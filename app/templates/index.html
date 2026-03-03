@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  /* Roberto Intelligence tokens */
+  :root{
+    --ri-primary:#0D6EFD;
+    --ri-amber:#FFC107;
+    --ri-dark:#212529;
+    --ri-light:#F8F9FA;
+    --ri-soft:#CCE5FF;
+    --ri-success:#198754;
+  }
+
+  /* Base */
+  .ri-page{ color:var(--ri-dark); }
+  .ri-card{
+    background:var(--ri-light);
+    border:1px solid rgba(33,37,41,.08);
+    border-radius:.75rem;
+  }
+  .ri-card .card-header{
+    background:#fff;
+    border-bottom:1px solid rgba(33,37,41,.08);
+  }
+
+  /* Soft badges */
+  .badge-soft-primary{
+    background:var(--ri-soft);
+    color:var(--ri-dark);
+    border:1px solid rgba(13,110,253,.18);
+    font-weight:600;
+  }
+  .badge-soft-success{
+    background:rgba(25,135,84,.12);
+    color:var(--ri-dark);
+    border:1px solid rgba(25,135,84,.20);
+    font-weight:600;
+  }
+  .badge-soft-danger{
+    background:rgba(220,53,69,.12);
+    color:var(--ri-dark);
+    border:1px solid rgba(220,53,69,.20);
+    font-weight:600;
+  }
+
+  /* Ticker Tape (Faixa de Indicadores) */
+  .ticker-wrapper{
+    background:var(--ri-dark);
+    color:#fff;
+    overflow:hidden;
+    height:40px;
+    display:flex;
+    align-items:center;
+    border-bottom:2px solid var(--ri-primary);
+  }
+  .ticker-content{
+    display:flex;
+    white-space:nowrap;
+    animation:ticker 30s linear infinite;
+  }
+  .ticker-item{
+    padding:0 40px;
+    font-size:.9rem;
+    display:flex;
+    align-items:center;
+  }
+  .ticker-label{
+    color:rgba(255,255,255,.75);
+    font-weight:700;
+    margin-right:8px;
+  }
+  .ticker-value{
+    color:var(--ri-success);
+    font-family:'Courier New', monospace;
+    font-weight:800;
+  }
+  @keyframes ticker{
+    0%{ transform:translateX(0); }
+    100%{ transform:translateX(-50%); }
+  }
+
+  /* Ajuste nos cards de notícia */
+  .card-noticia{ transition:transform .2s; }
+  .card-noticia:hover{ transform:translateY(-5px); }
+</style>
+
+<div class="ri-page">
+  <div class="ticker-wrapper shadow-sm">
+    <div class="ticker-content">
+  {# Criamos um loop que repete o conteúdo 2 vezes para o efeito visual #}
+  {% for i in range(2) %}
+    <div class="ticker-item"><span class="ticker-label">DÓLAR:</span> <span class="ticker-value">R$ {{ indicadores.dolar }}</span></div>
+    <div class="ticker-item"><span class="ticker-label">PETRÓLEO:</span> <span class="ticker-value">US$ {{ indicadores.petroleo }}</span></div>
+    <div class="ticker-item"><span class="ticker-label">BDI:</span> <span class="ticker-value">{{ indicadores.bdi }}</span></div>
+    <div class="ticker-item"><span class="ticker-label">FBX:</span> <span class="ticker-value">{{ indicadores.fbx }}</span></div>
+  {% endfor %}
+</div>
+
+</div>
+  </div>
+
+  <header class="py-5 bg-light border-bottom mb-4">
+    <div class="container">
+      <div class="text-center my-4">
+        <h1 class="fw-bolder mb-2" style="color: var(--ri-dark);">
+          Log<span style="color: var(--ri-primary);">Tech</span>
+        </h1>
+        <p class="lead mb-0">Inteligência de Dados e Notícias para Logística 4.0</p>
+      </div>
+    </div>
+  </header>
+
+  <div class="container mb-5">
+    <div class="card ri-card border-0 shadow-sm">
+      <div class="card-header fw-bold pt-3">
+        <i class="bi bi-rocket-takeoff-fill me-1" aria-hidden="true"></i>
+        Newsletter LogTech
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-3">Receba análises exclusivas do Cleiton e Julia diretamente no seu e-mail.</p>
+        <form action="/inscrever-newsletter" method="POST">
+          <div class="input-group">
+            <input class="form-control" name="email" type="email" placeholder="Seu melhor e-mail..." required />
+            <button class="btn btn-primary" type="submit">Subscrever</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="row g-4">
+<div class="col-lg-8">
+    {% include 'noticias.html' %}
+</div>
+
+      <div class="col-lg-4">
+    {% include 'artigos.html' %}
+</div>
+    </div>
+  </div>
+</div>
+{% endblock %}

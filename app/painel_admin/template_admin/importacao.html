@@ -1,0 +1,36 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <section class="card border-0 shadow-sm">
+        <div class="card-header bg-white fw-bold py-3">
+            <i class="bi bi-database-up text-success me-2"></i>Carga de Arquivos Críticos
+        </div>
+        <div class="card-body">
+            <div class="row g-4">
+                <div class="col-md-6 border-end">
+                    <h6 class="fw-bold text-muted small mb-3 text-uppercase">Tabelas de Frete (CSV)</h6>
+                    <form action="{{ url_for('admin.executar_importacao', tipo='tabelas') }}" method="POST" enctype="multipart/form-data">
+                        <div class="input-group">
+                            <input type="file" name="arquivo" class="form-control" accept=".txt" required>
+                            <button type="submit" class="btn btn-outline-primary">Subir</button>
+                        </div>
+                    </form>
+                </div>
+                <div class="col-md-6">
+                    <h6 class="fw-bold text-muted small mb-3 text-uppercase">Carga Operação (TXT / CSV)</h6>
+                    <form action="{{ url_for('admin.executar_importacao', tipo='operacao') }}" method="POST" enctype="multipart/form-data">
+                        <div class="input-group">
+                            <input type="file" name="arquivo" class="form-control" accept=".txt,.csv" required>
+                            <button type="submit" class="btn btn-outline-success">Subir</button>
+                        </div>
+                    </form>
+                    <small class="text-muted mt-2 d-block">
+                        <i class="bi bi-info-circle me-1"></i> Use o formato padrão: uf_nome, cidade_nome, chave_busca, id_uf, id_cidade
+                    </small>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

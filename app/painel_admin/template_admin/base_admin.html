@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cleiton Admin | Backoffice</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root { --sidebar-bg: #212529; --content-bg: #f4f7f6; }
+        body { background-color: var(--content-bg); overflow-x: hidden; }
+        .sidebar { min-width: 250px; max-width: 250px; background: var(--sidebar-bg); min-height: 100vh; color: white; transition: all 0.3s; }
+        .nav-link { color: rgba(255,255,255,.7); border-radius: 5px; margin: 5px 15px; }
+        .nav-link:hover, .nav-link.active { color: white; background: rgba(255,255,255,.1); }
+        .main-content { width: 100%; }
+    </style>
+</head>
+<body>
+    <div class="d-flex">
+        <nav class="sidebar shadow">
+            <div class="p-4">
+                <h4 class="fw-bold text-center text-primary"><i class="bi bi-cpu-fill"></i> Log Admin</h4>
+            </div>
+            <hr class="mx-3">
+            <ul class="nav nav-pills flex-column mb-auto">
+                <li class="nav-item">
+                    <a href="{{ url_for('admin.admin_dashboard') }}" class="nav-link {{ 'active' if request.endpoint == 'admin.admin_dashboard' }}">
+                        <i class="bi bi-speedometer2 me-2"></i> Dashboard
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('admin.gestao_planos') }}" class="nav-link {{ 'active' if request.endpoint == 'admin.gestao_planos' }}">
+                        <i class="bi bi-tags me-2"></i> Planos & SaaS
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('admin.importacao_dados') }}" class="nav-link {{ 'active' if request.endpoint == 'admin.importacao_dados' }}">
+                        <i class="bi bi-database-up me-2"></i> Importação
+                    </a>
+                </li>
+                <li class="mt-4">
+                    <a href="{{ url_for('index') }}" class="nav-link text-warning">
+                        <i class="bi bi-arrow-left-circle me-2"></i> Sair do Painel
+                    </a>
+                </li>
+            </ul>
+        </nav>
+
+        <div class="main-content">
+            <header class="navbar navbar-white sticky-top bg-white p-3 shadow-sm">
+                <span class="navbar-text ms-3 fw-bold">Bem-vindo, {{ current_user.email }}</span>
+                <div class="me-3">
+                    <span class="badge bg-success">Versão 1.0.2</span>
+                </div>
+            </header>
+
+            <main class="p-4">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                  {% if messages %}
+                    {% for category, message in messages %}
+                      <div class="alert alert-{{ category if category != 'message' else 'info' }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                      </div>
+                    {% endfor %}
+                  {% endif %}
+                {% endwith %}
+
+                {% block admin_content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

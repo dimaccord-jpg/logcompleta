@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log Completa | Intelligence</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            /* Cores de Alto Contraste */
+            --sidebar-bg: #050c16;      /* Fundo profundo para contraste */
+            --sidebar-hover: #112240;
+            --laranja-log: #ff6b35;
+            --texto-muted: #a8b2d1;
+            --sidebar-width: 260px;
+            --sidebar-collapsed: 80px;
+        }
+
+        body { background-color: #f4f7f9; transition: all 0.3s; overflow-x: hidden; }
+
+        /* SIDEBAR ESTRUTURA */
+        #sidebar {
+            width: var(--sidebar-width);
+            height: 100vh;
+            position: fixed;
+            background: var(--sidebar-bg);
+            color: white;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+            z-index: 1000;
+            box-shadow: 4px 0 10px rgba(0,0,0,0.2);
+        }
+
+        #sidebar.active { width: var(--sidebar-collapsed); }
+
+        /* HEADER CENTRALIZADO */
+        .sidebar-header { 
+            padding: 25px 15px; 
+            display: flex; 
+            flex-direction: column;
+            align-items: center; 
+            justify-content: center;
+            background: rgba(0,0,0,0.3);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            min-height: 120px;
+            text-align: center;
+        }
+
+        .logo-img { 
+            max-width: 180px; 
+            height: auto; 
+            margin-bottom: 15px;
+            transition: 0.3s;
+        }
+
+        #sidebarCollapse {
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 5px 10px;
+            transition: 0.2s;
+        }
+        #sidebarCollapse:hover { background: var(--laranja-log); }
+
+        /* MODO RECOLHIDO */
+        #sidebar.active .logo-img { display: none; }
+        #sidebar.active .logo-icon { display: block !important; }
+        .logo-icon { display: none; color: var(--laranja-log); font-size: 2rem; margin-bottom: 10px; }
+
+        /* MENU ITENS */
+        .nav-list { list-style: none; padding: 20px 0; flex-grow: 1; }
+        .nav-item { 
+            padding: 14px 25px; 
+            display: flex; 
+            align-items: center; 
+            color: var(--texto-muted); 
+            text-decoration: none; 
+            transition: 0.2s; 
+            white-space: nowrap;
+            font-weight: 500;
+        }
+        .nav-item i { font-size: 1.3rem; min-width: 45px; }
+        .nav-item:hover, .nav-item.active { 
+            color: white; 
+            background: var(--sidebar-hover); 
+            border-left: 4px solid var(--laranja-log); 
+        }
+
+        /* RODAPÉ */
+        .sidebar-footer { 
+            padding: 20px; 
+            border-top: 1px solid rgba(255,255,255,0.05); 
+            background: rgba(0,0,0,0.2); 
+        }
+        
+        #content {
+            margin-left: var(--sidebar-width);
+            width: calc(100% - var(--sidebar-width));
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            min-height: 100vh;
+        }
+        #content.active {
+            margin-left: var(--sidebar-collapsed);
+            width: calc(100% - var(--sidebar-collapsed));
+        }
+
+        #sidebar.active .menu-text { display: none; }
+
+        /* ALERTAS FLASH */
+        .flash-messages {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1050;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="flash-messages">
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            {% for message in messages %}
+              <div class="alert alert-success alert-dismissible fade show shadow" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+    </div>
+
+    <nav id="sidebar">
+        <div class="sidebar-header">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Logo" class="logo-img">
+            <i class="bi bi-box-seam logo-icon"></i>
+            
+            <button type="button" id="sidebarCollapse" class="btn text-white shadow-none">
+                <i class="bi bi-list fs-4"></i>
+            </button>
+        </div>
+
+        <div class="nav-list">
+            <a href="{{ url_for('index') }}" class="nav-item active">
+                <i class="bi bi-house-door"></i>
+                <span class="menu-text">Home / Notícias</span>
+            </a>
+            <a href="{{ url_for('fretes') }}" class="nav-item">
+                <i class="bi bi-truck"></i>
+                <span class="menu-text">Consulta de Frete</span>
+                {% if not current_user.is_authenticated %}
+                <i class="bi bi-lock-fill ms-auto opacity-50 menu-text" style="font-size: 0.8rem;"></i>
+                {% endif %}
+            </a>
+        </div>
+
+        <div class="sidebar-footer">
+            {% if current_user.is_authenticated %}
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-person-circle fs-3 me-3 text-warning"></i>
+                    <div class="menu-text">
+                        <small class="d-block text-muted" style="font-size: 0.65rem;">BEM-VINDO</small>
+                        <a href="{{ url_for('logout') }}" class="text-white text-decoration-none small fw-bold">Sair</a>
+                    </div>
+                </div>
+            {% else %}
+                <a href="{{ url_for('login') }}" class="nav-item p-0 text-white">
+                    <i class="bi bi-box-arrow-in-right"></i>
+                    <span class="menu-text">Login / Cadastro</span>
+                </a>
+            {% endif %}
+        </div>
+    </nav>
+
+    <div id="content">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        $(document).ready(function () {
+            $('#sidebarCollapse').on('click', function () {
+                $('#sidebar, #content').toggleClass('active');
+            });
+        });
+    </script>
+</body>
+</html>

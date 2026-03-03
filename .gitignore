@@ -1,0 +1,32 @@
+# === Secrets / ambientes ===
+.env
+.env.*
+!.env.example
+
+# === Python / venv ===
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# === Logs ===
+logs/
+*.log
+
+# === Caches / artefatos locais ===
+cache_*.json
+*.tmp
+
+# === Bancos locais (SQLite) ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === VS Code / OS ===
+.vscode/
+.DS_Store
+Thumbs.db

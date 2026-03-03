@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  :root{
+    --ri-primary:#0D6EFD;
+    --ri-amber:#FFC107;
+    --ri-dark:#212529;
+    --ri-light:#F8F9FA;
+    --ri-soft:#CCE5FF;
+    --ri-success:#198754;
+  }
+
+  /* Roberto Intelligence helpers (Bootstrap 5-safe) */
+  .ri-page{ color: var(--ri-dark); }
+  .ri-surface{
+    background: var(--ri-light);
+    border: 1px solid rgba(33,37,41,.08);
+    border-radius: 1rem;
+  }
+  .ri-card{
+    background:#fff;
+    border: 1px solid rgba(33,37,41,.08);
+    border-radius: 1rem;
+  }
+  .ri-badge-soft-primary{
+    background: var(--ri-soft);
+    color: var(--ri-primary);
+    border: 1px solid rgba(13,110,253,.18);
+  }
+  .ri-insight{
+    background: rgba(255,193,7,.16);
+    border: 1px solid rgba(255,193,7,.35);
+    color: var(--ri-dark);
+    border-radius: .75rem;
+  }
+  .ri-metric{
+    border: 1px solid rgba(33,37,41,.08);
+    border-radius: 1rem;
+  }
+  .extra-small{ font-size: .75rem; }
+</style>
+
+<div class="container mt-4 ri-page">
+  <!-- Header -->
+  <div class="row align-items-start mb-4">
+    <div class="col-12">
+      <div class="d-flex align-items-center gap-2">
+        <i class="bi bi-cpu-fill text-primary fs-4"></i>
+        <div>
+          <h2 class="fw-bold mb-1">Roberto Intelligence</h2>
+          <p class="text-muted mb-0">Consulte a viabilidade de fretes com base em dados históricos.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alerts -->
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for message in messages %}
+        <div class="alert alert-warning alert-dismissible fade show shadow-sm border-0 mb-4" role="alert">
+          <i class="bi bi-exclamation-triangle-fill me-2"></i> {{ message }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <!-- Filters / Form -->
+  <div class="ri-card shadow-sm mb-4">
+    <div class="card-body p-4">
+      <form method="POST" class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label small fw-bold">Cidade Origem</label>
+          <input type="text" name="origem" class="form-control" placeholder="Ex: Cariacica" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-bold">UF Origem</label>
+          <input type="text" name="uf_origem" class="form-control" placeholder="ES" maxlength="2" style="text-transform: uppercase;" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-bold">Cidade Destino</label>
+          <input type="text" name="destino" class="form-control" placeholder="Ex: São Paulo" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-bold">UF Destino</label>
+          <input type="text" name="uf_destino" class="form-control" placeholder="SP" maxlength="2" style="text-transform: uppercase;" required>
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <button type="submit" class="btn btn-primary w-100 fw-bold">
+            <i class="bi bi-search me-2"></i>Analisar Rota
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if resultado %}
+  <!-- Results -->
+  <div class="row mb-5">
+    <div class="col-12">
+      <div class="ri-card shadow-sm overflow-hidden">
+        <div class="card-header bg-white p-4 border-0">
+          <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+            <div>
+              <span class="badge ri-badge-soft-primary mb-2">
+                <i class="bi bi-graph-up-arrow me-1"></i>Resultado da Análise
+              </span>
+              <h4 class="fw-bold mb-0">{{ resultado.rota }}</h4>
+            </div>
+            <div class="text-end">
+              <span class="d-block small text-muted">Amostras analisadas</span>
+              <span class="badge bg-dark">
+                <i class="bi bi-database-fill me-1"></i>{{ resultado.amostras }} fretes
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-body p-4 ri-surface">
+          <div class="row g-4 text-center">
+            <div class="col-md-4">
+              <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
+                <h6 class="text-uppercase small fw-bold text-muted mb-2">Média Bruta</h6>
+                <h2 class="fw-bold text-primary mb-0" id="txt_valor_frete">R$ {{ "%.2f"|format(resultado.media_bruta) }}</h2>
+                <span class="small text-muted fw-bold" id="txt_unidade">R$ / KG</span>
+
+                <div class="form-check form-switch d-flex justify-content-center mt-3">
+                  <input class="form-check-input me-2" type="checkbox" id="switchUnidade" role="switch">
+                  <label class="form-check-label extra-small fw-bold" for="switchUnidade">Ver em Tonelada</label>
+                </div>
+              </div>
+            </div>
+
+              <div class="col-md-4">
+                <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
+                  <h6 class="text-uppercase small fw-bold text-muted mb-2">Previsão Roberto</h6>
+                  <h2 class="fw-bold text-warning mb-0" id="txt_previsao">
+                    {{ resultado.previsao_roberto }}
+                  </h2>
+                  <span class="small text-muted" id="txt_unidade_prev">Tendência de Mercado</span>
+                </div>
+              </div>
+
+            <div class="col-md-4">
+              <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
+                <h6 class="text-uppercase small fw-bold text-muted mb-2">Assertividade do Modelo</h6>
+                <h2 class="fw-bold text-primary mb-0" id="txt_assertividade">
+                  {{ (resultado.assertividade * 100)|int }}%
+                </h2>
+                <span class="small text-muted">Índice de Confiança</span>
+              </div>
+            </div>
+          </div>
+        </div>        
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+(function() {
+  // Capturamos apenas o valor numérico da Média Bruta vindo do backend
+  const vBruto = Number("{{ resultado.media_bruta if resultado else 0 }}");
+  const switchBtn = document.getElementById('switchUnidade');
+  
+  if (!switchBtn) return;
+
+  switchBtn.addEventListener('change', function() {
+    const elBruto = document.getElementById('txt_valor_frete');
+    const labelUnidade = document.getElementById('txt_unidade');
+
+    if (this.checked) {
+      // Conversão para Tonelada
+      if (elBruto) {
+        elBruto.innerText = 'R$ ' + (vBruto * 1000).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      }
+      if (labelUnidade) labelUnidade.innerText = 'R$ / TONELADA';
+    } else {
+      // Retorno para KG
+      if (elBruto) {
+        elBruto.innerText = 'R$ ' + vBruto.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      }
+      if (labelUnidade) labelUnidade.innerText = 'R$ / KG';
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h4 class="mb-0">Gestão de Planos & SaaS</h4>
+        <span class="badge bg-primary">Modelo: Tiered Pricing</span>
+    </div>
+
+    <div class="row g-4 mb-5">
+        {% for nivel in ['Starter (Good)', 'Pro (Better)', 'Enterprise (Best)'] %}
+        <div class="col-md-4">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-dark text-white fw-bold">
+                    {{ nivel }}
+                </div>
+                <div class="card-body">
+                    <form action="{{ url_for('admin.atualizar_precos') }}" method="POST">
+                        <input type="hidden" name="plano_tipo" value="{{ nivel }}">
+                        
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">Preço Mensal (R$)</label>
+                            <input type="number" step="0.01" class="form-control" name="valor" placeholder="Ex: 99.90">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">Volume de Consultas/Mês</label>
+                            <input type="number" class="form-control" name="limite" placeholder="Ex: 100">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">Recursos Inclusos (JSON ou lista)</label>
+                            <textarea class="form-control" rows="3" placeholder="Ex: Suporte 24h, Exportação PDF..."></textarea>
+                        </div>
+
+                        <button type="submit" class="btn btn-sm btn-outline-dark w-100">Salvar Alterações</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="card border-0 shadow-sm mb-5 border-start border-4 border-info">
+        <div class="card-body">
+            <h6 class="fw-bold"><i class="bi bi-gift me-2 text-info"></i>Configuração Plano Grátis (Freemium)</h6>
+            <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label class="small fw-bold text-muted">Consultas Grátis/Mês</label>
+                    <input type="number" class="form-control" value="5">
+                </div>
+                <div class="col-md-4">
+                    <label class="small fw-bold text-muted">Dias de Teste (Trial)</label>
+                    <input type="number" class="form-control" value="7">
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-info text-white w-100">Atualizar Regras Grátis</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm bg-light">
+        <div class="card-header bg-white fw-bold py-3">
+            <i class="bi bi-megaphone-fill text-danger me-2"></i>Campanhas de Marketing & Up-selling
+        </div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label small fw-bold">Público-Alvo</label>
+                    <select class="form-select">
+                        <option>Todos os Usuários Grátis</option>
+                        <option>Usuários Starter (Próximos ao limite)</option>
+                        <option>Usuários Inativos (+30 dias)</option>
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-bold">Tipo de Ação</label>
+                    <select class="form-select">
+                        <option>Disparar E-mail Marketing</option>
+                        <option>Notificação In-App (Push)</option>
+                        <option>Liberar Cupom de Desconto</option>
+                    </select>
+                </div>
+                <div class="col-12 text-end">
+                    <button class="btn btn-danger px-4">Preparar Campanha</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

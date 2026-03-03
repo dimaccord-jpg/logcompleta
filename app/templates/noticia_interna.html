@@ -1,0 +1,91 @@
+{% extends "base.html" %} 
+
+{% block content %}
+<div class="container mt-5 mb-5">
+    {# Adicionada classe condicional no card para destaque visual de Artigos #}
+    <article class="ri-card p-4 p-md-5 shadow-sm bg-white mx-auto {% if noticia.tipo == 'artigo' %}border-top border-primary border-4{% endif %}" style="max-width: 900px; border-radius: 15px;">
+        
+        <header class="mb-4 text-center">
+            <div class="mb-3">
+                {% if noticia.tipo == 'artigo' %}
+                    <span class="badge bg-primary px-3 py-2 text-uppercase" style="letter-spacing: 1px;">
+                        <i class="bi bi-star-fill me-1"></i> Artigo Estratégico
+                    </span>
+                {% else %}
+                    <span class="badge bg-secondary px-3 py-2 text-uppercase" style="letter-spacing: 1px;">
+                        <i class="bi bi-lightning-charge-fill me-1"></i> Insight Rápido
+                    </span>
+                {% endif %}
+            </div>
+
+            <h1 class="fw-bold display-5 mb-3" style="color: #050c16;">{{ noticia.titulo_julia }}</h1>
+            
+            {# Subtítulo premium gerado pela Júlia para Artigos  #}
+            {% if noticia.tipo == 'artigo' and noticia.subtitulo %}
+                <p class="lead text-muted fst-italic mb-4" style="font-size: 1.4rem;">
+                    {{ noticia.subtitulo }}
+                </p>
+            {% endif %}
+
+            <div class="text-muted small border-top border-bottom py-2 d-flex justify-content-center gap-3">
+                {# Tratamento para evitar erro caso a data falhe no banco #}
+                <span><i class="bi bi-calendar3 me-1"></i> {{ noticia.data_publicacao.strftime('%d/%m/%Y') if noticia.data_publicacao else 'Recente' }}</span>
+                <span>|</span>
+                <span><i class="bi bi-journal-text me-1"></i> Fonte: {{ noticia.fonte }}</span>
+            </div>
+        </header>
+
+        {# Imagem de capa dinâmica #}
+        {% if noticia.url_imagem %}
+            <div class="mb-5">
+                <img src="{{ noticia.url_imagem }}" class="img-fluid rounded shadow-sm w-100" alt="Capa da Matéria">
+            </div>
+        {% endif %}
+        
+        <div class="content mb-5" style="font-size: 1.15rem; line-height: 1.8; color: #333;">
+            {% if noticia.tipo == 'artigo' %}
+                {# Renderiza o conteúdo técnico em HTML se for Artigo  #}
+                <div class="artigo-texto">
+                    {% if noticia.conteudo_completo %}
+                        {{ noticia.conteudo_completo | safe }}
+                    {% else %}
+                        <p class="text-muted italic">Conteúdo técnico em processamento pela Editora Júlia...</p>
+                    {% endif %}
+                </div>
+            {% else %}
+                {# Renderiza apenas o resumo/insight para notícias comuns [cite: 169] #}
+                <div class="noticia-resumo p-4 bg-light rounded-3 border-start border-secondary border-4">
+                    <p class="mb-0">{{ noticia.resumo_julia }}</p>
+                </div>
+            {% endif %}
+        </div>
+
+        <hr class="my-5">
+        
+        {# Rodapé Estratégico #}
+        <div class="footer-noticia bg-light p-4 rounded-3 border-start border-primary border-4">
+            <h5 class="fw-bold mb-3"><i class="bi bi-info-circle me-2"></i>Análise da Editora</h5>
+            <p class="mb-2 text-muted">Esta análise foi fundamentada na pauta original:</p>
+            <p class="mb-0">
+                <a href="{{ noticia.link }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none fw-bold text-primary">
+                    <i class="bi bi-link-45deg"></i> {{ noticia.titulo_original }}
+                </a>
+            </p>
+            
+            {# Exibição de referências exclusivas de artigos  #}
+            {% if noticia.tipo == 'artigo' and noticia.referencias %}
+                <div class="small mt-3 pt-3 border-top text-muted">
+                    <strong>Insights Adicionais e Referências:</strong><br>
+                    {{ noticia.referencias }}
+                </div>
+            {% endif %}
+        </div>
+        
+        <div class="mt-5 text-center">
+            <a href="{{ url_for('index') }}" class="btn btn-outline-dark px-4 py-2">
+                <i class="bi bi-arrow-left me-2"></i>Voltar ao Portal LogTech
+            </a>
+        </div>
+    </article>
+</div>
+{% endblock %}

@@ -1,0 +1,28 @@
+<h4 class="mb-4 fw-bold">
+    <i class="bi bi-newspaper me-1" aria-hidden="true"></i>
+    Últimas da Logística
+</h4>
+
+{% for noticia in noticias if noticia.tipo != 'artigo' %}
+<div class="card mb-4 border-0 shadow-sm card-noticia ri-card">
+    <div class="card-body">
+        <div class="small text-muted">
+            {{ noticia.data_publicacao.strftime('%d/%m/%Y %H:%M') if noticia.data_publicacao else 'Recente' }} • {{ noticia.fonte }}
+        </div>
+        <h2 class="card-title h4 mt-2">{{ noticia.titulo_julia }}</h2>
+        <p class="card-text">{{ noticia.resumo_julia|truncate(150, True, '...') }}</p>
+        
+        <a class="btn btn-sm btn-primary me-2" href="{{ url_for('detalhe_noticia', noticia_id=noticia.id) }}">
+            Ver Insight Log Completa →
+        </a>
+
+        <a class="btn btn-sm btn-outline-secondary" href="{{ noticia.link }}" target="_blank">
+            Fonte Original
+        </a>
+    </div>
+</div>
+{% else %}
+<div class="text-center py-5">
+    <p class="text-muted">Nossos agentes estão preparando novos insights estratégicos...</p>
+</div>
+{% endfor %}
