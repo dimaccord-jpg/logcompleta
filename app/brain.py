@@ -20,7 +20,7 @@ def gerar_chave_busca(cidade, uf):
 
 def processar_inteligencia_frete(origem_raw, destino_raw, uf_origem, uf_destino, models):
     # Movemos o import para dentro da função que o utiliza
-    from run_cleiton import coordenar_analise_frete  
+    from app.run_cleiton import coordenar_analise_frete  
     DePara = models['DeParaLogistica']
     FreteReal = models['FreteReal']
     

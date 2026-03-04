@@ -6,9 +6,9 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # Integração com o ecossistema do projeto
-from web import app
-from extensions import db
-from models import NoticiaPortal
+from app.web import app
+from app.extensions import db
+from app.models import NoticiaPortal
 
 # Carrega variáveis do arquivo .env
 # Baseado na variável de sistema APP_ENV

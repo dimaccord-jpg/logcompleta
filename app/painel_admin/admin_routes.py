@@ -6,8 +6,8 @@ import os
 import csv
 import io
 from datetime import datetime
-from extensions import db # Criado para atender extensions
-from models import FreteReal # <--- Adicione esta linha
+from app.extensions import db # Criado para atender extensions
+from app.models import FreteReal # <--- Adicione esta linha
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 pasta_templates = os.path.join(base_dir, 'template_admin')

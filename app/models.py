@@ -1,4 +1,4 @@
-from extensions import db
+from app.extensions import db
 from flask_login import UserMixin
 
 class User(db.Model, UserMixin):
@@ -45,7 +45,7 @@ class Lead(db.Model):
     email = db.Column(db.String(150), unique=True, nullable=False)
     data_inscricao = db.Column(db.DateTime, default=db.func.current_timestamp())
 
-from extensions import db
+from app.extensions import db
 from datetime import datetime
 
 class NoticiaPortal(db.Model):
