@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 from flask import Flask, render_template, redirect, url_for, request, flash, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import login_user, login_required, logout_user, current_user
-from app.extensions import db, login_manager
-from app.painel_admin.admin_routes import admin_bp
+from .extensions import db, login_manager
+from .painel_admin.admin_routes import admin_bp
 from sqlalchemy import text
 
 # 2. Configuração de Caminho e Inicialização do App
@@ -69,9 +69,9 @@ app.register_blueprint(admin_bp) #
 
 # 5. Imports que dependem do Contexto (Executados após a vinculação do DB)
 with app.app_context(): #
-    from app.models import User, DeParaLogistica, FreteReal, NoticiaPortal #
-    from app.brain import processar_inteligencia_frete #
-    from app.news_ai import registrar_lead_newsletter #
+    from .models import User, DeParaLogistica, FreteReal, NoticiaPortal #
+    from .brain import processar_inteligencia_frete #
+    from .news_ai import registrar_lead_newsletter #
       
 @login_manager.user_loader
 def load_user(user_id):
@@ -252,7 +252,7 @@ def detalhe_noticia(noticia_id):
 @login_required
 def executar_cleiton():
     # Import LAZY: só acontece quando você chama esse endpoint
-    from app.run_cleiton import executar_orquestracao
+    from run_cleiton import executar_orquestracao
 
     executar_orquestracao(app)
     flash("Cleiton executado com sucesso.", "success")
