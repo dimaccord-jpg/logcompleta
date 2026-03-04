@@ -1,8 +1,8 @@
 import os
 import logging
 from datetime import datetime
-from extensions import db
-from models import Lead, NoticiaPortal # Certifique-se que NoticiaPortal está no models.py
+from app.extensions import db
+from app.models import Lead, NoticiaPortal # Certifique-se que NoticiaPortal está no models.py
 
 # Configuração de Log para acompanhar as ações do Cleiton
 logger = logging.getLogger(__name__)

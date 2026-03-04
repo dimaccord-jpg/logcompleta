@@ -2,7 +2,7 @@ import time
 import logging
 import sys
 import os
-from extensions import db
+from app.extensions import db
 from datetime import datetime
 import json
 from dotenv import load_dotenv
@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 # Importamos as funções principais dos seus agentes especializados
 try:
-    from news_ai import processar_ciclo_noticias
-    from run_julia import processar_insight_do_momento
+    from app.news_ai import processar_ciclo_noticias
+    from app.run_julia import processar_insight_do_momento
     # Caso o finance.py ainda não exista, mantemos o try para não quebrar o fluxo
     try:
-        from finance import atualizar_indices
+        from app.finance import atualizar_indices
     except ImportError:
         atualizar_indices = None
 except ImportError as e:
@@ -36,7 +36,7 @@ def coordenar_analise_frete(historico_ia, rota_str):
     Interface de tempo real para análise de fretes.
     Chamada pelo brain.py quando um usuário clica em 'Analisar Rota'.
     """
-    from run_roberto import roberto # Import local para quebrar o ciclo
+    from app.run_roberto import roberto # Import local para quebrar o ciclo
     logger.info(f"🤖 GESTOR CLEITON: Recebendo solicitação de análise para {rota_str}")
     
     # 1. Carregamento dos índices (Pilar Financeiro)
@@ -80,7 +80,7 @@ def executar_orquestracao(app_flask):
     with app_flask.app_context():
         # 1. APRENDIZADO
         # IMPORT LOCAL (Lazy Loading): Só importa quando o contexto do app já existe
-        from models import NoticiaPortal
+        from app.models import NoticiaPortal
         ultimos_temas = NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(5).all()
         temas_vistos = [t.titulo_julia for t in ultimos_temas]
         logger.info(f"Contexto atual (Memória): {len(temas_vistos)} pautas recentes analisadas.")
@@ -106,7 +106,7 @@ def executar_orquestracao(app_flask):
 if __name__ == "__main__":
     # O import dentro do IF garante que o 'web.py' só seja chamado
     # se você rodar o 'run_cleiton.py' diretamente no terminal.
-    from web import app 
+    from app.web import app 
     SEGUNDOS_3H = 3 * 60 * 60
     
     # Configuração de Log APENAS quando rodado como script principal
