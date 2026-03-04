@@ -113,16 +113,9 @@ def index():
     # Localiza o arquivo de índices dinâmicos
     path_indices = os.path.join(diretorio_atual, 'indices.json')
     try:
-        with open(path_indices, 'r', encoding='utf-8') as f:
-            indicadores = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
-
-    try:
-        noticias_reais = NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(10).all()
-    except Exception as e:
-        logging.error(f"Erro ao buscar notícias para a página inicial: {e}")
-        noticias_reais = []
+        with open(path_indices, 'r') as f:indicadores = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
+    noticias_reais = NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(10).all()
 
     return render_template('index.html', noticias=noticias_reais, indicadores=indicadores)
 
@@ -263,3 +256,4 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()  
     app.run(debug=True)
+
