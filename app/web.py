@@ -7,6 +7,10 @@ import sys
 from functools import wraps
 from dotenv import load_dotenv
 
+# Adiciona o diretório pai ao sys.path para resolver imports absolutos
+diretorio_raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, diretorio_raiz)
+
 # 1. Imports do Flask e Extensões Base
 from flask import Flask, render_template, redirect, url_for, request, flash, abort
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -18,6 +22,8 @@ from sqlalchemy import text
 # 2. Configuração de Caminho e Inicialização do App
 # Carrega o ambiente baseado na variável de sistema APP_ENV (padrão: dev)
 diretorio_atual = os.path.dirname(os.path.abspath(__file__)) #
+# Adiciona o diretório pai ao sys.path para resolver imports absolutos
+sys.path.insert(0, os.path.dirname(diretorio_atual))
 env_name = os.getenv('APP_ENV', 'dev')
 dotenv_path = os.path.join(diretorio_atual, f'.env.{env_name}')
 load_dotenv(dotenv_path)

@@ -9,6 +9,8 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
    pip install -r ../requirements.txt
    ```
 2. Garanta que os arquivos `.env.dev` e `.env.homolog` existam na pasta `app/`.
+   - O arquivo `.env` simples é legado e **não deve ser usado**.
+   - Use `app/.env.example` como base, copiando para `.env.dev` e `.env.homolog` e ajustando apenas os valores.
 
 ---
 

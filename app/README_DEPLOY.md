@@ -57,10 +57,13 @@ DB_URI_LEADS=sqlite:////srv/logcompleta/data/leads.db
 DB_URI_NOTICIAS=sqlite:////srv/logcompleta/data/noticias.db
 
 # Chaves de API
+GEMINI_API_KEY=...          # Cleiton (orquestrador)
 GEMINI_API_KEY_ROBERTO=...
 GEMINI_API_KEY_1=...
 GEMINI_API_KEY_2=...
 ```
+
+Neste momento, você pode utilizar os mesmos valores de chave de API em DEV, HOMOLOG e PROD; a diferença entre ambientes é controlada principalmente por `APP_ENV` e pelos caminhos de banco de dados.
 
 ## 4. Configurar Gunicorn com Systemd
 
