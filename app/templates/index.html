@@ -100,22 +100,38 @@
 </div>
   </div>
 
-  <header class="py-5 bg-light border-bottom mb-4">
+  <header class="af-hero-home py-5 mb-4">
     <div class="container">
-      <div class="text-center my-4">
-        <h1 class="fw-bolder mb-2" style="color: var(--ri-dark);">
-          Log<span style="color: var(--ri-primary);">Tech</span>
+      <div class="text-center my-4 position-relative">
+        <h1 class="fw-bolder mb-2" style="font-size: 2.5rem;">
+          <span class="af-text-gradient">Agentefrete</span>
         </h1>
-        <p class="lead mb-0">Inteligência de Dados e Notícias para Logística 4.0</p>
+        <p class="lead mb-4" style="color: var(--af-text-secondary); font-size: 1.1rem;">
+          Inteligencia de Dados e Noticias para Logistica 4.0
+        </p>
+        <div class="d-flex justify-content-center gap-3 flex-wrap">
+          <span class="af-stat-badge">
+            <span class="af-stat-dot"></span>
+            Roberto IA ativo
+          </span>
+          <span class="af-stat-badge">
+            <span class="af-stat-dot"></span>
+            Julia IA ativa
+          </span>
+          <span class="af-stat-badge">
+            <span class="af-stat-dot" style="background: var(--af-cyan);"></span>
+            {{ indicadores.total_noticias|default('50+') }} noticias
+          </span>
+        </div>
       </div>
     </div>
   </header>
 
   <div class="container mb-5">
-    <div class="card ri-card border-0 shadow-sm">
+    <div class="card ri-card border-0 shadow-sm af-glow">
       <div class="card-header fw-bold pt-3">
-        <i class="bi bi-rocket-takeoff-fill me-1" aria-hidden="true"></i>
-        Newsletter LogTech
+        <i class="bi bi-rocket-takeoff-fill me-1" style="color: var(--af-cyan);" aria-hidden="true"></i>
+        Newsletter Agentefrete
       </div>
       <div class="card-body">
         <p class="small text-muted mb-3">Receba análises exclusivas do Cleiton e Julia diretamente no seu e-mail.</p>
