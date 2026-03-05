@@ -252,7 +252,7 @@ def detalhe_noticia(noticia_id):
 @login_required
 def executar_cleiton():
     # Import LAZY: só acontece quando você chama esse endpoint
-    from app.run_cleiton import executar_orquestracao
+    from run_cleiton import executar_orquestracao
 
     executar_orquestracao(app)
     flash("Cleiton executado com sucesso.", "success")
