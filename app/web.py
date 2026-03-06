@@ -24,7 +24,7 @@ from app.extensions import db, login_manager
 from flask_mail import Mail, Message
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from app.painel_admin.admin_routes import admin_bp
-from sqlalchemy import text
+from sqlalchemy import text, func
 
 # 2. Configuração de Caminho e Inicialização do App
 # Carrega o ambiente baseado na variável de sistema APP_ENV (padrão: dev)
@@ -198,6 +198,14 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+
+def ops_token_required():
+    """Protege endpoints operacionais com token compartilhado via ambiente."""
+    expected = os.getenv('OPS_TOKEN', '').strip()
+    provided = request.headers.get('X-Ops-Token', '').strip()
+    if not expected or provided != expected:
+        abort(403)
+
 # --- ROTA DE DIAGNÓSTICO (TEMPORÁRIA) ---
 @app.route('/oauth-diagnostics')
 def oauth_diagnostics():
@@ -227,6 +235,107 @@ def oauth_diagnostics():
     except Exception as e:
         logging.error(f"Erro no diagnóstico: {str(e)}", exc_info=True)
         return {"status": "error", "message": str(e)}, 500
+
+
+@app.route('/ops/user-audit', methods=['POST'])
+def ops_user_audit():
+    """Audita usuários para identificar possíveis duplicidades e status admin."""
+    ops_token_required()
+    ensure_database_schema()
+
+    try:
+        users = User.query.order_by(User.id.asc()).all()
+
+        # Duplicidade por e-mail normalizado (case-insensitive)
+        duplicate_groups = (
+            db.session.query(func.lower(User.email).label('email_norm'), func.count(User.id).label('cnt'))
+            .group_by(func.lower(User.email))
+            .having(func.count(User.id) > 1)
+            .all()
+        )
+
+        duplicates = []
+        for group in duplicate_groups:
+            members = (
+                User.query.filter(func.lower(User.email) == group.email_norm)
+                .order_by(User.id.asc())
+                .all()
+            )
+            duplicates.append({
+                'email_norm': group.email_norm,
+                'count': int(group.cnt),
+                'members': [
+                    {
+                        'id': u.id,
+                        'email': u.email,
+                        'is_admin': bool(u.is_admin),
+                        'oauth_provider': u.oauth_provider,
+                    }
+                    for u in members
+                ],
+            })
+
+        return {
+            'status': 'ok',
+            'total_users': len(users),
+            'users': [
+                {
+                    'id': u.id,
+                    'email': u.email,
+                    'is_admin': bool(u.is_admin),
+                    'oauth_provider': u.oauth_provider,
+                }
+                for u in users
+            ],
+            'duplicates': duplicates,
+        }, 200
+    except Exception as e:
+        logging.exception(f'Erro em /ops/user-audit: {e}')
+        return {'status': 'error', 'message': str(e)}, 500
+
+
+@app.route('/ops/promote-admin', methods=['POST'])
+def ops_promote_admin():
+    """Promove usuário para admin a partir do e-mail informado."""
+    ops_token_required()
+    ensure_database_schema()
+
+    payload = request.get_json(silent=True) or {}
+    email = (payload.get('email') or '').strip().lower()
+    if not email:
+        return {'status': 'error', 'message': 'Campo email é obrigatório.'}, 400
+
+    try:
+        users = (
+            User.query.filter(func.lower(User.email) == email)
+            .order_by(User.id.asc())
+            .all()
+        )
+
+        if not users:
+            return {'status': 'error', 'message': 'Usuário não encontrado.'}, 404
+
+        for user in users:
+            user.is_admin = True
+
+        db.session.commit()
+
+        return {
+            'status': 'ok',
+            'promoted_count': len(users),
+            'users': [
+                {
+                    'id': u.id,
+                    'email': u.email,
+                    'is_admin': bool(u.is_admin),
+                }
+                for u in users
+            ],
+        }, 200
+    except Exception as e:
+        db.session.rollback()
+        logging.exception(f'Erro em /ops/promote-admin: {e}')
+        return {'status': 'error', 'message': str(e)}, 500
 
 # --- ROTA DE HEALTH CHECK (MONITORAMENTO) ---
 @app.route('/health')
