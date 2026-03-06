@@ -157,8 +157,31 @@ def ensure_database_schema():
             raise
 
 
+def ensure_bootstrap_admin_user():
+    """Promove um usuário existente a admin no startup, quando configurado."""
+    admin_email = os.getenv('BOOTSTRAP_ADMIN_EMAIL') or os.getenv('MAIL_USERNAME')
+    if not admin_email:
+        return
+
+    try:
+        user = User.query.filter_by(email=admin_email).first()
+        if not user:
+            logging.info(f"Bootstrap admin: usuário '{admin_email}' ainda não existe.")
+            return
+
+        if user.is_admin:
+            return
+
+        user.is_admin = True
+        db.session.commit()
+        logging.info(f"Bootstrap admin: usuário '{admin_email}' promovido para admin.")
+    except Exception as e:
+        logging.exception(f"Falha ao promover usuário admin no bootstrap: {e}")
+
+
 with app.app_context():
     ensure_database_schema()
+    ensure_bootstrap_admin_user()
       
 @login_manager.user_loader
 def load_user(user_id):
