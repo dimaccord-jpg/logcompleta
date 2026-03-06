@@ -4,3 +4,6 @@ flask-sqlalchemy
 python-dotenv
 gunicorn
 psycopg2-binary
+Flask-Mail
+itsdangerous
+Flask-Dance

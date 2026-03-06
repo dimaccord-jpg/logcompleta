@@ -63,10 +63,18 @@
                                 <label class="form-label small fw-bold">Senha</label>
                                 <input type="password" name="password" class="form-control" placeholder="********" required>
                             </div>
-                            <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold shadow">
-                                Entrar no Sistema
-                            </button>
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <button type="submit" class="btn btn-primary btn-lg fw-bold shadow">
+                                    Entrar no Sistema
+                                </button>
+                                <a href="{{ url_for('request_password_reset') }}" class="small">Esqueci minha senha</a>
+                            </div>
                         </form>
+                        <div class="mt-2">
+                            <a href="{{ url_for('login_google') }}" class="btn btn-outline-secondary w-100 fw-bold">
+                                Entrar com Google
+                            </a>
+                        </div>
                     </div>
 
                     <div class="tab-pane fade" id="content-cadastro" role="tabpanel">
@@ -83,9 +91,42 @@
                                 <label class="form-label small fw-bold">E-mail Corporativo</label>
                                 <input type="email" name="email" class="form-control" placeholder="empresa@email.com" required>
                             </div>
-                            <div class="mb-4">
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold">Cargo</label>
+                                <select name="job_role" class="form-select" required>
+                                    <option value="" selected disabled>Selecione seu cargo</option>
+                                    <option value="analista">Analista</option>
+                                    <option value="coordenador">Coordenador</option>
+                                    <option value="gerente">Gerente</option>
+                                    <option value="diretor">Diretor</option>
+                                    <option value="proprietario">Proprietário / Sócio</option>
+                                    <option value="outro">Outro</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold d-block">Objetivo de uso</label>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="usage_purpose" id="uso-trabalho" value="trabalho" required>
+                                    <label class="form-check-label small" for="uso-trabalho">Trabalho / Empresa</label>
+                                </div>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="usage_purpose" id="uso-pessoal" value="pessoal">
+                                    <label class="form-check-label small" for="uso-pessoal">Uso pessoal</label>
+                                </div>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="usage_purpose" id="uso-estudo" value="estudo">
+                                    <label class="form-check-label small" for="uso-estudo">Estudos / Pesquisa</label>
+                                </div>
+                            </div>
+                            <div class="mb-3">
                                 <label class="form-label small fw-bold">Senha</label>
                                 <input type="password" name="password" class="form-control" placeholder="Minimo 8 caracteres" required>
+                            </div>
+                            <div class="mb-4 form-check">
+                                <input class="form-check-input" type="checkbox" value="1" id="newsletter" name="subscribes_to_newsletter">
+                                <label class="form-check-label small" for="newsletter">
+                                    Desejo receber novidades, conteúdos e atualizações por e-mail.
+                                </label>
                             </div>
                             <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold shadow">
                                 Solicitar Acesso Gratuito
