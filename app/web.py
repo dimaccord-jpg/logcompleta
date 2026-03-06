@@ -124,14 +124,30 @@ with app.app_context(): #
     from app.news_ai import registrar_lead_newsletter #
 
 # Em produção com Gunicorn, o bloco __main__ não executa.
-# Garantimos a criação das tabelas para evitar erros "no such table".
+# Esta rotina garante criação do schema uma única vez por processo.
+_schema_initialized = False
+_schema_lock = threading.Lock()
+
+
+def ensure_database_schema():
+    global _schema_initialized
+    if _schema_initialized:
+        return
+
+    with _schema_lock:
+        if _schema_initialized:
+            return
+        try:
+            db.create_all()
+            _schema_initialized = True
+            logging.info("Banco inicializado: tabelas verificadas/criadas com sucesso.")
+        except Exception as e:
+            logging.exception(f"Falha ao inicializar banco de dados: {e}")
+            raise
+
+
 with app.app_context():
-    try:
-        db.create_all()
-        logging.info("Banco inicializado: tabelas verificadas/criadas com sucesso.")
-    except Exception as e:
-        logging.exception(f"Falha ao inicializar banco de dados: {e}")
-        raise
+    ensure_database_schema()
       
 @login_manager.user_loader
 def load_user(user_id):
@@ -220,6 +236,7 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     logging.info(f"=== Acessando /login (método: {request.method}) ===")
+    ensure_database_schema()
     if request.method == 'POST':
         email_input = request.form.get('email')
         password = request.form.get('password')
@@ -354,6 +371,7 @@ def login_google():
 def google_callback():
     """Callback do Google OAuth"""
     logging.info("=== INICIANDO google_callback ===")
+    ensure_database_schema()
     
     # Validar state (proteção CSRF)
     state = request.args.get('state')
