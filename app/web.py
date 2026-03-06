@@ -122,6 +122,16 @@ with app.app_context(): #
     from app.models import User, DeParaLogistica, FreteReal, NoticiaPortal #
     from app.brain import processar_inteligencia_frete #
     from app.news_ai import registrar_lead_newsletter #
+
+# Em produção com Gunicorn, o bloco __main__ não executa.
+# Garantimos a criação das tabelas para evitar erros "no such table".
+with app.app_context():
+    try:
+        db.create_all()
+        logging.info("Banco inicializado: tabelas verificadas/criadas com sucesso.")
+    except Exception as e:
+        logging.exception(f"Falha ao inicializar banco de dados: {e}")
+        raise
       
 @login_manager.user_loader
 def load_user(user_id):
