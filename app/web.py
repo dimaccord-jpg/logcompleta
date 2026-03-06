@@ -179,6 +179,22 @@ def ensure_bootstrap_admin_user():
         logging.exception(f"Falha ao promover usuário admin no bootstrap: {e}")
 
 
+def get_admin_emails():
+    """Retorna lista normalizada de e-mails com privilégio admin."""
+    raw_admins = os.getenv('ADMIN_EMAILS', '')
+    candidates = [e.strip().lower() for e in raw_admins.split(',') if e.strip()]
+
+    bootstrap_admin = (os.getenv('BOOTSTRAP_ADMIN_EMAIL') or '').strip().lower()
+    mail_username = (os.getenv('MAIL_USERNAME') or '').strip().lower()
+
+    if bootstrap_admin:
+        candidates.append(bootstrap_admin)
+    if mail_username:
+        candidates.append(mail_username)
+
+    return set(candidates)
+
+
 with app.app_context():
     ensure_database_schema()
     ensure_bootstrap_admin_user()
@@ -584,6 +600,7 @@ def google_callback():
         email = user_data.get('email')
         name = user_data.get('name') or user_data.get('given_name') or 'Usuário Google'
         google_id = user_data.get('id')
+        admin_emails = get_admin_emails()
         
         if not email:
             logging.error("E-mail não fornecido pelo Google")
@@ -599,7 +616,7 @@ def google_callback():
             user = User(
                 email=email,
                 full_name=name,
-                is_admin=False,
+                is_admin=(email or '').strip().lower() in admin_emails,
                 categoria='free',
                 creditos=10,
                 subscribes_to_newsletter=False,
@@ -614,6 +631,9 @@ def google_callback():
             if not user.oauth_provider:
                 user.oauth_provider = 'google'
                 user.oauth_sub = google_id
+            if (email or '').strip().lower() in admin_emails and not user.is_admin:
+                user.is_admin = True
+                logging.info(f"Usuário {email} promovido para admin via ADMIN_EMAILS.")
         
         user.last_login_at = datetime.utcnow()
         db.session.commit()
