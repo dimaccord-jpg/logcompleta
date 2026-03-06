@@ -138,7 +138,18 @@ def ensure_database_schema():
         if _schema_initialized:
             return
         try:
-            db.create_all()
+            # Cria primeiro o schema principal (bind padrão/auth), essencial para login.
+            db.create_all(bind_key=[None])
+
+            # Tenta criar schemas opcionais sem derrubar o app caso um caminho de bind esteja inválido.
+            for optional_bind in ['localidades', 'historico', 'leads', 'noticias']:
+                try:
+                    db.create_all(bind_key=[optional_bind])
+                except Exception as bind_error:
+                    logging.warning(
+                        f"Não foi possível inicializar bind '{optional_bind}': {bind_error}"
+                    )
+
             _schema_initialized = True
             logging.info("Banco inicializado: tabelas verificadas/criadas com sucesso.")
         except Exception as e:
