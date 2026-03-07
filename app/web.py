@@ -195,6 +195,16 @@ def get_admin_emails():
     return set(candidates)
 
 
+def normalize_email(email):
+    """Normaliza e-mail para comparações estáveis no banco."""
+    return (email or '').strip().lower()
+
+
+def is_profile_complete(user):
+    """Define perfil completo somente quando os dois campos obrigatórios têm conteúdo."""
+    return bool((user.job_role or '').strip()) and bool((user.usage_purpose or '').strip())
+
+
 with app.app_context():
     ensure_database_schema()
     ensure_bootstrap_admin_user()
@@ -401,7 +411,8 @@ def login():
         password = request.form.get('password')
         logging.info(f"Tentativa de login com email: {email_input}")
 
-        user = User.query.filter_by(email=email_input).first()
+        email_norm = normalize_email(email_input)
+        user = User.query.filter(func.lower(User.email) == email_norm).first()
 
         if user and user.verify_password(password):
             user.last_login_at = datetime.utcnow()
@@ -419,12 +430,12 @@ def login():
 @app.route('/request-password-reset', methods=['GET', 'POST'])
 def request_password_reset():
     if request.method == 'POST':
-        email = request.form.get('email')
+        email = normalize_email(request.form.get('email'))
         if not email:
             flash('Informe o e-mail cadastrado.', 'warning')
             return redirect(url_for('request_password_reset'))
 
-        user = User.query.filter_by(email=email).first()
+        user = User.query.filter(func.lower(User.email) == email).first()
         if not user:
             # Não revelamos se o e-mail existe ou não, por segurança
             flash('Se o e-mail estiver cadastrado, enviaremos um link de recuperação.', 'info')
@@ -597,7 +608,7 @@ def google_callback():
         user_data = userinfo_response.json()
         logging.info(f"Dados do usuário: email={user_data.get('email')}, name={user_data.get('name')}")
         
-        email = user_data.get('email')
+        email = normalize_email(user_data.get('email'))
         name = user_data.get('name') or user_data.get('given_name') or 'Usuário Google'
         google_id = user_data.get('id')
         admin_emails = get_admin_emails()
@@ -607,9 +618,13 @@ def google_callback():
             flash('Sua conta Google não retornou um e-mail válido.', 'danger')
             return redirect(url_for('login'))
         
-        # Buscar ou criar usuário
-        logging.info(f"Buscando usuário com email: {email}")
-        user = User.query.filter_by(email=email).first()
+        # Buscar ou criar usuário (prioriza sub do Google, fallback por e-mail normalizado)
+        user = None
+        if google_id:
+            user = User.query.filter_by(oauth_provider='google', oauth_sub=google_id).first()
+
+        if not user:
+            user = User.query.filter(func.lower(User.email) == email).order_by(User.id.asc()).first()
         
         if not user:
             logging.info(f"Criando novo usuário: {email}")
@@ -631,6 +646,8 @@ def google_callback():
             if not user.oauth_provider:
                 user.oauth_provider = 'google'
                 user.oauth_sub = google_id
+            elif user.oauth_provider == 'google' and not user.oauth_sub and google_id:
+                user.oauth_sub = google_id
             if (email or '').strip().lower() in admin_emails and not user.is_admin:
                 user.is_admin = True
                 logging.info(f"Usuário {email} promovido para admin via ADMIN_EMAILS.")
@@ -648,7 +665,7 @@ def google_callback():
         session.pop('oauth_state', None)
         
         # Verificar se o usuário precisa completar o perfil
-        if not user.job_role or not user.usage_purpose:
+        if not is_profile_complete(user):
             logging.info(f"Usuário {email} precisa completar perfil")
             session['pending_profile_completion'] = True
             return redirect(url_for('complete_profile'))
@@ -675,14 +692,14 @@ def complete_profile():
     user = current_user
     
     # Verificar se o usuário já tem esses dados preenchidos
-    if request.method == 'GET' and user.job_role and user.usage_purpose:
+    if request.method == 'GET' and is_profile_complete(user):
         logging.info(f"Usuário {user.email} já tem perfil completo. Redirecionando para index.")
         flash('Seu perfil já está completo.', 'info')
         return redirect(url_for('index'))
     
     if request.method == 'POST':
-        job_role = request.form.get('job_role')
-        usage_purpose = request.form.get('usage_purpose')
+        job_role = (request.form.get('job_role') or '').strip()
+        usage_purpose = (request.form.get('usage_purpose') or '').strip()
         subscribes_to_newsletter = bool(request.form.get('subscribes_to_newsletter'))
         
         if not job_role or not usage_purpose:
@@ -711,18 +728,18 @@ def complete_profile():
 
 @app.route('/register', methods=['POST'])
 def register():
-    full_name = request.form.get('nome')
-    email = request.form.get('email')
+    full_name = (request.form.get('nome') or '').strip()
+    email = normalize_email(request.form.get('email'))
     password = request.form.get('password')
-    job_role = request.form.get('job_role')
-    usage_purpose = request.form.get('usage_purpose')
+    job_role = (request.form.get('job_role') or '').strip()
+    usage_purpose = (request.form.get('usage_purpose') or '').strip()
     subscribes_to_newsletter = bool(request.form.get('subscribes_to_newsletter'))
 
     if not full_name or not email or not password:
         flash('Por favor, preencha nome, e-mail e senha.', 'danger')
         return redirect(url_for('login'))
 
-    user_exists = User.query.filter_by(email=email).first()
+    user_exists = User.query.filter(func.lower(User.email) == email).first()
     if user_exists:
         flash('Este e-mail já está cadastrado.', 'danger')
         return redirect(url_for('login'))
