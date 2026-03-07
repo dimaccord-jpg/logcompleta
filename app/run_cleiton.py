@@ -14,6 +14,14 @@ load_dotenv(f'.env.{env_name}')
 # Configuração de Logger local
 logger = logging.getLogger(__name__)
 
+# Chave exclusiva do Cleiton (orquestrador)
+cleiton_api_key = os.getenv("GEMINI_API_KEY")
+if not cleiton_api_key:
+    logger.warning(
+        "GEMINI_API_KEY não configurada para o Cleiton. "
+        f"Ajuste no arquivo .env.{env_name} ou nas variáveis de ambiente do sistema."
+    )
+
 # Importamos as funções principais dos seus agentes especializados
 try:
     from app.news_ai import processar_ciclo_noticias

@@ -1,13 +1,33 @@
 from app.extensions import db
 from flask_login import UserMixin
+from datetime import datetime
+
 
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), unique=True, nullable=False)
-    password = db.Column(db.String(150), nullable=False)
+    email = db.Column(db.String(150), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=True)  # None para usuários só OAuth (ex.: Google)
+    full_name = db.Column(db.String(150), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
     categoria = db.Column(db.String(50), default='free')
     creditos = db.Column(db.Integer, default=10)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_login_at = db.Column(db.DateTime, nullable=True)
+    subscribes_to_newsletter = db.Column(db.Boolean, default=False)
+    usage_purpose = db.Column(db.String(50), nullable=True)
+    job_role = db.Column(db.String(100), nullable=True)
+    oauth_provider = db.Column(db.String(50), nullable=True)
+    oauth_sub = db.Column(db.String(255), nullable=True)
+
+    def set_password(self, password: str) -> None:
+        from werkzeug.security import generate_password_hash
+        self.password_hash = generate_password_hash(password, method='pbkdf2:sha256')
+
+    def verify_password(self, password: str) -> bool:
+        if self.password_hash is None:
+            return False
+        from werkzeug.security import check_password_hash
+        return check_password_hash(self.password_hash, password)
 
 class DeParaLogistica(db.Model):
     __bind_key__ = 'localidades'
@@ -44,9 +64,6 @@ class Lead(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(150), unique=True, nullable=False)
     data_inscricao = db.Column(db.DateTime, default=db.func.current_timestamp())
-
-from app.extensions import db
-from datetime import datetime
 
 class NoticiaPortal(db.Model):
     __bind_key__ = 'noticias'

@@ -20,6 +20,9 @@ logs/
 # === Caches / artefatos locais ===
 cache_*.json
 *.tmp
+flask_session/
+diagnose_logcompleta.sh
+build.sh
 
 # === Bancos locais (SQLite) ===
 *.db
