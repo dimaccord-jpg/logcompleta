@@ -597,7 +597,7 @@ def google_callback():
         user_data = userinfo_response.json()
         logging.info(f"Dados do usuário: email={user_data.get('email')}, name={user_data.get('name')}")
         
-        email = user_data.get('email')
+        email = (user_data.get('email') or '').strip().lower()
         name = user_data.get('name') or user_data.get('given_name') or 'Usuário Google'
         google_id = user_data.get('id')
         admin_emails = get_admin_emails()
@@ -607,9 +607,13 @@ def google_callback():
             flash('Sua conta Google não retornou um e-mail válido.', 'danger')
             return redirect(url_for('login'))
         
-        # Buscar ou criar usuário
+        # Buscar ou criar usuário (prioriza identificador estável do Google)
         logging.info(f"Buscando usuário com email: {email}")
-        user = User.query.filter_by(email=email).first()
+        user = None
+        if google_id:
+            user = User.query.filter_by(oauth_provider='google', oauth_sub=google_id).first()
+        if not user:
+            user = User.query.filter(func.lower(User.email) == email).order_by(User.id.asc()).first()
         
         if not user:
             logging.info(f"Criando novo usuário: {email}")
@@ -631,6 +635,8 @@ def google_callback():
             if not user.oauth_provider:
                 user.oauth_provider = 'google'
                 user.oauth_sub = google_id
+            elif user.oauth_provider == 'google' and not user.oauth_sub and google_id:
+                user.oauth_sub = google_id
             if (email or '').strip().lower() in admin_emails and not user.is_admin:
                 user.is_admin = True
                 logging.info(f"Usuário {email} promovido para admin via ADMIN_EMAILS.")
@@ -648,7 +654,7 @@ def google_callback():
         session.pop('oauth_state', None)
         
         # Verificar se o usuário precisa completar o perfil
-        if not user.job_role or not user.usage_purpose:
+        if not (user.job_role or '').strip() or not (user.usage_purpose or '').strip():
             logging.info(f"Usuário {email} precisa completar perfil")
             session['pending_profile_completion'] = True
             return redirect(url_for('complete_profile'))
@@ -675,14 +681,14 @@ def complete_profile():
     user = current_user
     
     # Verificar se o usuário já tem esses dados preenchidos
-    if request.method == 'GET' and user.job_role and user.usage_purpose:
+    if request.method == 'GET' and (user.job_role or '').strip() and (user.usage_purpose or '').strip():
         logging.info(f"Usuário {user.email} já tem perfil completo. Redirecionando para index.")
         flash('Seu perfil já está completo.', 'info')
         return redirect(url_for('index'))
     
     if request.method == 'POST':
-        job_role = request.form.get('job_role')
-        usage_purpose = request.form.get('usage_purpose')
+        job_role = (request.form.get('job_role') or '').strip()
+        usage_purpose = (request.form.get('usage_purpose') or '').strip()
         subscribes_to_newsletter = bool(request.form.get('subscribes_to_newsletter'))
         
         if not job_role or not usage_purpose:
