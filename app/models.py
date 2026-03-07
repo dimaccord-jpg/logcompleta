@@ -45,7 +45,7 @@ class FreteReal(db.Model):
     __tablename__ = 'frete_real'
     
     id = db.Column(db.Integer, primary_key=True)
-    data_emissao = db.Column(db.DateTime(20))
+    data_emissao = db.Column(db.DateTime)
     id_cidade_origem = db.Column(db.Integer)
     id_cidade_destino = db.Column(db.Integer)
     cidade_origem = db.Column(db.String(100))

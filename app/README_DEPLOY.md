@@ -12,6 +12,8 @@ sudo apt install python3-pip python3-venv nginx git -y
 
 ## 2. Estrutura de Pastas e Código
 
+O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit` e `/ops/promote-admin`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação.
+
 Vamos criar uma estrutura organizada em `/srv`.
 
 ```bash
@@ -42,7 +44,7 @@ mkdir -p /srv/logcompleta/data
 **Crie o arquivo `.env.prod` no servidor:**
 `nano /srv/logcompleta/code/app/.env.prod`
 
-Conteúdo (Ajuste os caminhos do DB para serem absolutos):
+Conteúdo (Ajuste os caminhos do DB e a URL do site):
 ```ini
 APP_ENV=prod
 FLASK_DEBUG=False
@@ -55,6 +57,20 @@ DB_URI_LOCALIDADES=sqlite:////srv/logcompleta/data/base_localidades.db
 DB_URI_HISTORICO=sqlite:////srv/logcompleta/data/historico_frete.db
 DB_URI_LEADS=sqlite:////srv/logcompleta/data/leads.db
 DB_URI_NOTICIAS=sqlite:////srv/logcompleta/data/noticias.db
+
+# Não defina OAUTHLIB_INSECURE_TRANSPORT em produção (ou use 0). OAuth deve usar HTTPS.
+# Login Google: use a URL pública do seu domínio (auth em app/auth_services.py)
+GOOGLE_OAUTH_REDIRECT_URI=https://SEU_DOMINIO/login/google/callback
+
+# E-mail (recuperação de senha)
+MAIL_SERVER=smtp.gmail.com
+MAIL_PORT=587
+MAIL_USE_TLS=True
+MAIL_USERNAME=...
+MAIL_PASSWORD=...
+
+# Token para rotas de operação e diagnóstico OAuth (header X-Ops-Token). Gere um valor secreto.
+OPS_TOKEN=seu_token_secreto_aqui
 
 # Chaves de API
 GEMINI_API_KEY=...          # Cleiton (orquestrador)
