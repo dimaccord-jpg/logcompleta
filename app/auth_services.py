@@ -28,6 +28,41 @@ def _get_serializer(secret_key: str):
     return URLSafeTimedSerializer(secret_key, salt=PASSWORD_RESET_EMAIL_SALT)
 
 
+def _normalize_email(email: str) -> str:
+    """Normaliza e-mail para comparacoes consistentes no banco."""
+    return (email or "").strip().lower()
+
+
+def _is_profile_complete(user: User) -> bool:
+    """Perfil completo exige os dois campos obrigatorios preenchidos."""
+    return bool((user.job_role or "").strip()) and bool((user.usage_purpose or "").strip())
+
+
+def _select_canonical_user(candidates: list[User], google_id: str | None) -> User:
+    """
+    Escolhe um usuario canonico entre candidatos com mesmo e-mail normalizado.
+    Prioriza vinculo Google estavel e perfil ja completo para evitar regressao de onboarding.
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Se houver match exato por sub do Google, ele sempre vence.
+    if google_id:
+        for candidate in candidates:
+            if candidate.oauth_provider == "google" and (candidate.oauth_sub or "").strip() == google_id:
+                return candidate
+
+    def _score(user: User):
+        return (
+            1 if _is_profile_complete(user) else 0,
+            1 if (user.oauth_provider == "google" and (user.oauth_sub or "").strip()) else 0,
+            1 if user.last_login_at else 0,
+            -(user.id or 0),
+        )
+
+    return max(candidates, key=_score)
+
+
 def _get_admin_emails():
     """Retorna conjunto de e-mails com privilégio admin (env)."""
     raw = os.getenv("ADMIN_EMAILS", "")
@@ -62,9 +97,10 @@ def authenticate_user(email: str, password: str):
     Autentica usuário por e-mail e senha.
     Retorna (user, None) em sucesso ou (None, mensagem_erro) em falha.
     """
+    email = _normalize_email(email)
     if not email or not (password or "").strip():
         return None, "Email ou senha incorretos."
-    user = User.query.filter_by(email=email.strip()).first()
+    user = User.query.filter(func.lower(User.email) == email).order_by(User.id.asc()).first()
     if not user or not user.verify_password(password):
         return None, "Email ou senha incorretos."
     user.last_login_at = datetime.utcnow()
@@ -87,11 +123,11 @@ def request_password_reset(
     build_reset_url(token: str) -> str deve retornar a URL completa (ex.: url_for(..., _external=True)).
     Retorna (success: bool, message: str, dev_reset_url: str | None).
     """
-    email = (email or "").strip()
+    email = _normalize_email(email)
     if not email:
         return False, "Informe o e-mail cadastrado.", None
 
-    user = User.query.filter_by(email=email).first()
+    user = User.query.filter(func.lower(User.email) == email).order_by(User.id.asc()).first()
     if not user:
         return True, "Se o e-mail estiver cadastrado, enviaremos um link de recuperação.", None
 
@@ -226,9 +262,10 @@ def handle_google_oauth_callback(
             return None, "Não foi possível obter os dados do Google.", False
 
         user_data = userinfo_response.json()
-        email = (user_data.get("email") or "").strip().lower()
+        email = _normalize_email(user_data.get("email") or "")
         name = user_data.get("name") or user_data.get("given_name") or "Usuário Google"
-        google_id = user_data.get("id")
+        # Em OpenID Connect o identificador estavel e "sub". Mantemos fallback para "id" por compatibilidade.
+        google_id = (user_data.get("sub") or user_data.get("id") or "").strip() or None
 
         if not email:
             return None, "Sua conta Google não retornou um e-mail válido.", False
@@ -237,8 +274,21 @@ def handle_google_oauth_callback(
         user = None
         if google_id:
             user = User.query.filter_by(oauth_provider="google", oauth_sub=google_id).first()
-        if not user:
-            user = User.query.filter(func.lower(User.email) == email).order_by(User.id.asc()).first()
+
+        email_candidates = (
+            User.query.filter(func.lower(User.email) == email)
+            .order_by(User.id.asc())
+            .all()
+        )
+
+        if not user and email_candidates:
+            user = _select_canonical_user(email_candidates, google_id)
+            if len(email_candidates) > 1:
+                logger.warning(
+                    "Múltiplos usuários para e-mail normalizado '%s'. Selecionado id=%s",
+                    email,
+                    user.id,
+                )
 
         if not user:
             user = User(
@@ -260,13 +310,16 @@ def handle_google_oauth_callback(
                 user.oauth_sub = google_id
             elif user.oauth_provider == "google" and not user.oauth_sub and google_id:
                 user.oauth_sub = google_id
+            elif user.oauth_provider == "google" and google_id and user.oauth_sub != google_id:
+                # Mantem vinculo Google consistente para evitar fallback por e-mail em logins futuros.
+                user.oauth_sub = google_id
             if email in admin_emails and not user.is_admin:
                 user.is_admin = True
 
         user.last_login_at = datetime.utcnow()
         db.session.commit()
 
-        needs_profile = not (user.job_role or "").strip() or not (user.usage_purpose or "").strip()
+        needs_profile = not _is_profile_complete(user)
         return user, None, needs_profile
 
     except requests.RequestException as e:
@@ -309,11 +362,11 @@ def register_user(
     Retorna (user, None) em sucesso ou (None, mensagem_erro) em falha.
     """
     full_name = (full_name or "").strip()
-    email = (email or "").strip()
+    email = _normalize_email(email)
     if not full_name or not email or not (password or "").strip():
         return None, "Por favor, preencha nome, e-mail e senha."
 
-    if User.query.filter_by(email=email).first():
+    if User.query.filter(func.lower(User.email) == email).first():
         return None, "Este e-mail já está cadastrado."
 
     new_user = User(
