@@ -64,7 +64,22 @@
         
         {# Rodapé Estratégico #}
         <div class="footer-noticia bg-light p-4 rounded-3 border-start border-primary border-4">
+            {% set julia_avatar = config.get('JULIA_AVATAR_URL') or url_for('static', filename='img/julia-avatar.svg') %}
             <h5 class="fw-bold mb-3"><i class="bi bi-info-circle me-2"></i>Análise da Editora</h5>
+            <div class="d-flex align-items-center gap-3 mb-3 pb-3 border-bottom">
+                <img
+                    src="{{ julia_avatar }}"
+                    alt="Júlia, Agente de IA"
+                    width="56"
+                    height="56"
+                    class="rounded-circle border border-2 border-primary-subtle"
+                    style="object-fit: cover;"
+                >
+                <div>
+                    <p class="mb-0 fw-bold">Júlia, Agente de IA</p>
+                    <small class="text-muted">Editora responsavel pela analise estrategica deste insight.</small>
+                </div>
+            </div>
             <p class="mb-2 text-muted">Esta análise foi fundamentada na pauta original:</p>
             <p class="mb-0">
                 <a href="{{ noticia.link }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none fw-bold text-primary">
@@ -77,6 +92,16 @@
                 <div class="small mt-3 pt-3 border-top text-muted">
                     <strong>Insights Adicionais e Referências:</strong><br>
                     {{ noticia.referencias }}
+                </div>
+            {% endif %}
+
+            {# CTA e objetivo de lead (artigos Etapa 2) #}
+            {% if noticia.tipo == 'artigo' and noticia.cta %}
+                <div class="mt-4 pt-4 border-top border-primary">
+                    <p class="fw-bold mb-2">{{ noticia.cta }}</p>
+                    {% if noticia.objetivo_lead %}
+                        <span class="badge bg-primary">{{ noticia.objetivo_lead }}</span>
+                    {% endif %}
                 </div>
             {% endif %}
         </div>

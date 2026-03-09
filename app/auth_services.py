@@ -5,7 +5,7 @@ Toda a lógica de negócio de auth fica aqui; web.py apenas chama e redireciona.
 import os
 import secrets
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import requests
@@ -17,6 +17,10 @@ from app.extensions import db
 from app.models import User
 
 logger = logging.getLogger(__name__)
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 # --- Constantes (e-mail de recuperação de senha) ---
 PASSWORD_RESET_EMAIL_SUBJECT = "Redefinição de senha - Agentefrete"
@@ -103,7 +107,7 @@ def authenticate_user(email: str, password: str):
     user = User.query.filter(func.lower(User.email) == email).order_by(User.id.asc()).first()
     if not user or not user.verify_password(password):
         return None, "Email ou senha incorretos."
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = _utcnow_naive()
     db.session.commit()
     return user, None
 
@@ -316,7 +320,7 @@ def handle_google_oauth_callback(
             if email in admin_emails and not user.is_admin:
                 user.is_admin = True
 
-        user.last_login_at = datetime.utcnow()
+        user.last_login_at = _utcnow_naive()
         db.session.commit()
 
         needs_profile = not _is_profile_complete(user)

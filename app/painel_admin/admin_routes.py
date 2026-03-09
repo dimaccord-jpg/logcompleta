@@ -1,13 +1,13 @@
-from flask import Blueprint, render_template, flash, redirect, url_for, request
+from flask import Blueprint, render_template, flash, redirect, url_for, request, current_app
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
-from sqlalchemy import text # Importante para rodar o SQL puro
+from sqlalchemy import text
 import os
 import csv
 import io
 from datetime import datetime
-from app.extensions import db # Criado para atender extensions
-from app.models import FreteReal # <--- Adicione esta linha
+from app.extensions import db
+from app.models import FreteReal, RecomendacaoEstrategica, InsightCanal, AuditoriaGerencial, ConfigRegras
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 pasta_templates = os.path.join(base_dir, 'template_admin')
@@ -21,7 +21,7 @@ def verificar_acesso_admin():
     """Retorna True se o usuário estiver autenticado e for administrador."""
     return current_user.is_authenticated and getattr(current_user, 'is_admin', False)
 
-# --- ROTA 1: DASHBOARD ---
+# --- ROTA 1: DASHBOARD (Fase 6: KPIs insight + recomendações) ---
 @admin_bp.route('/')
 @admin_bp.route('/dashboard')
 @login_required
@@ -34,7 +34,223 @@ def admin_dashboard():
         "status_geral": "Operacional",
         "mensagem_sistema": "Painel Cleiton Log Ativo"
     }
-    return render_template('dashboard.html', status=status_sistema)
+    # KPIs estratégicos (Fase 6): insight e recomendações
+    kpis_insight = _obter_kpis_insight()
+    recomendacoes_recentes = _obter_recomendacoes_recentes(limite=15)
+    return render_template(
+        'dashboard.html',
+        status=status_sistema,
+        kpis_insight=kpis_insight,
+        recomendacoes_recentes=recomendacoes_recentes,
+    )
+
+
+def _obter_kpis_insight():
+    """Retorna dict com contagens para painel estratégico (dentro de app_context)."""
+    try:
+        pendentes = RecomendacaoEstrategica.query.filter_by(status="pendente").count()
+        aplicadas = RecomendacaoEstrategica.query.filter_by(status="aplicada").count()
+        descartadas = RecomendacaoEstrategica.query.filter_by(status="descartada").count()
+        total_metricas = InsightCanal.query.count()
+        total_auditorias_insight = AuditoriaGerencial.query.filter_by(tipo_decisao="insight").count()
+        return {
+            "recomendacoes_pendentes": pendentes,
+            "recomendacoes_aplicadas": aplicadas,
+            "recomendacoes_descartadas": descartadas,
+            "total_metricas": total_metricas,
+            "total_auditorias_insight": total_auditorias_insight,
+        }
+    except Exception:
+        return {
+            "recomendacoes_pendentes": 0,
+            "recomendacoes_aplicadas": 0,
+            "recomendacoes_descartadas": 0,
+            "total_metricas": 0,
+            "total_auditorias_insight": 0,
+        }
+
+
+def _obter_recomendacoes_recentes(limite=15):
+    """Lista recomendações recentes (todas as status) para exibição no dashboard."""
+    try:
+        return (
+            RecomendacaoEstrategica.query
+            .order_by(RecomendacaoEstrategica.criado_em.desc())
+            .limit(max(1, min(50, limite)))
+            .all()
+        )
+    except Exception:
+        return []
+
+
+# --- ROTA 1.1: AGENTES (Júlia / Roberto) ---
+@admin_bp.route('/agentes')
+@login_required
+def agentes_home():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    return redirect(url_for('admin.agentes_julia'))
+
+
+@admin_bp.route('/agentes/julia')
+@login_required
+def agentes_julia():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    frequencia_horas = _obter_frequencia_horas()
+    return render_template('agentes_julia.html', frequencia_horas=frequencia_horas)
+
+
+def _obter_frequencia_horas() -> int:
+    """Retorna a frequência atual do ciclo (fallback seguro = 3h)."""
+    try:
+        from app.run_cleiton_agente_regras import bootstrap_regras, CHAVE_FREQUENCIA_HORAS, DEFAULTS
+        bootstrap_regras()
+        cfg = ConfigRegras.query.filter_by(chave=CHAVE_FREQUENCIA_HORAS).first()
+        if cfg and cfg.valor_inteiro is not None:
+            return max(1, int(cfg.valor_inteiro))
+        return int(DEFAULTS.get(CHAVE_FREQUENCIA_HORAS, 3))
+    except Exception:
+        return 3
+
+
+@admin_bp.route('/agentes/julia/frequencia', methods=['POST'])
+@login_required
+def agentes_julia_configurar_frequencia():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    valor_raw = (request.form.get('frequencia_horas') or '').strip()
+    try:
+        valor = int(valor_raw)
+        if valor < 1:
+            raise ValueError('Frequência deve ser maior que zero.')
+    except Exception:
+        flash('Valor de frequência inválido. Informe horas inteiras (ex.: 1, 3, 6).', 'warning')
+        return redirect(url_for('admin.agentes_julia'))
+
+    try:
+        from app.run_cleiton_agente_regras import bootstrap_regras, CHAVE_FREQUENCIA_HORAS
+        bootstrap_regras()
+        cfg = ConfigRegras.query.filter_by(chave=CHAVE_FREQUENCIA_HORAS).first()
+        if not cfg:
+            cfg = ConfigRegras(chave=CHAVE_FREQUENCIA_HORAS, descricao='Intervalo de execução do ciclo em horas')
+            db.session.add(cfg)
+        cfg.valor_inteiro = valor
+        cfg.valor_texto = None
+        cfg.valor_real = None
+        db.session.commit()
+        flash(f'Frequência do ciclo atualizada para {valor}h.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erro ao atualizar frequência: {str(e)}', 'danger')
+    return redirect(url_for('admin.agentes_julia'))
+
+
+@admin_bp.route('/agentes/roberto')
+@login_required
+def agentes_roberto():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    return render_template('agentes_roberto.html')
+
+
+@admin_bp.route('/agentes/julia/executar-cleiton', methods=['POST'])
+@login_required
+def agentes_julia_executar_cleiton():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    bypass_frequencia = (request.form.get('bypass_frequencia') or '').strip() in ('1', 'true', 'True')
+    try:
+        from app.run_cleiton import executar_orquestracao
+        executar_orquestracao(current_app, bypass_frequencia=bypass_frequencia)
+        if bypass_frequencia:
+            flash("Ciclo do Cleiton executado com bypass de frequência (admin).", "success")
+        else:
+            flash("Ciclo do Cleiton executado com sucesso.", "success")
+    except Exception as e:
+        flash(f"Erro ao executar Cleiton: {str(e)}", "danger")
+    return redirect(url_for('admin.agentes_julia'))
+
+
+@admin_bp.route('/agentes/julia/executar-insight', methods=['POST'])
+@login_required
+def agentes_julia_executar_insight():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    try:
+        from app.run_cleiton import executar_orquestracao
+        executar_orquestracao(current_app)
+        flash("Ciclo completo executado (inclui Customer Insight).", "success")
+    except Exception as e:
+        flash(f"Erro ao executar ciclo com insight: {str(e)}", "danger")
+    return redirect(url_for('admin.agentes_julia'))
+
+
+@admin_bp.route('/agentes/julia/coletar-noticias', methods=['POST'])
+@login_required
+def agentes_julia_coletar_noticias():
+    """Ação opcional: executa apenas Scout + Verificador para notícias automáticas."""
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    try:
+        from app.run_cleiton_agente_scout import executar_coleta
+        from app.run_cleiton_agente_verificador import executar_verificacao
+        resultado_scout = executar_coleta()
+        resultado_verif = executar_verificacao()
+        msg = (
+            f"Coleta de notícias executada. "
+            f"Inseridas: {resultado_scout.get('inseridas', 0)}, "
+            f"Ignoradas (duplicatas/erros de inserção): {resultado_scout.get('ignoradas_duplicata', 0)}, "
+            f"Fontes com erro: {resultado_scout.get('erros', 0)}. "
+            f"Verificação: aprovadas={resultado_verif.get('aprovadas', 0)}, "
+            f"revisar={resultado_verif.get('revisar', 0)}, "
+            f"rejeitadas={resultado_verif.get('rejeitadas', 0)}."
+        )
+        flash(msg, "success")
+    except Exception as e:
+        flash(f"Erro ao coletar/verificar notícias: {str(e)}", "danger")
+    return redirect(url_for('admin.agentes_julia'))
+
+
+# --- Fase 6: Gestão de recomendações (aplicar/descartar) ---
+@admin_bp.route('/recomendacoes/<int:recomendacao_id>/aplicar', methods=['POST'])
+@login_required
+def recomendacao_aplicar(recomendacao_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    try:
+        from app.run_cleiton_agente_customer_insight import atualizar_status_recomendacao
+        ok = atualizar_status_recomendacao(
+            recomendacao_id, "aplicada", current_app,
+            detalhe="Aplicada manualmente pelo painel admin",
+        )
+        if ok:
+            flash("Recomendação marcada como aplicada.", "success")
+        else:
+            flash("Recomendação não encontrada ou status inválido.", "warning")
+    except Exception as e:
+        flash(f"Erro ao atualizar recomendação: {str(e)}", "danger")
+    return redirect(url_for('admin.admin_dashboard'))
+
+
+@admin_bp.route('/recomendacoes/<int:recomendacao_id>/descartar', methods=['POST'])
+@login_required
+def recomendacao_descartar(recomendacao_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    try:
+        from app.run_cleiton_agente_customer_insight import atualizar_status_recomendacao
+        ok = atualizar_status_recomendacao(
+            recomendacao_id, "descartada", current_app,
+            detalhe="Descartada manualmente pelo painel admin",
+        )
+        if ok:
+            flash("Recomendação descartada.", "success")
+        else:
+            flash("Recomendação não encontrada ou status inválido.", "warning")
+    except Exception as e:
+        flash(f"Erro ao descartar recomendação: {str(e)}", "danger")
+    return redirect(url_for('admin.admin_dashboard'))
 
 # --- ROTA 2: GESTÃO DE PLANOS ---
 @admin_bp.route('/planos')
@@ -116,7 +332,7 @@ def executar_importacao(tipo):
                 leitor = csv.DictReader(stream, delimiter=',') # Padrão vírgula conforme seu teste_upload.txt
 
                 sucessos, falhas = 0, 0
-                engine_localidades = db.get_engine(bind='localidades')
+                engine_localidades = db.engines['localidades']
                 
                 with engine_localidades.connect() as connection:
                     for linha in leitor:
@@ -182,7 +398,7 @@ def executar_importacao(tipo):
                 sucessos = 0
                 linhas_com_erro = [] # Lista para armazenar o log de falhas
 
-                engine_loc = db.get_engine(bind='localidades')
+                engine_loc = db.engines['localidades']
 
                 for i, linha in enumerate(leitor, start=1):
                     try:

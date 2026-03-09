@@ -12,7 +12,7 @@ sudo apt install python3-pip python3-venv nginx git -y
 
 ## 2. Estrutura de Pastas e Código
 
-O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit` e `/ops/promote-admin`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação.
+O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit` e `/ops/promote-admin`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. A camada gerencial Cleiton usa o bind `gerencial` (`DB_URI_GERENCIAL`); o carregamento de `.env` é por caminho absoluto via `app/env_loader.py` — defina `APP_ENV=prod` no systemd para carregar `.env.prod`.
 
 Vamos criar uma estrutura organizada em `/srv`.
 
@@ -57,6 +57,7 @@ DB_URI_LOCALIDADES=sqlite:////srv/logcompleta/data/base_localidades.db
 DB_URI_HISTORICO=sqlite:////srv/logcompleta/data/historico_frete.db
 DB_URI_LEADS=sqlite:////srv/logcompleta/data/leads.db
 DB_URI_NOTICIAS=sqlite:////srv/logcompleta/data/noticias.db
+DB_URI_GERENCIAL=sqlite:////srv/logcompleta/data/gerencial.db
 
 # Não defina OAUTHLIB_INSECURE_TRANSPORT em produção (ou use 0). OAuth deve usar HTTPS.
 # Login Google: use a URL pública do seu domínio (auth em app/auth_services.py)
@@ -72,14 +73,50 @@ MAIL_PASSWORD=...
 # Token para rotas de operação e diagnóstico OAuth (header X-Ops-Token). Gere um valor secreto.
 OPS_TOKEN=seu_token_secreto_aqui
 
-# Chaves de API
-GEMINI_API_KEY=...          # Cleiton (orquestrador)
+# Chaves de API e modelos (Etapa 2: Júlia pipeline + imagem)
+GEMINI_API_KEY=...
 GEMINI_API_KEY_ROBERTO=...
-GEMINI_API_KEY_1=...
-GEMINI_API_KEY_2=...
+GEMINI_API_KEY_1=...        # Júlia notícias
+GEMINI_API_KEY_2=...        # Júlia artigos
+GEMINI_MODEL_TEXT=gemini-2.5-flash
+IMAGE_PROVIDER=gemini
+GEMINI_MODEL_IMAGE=imagen-3.0-generate-002
+# Fallback Gemini (multimodal) para quando Imagen não retornar URL pública
+GEMINI_MODEL_IMAGE_FALLBACK=gemini-2.0-flash-preview-image-generation
+# Opcional: fallback visual estático (se vazio, sistema tenta fallback temático)
+# IMAGEM_FALLBACK_URL=https://sua-cdn.com/imagens/fallback-logistica.jpg
+# Avatar da editora (opcional)
+# JULIA_AVATAR_URL=https://sua-cdn.com/imagens/julia-avatar.png
+# Fase 3: Scout + Verificador (apenas pautas aprovadas vão para Júlia)
+# SCOUT_ENABLED=true
+# IMPORTANTE: SCOUT_SOURCES_JSON deve ficar em UMA linha, sem comentarios e sem quebra.
+# SCOUT_SOURCES_JSON=[{"url":"https://g1.globo.com/rss/g1/","tipo":"noticia","tipo_fonte":"rss"},{"url":"https://news.google.com/rss/search?q=logistica&hl=pt-BR&gl=BR&ceid=BR:pt-419","tipo":"noticia","tipo_fonte":"rss"}]
+# SCOUT_MAX_ITENS_POR_CICLO=20
+# VERIFICADOR_SCORE_MINIMO=0.5
+# VERIFICADOR_SIMILARIDADE_TITULO=0.85
+# VERIFICADOR_FONTES_CONFIAVEIS=valor.globo.com,g1.globo.com,transportemoderno.com.br,logweb.com.br,portosenavios.com.br,tecnologistica.com.br,supplychaindive.com,supplychainbrain.com,logisticsmgmt.com,freightwaves.com
+# VERIFICADOR_BLOQUEAR_DOMINIOS=example-spam.com,agregador-ruido.net,dominio-suspeito.xyz
+# Fase 4: Designer + Publisher (portal + canais; PUBLISHER_MODO=mock para canais externos)
+# DESIGNER_ENABLED=true
+# PUBLISHER_CANAIS_ATIVOS=portal,linkedin,instagram,email
+# PUBLISHER_MODO=mock
+# Fase 5: Customer Insight (métricas e recomendações; INSIGHT_COLETA_MODO=mock até APIs reais)
+# INSIGHT_ENABLED=true
+# INSIGHT_COLETA_MODO=mock
+# INSIGHT_JANELA_DIAS=30
+# INSIGHT_SCORE_ESCALAR=70
+# INSIGHT_SCORE_PAUSAR=25
+# INSIGHT_MIN_IMPRESSOES=100
+# Fase 6: Nenhuma variável nova; feedback loop e painel admin usam as mesmas configs.
 ```
 
 Neste momento, você pode utilizar os mesmos valores de chave de API em DEV, HOMOLOG e PROD; a diferença entre ambientes é controlada principalmente por `APP_ENV` e pelos caminhos de banco de dados.
+
+Checklist rapido de validacao (Fase 3):
+- `SCOUT_SOURCES_JSON` em linha unica e JSON valido.
+- Sem comentarios dentro do valor de `SCOUT_SOURCES_JSON`.
+- Em caso de restricao de fontes, informar domínios sem `https://` e sem caminho.
+- Reiniciar o serviço (`systemctl restart logcompleta`) após alterar `.env.prod`.
 
 ## 4. Configurar Gunicorn com Systemd
 

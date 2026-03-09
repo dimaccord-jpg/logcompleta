@@ -1,17 +1,21 @@
+"""
+Cleiton - Entrypoint e fachada de compatibilidade.
+Delega orquestração gerencial ao run_cleiton_agente_orquestrador.
+Carregamento de .env via caminho absoluto (app/env_loader).
+"""
 import time
 import logging
 import sys
 import os
+import json
+
+# --- CARREGAMENTO DE AMBIENTE (caminho absoluto baseado no diretório app) ---
+from app.env_loader import load_app_env
+load_app_env()
+
 from app.extensions import db
 from datetime import datetime
-import json
-from dotenv import load_dotenv
 
-# --- CARREGAMENTO DE AMBIENTE ---
-env_name = os.getenv('APP_ENV', 'dev')
-load_dotenv(f'.env.{env_name}')
-
-# Configuração de Logger local
 logger = logging.getLogger(__name__)
 
 # Chave exclusiva do Cleiton (orquestrador)
@@ -19,127 +23,83 @@ cleiton_api_key = os.getenv("GEMINI_API_KEY")
 if not cleiton_api_key:
     logger.warning(
         "GEMINI_API_KEY não configurada para o Cleiton. "
-        f"Ajuste no arquivo .env.{env_name} ou nas variáveis de ambiente do sistema."
+        "Ajuste no .env.{APP_ENV} ou nas variáveis de ambiente."
     )
 
-# Importamos as funções principais dos seus agentes especializados
-try:
-    from app.news_ai import processar_ciclo_noticias
-    from app.run_julia import processar_insight_do_momento
-    # Caso o finance.py ainda não exista, mantemos o try para não quebrar o fluxo
-    try:
-        from app.finance import atualizar_indices
-    except ImportError:
-        atualizar_indices = None
-except ImportError as e:
-    logger.error(f"❌ Erro ao importar agentes: {e}")
-    logger.warning("O sistema continuará rodando, mas as funções de IA podem estar indisponíveis.")
-    # Define como None para evitar NameError, o código abaixo deve tratar isso
-    processar_ciclo_noticias = None
-    processar_insight_do_momento = None
-    atualizar_indices = None
 
 def coordenar_analise_frete(historico_ia, rota_str):
     """
     Interface de tempo real para análise de fretes.
     Chamada pelo brain.py quando um usuário clica em 'Analisar Rota'.
     """
-    from app.run_roberto import roberto # Import local para quebrar o ciclo
-    logger.info(f"🤖 GESTOR CLEITON: Recebendo solicitação de análise para {rota_str}")
-    
-    # 1. Carregamento dos índices (Pilar Financeiro)
-    indices = {}
-    
-    # Garante que pegamos o indices.json da pasta APP, não importa de onde o comando foi rodado
+    from app.run_roberto import roberto
+    logger.info("GESTOR CLEITON: Recebendo solicitação de análise para %s", rota_str)
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    caminho_indices = os.path.join(base_dir, 'indices.json')
-
+    caminho_indices = os.path.join(base_dir, "indices.json")
+    indices = {}
     try:
-        with open(caminho_indices, 'r', encoding='utf-8') as f:
+        with open(caminho_indices, "r", encoding="utf-8") as f:
             indices = json.load(f)
         logger.info("Contexto de mercado (indices.json) carregado com sucesso.")
     except Exception as e:
-        logger.warning(f"⚠️ Cleiton: Falha ao ler índices de mercado: {e}")
+        logger.warning("Cleiton: Falha ao ler índices de mercado: %s", e)
         indices = {"historico": [], "ultima_atualizacao": "N/A"}
-
-    # 2. Delegação para o Agente Roberto
-    # Roberto agora decidirá a acurácia com base nas novas instruções de sistema
     try:
         insight = roberto.analisar_frete(historico_ia, indices, rota_str)
-        logger.info(f"✅ Análise concluída pelo Roberto para a rota {rota_str}")
+        logger.info("Análise concluída pelo Roberto para a rota %s", rota_str)
         return insight
     except Exception as e:
-        logger.exception(f"❌ Erro crítico na análise do Roberto: {e}")
+        logger.exception("Erro crítico na análise do Roberto: %s", e)
         return {
             "tendencia_macro": "Erro no Processamento",
             "acuracia_percentual": "0%",
-            "previsao_texto": "Ocorreu um erro interno na orquestração da IA."
+            "previsao_texto": "Ocorreu um erro interno na orquestração da IA.",
         }
-# 1. FOCO NA LIMPEZA: Note que não há nenhum import de 'web' aqui em cima.
 
-def executar_orquestracao(app_flask):
+
+def executar_orquestracao(app_flask, bypass_frequencia: bool = False):
     """
-    O Cleiton agora é agnóstico. Ele não sabe onde o web.py mora, 
-    ele apenas recebe a 'energia' (contexto) para trabalhar.
+    Fachada: delega ao orquestrador gerencial (regras, auditoria, dispatch).
+    Mantém compatibilidade com rota /executar-cleiton e script em loop.
     """
-    logger.info("🤖 MAESTRO CLEITON: Iniciando ciclo de inteligência via Injeção de Dependência.")
-    
-    # 2. Alteração: Usa o parâmetro app_flask em vez do import global
-    with app_flask.app_context():
-        # 1. APRENDIZADO
-        # IMPORT LOCAL (Lazy Loading): Só importa quando o contexto do app já existe
-        from app.models import NoticiaPortal
-        ultimos_temas = NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(5).all()
-        temas_vistos = [t.titulo_julia for t in ultimos_temas]
-        logger.info(f"Contexto atual (Memória): {len(temas_vistos)} pautas recentes analisadas.")
+    from app.run_cleiton_agente_orquestrador import executar_ciclo_gerencial
+    logger.info("MAESTRO CLEITON: Iniciando ciclo gerencial (delegação ao orquestrador).")
+    executar_ciclo_gerencial(app_flask, bypass_frequencia=bypass_frequencia)
 
-        # 2. DECISÃO
-        tem_artigo_hoje = NoticiaPortal.query.filter(
-            NoticiaPortal.tipo == 'artigo',
-            NoticiaPortal.data_publicacao >= datetime.now().replace(hour=0, minute=0)
-        ).first()
-
-        tipo_missao = 'artigo' if not tem_artigo_hoje else 'noticia'
-        logger.info(f"Missão definida: Gerar {tipo_missao.upper()}")
-
-        # 3. EXECUÇÃO
-        try:
-            if processar_insight_do_momento:
-                processar_insight_do_momento(tipo_desejado=tipo_missao)
-            else:
-                logger.error("Função processar_insight_do_momento não disponível (erro de import).")
-        except Exception as e:
-            logger.exception(f"⚠️ Falha na execução da Júlia: {e}")
 
 if __name__ == "__main__":
-    # O import dentro do IF garante que o 'web.py' só seja chamado
-    # se você rodar o 'run_cleiton.py' diretamente no terminal.
-    from app.web import app 
-    SEGUNDOS_3H = 3 * 60 * 60
-    
-    # Configuração de Log APENAS quando rodado como script principal
+    from app.web import app
+    segundos_ciclo = 3 * 3600
+    app_env = (os.getenv("APP_ENV", "dev").strip() or "dev").lower()
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s | %(levelname)s | AGENTE: %(message)s',
+        format="%(asctime)s | %(levelname)s | AGENTE: %(message)s",
         handlers=[
-            logging.FileHandler("cleiton_operacoes.log", encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
+            logging.FileHandler("cleiton_operacoes.log", encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
     )
-
-    logger.info("="*50)
+    logger.info("=" * 50)
     logger.info("       SISTEMA MULTI-AGENTE LOG COMPLETA")
-    logger.info("           ORQUESTRADOR RUN_CLEITON")
-    logger.info("="*50)
-
+    logger.info("           ORQUESTRADOR RUN_CLEITON (FACHADA)")
+    logger.info("=" * 50)
+    if app_env != "prod":
+        logger.warning(
+            "Loop automático do Cleiton desabilitado fora de produção (APP_ENV=%s). "
+            "Use rotas manuais (/executar-cleiton) no ambiente de desenvolvimento/homologação.",
+            app_env,
+        )
+        sys.exit(0)
     while True:
         try:
-            # Passamos a instância do app para o orquestrador
             executar_orquestracao(app)
-            time.sleep(SEGUNDOS_3H)
+            with app.app_context():
+                from app.run_cleiton_agente_regras import get_frequencia_horas
+                segundos_ciclo = max(1, int(get_frequencia_horas())) * 3600
+            time.sleep(segundos_ciclo)
         except KeyboardInterrupt:
-            logger.info("\n🛑 Maestro Cleiton interrompido. Desligando...")
+            logger.info("Maestro Cleiton interrompido. Desligando...")
             break
         except Exception as e:
-            logger.exception(f"Erro no ciclo de orquestração: {e}")
-            time.sleep(60) # Espera um pouco antes de tentar de novo em caso de erro
+            logger.exception("Erro no ciclo de orquestração: %s", e)
+            time.sleep(60)

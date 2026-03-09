@@ -1,19 +1,16 @@
 import os
 import json
 from google import genai
-from dotenv import load_dotenv
 import logging
+from app.env_loader import load_app_env
 
-# Carrega as chaves do arquivo .env
-# Baseado na variável de sistema APP_ENV
-env_name = os.getenv('APP_ENV', 'dev')
-load_dotenv(f'.env.{env_name}')
+# Carrega .env por caminho absoluto (independente do CWD)
+load_app_env()
 
 logger = logging.getLogger(__name__)
 
 class AgenteRoberto:
     def __init__(self):
-        # 2.0 Flash conforme solicitado para melhor raciocínio
         self.api_key = os.getenv("GEMINI_API_KEY_ROBERTO")
         
         if not self.api_key:
@@ -32,6 +29,23 @@ class AgenteRoberto:
             "Muitas amostras reais (>100) = Acurácia Alta, mesmo sem índices."
             "Retorne SEMPRE um JSON puro, sem formatação Markdown extra."
         )
+        self.model_candidates = self._get_model_candidates()
+
+    def _get_model_candidates(self):
+        """Modelos em ordem de fallback para evitar indisponibilidade por conta/projeto."""
+        candidates = [
+            os.getenv("GEMINI_MODEL_FRETE", "").strip(),
+            os.getenv("GEMINI_MODEL_TEXT", "").strip(),
+            "gemini-2.5-flash",
+            "gemini-1.5-flash",
+        ]
+        seen = set()
+        ordered = []
+        for c in candidates:
+            if c and c not in seen:
+                seen.add(c)
+                ordered.append(c)
+        return ordered
 
     def analisar_frete(self, historico, indices_completos, rota):
         """
@@ -74,30 +88,33 @@ class AgenteRoberto:
         
         full_prompt = f"{self.persona}\n\n{prompt_usuario}"
 
-        try:
-            # Usando a força do Gemini 2.0 para analisar a série temporal
-            response = self.client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=full_prompt
-            )
-            
-            # Limpeza de possíveis formatações markdown
-            content = response.text.replace('```json', '').replace('```', '').strip()
-            
-            # Conversão para dicionário Python
-            resultado = json.loads(content)
-            
-            # Debug para o terminal do Cleiton
-            logger.info(f"✅ Roberto analisou {len(trilha_mercado)} meses de mercado para a rota {rota}.")
-            
-            return resultado
+        last_error = None
+        for model_name in self.model_candidates:
+            try:
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=full_prompt
+                )
 
-        except Exception as e:
+                content = (response.text or "").replace('```json', '').replace('```', '').strip()
+                inicio = content.find("{")
+                fim = content.rfind("}") + 1
+                if inicio < 0 or fim <= inicio:
+                    raise ValueError("Resposta sem JSON válido")
+
+                resultado = json.loads(content[inicio:fim])
+                logger.info("✅ Roberto analisou %s meses de mercado para a rota %s (modelo=%s).", len(trilha_mercado), rota, model_name)
+                return resultado
+            except Exception as e:
+                last_error = e
+                logger.warning("Modelo indisponível/falhou para Roberto (%s): %s", model_name, e)
+
+        if last_error:
             return {
                 "previsao_texto": "Ih chefe, deu um curto aqui no modelo e não consegui processar a análise.",
                 "tendencia_macro": "Indisponível",
                 "acuracia_percentual": "0%",
-                "recado_do_roberto": f"Aperta o F5 aí, deu ruim: {str(e)}"
+                "recado_do_roberto": f"Aperta o F5 aí, deu ruim: {str(last_error)}"
             }
 # Instância única para ser importada pelo brain.py
 roberto = AgenteRoberto()

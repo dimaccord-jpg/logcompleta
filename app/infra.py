@@ -19,7 +19,117 @@ logger = logging.getLogger(__name__)
 _schema_initialized = False
 _schema_lock = threading.Lock()
 
-OPTIONAL_BINDS = ['localidades', 'historico', 'leads', 'noticias']
+OPTIONAL_BINDS = ['localidades', 'historico', 'leads', 'noticias', 'gerencial']
+
+# Colunas adicionadas na Etapa 2 (NoticiaPortal); migração suave para bases existentes
+NOTICIAS_PORTAL_EXTRA_COLUMNS = [
+    ("cta", "TEXT"),
+    ("objetivo_lead", "VARCHAR(100)"),
+    ("status_qualidade", "VARCHAR(30)"),
+    ("origem_pauta", "VARCHAR(50)"),
+]
+
+# Colunas adicionadas na Fase 4 (NoticiaPortal - Designer/Publisher)
+NOTICIAS_PORTAL_EXTRA_COLUMNS_FASE4 = [
+    ("url_imagem_master", "VARCHAR(500)"),
+    ("assets_canais_json", "TEXT"),
+    ("status_publicacao", "VARCHAR(30)"),
+    ("publicado_em", "DATETIME"),
+]
+
+# Colunas adicionadas na Fase 3 (Pauta - Scout/Verificador)
+PAUTAS_EXTRA_COLUMNS = [
+    ("status_verificacao", "VARCHAR(30)"),
+    ("score_confiabilidade", "REAL"),
+    ("motivo_verificacao", "TEXT"),
+    ("fonte_tipo", "VARCHAR(30)"),
+    ("hash_conteudo", "VARCHAR(64)"),
+    ("coletado_em", "DATETIME"),
+    ("verificado_em", "DATETIME"),
+]
+
+
+def _ensure_noticias_portal_columns(db_instance):
+    """Adiciona colunas Etapa 2 em noticias_portal se não existirem (retrocompatível)."""
+    from sqlalchemy import text
+    try:
+        engine = db_instance.engines["noticias"]
+    except Exception:
+        return
+    for col_name, col_type in NOTICIAS_PORTAL_EXTRA_COLUMNS:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE noticias_portal ADD COLUMN " + col_name + " " + col_type
+                ))
+                conn.commit()
+            logger.info("Coluna noticias_portal.%s adicionada.", col_name)
+        except Exception as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
+def _ensure_noticias_portal_columns_fase4(db_instance):
+    """Adiciona colunas Fase 4 em noticias_portal (Designer/Publisher)."""
+    from sqlalchemy import text
+    try:
+        engine = db_instance.engines["noticias"]
+    except Exception:
+        return
+    for col_name, col_type in NOTICIAS_PORTAL_EXTRA_COLUMNS_FASE4:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE noticias_portal ADD COLUMN " + col_name + " " + col_type
+                ))
+                conn.commit()
+            logger.info("Coluna noticias_portal.%s adicionada (Fase 4).", col_name)
+        except Exception as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
+def _ensure_pautas_columns(db_instance):
+    """Adiciona colunas Fase 3 em pautas se não existirem (retrocompatível)."""
+    from sqlalchemy import text
+    try:
+        engine = db_instance.engines["noticias"]
+    except Exception:
+        return
+    for col_name, col_type in PAUTAS_EXTRA_COLUMNS:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE pautas ADD COLUMN " + col_name + " " + col_type
+                ))
+                conn.commit()
+            logger.info("Coluna pautas.%s adicionada.", col_name)
+        except Exception as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
+def _warn_non_sqlite_migration_limits(db_instance):
+    """Alerta operacional: migração suave foi validada principalmente em SQLite."""
+    try:
+        eng_noticias = db_instance.engines["noticias"]
+        eng_gerencial = db_instance.engines["gerencial"]
+        dialects = {eng_noticias.dialect.name, eng_gerencial.dialect.name}
+        if any(d != "sqlite" for d in dialects):
+            logger.warning(
+                "Ambiente com SGBD não SQLite detectado (%s). "
+                "Revise migrações de colunas/tipos antes de promover para produção.",
+                ",".join(sorted(dialects)),
+            )
+    except Exception:
+        # Aviso apenas informativo; não deve bloquear bootstrap.
+        pass
 
 
 def resolve_sqlite_path(uri: str, base_dir: str) -> str:
@@ -54,6 +164,19 @@ def ensure_database_schema(db_instance):
                         "Não foi possível inicializar bind '%s': %s",
                         optional_bind, bind_error
                     )
+            try:
+                _ensure_noticias_portal_columns(db_instance)
+            except Exception as col_err:
+                logger.warning("Colunas adicionais noticias_portal: %s", col_err)
+            try:
+                _ensure_noticias_portal_columns_fase4(db_instance)
+            except Exception as col_err:
+                logger.warning("Colunas adicionais noticias_portal Fase 4: %s", col_err)
+            try:
+                _ensure_pautas_columns(db_instance)
+            except Exception as col_err:
+                logger.warning("Colunas adicionais pautas: %s", col_err)
+            _warn_non_sqlite_migration_limits(db_instance)
             _schema_initialized = True
             logger.info("Banco inicializado: tabelas verificadas/criadas com sucesso.")
         except Exception as e:

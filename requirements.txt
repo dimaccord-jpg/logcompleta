@@ -8,3 +8,5 @@ Flask-Mail
 Flask-Session
 itsdangerous
 Flask-Dance
+feedparser
+requests

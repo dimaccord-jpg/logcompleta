@@ -57,6 +57,7 @@ db_uri_auth = os.getenv('DB_URI_AUTH', 'sqlite:///' + os.path.join(_diretorio_ap
 app.config['SQLALCHEMY_DATABASE_URI'] = resolve_sqlite_path(db_uri_auth, _diretorio_app)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
+app.config['JULIA_AVATAR_URL'] = (os.getenv('JULIA_AVATAR_URL', '') or '').strip()
 
 # Configurações de Sessão (Filesystem é mais simples e funciona bem SEM reloader)
 app.config['SESSION_TYPE'] = 'filesystem'
@@ -88,7 +89,8 @@ db_binds = {
     'localidades': os.getenv('DB_URI_LOCALIDADES', 'sqlite:///' + os.path.join(_diretorio_app, 'base_localidades.db')),
     'historico':   os.getenv('DB_URI_HISTORICO', 'sqlite:///' + os.path.join(_diretorio_app, 'historico_frete.db')),
     'leads':       os.getenv('DB_URI_LEADS', 'sqlite:///' + os.path.join(_diretorio_app, 'leads.db')),
-    'noticias':    os.getenv('DB_URI_NOTICIAS', 'sqlite:///' + os.path.join(_diretorio_app, 'noticias.db'))
+    'noticias':    os.getenv('DB_URI_NOTICIAS', 'sqlite:///' + os.path.join(_diretorio_app, 'noticias.db')),
+    'gerencial':   os.getenv('DB_URI_GERENCIAL', 'sqlite:///' + os.path.join(_diretorio_app, 'gerencial.db'))
 }
 app.config['SQLALCHEMY_BINDS'] = {k: resolve_sqlite_path(v, _diretorio_app) for k, v in db_binds.items()}
 
@@ -381,6 +383,18 @@ def executar_cleiton():
 
     executar_orquestracao(app)
     flash("Cleiton executado com sucesso.", "success")
+    return redirect(url_for("index"))
+
+
+# Fase 5: Customer Insight (delegação; lógica em run_cleiton_agente_customer_insight)
+@app.route("/executar-insight", methods=["POST"])
+@login_required
+def executar_insight():
+    # Mantemos esta rota por compatibilidade, mas preservamos o objetivo principal:
+    # insight roda ao final do ciclo gerencial completo do Cleiton.
+    from app.run_cleiton import executar_orquestracao
+    executar_orquestracao(app)
+    flash("Ciclo do Cleiton executado (inclui Customer Insight no final).", "success")
     return redirect(url_for("index"))
 
 # --- EXECUÇÃO E MANUTENÇÃO ---
