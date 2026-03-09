@@ -64,7 +64,8 @@ def executar_orquestracao(app_flask, bypass_frequencia: bool = False):
     """
     from app.run_cleiton_agente_orquestrador import executar_ciclo_gerencial
     logger.info("MAESTRO CLEITON: Iniciando ciclo gerencial (delegação ao orquestrador).")
-    executar_ciclo_gerencial(app_flask, bypass_frequencia=bypass_frequencia)
+    resultado = executar_ciclo_gerencial(app_flask, bypass_frequencia=bypass_frequencia)
+    return resultado
 
 
 if __name__ == "__main__":

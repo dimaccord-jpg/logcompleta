@@ -162,11 +162,39 @@ def agentes_julia_executar_cleiton():
     bypass_frequencia = (request.form.get('bypass_frequencia') or '').strip() in ('1', 'true', 'True')
     try:
         from app.run_cleiton import executar_orquestracao
-        executar_orquestracao(current_app, bypass_frequencia=bypass_frequencia)
-        if bypass_frequencia:
-            flash("Ciclo do Cleiton executado com bypass de frequência (admin).", "success")
+        resultado = executar_orquestracao(current_app, bypass_frequencia=bypass_frequencia) or {}
+        status = resultado.get("status") or "falha"
+        motivo = resultado.get("motivo") or "Ciclo não informou motivo detalhado."
+        mission_id = resultado.get("mission_id")
+        tipo_missao = resultado.get("tipo_missao")
+        scout = resultado.get("scout") or {}
+        verif = resultado.get("verificador") or {}
+
+        partes_msg = [motivo]
+        if mission_id:
+            partes_msg.append(f"mission_id={mission_id}")
+        if tipo_missao:
+            partes_msg.append(f"tipo_missao={tipo_missao}")
+        if scout:
+            partes_msg.append(
+                f"Scout: inseridas={scout.get('inseridas', 0)}, "
+                f"ignoradas={scout.get('ignoradas_duplicata', 0)}, "
+                f"erros={scout.get('erros', 0)}"
+            )
+        if verif:
+            partes_msg.append(
+                f"Verificador: aprovadas={verif.get('aprovadas', 0)}, "
+                f"revisar={verif.get('revisar', 0)}, "
+                f"rejeitadas={verif.get('rejeitadas', 0)}"
+            )
+        mensagem = " | ".join(partes_msg)
+
+        if status == "sucesso":
+            flash(mensagem, "success")
+        elif status == "ignorado":
+            flash(mensagem, "warning")
         else:
-            flash("Ciclo do Cleiton executado com sucesso.", "success")
+            flash(mensagem, "danger")
     except Exception as e:
         flash(f"Erro ao executar Cleiton: {str(e)}", "danger")
     return redirect(url_for('admin.agentes_julia'))
@@ -206,7 +234,12 @@ def agentes_julia_coletar_noticias():
             f"revisar={resultado_verif.get('revisar', 0)}, "
             f"rejeitadas={resultado_verif.get('rejeitadas', 0)}."
         )
-        flash(msg, "success")
+        msg_diag = (
+            f" Fontes processadas: {resultado_scout.get('fontes_processadas', 0)}, "
+            f"fontes com erro: {resultado_scout.get('fontes_com_erro', 0)}, "
+            f"fontes sem itens: {resultado_scout.get('fontes_sem_itens', 0)}."
+        )
+        flash(msg + msg_diag, "success")
     except Exception as e:
         flash(f"Erro ao coletar/verificar notícias: {str(e)}", "danger")
     return redirect(url_for('admin.agentes_julia'))

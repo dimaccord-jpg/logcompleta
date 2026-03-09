@@ -4,6 +4,7 @@ Entrada: payload do Cleiton (mission_id, tipo_missao, tema, ...).
 Saída: True apenas quando publicação concluída no formato correto; falhas auditáveis.
 """
 import logging
+import os
 from typing import Any
 from app.extensions import db
 from app.models import Pauta, NoticiaPortal
@@ -18,19 +19,32 @@ from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
 logger = logging.getLogger(__name__)
 
 
+def _status_verificacao_permitidos() -> list[str]:
+    """
+    Define quais status do Verificador podem alimentar a Júlia.
+    Padrão seguro: apenas 'aprovado'.
+    Exemplo em homolog: JULIA_STATUS_VERIFICACAO_PERMITIDOS=aprovado,revisar
+    """
+    raw = (os.getenv("JULIA_STATUS_VERIFICACAO_PERMITIDOS", "aprovado") or "aprovado").strip().lower()
+    permitidos = [x.strip() for x in raw.split(",") if x.strip()]
+    validos = [x for x in permitidos if x in ("aprovado", "revisar")]
+    return validos or ["aprovado"]
+
+
 def obter_pauta_validada(tipo_missao: str, mission_id: str | None) -> Pauta | None:
     """
-    Retorna uma pauta pendente e aprovada pelo Verificador para o tipo (noticia | artigo).
-    Só pautas com status_verificacao=aprovado seguem para Julia.
+    Retorna uma pauta pendente elegível pelo Verificador para o tipo (noticia | artigo).
+    Por padrão só 'aprovado'; pode incluir 'revisar' via env em homolog.
     Marca como em_processamento e opcionalmente associa mission_id.
     """
     tipo = (tipo_missao or "noticia").lower()
+    status_permitidos = _status_verificacao_permitidos()
     try:
         pauta = (
             Pauta.query.filter(
                 Pauta.tipo == tipo,
                 Pauta.status == "pendente",
-                Pauta.status_verificacao == "aprovado",
+                Pauta.status_verificacao.in_(status_permitidos),
             )
             .order_by(Pauta.created_at.asc())
             .first()

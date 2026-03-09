@@ -6,6 +6,7 @@ registra auditoria e dispara jobs para agentes especializados. Nunca escreve con
 import logging
 import json
 from datetime import datetime
+from typing import Any
 from app.extensions import db
 from app.models import PlanoEstrategico, NoticiaPortal, AuditoriaGerencial, Pauta
 from app.run_cleiton_agente_regras import (
@@ -137,7 +138,7 @@ def bootstrap_plano_se_necessario() -> None:
             pass
 
 
-def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None:
+def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict[str, Any]:
     """
     Ciclo principal do Cleiton (gerencial):
     1. Garante bootstrap de regras e plano
@@ -157,6 +158,19 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
         tema_serie = (plano.tema_serie if plano else "") or "portal"
         objetivo = (plano.objetivo if plano else "") or "conteúdo editorial"
 
+        resultado: dict[str, Any] = {
+            "status": "falha",
+            "motivo": "Ciclo não concluído.",
+            "bypass_frequencia": bool(bypass_frequencia),
+            "fora_janela": False,
+            "ignorado_frequencia": False,
+            "tipo_missao": None,
+            "mission_id": None,
+            "dispatch_ok": None,
+            "scout": None,
+            "verificador": None,
+        }
+
         ultima = ultima_auditoria_orquestracao()
         if not bypass_frequencia and not pode_executar_por_frequencia(ultima):
             logger.info("Cleiton: ciclo ignorado por frequência (última execução recente).")
@@ -169,7 +183,10 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
                 ),
                 resultado="ignorado",
             )
-            return
+            resultado["status"] = "ignorado"
+            resultado["motivo"] = "Ciclo ignorado por frequência (última execução recente)."
+            resultado["ignorado_frequencia"] = True
+            return resultado
 
         if bypass_frequencia:
             auditoria_registrar(
@@ -193,9 +210,13 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
                 ),
                 resultado="ignorado",
             )
-            return
+            resultado["status"] = "ignorado"
+            resultado["motivo"] = "Fora da janela de publicação; ciclo não executado."
+            resultado["fora_janela"] = True
+            return resultado
 
         tipo_missao = decidir_tipo_missao()
+        resultado["tipo_missao"] = tipo_missao
         tema_efetivo = tema_serie
         prioridade_efetiva = get_prioridade_padrao()
         recomendacao_em_uso = None  # Fase 6: feedback loop estratégico
@@ -213,6 +234,7 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
                     tema_efetivo = str(parsed["tema_sugerido"])[:255]
                 if parsed.get("tipo") and str(parsed["tipo"]).lower() in ("noticia", "artigo"):
                     tipo_missao = str(parsed["tipo"]).lower()
+                    resultado["tipo_missao"] = tipo_missao
                 if isinstance(parsed.get("prioridade"), (int, float)):
                     prioridade_efetiva = max(1, min(10, int(parsed["prioridade"])))
                 elif rec.prioridade is not None:
@@ -239,10 +261,14 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
 
         logger.info("Cleiton: missão definida tipo=%s | tema=%s", tipo_missao, tema_efetivo)
 
+        resultado_scout: dict[str, Any] | None = None
+        resultado_verificador: dict[str, Any] | None = None
+
         # Fase 3: Scout (coleta) -> Verificador (só aprovadas vão para Julia)
         try:
             from app.run_cleiton_agente_scout import executar_coleta
-            executar_coleta()
+            resultado_scout = executar_coleta()
+            resultado["scout"] = resultado_scout
         except Exception as e:
             logger.warning("Scout falhou (continuando ciclo): %s", e)
             auditoria_registrar(
@@ -254,7 +280,8 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
             )
         try:
             from app.run_cleiton_agente_verificador import executar_verificacao
-            executar_verificacao()
+            resultado_verificador = executar_verificacao()
+            resultado["verificador"] = resultado_verificador
         except Exception as e:
             logger.warning("Verificador falhou (continuando ciclo): %s", e)
             auditoria_registrar(
@@ -286,6 +313,7 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
             tentativa_atual=1,
             metadados=metadados,
         )
+        resultado["mission_id"] = payload.get("mission_id")
         registrar_missao(payload)
         auditoria_registrar(
             tipo_decisao="orquestracao",
@@ -298,6 +326,7 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
         )
 
         ok = despachar(payload, app_flask)
+        resultado["dispatch_ok"] = bool(ok)
         if not ok:
             auditoria_registrar(
                 tipo_decisao="orquestracao",
@@ -305,6 +334,11 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
                 contexto=_contexto_orquestracao(payload, bypass_frequencia),
                 resultado="falha",
             )
+            resultado["status"] = "falha"
+            resultado["motivo"] = "Despacho para agente operacional falhou ou não houve publicação."
+        else:
+            resultado["status"] = "sucesso"
+            resultado["motivo"] = "Missão despachada com sucesso e agente operacional publicou conteúdo."
         # Fase 6: se missão sucesso e havia recomendação em uso, marcar como aplicada
         if ok and recomendacao_em_uso:
             try:
@@ -342,3 +376,4 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> None
                 detalhe=str(e),
             )
     logger.info("Cleiton orquestrador: ciclo gerencial encerrado.")
+    return resultado

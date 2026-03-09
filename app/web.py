@@ -8,7 +8,6 @@ if os.path.dirname(_diretorio_app) not in sys.path:
 
 import json
 import logging
-from dotenv import load_dotenv
 
 # 1. Imports do Flask e Extensões Base
 from flask import Flask, render_template, redirect, url_for, request, flash, abort, session
@@ -36,10 +35,10 @@ from app.auth_services import (
     register_user,
 )
 
-# 2. Configuração de ambiente e dotenv
-env_name = os.getenv('APP_ENV', 'dev')
-dotenv_path = os.path.join(_diretorio_app, f'.env.{env_name}')
-load_dotenv(dotenv_path)
+# 2. Configuração de ambiente e dotenv (via loader centralizado)
+from app import env_loader
+
+_env_loaded = env_loader.load_app_env()
 
 # Configuração de Logging (Global para o Flask e Gunicorn)
 log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
@@ -48,6 +47,16 @@ logging.basicConfig(
     format='%(asctime)s | %(levelname)s | FLASK_APP | %(message)s',
     stream=sys.stdout
 )
+
+if not _env_loaded:
+    _env_name_for_log = (os.getenv('APP_ENV', 'dev') or 'dev').strip() or 'dev'
+    _dotenv_path_for_log = os.path.join(env_loader.get_app_dir(), f'.env.{_env_name_for_log}')
+    logging.warning(
+        "Arquivo de ambiente .env.%s não foi encontrado/carregado em %s. "
+        "Seguindo apenas com variáveis já definidas no ambiente.",
+        _env_name_for_log,
+        _dotenv_path_for_log,
+    )
 
 app = Flask(__name__)
 

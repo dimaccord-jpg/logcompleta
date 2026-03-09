@@ -64,19 +64,31 @@ def _limites_recencia_horas() -> tuple[int, int]:
     return quente, aceitavel
 
 
+def _normalizar_dominio(dominio: str) -> str:
+    """
+    Normaliza domínio para comparação:
+    - lowercase
+    - remove prefixo www.
+    """
+    d = (dominio or "").strip().lower()
+    if d.startswith("www."):
+        d = d[4:]
+    return d
+
+
 def _fontes_confiaveis() -> list[str]:
     """Lista de domínios ou nomes de fonte considerados confiáveis (separados por vírgula)."""
     raw = os.getenv("VERIFICADOR_FONTES_CONFIAVEIS", "").strip()
     if not raw:
         return []
-    return [x.strip().lower() for x in raw.split(",") if x.strip()]
+    return [_normalizar_dominio(x) for x in raw.split(",") if x.strip()]
 
 
 def _dominios_bloqueados() -> list[str]:
     raw = os.getenv("VERIFICADOR_BLOQUEAR_DOMINIOS", "").strip()
     if not raw:
         return []
-    return [x.strip().lower() for x in raw.split(",") if x.strip()]
+    return [_normalizar_dominio(x) for x in raw.split(",") if x.strip()]
 
 
 def _limiar_similaridade() -> float:
@@ -86,11 +98,22 @@ def _limiar_similaridade() -> float:
         return 0.85
 
 
+def _dominio_confiavel(dominio: str, fontes_ok: list[str]) -> bool:
+    """Retorna True quando domínio está coberto pela whitelist (exato ou subdomínio)."""
+    if not dominio or not fontes_ok:
+        return False
+    for fonte in fontes_ok:
+        if dominio == fonte or dominio.endswith("." + fonte):
+            return True
+    return False
+
+
 def _dominio_do_link(link: str) -> str:
     if not link:
         return ""
     try:
-        return (urlparse(link).netloc or "").lower()
+        netloc = (urlparse(link).netloc or "").lower()
+        return _normalizar_dominio(netloc)
     except Exception:
         return ""
 
@@ -162,10 +185,12 @@ def _calcular_score_e_decisao(pauta: Pauta) -> tuple[float, str, str]:
     if dominio and dominio in bloqueados:
         return 0.0, STATUS_REJEITADO, f"Domínio bloqueado: {dominio}"
 
-    if dominio and fontes_ok and dominio not in fontes_ok:
-        # Fonte não está na lista de confiáveis: reduz score
-        score -= 0.2
-        motivo_partes.append("fonte não listada como confiável")
+    if dominio and fontes_ok:
+        # aceita equivalência exata e subdomínios do domínio raiz listado como confiável
+        if not _dominio_confiavel(dominio, fontes_ok):
+            # Fonte não está na lista de confiáveis: reduz score
+            score -= 0.2
+            motivo_partes.append("fonte não listada como confiável")
 
     # Relevância por termos simples (logística/supply chain/frete/etc.)
     termos = _termos_relevantes()
@@ -211,7 +236,7 @@ def _calcular_score_e_decisao(pauta: Pauta) -> tuple[float, str, str]:
     score = max(0.0, min(1.0, score))
     if score < score_min:
         return score, STATUS_REJEITADO, "; ".join(motivo_partes) or "Score abaixo do mínimo."
-    if score >= 0.8 and (not fontes_ok or dominio in fontes_ok):
+    if score >= 0.8 and (not fontes_ok or _dominio_confiavel(dominio, fontes_ok)):
         return score, STATUS_APROVADO, "Aprovado."
     if score >= score_min:
         return score, STATUS_REVISAR, "; ".join(motivo_partes) or "Revisar."
