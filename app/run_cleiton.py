@@ -83,7 +83,7 @@ if __name__ == "__main__":
     logger.info("       SISTEMA MULTI-AGENTE LOG COMPLETA")
     logger.info("           ORQUESTRADOR RUN_CLEITON (FACHADA)")
     logger.info("=" * 50)
-    if app_env != "prod":
+    if app_env not in ["prod", "homolog"]:
         logger.warning(
             "Loop automático do Cleiton desabilitado fora de produção (APP_ENV=%s). "
             "Use rotas manuais (/executar-cleiton) no ambiente de desenvolvimento/homologação.",
