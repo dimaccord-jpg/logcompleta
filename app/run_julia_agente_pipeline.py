@@ -94,7 +94,18 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
     with app_flask.app_context():
         pauta = obter_pauta_validada(tipo_missao, mission_id)
         if not pauta:
-            logger.warning("Júlia pipeline: nenhuma pauta pendente para tipo=%s", tipo_missao)
+            logger.warning("Júlia pipeline: nenhuma pauta pendente/ elegível para tipo=%s", tipo_missao)
+            auditoria_registrar(
+                tipo_decisao="julia",
+                decisao="Nenhuma pauta elegível para processamento",
+                contexto={
+                    "mission_id": mission_id,
+                    "tipo_missao": tipo_missao,
+                    "status_verificacao_permitidos": _status_verificacao_permitidos(),
+                },
+                resultado="ignorado",
+                detalhe="Pipeline não encontrou pauta com status_verificacao permitido.",
+            )
             return False
 
         # 1. Redação

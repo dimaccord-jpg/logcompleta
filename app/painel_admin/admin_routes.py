@@ -98,7 +98,16 @@ def agentes_julia():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
     frequencia_horas = _obter_frequencia_horas()
-    return render_template('agentes_julia.html', frequencia_horas=frequencia_horas)
+    ultima_execucao, proxima_prevista = _obter_ultima_e_proxima_execucao(frequencia_horas)
+    janela_inicio, janela_fim = _obter_janela_publicacao()
+    return render_template(
+        'agentes_julia.html',
+        frequencia_horas=frequencia_horas,
+        ultima_execucao=ultima_execucao,
+        proxima_prevista=proxima_prevista,
+        janela_inicio=janela_inicio,
+        janela_fim=janela_fim,
+    )
 
 
 def _obter_frequencia_horas() -> int:
@@ -112,6 +121,33 @@ def _obter_frequencia_horas() -> int:
         return int(DEFAULTS.get(CHAVE_FREQUENCIA_HORAS, 3))
     except Exception:
         return 3
+
+
+def _obter_ultima_e_proxima_execucao(frequencia_horas: int) -> tuple[datetime | None, datetime | None]:
+    """
+    Retorna (última execução de orquestração sem bypass, próxima execução prevista).
+    Próxima = última + frequência em horas. Usado apenas para exibição; o ciclo real
+    depende de haver processo/cron rodando (ex.: run_cleiton.py em loop ou job agendado).
+    """
+    try:
+        from app.run_cleiton_agente_orquestrador import ultima_auditoria_orquestracao
+        from datetime import timedelta
+        ultima = ultima_auditoria_orquestracao()
+        if ultima is None:
+            return None, None
+        proxima = ultima + timedelta(hours=max(1, frequencia_horas))
+        return ultima, proxima
+    except Exception:
+        return None, None
+
+
+def _obter_janela_publicacao() -> tuple[int, int]:
+    """Retorna (hora_inicio, hora_fim) da janela de publicação (0-23)."""
+    try:
+        from app.run_cleiton_agente_regras import get_janela_publicacao
+        return get_janela_publicacao()
+    except Exception:
+        return 6, 22
 
 
 @admin_bp.route('/agentes/julia/frequencia', methods=['POST'])
@@ -181,6 +217,12 @@ def agentes_julia_executar_cleiton():
                 f"ignoradas={scout.get('ignoradas_duplicata', 0)}, "
                 f"erros={scout.get('erros', 0)}"
             )
+            if "fontes_processadas" in scout:
+                partes_msg.append(
+                    f"Fontes Scout: processadas={scout.get('fontes_processadas', 0)}, "
+                    f"com_erro={scout.get('fontes_com_erro', 0)}, "
+                    f"sem_itens={scout.get('fontes_sem_itens', 0)}"
+                )
         if verif:
             partes_msg.append(
                 f"Verificador: aprovadas={verif.get('aprovadas', 0)}, "

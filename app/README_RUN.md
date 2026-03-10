@@ -161,3 +161,46 @@ Observação: o match de domínio é exato (`valor.globo.com` é diferente de `g
 - **Fase 6 (encerramento):** `python -m unittest app.tests.test_fase6_encerramento -v`
 
 Execute a partir da raiz do projeto com `PYTHONPATH` apontando para a raiz e `APP_ENV=dev`. Testes que dependem do app Flask (ex.: rotas, contexto de BD) podem ser ignorados (skip) se dependências não estiverem disponíveis; os demais validam parser, classificação, payload, regressão e alinhamento de `/executar-insight` ao ciclo completo.
+
+---
+
+## 7. Homolog – validação do bypass e do cron
+
+Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tanto pelo botão de bypass quanto pelo agendamento automático.
+
+- **Pré-requisitos em homolog**
+  - Serviço web subindo com `APP_ENV=homolog` (via variável de ambiente ou arquivo `.env.homolog` carregado por `env_loader.py`).
+  - Variável `CRON_SECRET` definida no ambiente homolog (veja `app/.env.example` e `RENDER_CRON_HOMOLOG.md`).
+  - `SCOUT_ENABLED=true` e `SCOUT_SOURCES_JSON` configurado com JSON **válido em uma linha** e pelo menos uma fonte funcional.
+
+- **7.1 – Validar botão “Executar agora (bypass)” no painel admin**
+  1. Acesse `/login`, entre com um usuário admin.
+  2. Vá em `Admin` → `Agentes - Júlia`.
+  3. Clique em **Executar agora (bypass de frequencia)**.
+  4. Mensagem esperada no topo:
+     - Em caso de sucesso: texto contendo o motivo e os contadores do Scout/Verificador, por exemplo  
+       `Scout: inseridas=..., ignoradas=..., erros=... | Fontes Scout: processadas=..., com_erro=..., sem_itens=... | Verificador: aprovadas=...`.
+     - Se não houver pauta elegível (nenhuma pauta com `status_verificacao` permitido): a mensagem pode indicar falha de publicação; o detalhe auditável fica registrado em `AuditoriaGerencial` com `tipo_decisao="julia"` e decisão `"Nenhuma pauta elegível para processamento"`.
+  5. Após sucesso, confirme que existe uma nova linha em `noticias_portal` e que a home (`/`) exibe a notícia recente.
+
+- **7.2 – Validar rota de cron `/cron/executar-cleiton`**
+  1. Sem segredo (apenas para teste rápido de deploy):
+     ```bash
+     curl -i "https://SEU_DOMINIO_HOMOLOG/cron/executar-cleiton"
+     ```
+     - Esperado: **403 Unauthorized** (rota existe e está protegida).
+     - Se retornar **404**, o problema é de deploy/roteamento (serviço/branch errado ou domínio apontando para outro backend).
+  2. Com segredo correto:
+     ```bash
+     curl -H "X-Cron-Secret: SEU_CRON_SECRET" "https://SEU_DOMINIO_HOMOLOG/cron/executar-cleiton"
+     ```
+     - Esperado: `HTTP 200` com JSON `{ "ok": true|false, "status": "...", "motivo": "...", "mission_id": "..." }`.
+     - Se `status` for `"ignorado"`, verifique frequência/janela (`run_cleiton_agente_regras.py` e painel `Agentes - Júlia`).
+
+- **7.3 – Validar execução automática (Cron/worker)**
+  - Configure o Cron Job conforme `RENDER_CRON_HOMOLOG.md` (ou o worker `python -m app.run_cleiton` com `APP_ENV=homolog`).
+  - Após o horário agendado:
+    - Em `Admin` → `Agentes - Júlia`, confira:
+      - **Última execução (ciclo automático)** atualizada.
+      - **Próxima execução prevista** consistente com a frequência configurada.
+    - Verifique se novas notícias foram inseridas em `noticias_portal` e aparecem na home (`/`) e na rota de detalhe `/noticia/<id>`.

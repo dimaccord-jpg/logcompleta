@@ -85,6 +85,27 @@
                     </small>
                 </div>
             </form>
+            <hr class="my-3">
+            <h6 class="mb-2">Próxima notícia automática (homolog/prod)</h6>
+            <ul class="mb-0 text-muted small">
+                <li><strong>Frequência atual:</strong> {{ frequencia_horas|default(3) }}h entre ciclos.</li>
+                <li><strong>Janela de publicação:</strong> {{ janela_inicio|default(6) }}h às {{ janela_fim|default(22) }}h (ciclo só roda dentro desse horário).</li>
+                <li><strong>Última execução (ciclo automático):</strong>
+                    {% if ultima_execucao %}
+                        {{ ultima_execucao.strftime('%d/%m/%Y %H:%M') }} (UTC).
+                    {% else %}
+                        Nunca registrada (ou só execuções com bypass).
+                    {% endif %}
+                </li>
+                <li><strong>Próxima execução prevista:</strong>
+                    {% if proxima_prevista %}
+                        {{ proxima_prevista.strftime('%d/%m/%Y %H:%M') }} (UTC).
+                    {% else %}
+                        —
+                    {% endif %}
+                    <br><em>Só ocorre se houver processo/cron rodando o ciclo (ex.: script Cleiton em loop ou job no Render).</em>
+                </li>
+            </ul>
         </div>
     </div>
 

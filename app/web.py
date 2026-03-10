@@ -406,6 +406,33 @@ def executar_insight():
     flash("Ciclo do Cleiton executado (inclui Customer Insight no final).", "success")
     return redirect(url_for("index"))
 
+
+# --- CRON: execução automática do ciclo Cleiton (Render Cron Job / agendador externo) ---
+@app.route("/cron/executar-cleiton", methods=["GET", "POST"])
+def cron_executar_cleiton():
+    """
+    Rota para agendador (ex.: Render Cron Job). Respeita frequência e janela; não usa bypass.
+    Protegida por CRON_SECRET: header X-Cron-Secret ou query ?secret=<CRON_SECRET>.
+    """
+    secret = request.headers.get("X-Cron-Secret") or request.args.get("secret")
+    expected = (os.getenv("CRON_SECRET") or "").strip()
+    if not expected or secret != expected:
+        return {"ok": False, "error": "unauthorized"}, 403
+    try:
+        from app.run_cleiton import executar_orquestracao
+        resultado = executar_orquestracao(app, bypass_frequencia=False) or {}
+        status = resultado.get("status", "falha")
+        return {
+            "ok": status == "sucesso",
+            "status": status,
+            "motivo": resultado.get("motivo", ""),
+            "mission_id": resultado.get("mission_id"),
+        }, 200
+    except Exception as e:
+        logging.exception("Cron executar-cleiton: %s", e)
+        return {"ok": False, "error": str(e)}, 500
+
+
 # --- EXECUÇÃO E MANUTENÇÃO ---
 if __name__ == '__main__':
     # use_reloader=False é CRÍTICO para OAuth2 em desenvolvimento

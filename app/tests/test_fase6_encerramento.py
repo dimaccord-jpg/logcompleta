@@ -266,6 +266,29 @@ class TestRotasPrincipais(unittest.TestCase):
         admin_rules = [r for r in rules if "admin" in r and "dashboard" in r]
         self.assertGreater(len(admin_rules), 0)
 
+    def test_cron_rota_existe(self):
+        app = get_app()
+        if app is None:
+            self.skipTest("App não disponível")
+        rules = [r.rule for r in app.url_map.iter_rules()]
+        self.assertIn("/cron/executar-cleiton", rules)
+
+    def test_cron_sem_segredo_retorna_403(self):
+        app = get_app()
+        if app is None:
+            self.skipTest("App não disponível")
+        old_secret = os.environ.get("CRON_SECRET")
+        try:
+            os.environ["CRON_SECRET"] = "segredo_teste"
+            client = app.test_client()
+            resp = client.get("/cron/executar-cleiton")
+            self.assertEqual(resp.status_code, 403)
+        finally:
+            if old_secret is None:
+                os.environ.pop("CRON_SECRET", None)
+            else:
+                os.environ["CRON_SECRET"] = old_secret
+
 
 if __name__ == "__main__":
     unittest.main()
