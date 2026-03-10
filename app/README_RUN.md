@@ -14,12 +14,15 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
 
 **Fase 6 – Encerramento:** Feedback loop estratégico: o orquestrador consome recomendações pendentes (prioridade DESC) antes do dispatch e aplica tema, tipo_missao e prioridade ao payload; em missão sucesso a recomendação é marcada como aplicada; em falha permanece pendente. Serviço de gestão: `listar_recomendacoes_pendentes`, `selecionar_recomendacao_prioritaria`, `parse_recomendacao_json`/`parse_contexto_json`, `atualizar_status_recomendacao` (com auditoria). Painel admin (Dashboard): KPIs de insight (pendentes, aplicadas, descartadas, total métricas, auditorias) e lista de recomendações recentes com ações **Aplicar** e **Descartar** (POST `/admin/recomendacoes/<id>/aplicar` e `/descartar`). Rotas principais: `/health`, `/executar-cleiton`, `/executar-insight` (ciclo completo), login/home. Suite de testes: `app/tests/test_fase5_insight.py` e `app/tests/test_fase6_encerramento.py` (unitários, integração, regressão Fases 3–5, smoke de rotas). Comando: `python -m unittest app.tests.test_fase6_encerramento -v` (a partir da raiz do projeto, com `PYTHONPATH` e `APP_ENV=dev`).
 
+**Execução manual no Admin (hotfix homolog/prod):** A rota `/admin/agentes/julia/executar-cleiton` roda em **background** por padrão quando `APP_ENV` é `homolog` ou `prod`, evitando timeout de worker na requisição HTTP. Em `dev`, o padrão continua síncrono para facilitar validação local. É possível forçar via `ADMIN_CLEITON_EXEC_MODE=sync|async`.
+
 ## Pré-requisitos
 
 1. Instale as dependências:
    ```bash
    pip install -r ../requirements.txt
    ```
+  - O `requirements.txt` já inclui `google-generativeai` para integração com Gemini (Cleiton/Júlia/Roberto).
 2. Garanta que os arquivos `.env.dev` e `.env.homolog` existam na pasta `app/`.
    - O arquivo `.env` simples é legado e **não deve ser usado**.
    - Use `app/.env.example` como base, copiando para `.env.dev` e `.env.homolog` e ajustando apenas os valores.
@@ -100,6 +103,7 @@ curl -H "X-Ops-Token: SEU_OPS_TOKEN" http://127.0.0.1:5000/oauth-diagnostics
 O pipeline da Júlia consome pautas da tabela `Pauta` (bind noticias). Há dois caminhos principais:
 
 - **Notícias (automático):** o Scout (`run_cleiton_agente_scout.py`), chamado pelo ciclo do Cleiton, coleta notícias de fontes configuradas via `SCOUT_SOURCES_JSON` (consulte `app/.env.example` para o formato detalhado) e insere registros em `Pauta` com `tipo='noticia'` e `status_verificacao='pendente'`. Não é necessário inserir pautas de notícia manualmente.
+- Em caso de feed inválido/inacessível, o Scout registra erro da fonte e continua para as demais (não interrompe o ciclo completo).
 - **Artigos (manual/assistido):** artigos continuam aceitando input manual. Você pode inserir linhas na tabela `pautas` com `tipo='artigo'` (ou usar importadores legados) para abastecer a Júlia com conteúdos mais profundos.
 
 Para semear pautas a partir do arquivo legado:
@@ -178,10 +182,13 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
   2. Vá em `Admin` → `Agentes - Júlia`.
   3. Clique em **Executar agora (bypass de frequencia)**.
   4. Mensagem esperada no topo:
-     - Em caso de sucesso: texto contendo o motivo e os contadores do Scout/Verificador, por exemplo  
-       `Scout: inseridas=..., reativadas=..., ignoradas=..., erros=... | Fontes Scout: processadas=..., com_erro=..., sem_itens=... | Verificador: aprovadas=...`.
+       - Em homolog/prod (modo async padrão): `Execução do Cleiton iniciada em segundo plano. Acompanhe os logs para status final.`.
+       - Se já houver execução em andamento: `Já existe uma execução do Cleiton em andamento. Aguarde a conclusão.`.
+       - Em dev (modo sync): texto contendo o motivo e os contadores do Scout/Verificador, por exemplo  
+         `Scout: inseridas=..., reativadas=..., ignoradas=..., erros=... | Fontes Scout: processadas=..., com_erro=..., sem_itens=... | Verificador: aprovadas=...`.
      - Se não houver pauta elegível (nenhuma pauta com `status_verificacao` permitido): a mensagem pode indicar falha de publicação; o detalhe auditável fica registrado em `AuditoriaGerencial` com `tipo_decisao="julia"` e decisão `"Nenhuma pauta elegível para processamento"`.
-  5. Após sucesso, confirme que existe uma nova linha em `noticias_portal` e que a home (`/`) exibe a notícia recente.
+    5. Em modo async, o resultado final fica no log com `Cleiton admin (async) concluído: status=... mission_id=... motivo=...`.
+    6. Após sucesso, confirme que existe uma nova linha em `noticias_portal` e que a home (`/`) exibe a notícia recente.
 
   Observação importante: o Scout pode reativar pautas em `status="falha"` quando o mesmo link reaparece e ainda não existe publicação em `noticias_portal`. Isso evita ficar preso em ciclos com muitas duplicatas históricas.
 
@@ -207,3 +214,15 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
       - **Última execução (ciclo automático)** atualizada.
       - **Próxima execução prevista** consistente com a frequência configurada.
     - Verifique se novas notícias foram inseridas em `noticias_portal` e aparecem na home (`/`) e na rota de detalhe `/noticia/<id>`.
+
+  ### Ajustes operacionais de timeout (homolog/prod)
+
+  Em ambientes com latência externa maior (RSS/IA), ajuste no ambiente do serviço:
+
+  ```env
+  GUNICORN_TIMEOUT_SECONDS=120
+  GUNICORN_GRACEFUL_TIMEOUT_SECONDS=30
+  GUNICORN_KEEPALIVE_SECONDS=5
+  GEMINI_HTTP_TIMEOUT_MS=20000
+  GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000
+  ```

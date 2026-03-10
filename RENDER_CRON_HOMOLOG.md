@@ -2,6 +2,8 @@
 
 Para que a **próxima notícia seja publicada automaticamente** em homolog na frequência configurada (ex.: 1h), use o **Cron Job** do Render chamando a rota `/cron/executar-cleiton`.
 
+> Observação pós-hotfix: no painel admin, o botão **Executar agora** (`/admin/agentes/julia/executar-cleiton`) roda em segundo plano por padrão em `APP_ENV=homolog|prod` para evitar timeout de worker na requisição HTTP.
+
 ## 1. Variável de ambiente no serviço web (homolog)
 
 No Render → seu **Web Service** (backend) → **Environment**:
@@ -11,6 +13,13 @@ No Render → seu **Web Service** (backend) → **Environment**:
    - **Value:** um segredo forte (ex.: gere com `openssl rand -hex 32`).
 
 2. Salve (o Render pode redeployar automaticamente).
+
+3. Recomendado (estabilidade):
+   - `GUNICORN_TIMEOUT_SECONDS=120`
+   - `GUNICORN_GRACEFUL_TIMEOUT_SECONDS=30`
+   - `GUNICORN_KEEPALIVE_SECONDS=5`
+   - `GEMINI_HTTP_TIMEOUT_MS=20000`
+   - `GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000`
 
 ## 2. Criar o Cron Job no Render
 

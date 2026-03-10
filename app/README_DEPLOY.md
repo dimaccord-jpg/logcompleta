@@ -33,6 +33,8 @@ pip install -r requirements.txt
 pip install gunicorn
 ```
 
+`requirements.txt` já inclui `google-generativeai`, necessário para integrações Gemini.
+
 ## 3. Configuração de Dados e Persistência
 
 Para evitar perder dados em novos deploys, o banco de dados ficará fora da pasta do código.
@@ -83,6 +85,15 @@ IMAGE_PROVIDER=gemini
 GEMINI_MODEL_IMAGE=imagen-3.0-generate-002
 # Fallback Gemini (multimodal) para quando Imagen não retornar URL pública
 GEMINI_MODEL_IMAGE_FALLBACK=gemini-2.0-flash-preview-image-generation
+# Timeouts HTTP Gemini (ms)
+GEMINI_HTTP_TIMEOUT_MS=20000
+GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000
+# Timeouts Gunicorn (segundos)
+GUNICORN_TIMEOUT_SECONDS=120
+GUNICORN_GRACEFUL_TIMEOUT_SECONDS=30
+GUNICORN_KEEPALIVE_SECONDS=5
+# Execução manual no painel admin: em homolog/prod o padrão já é async
+# ADMIN_CLEITON_EXEC_MODE=async
 # Opcional: fallback visual estático (se vazio, sistema tenta fallback temático)
 # IMAGEM_FALLBACK_URL=https://sua-cdn.com/imagens/fallback-logistica.jpg
 # Avatar da editora (opcional)
@@ -110,12 +121,13 @@ GEMINI_MODEL_IMAGE_FALLBACK=gemini-2.0-flash-preview-image-generation
 # Fase 6: Nenhuma variável nova; feedback loop e painel admin usam as mesmas configs.
 ```
 
-Neste momento, você pode utilizar os mesmos valores de chave de API em DEV, HOMOLOG e PROD; a diferença entre ambientes é controlada principalmente por `APP_ENV` e pelos caminhos de banco de dados.
+Use credenciais distintas por ambiente (dev, homolog, prod) e rotacione imediatamente qualquer chave/tokens expostos.
 
 Checklist rapido de validacao (Fase 3):
 - `SCOUT_SOURCES_JSON` em linha unica e JSON valido.
 - Sem comentarios dentro do valor de `SCOUT_SOURCES_JSON`.
 - Em caso de restricao de fontes, informar domínios sem `https://` e sem caminho.
+- Se uma fonte RSS falhar (parse/rede), o Scout registra erro dessa fonte e continua o ciclo com as demais.
 - Reiniciar o serviço (`systemctl restart logcompleta`) após alterar `.env.prod`.
 
 ## 4. Configurar Gunicorn com Systemd
@@ -134,7 +146,7 @@ Group=www-data
 WorkingDirectory=/srv/logcompleta/code/app
 Environment="PATH=/srv/logcompleta/code/venv/bin"
 Environment="APP_ENV=prod"
-ExecStart=/srv/logcompleta/code/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:5000 web:app
+ExecStart=/srv/logcompleta/code/venv/bin/gunicorn --config /srv/logcompleta/code/gunicorn_config.py --workers 3 --bind 127.0.0.1:5000 web:app
 
 [Install]
 WantedBy=multi-user.target
