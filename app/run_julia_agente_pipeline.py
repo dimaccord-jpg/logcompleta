@@ -117,7 +117,11 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
 
         # 2. Imagem
         prompt_imagem = (conteudo.get("prompt_imagem") or "").strip()
-        url_imagem = gerar_url_imagem(prompt_imagem)
+        try:
+            url_imagem = gerar_url_imagem(prompt_imagem)
+        except Exception as e:
+            logger.exception("Júlia pipeline: falha inesperada na geração de imagem, usando fallback: %s", e)
+            url_imagem = gerar_url_imagem("")
         conteudo["url_imagem"] = url_imagem
         conteudo["link"] = pauta.link
         conteudo["fonte_link"] = pauta.link

@@ -5,6 +5,7 @@ from sqlalchemy import text
 import os
 import csv
 import io
+import logging
 from datetime import datetime
 from app.extensions import db
 from app.models import FreteReal, RecomendacaoEstrategica, InsightCanal, AuditoriaGerencial, ConfigRegras
@@ -239,6 +240,7 @@ def agentes_julia_executar_cleiton():
         else:
             flash(mensagem, "danger")
     except Exception as e:
+        logging.exception("Falha ao executar Cleiton via admin (bypass_frequencia=%s): %s", bypass_frequencia, e)
         flash(f"Erro ao executar Cleiton: {str(e)}", "danger")
     return redirect(url_for('admin.agentes_julia'))
 

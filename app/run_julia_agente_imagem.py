@@ -17,6 +17,30 @@ logger = logging.getLogger(__name__)
 IMAGEM_FALLBACK_URL = (os.getenv("IMAGEM_FALLBACK_URL", "") or "").strip()
 
 
+def _get_gemini_timeout_ms() -> int:
+    """Timeout HTTP para chamadas Gemini de imagem (ms), com fallback seguro."""
+    raw = (
+        os.getenv("GEMINI_IMAGE_HTTP_TIMEOUT_MS", "").strip()
+        or os.getenv("GEMINI_HTTP_TIMEOUT_MS", "").strip()
+    )
+    try:
+        return max(1_000, int(raw)) if raw else 20_000
+    except ValueError:
+        return 20_000
+
+
+def _build_gemini_client(key: str):
+    """Cria cliente Gemini com timeout configurável; cai para cliente padrão se necessário."""
+    from google import genai
+    try:
+        from google.genai import types as genai_types
+        http_options = genai_types.HttpOptions(timeout=_get_gemini_timeout_ms())
+        return genai.Client(api_key=key, http_options=http_options)
+    except Exception as e:
+        logger.warning("Gemini imagem: falha ao aplicar http timeout, usando cliente padrão: %s", e)
+        return genai.Client(api_key=key)
+
+
 def _get_model_image() -> str:
     return (os.getenv("GEMINI_MODEL_IMAGE", "").strip() or "imagen-3.0-generate-002").strip()
 
@@ -63,9 +87,8 @@ def _gerar_via_gemini(prompt_imagem: str) -> str | None:
 def _gerar_via_gemini_imagen(prompt_imagem: str, key: str) -> str | None:
     """Tenta gerar imagem via API Imagen do Gemini."""
     try:
-        from google import genai
         from google.genai import types
-        client = genai.Client(api_key=key)
+        client = _build_gemini_client(key)
         model = _get_model_image()
         config = getattr(types, "GenerateImagesConfig", None)
         kwargs = {"model": model, "prompt": prompt_imagem or "global supply chain operations", "number_of_images": 1}
@@ -90,8 +113,7 @@ def _gerar_via_gemini_imagen(prompt_imagem: str, key: str) -> str | None:
 def _gerar_via_gemini_multimodal(prompt_imagem: str, key: str) -> str | None:
     """Fallback Gemini multimodal para extrair inline_data de imagem em bytes."""
     try:
-        from google import genai
-        client = genai.Client(api_key=key)
+        client = _build_gemini_client(key)
         model = _get_model_image_fallback()
         prompt_final = (
             "Create a realistic editorial illustration, no text overlay, no watermark, "
