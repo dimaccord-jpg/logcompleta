@@ -6,9 +6,22 @@ import json
 import logging
 from app.extensions import db
 from app.models import NoticiaPortal
-from app.run_julia_agente_imagem import normalizar_url_imagem
+from app.run_julia_agente_imagem import normalizar_url_imagem, gerar_fallback_imagem_estatica
 
 logger = logging.getLogger(__name__)
+
+
+def _sanear_url_imagem_persistencia(url: str | None, contexto_texto: str | None = None) -> str | None:
+    """Evita persistir fallbacks remotos voláteis; prioriza artefato local estático."""
+    if not url:
+        return None
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    low = raw.lower()
+    if "loremflickr.com" in low or "placehold.co" in low:
+        return gerar_fallback_imagem_estatica(contexto_texto or "")
+    return raw
 
 
 def _normalizar_texto(val) -> str | None:
@@ -54,8 +67,11 @@ def publicar(
         logger.warning("Publicação idempotente: link já existe, reutilizando registro (%s).", link[:80])
         return existente
     titulo_julia = _normalizar_texto(titulo_julia) or "Sem título"
-    url_imagem = normalizar_url_imagem(url_imagem)
-    url_master = normalizar_url_imagem(url_imagem_master or url_imagem)
+    url_imagem = _sanear_url_imagem_persistencia(normalizar_url_imagem(url_imagem), titulo_julia)
+    url_master = _sanear_url_imagem_persistencia(
+        normalizar_url_imagem(url_imagem_master or url_imagem),
+        titulo_julia,
+    )
     assets_json = _normalizar_texto(assets_canais_json) if isinstance(assets_canais_json, str) else None
     if assets_canais_json is not None and isinstance(assets_canais_json, dict):
         assets_json = json.dumps(assets_canais_json, ensure_ascii=False)

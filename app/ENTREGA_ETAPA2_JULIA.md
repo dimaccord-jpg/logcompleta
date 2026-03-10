@@ -2,11 +2,11 @@
 
 ## 1. Resumo técnico
 
-- **Pipeline operacional:** Entrada pelo payload do Cleiton; etapas: obter pauta validada (tabela `Pauta`) → redação (Gemini, `GEMINI_MODEL_TEXT`) → imagem IA (fallback ou `IMAGE_PROVIDER`) → validação por tipo (notícia curta / artigo completo) → publicação em `NoticiaPortal`. Sucesso só quando a publicação é concluída no formato correto; falhas marcam missão como falha e pauta como falha.
+- **Pipeline operacional:** Entrada pelo payload do Cleiton; etapas: obter pauta validada (tabela `Pauta`) → redação (Gemini, `GEMINI_MODEL_TEXT`) → composição de prompt contextual de imagem (pauta + título/subtítulo/resumo) → imagem IA (com retries e fallback em camadas) → validação por tipo (notícia curta / artigo completo) → publicação em `NoticiaPortal`. Sucesso só quando a publicação é concluída no formato correto; falhas marcam missão como falha e pauta como falha.
 - **Remoção de processadas.json:** Pautas vêm exclusivamente da tabela `Pauta`. Função `popular_pautas_de_arquivo_json()` em `news_ai` permite importar do formato legado para semear/migrar.
-- **Notícia curta:** titulo_julia, url_imagem (ou fallback), resumo_julia (insight 3–5 linhas), link (fonte). Não publica sem link.
+- **Notícia curta:** titulo_julia, url_imagem (ou fallback estático local), resumo_julia (insight 3–5 linhas), link (fonte). Não publica sem link.
 - **Artigo:** titulo_julia, url_imagem, subtitulo, resumo_julia, conteudo_completo (HTML seguro), link, cta, objetivo_lead. CTA e objetivo_lead obrigatórios para aprovação na qualidade.
-- **Imagem:** `run_julia_agente_imagem` gera URL a partir do prompt (Gemini Imagen se configurado) ou usa `IMAGEM_FALLBACK_URL`; nunca persiste list/dict em coluna.
+- **Imagem:** `run_julia_agente_imagem` gera URL a partir de prompt contextual (Gemini Imagen se configurado), com retries antes de fallback. Ordem de fallback: (1) stock contextual salvo localmente `app/static/generated/julia_stock_<hash>.jpg` → (2) fallback estático fixo/versionado `app/static/img/fallback-capa-v1.svg` → (3) remoto opcional somente se habilitado. Nunca persiste list/dict em coluna.
 - **Modelos:** `NoticiaPortal` ganha colunas `cta`, `objetivo_lead`, `status_qualidade`, `origem_pauta`. Nova tabela `Pauta` (bind noticias). Migração suave em `infra._ensure_noticias_portal_columns`.
 - **Dispatcher:** Continua marcando sucesso apenas quando `processar_insight_do_momento(payload_cleiton=payload)` retorna True (publicação concluída).
 - **Retenção:** Mantida (18 meses dados, 2 meses imagens); compatível com `run_cleiton_agente_retencao`.
@@ -67,5 +67,5 @@
 
 ## 6. Riscos residuais e próximos passos
 
-- **Riscos:** (1) Gemini Imagen pode exigir projeto/API diferente; manter IMAGE_PROVIDER=fallback garante funcionamento sem imagem gerada. (2) Tabela `Pauta` vazia: sem coleta ou import, nenhuma missão Júlia publica; documentado em README. (3) Colunas novas em bases já existentes: migração via `_ensure_noticias_portal_columns`; em outros SGBDs (ex.: PostgreSQL) pode ser necessário ajustar sintaxe ALTER.
+- **Riscos:** (1) Gemini Imagen pode exigir projeto/API diferente; com fallback local estático fixo/versionado a publicação continua sem volatilidade visual e sem geração de arquivos de contingência por notícia. (2) Tabela `Pauta` vazia: sem coleta ou import, nenhuma missão Júlia publica; documentado em README. (3) Colunas novas em bases já existentes: migração via `_ensure_noticias_portal_columns`; em outros SGBDs (ex.: PostgreSQL) pode ser necessário ajustar sintaxe ALTER.
 - **Próximos passos:** (1) Implementar coleta (RSS/API) em `processar_ciclo_noticias` gravando em `Pauta`. (2) Opcional: rota ou script para import em massa de pautas. (3) Revisar segurança do HTML em `conteudo_completo` (bleach/Markup) se conteúdo for editável por usuários.

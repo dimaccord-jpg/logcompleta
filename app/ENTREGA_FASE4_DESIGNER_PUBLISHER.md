@@ -2,7 +2,7 @@
 
 ## 1. Resumo técnico
 
-- **Designer (`run_julia_agente_designer.py`):** Recebe conteúdo validado e gera/ajusta assets por canal. Saída: url_imagem_master, assets_por_canal (dict), prompt_final, provider_utilizado. Configurável por DESIGNER_ENABLED, DESIGNER_PROVIDER, DESIGNER_ASPECT_RATIO_PADRAO, DESIGNER_CANAIS_ATIVOS. Fallback seguro por canal; não publica e não altera texto.
+- **Designer (`run_julia_agente_designer.py`):** Recebe conteúdo validado e gera/ajusta assets por canal. Saída: url_imagem_master, assets_por_canal (dict), prompt_final, provider_utilizado. Configurável por DESIGNER_ENABLED, DESIGNER_PROVIDER, DESIGNER_ASPECT_RATIO_PADRAO, DESIGNER_CANAIS_ATIVOS. Fallback seguro em camadas (contextual local quando disponível; contingência fixa `/static/img/fallback-capa-v1.svg` apenas no último nível); não publica e não altera texto.
 - **Publisher (`run_julia_agente_publisher.py`):** Publica no portal (obrigatório) e nos canais ativos (portal, linkedin, instagram, email). Registra status por canal (pendente/publicado/falha/ignorado) em `PublicacaoCanal`. Bloqueia duplicidade por (noticia_id, canal). Aplica janela e intervalo entre posts para canais externos (`PUBLISHER_JANELA_*`, `PUBLISHER_INTERVALO_*`). Modo mock para canais externos; `PUBLISHER_MODO=real` retorna falha explícita enquanto APIs reais não estiverem implementadas. Resultado: sucesso_total, sucesso_parcial, falha_total; auditoria com tipo_decisao=publisher.
 - **Integração no pipeline:** Após qualidade: Designer → criação de NoticiaPortal (com url_imagem_master, assets_canais_json, status_publicacao=pendente) → Publisher (atualiza status_publicacao/publicado_em e cria PublicacaoCanal por canal). Missão só é sucesso se portal for publicado (falha_total = portal não publicado).
 - **Modelos:** NoticiaPortal: url_imagem_master, assets_canais_json, status_publicacao, publicado_em. Nova tabela PublicacaoCanal (gerencial): noticia_id, mission_id, canal, status, tentativa_atual, max_tentativas, payload_envio_json, resposta_canal_json, erro_detalhe, criado_em, atualizado_em. Migração suave em infra para colunas de NoticiaPortal.
@@ -40,7 +40,7 @@
 
 ## 4. Testes executados e resultados
 
-- **Designer:** gerar_assets_por_canal(None, "logística", "noticia") retorna url_imagem_master (fallback), assets_por_canal com canais de DESIGNER_CANAIS_ATIVOS, provider_utilizado.
+- **Designer:** gerar_assets_por_canal(None, "logística", "noticia") retorna url_imagem_master (fallback estático/local fixo versionado), assets_por_canal com canais de DESIGNER_CANAIS_ATIVOS, provider_utilizado.
 - **Publisher:** Com noticia aprovada, publicar_multicanal() atualiza portal e cria PublicacaoCanal para cada canal; segunda chamada para mesmo noticia_id+canal gera ignorado por duplicidade.
 - **Pipeline:** Com conteúdo validado, fluxo Designer → publicar → publicar_multicanal conclui; falha_total (ex.: portal não gravado) faz pipeline retornar False.
 - **Regressão:** web.py inalterado; Cleiton e Júlia (noticia/artigo) seguem compatíveis; Fase 3 (só pauta aprovada) preservada.

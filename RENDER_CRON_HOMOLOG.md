@@ -20,6 +20,17 @@ No Render → seu **Web Service** (backend) → **Environment**:
    - `GUNICORN_KEEPALIVE_SECONDS=5`
    - `GEMINI_HTTP_TIMEOUT_MS=20000`
    - `GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000`
+   - `IMAGE_RETRY_ATTEMPTS=3`
+   - `IMAGE_RETRY_BACKOFF_MS=800`
+   - `IMAGE_STOCK_FALLBACK_ENABLED=true`
+   - `IMAGE_ALLOW_REMOTE_FALLBACK=false`
+
+4. Recomendado (coerencia visual das capas em homolog):
+   - `IMAGE_PROVIDER=gemini`
+   - `GEMINI_MODEL_IMAGE=imagen-3.0-generate-002`
+   - `IMAGEM_FALLBACK_URL` vazio para priorizar fallback contextual local.
+   - Em indisponibilidade da IA e sem stock disponivel, o sistema usa o asset
+     versionado `/static/img/fallback-capa-v1.svg`.
 
 ## 2. Criar o Cron Job no Render
 

@@ -29,11 +29,26 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
    - Para login com Google, defina `GOOGLE_OAUTH_REDIRECT_URI` (ex.: `http://127.0.0.1:5000/login/google/callback`) e, em dev, `OAUTHLIB_INSECURE_TRANSPORT=1`.
    - Para a camada gerencial, configure `DB_URI_GERENCIAL` (ex.: `sqlite:///gerencial.db`) no `.env.*`; se omitido, usa `app/gerencial.db`.
    - Para a Júlia, `GEMINI_MODEL_TEXT` permite definir o modelo preferencial; se indisponível, o sistema tenta fallback automático.
-   - Para imagens da Júlia (insights/artigos), configure `IMAGE_PROVIDER=gemini`, `GEMINI_MODEL_IMAGE` e opcionalmente `GEMINI_MODEL_IMAGE_FALLBACK`.
-   - Quando o retorno vem em bytes (sem URL pública), o sistema salva o arquivo em `app/static/generated/` e publica via URL local (`/static/generated/...`).
-   - `IMAGEM_FALLBACK_URL` é opcional; se vazio, o sistema usa fallback visual temático para não exibir card quebrado.
+  - Para imagens da Júlia (insights/artigos), configure `IMAGE_PROVIDER=gemini`, `GEMINI_MODEL_IMAGE` e opcionalmente `GEMINI_MODEL_IMAGE_FALLBACK`.
+  - O pipeline enriquece o prompt de imagem com contexto da pauta + título/subtítulo/resumo gerados, para manter coesão semântica entre texto e capa.
+  - A geração principal usa retries configuráveis (`IMAGE_RETRY_ATTEMPTS`, `IMAGE_RETRY_BACKOFF_MS`) antes de degradar para fallback.
+  - Quando a IA retorna bytes (sem URL pública), o sistema salva o arquivo em `app/static/generated/` e publica via URL local (`/static/generated/...`).
+  - Se a IA falhar, o fallback preferencial é fotográfico contextual salvo localmente em `app/static/generated/julia_stock_<hash>.jpg`.
+  - Apenas sem stock disponível o sistema usa asset fixo versionado em `app/static/img/fallback-capa-v1.svg`.
+  - `IMAGEM_FALLBACK_URL` é opcional e tem prioridade quando definido.
+  - `IMAGE_ALLOW_REMOTE_FALLBACK=false` (padrão) evita fallback remoto variável; use `true` somente se quiser permitir placeholders externos em último caso.
    - Avatar da editora no detalhe da notícia: `JULIA_AVATAR_URL=/static/img/julia-avatar.png` (ou URL externa).
    - Para o Roberto, `GEMINI_MODEL_FRETE` define o modelo preferencial de análise; há fallback automático para evitar indisponibilidade.
+
+---
+
+## Diretriz UX de Contraste (tema dark)
+
+- O projeto usa tema escuro global em `static/css/agentefrete-theme.css`; por isso, evite definir `color: #...` inline em templates para corpo de texto.
+- Para conteúdo editorial/rico (HTML vindo do banco), aplique classes reutilizáveis de leitura:
+  - Superfície do card: `af-readable-surface`
+  - Bloco de conteúdo: `af-readable-content`
+- Essas classes padronizam contraste de `p`, `li`, `span`, `div`, `blockquote`, `td`, `th`, além de links e headings, evitando regressões de legibilidade em páginas novas.
 
 ---
 

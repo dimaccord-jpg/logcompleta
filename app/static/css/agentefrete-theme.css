@@ -317,6 +317,75 @@ header.bg-light, header.border-bottom { background: var(--af-bg-card) !important
 .af-feature-item i { color: var(--af-cyan); font-size: 1rem; }
 .af-feature-item span { color: rgba(255, 255, 255, 0.8); font-size: 0.9rem; }
 
+/* 13.1 CONTRASTE DE LEITURA (global e reutilizavel) */
+.af-readable-surface {
+  color: var(--af-text-secondary) !important;
+}
+.af-readable-surface h1,
+.af-readable-surface h2,
+.af-readable-surface h3,
+.af-readable-surface h4,
+.af-readable-surface h5,
+.af-readable-surface h6,
+.af-readable-content h1,
+.af-readable-content h2,
+.af-readable-content h3,
+.af-readable-content h4,
+.af-readable-content h5,
+.af-readable-content h6 {
+  color: var(--af-text-primary) !important;
+}
+.af-readable-content,
+.af-readable-content p,
+.af-readable-content li,
+.af-readable-content div,
+.af-readable-content span,
+.af-readable-content blockquote,
+.af-readable-content td,
+.af-readable-content th {
+  color: var(--af-text-secondary) !important;
+}
+.af-readable-content strong,
+.af-readable-content b,
+.af-readable-content em,
+.af-readable-content mark {
+  color: var(--af-text-primary) !important;
+}
+.af-readable-content a {
+  color: var(--af-cyan) !important;
+}
+.af-readable-content a:hover {
+  color: var(--af-cyan-bright) !important;
+}
+
+/* Fallback global para conteudo rico dentro de cards no tema dark */
+.ri-card .content,
+.ri-card .content p,
+.ri-card .content li,
+.ri-card .content div,
+.ri-card .content span,
+.card .content,
+.card .content p,
+.card .content li,
+.card .content div,
+.card .content span {
+  color: var(--af-text-secondary) !important;
+}
+.ri-card .content h1,
+.ri-card .content h2,
+.ri-card .content h3,
+.ri-card .content h4,
+.ri-card .content h5,
+.ri-card .content h6,
+.card .content h1,
+.card .content h2,
+.card .content h3,
+.card .content h4,
+.card .content h5,
+.card .content h6 {
+  color: var(--af-text-primary) !important;
+}
+
 /* 14. RESPONSIVO */
 .overlay {
     display: none;

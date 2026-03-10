@@ -3,8 +3,10 @@ Júlia - Agente Qualidade: validação de conteúdo por tipo antes de publicar.
 Garante campos mínimos, tamanho e evita duplicidade por link.
 """
 import logging
+import os
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,26 @@ def _str_val(val: Any) -> str:
     return str(val).strip()
 
 
+def _url_imagem_integra(url: Any) -> bool:
+    """Valida URL de imagem mínima (remota válida ou asset local existente)."""
+    s = _str_val(url)
+    if not s:
+        return False
+    p = urlparse(s)
+    if p.scheme in ("http", "https", "data"):
+        return True
+    local = s.replace("\\", "/")
+    if local.startswith("/static/"):
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        rel = local[len("/static/"):]
+        return os.path.exists(os.path.join(app_dir, "static", rel.replace("/", os.sep)))
+    if local.startswith("static/"):
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        rel = local[len("static/"):]
+        return os.path.exists(os.path.join(app_dir, "static", rel.replace("/", os.sep)))
+    return False
+
+
 def validar_noticia_curta(d: dict) -> tuple[bool, list[str]]:
     """
     Valida dict de notícia curta. Campos obrigatórios:
@@ -55,8 +77,8 @@ def validar_noticia_curta(d: dict) -> tuple[bool, list[str]]:
         err.append("resumo_julia deve ter entre 3 e 5 linhas")
     if not link:
         err.append("fonte_link (link original) obrigatório para notícia")
-    if url_img is None and d.get("url_imagem") is None:
-        pass  # pode ser fallback aplicado depois
+    if not _url_imagem_integra(url_img):
+        err.append("url_imagem ausente ou inválida")
     return (len(err) == 0, err)
 
 
@@ -74,6 +96,7 @@ def validar_artigo(d: dict) -> tuple[bool, list[str]]:
     link = _str_val(d.get("link")) or _str_val(d.get("fonte_link"))
     cta = _str_val(d.get("cta"))
     objetivo = _str_val(d.get("objetivo_lead"))
+    url_img = d.get("url_imagem")
     if not titulo or len(titulo) < MIN_TITULO:
         err.append("titulo_julia ausente ou muito curto")
     if not subtitulo:
@@ -89,6 +112,8 @@ def validar_artigo(d: dict) -> tuple[bool, list[str]]:
             err.append(f"conteudo_completo deve conter ao menos {MIN_PARAGRAFOS_ARTIGO} parágrafos <p> para artigo")
     if not link:
         err.append("fonte_link (link original) obrigatório para artigo")
+    if not _url_imagem_integra(url_img):
+        err.append("url_imagem ausente ou inválida para artigo")
     if not cta or len(cta) < MIN_CTA:
         err.append("cta obrigatória e com pelo menos %d caracteres" % MIN_CTA)
     if not objetivo:

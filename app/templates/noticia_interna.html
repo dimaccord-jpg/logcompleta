@@ -3,7 +3,7 @@
 {% block content %}
 <div class="container mt-5 mb-5">
     {# Adicionada classe condicional no card para destaque visual de Artigos #}
-    <article class="ri-card p-4 p-md-5 shadow-sm bg-white mx-auto {% if noticia.tipo == 'artigo' %}border-top border-primary border-4{% endif %}" style="max-width: 900px; border-radius: 15px;">
+    <article class="ri-card af-readable-surface p-4 p-md-5 shadow-sm bg-white mx-auto {% if noticia.tipo == 'artigo' %}border-top border-primary border-4{% endif %}" style="max-width: 900px; border-radius: 15px;">
         
         <header class="mb-4 text-center">
             <div class="mb-3">
@@ -18,7 +18,7 @@
                 {% endif %}
             </div>
 
-            <h1 class="fw-bold display-5 mb-3" style="color: #050c16;">{{ noticia.titulo_julia }}</h1>
+            <h1 class="fw-bold display-5 mb-3">{{ noticia.titulo_julia }}</h1>
             
             {# Subtítulo premium gerado pela Júlia para Artigos  #}
             {% if noticia.tipo == 'artigo' and noticia.subtitulo %}
@@ -36,13 +36,13 @@
         </header>
 
         {# Imagem de capa dinâmica #}
-        {% if noticia.url_imagem %}
+        {% if url_imagem_resolvida %}
             <div class="mb-5">
-                <img src="{{ noticia.url_imagem }}" class="img-fluid rounded shadow-sm w-100" alt="Capa da Matéria">
+                <img src="{{ url_imagem_resolvida }}" class="img-fluid rounded shadow-sm w-100" alt="Capa da Matéria">
             </div>
         {% endif %}
         
-        <div class="content mb-5" style="font-size: 1.15rem; line-height: 1.8; color: #333;">
+        <div class="content af-readable-content mb-5" style="font-size: 1.15rem; line-height: 1.8;">
             {% if noticia.tipo == 'artigo' %}
                 {# Renderiza o conteúdo técnico em HTML se for Artigo  #}
                 <div class="artigo-texto">

@@ -8,6 +8,7 @@ if os.path.dirname(_diretorio_app) not in sys.path:
 
 import json
 import logging
+from urllib.parse import urlparse
 
 # 1. Imports do Flask e Extensões Base
 from flask import Flask, render_template, redirect, url_for, request, flash, abort, session
@@ -378,10 +379,30 @@ def analise():
 def detalhe_noticia(noticia_id):
     # Busca a notícia específica no banco pelo ID
     noticia = NoticiaPortal.query.get_or_404(noticia_id)
+
+    def _resolver_url_imagem(raw_url: str | None) -> str | None:
+        """Converte caminhos locais de imagem para URL pública de static com url_for."""
+        val = (raw_url or "").strip()
+        if not val:
+            return None
+        # URLs remotas ou data-uri seguem como vieram.
+        parsed = urlparse(val)
+        if parsed.scheme in ("http", "https", "data"):
+            return val
+        local = val.replace("\\", "/")
+        if local.startswith("/static/"):
+            return url_for("static", filename=local[len("/static/"):])
+        if local.startswith("static/"):
+            return url_for("static", filename=local[len("static/"):])
+        if local.startswith("generated/"):
+            return url_for("static", filename=local)
+        return val
+
+    url_imagem_resolvida = _resolver_url_imagem(noticia.url_imagem)
     
     # Redirecionamos ambos para o mesmo template, 
     # pois ele já gerencia a lógica de exibição interna.
-    return render_template('noticia_interna.html', noticia=noticia)
+    return render_template('noticia_interna.html', noticia=noticia, url_imagem_resolvida=url_imagem_resolvida)
 
 # Criando lazy: importar dentro da função, na hora que você realmente vai usar.
 @app.route("/executar-cleiton", methods=["POST"])

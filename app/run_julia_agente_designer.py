@@ -9,6 +9,8 @@ import os
 from typing import Any
 from urllib.parse import quote
 
+from app.run_julia_agente_imagem import gerar_fallback_imagem_estatica
+
 logger = logging.getLogger(__name__)
 
 IMAGEM_FALLBACK = (os.getenv("IMAGEM_FALLBACK_URL", "") or "").strip()
@@ -45,8 +47,7 @@ def _url_para_canal(canal: str, url_master: str | None, prompt: str, aspect: str
 def _fallback_master(prompt: str | None) -> str:
     if IMAGEM_FALLBACK:
         return IMAGEM_FALLBACK
-    t = (prompt or "supply chain strategic insight")[:60].replace(" ", "+")
-    return f"https://placehold.co/800x450/0d6efd/fff?text={quote(t)}"
+    return gerar_fallback_imagem_estatica(prompt)
 
 
 def gerar_assets_por_canal(

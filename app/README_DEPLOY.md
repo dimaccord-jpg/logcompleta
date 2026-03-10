@@ -83,8 +83,13 @@ GEMINI_API_KEY_2=...        # Júlia artigos
 GEMINI_MODEL_TEXT=gemini-2.5-flash
 IMAGE_PROVIDER=gemini
 GEMINI_MODEL_IMAGE=imagen-3.0-generate-002
-# Fallback Gemini (multimodal) para quando Imagen não retornar URL pública
-GEMINI_MODEL_IMAGE_FALLBACK=gemini-2.0-flash-preview-image-generation
+# Fallback Gemini (multimodal) opcional para quando Imagen não retornar URL pública
+# GEMINI_MODEL_IMAGE_FALLBACK=gemini-2.5-flash-image-preview
+# Retentativas da camada de imagem
+# IMAGE_RETRY_ATTEMPTS=3
+# IMAGE_RETRY_BACKOFF_MS=800
+# Fallback fotográfico contextual local (recomendado manter true)
+# IMAGE_STOCK_FALLBACK_ENABLED=true
 # Timeouts HTTP Gemini (ms)
 GEMINI_HTTP_TIMEOUT_MS=20000
 GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000
@@ -94,8 +99,12 @@ GUNICORN_GRACEFUL_TIMEOUT_SECONDS=30
 GUNICORN_KEEPALIVE_SECONDS=5
 # Execução manual no painel admin: em homolog/prod o padrão já é async
 # ADMIN_CLEITON_EXEC_MODE=async
-# Opcional: fallback visual estático (se vazio, sistema tenta fallback temático)
+# Opcional: fallback visual estático prioritário (CDN própria)
 # IMAGEM_FALLBACK_URL=https://sua-cdn.com/imagens/fallback-logistica.jpg
+# Se IMAGEM_FALLBACK_URL ficar vazio, o sistema tenta fallback contextual local (stock) e,
+# só na indisponibilidade final, usa o asset versionado /static/img/fallback-capa-v1.svg
+# Padrão recomendado: manter false para evitar imagem remota variável por refresh
+# IMAGE_ALLOW_REMOTE_FALLBACK=false
 # Avatar da editora (opcional)
 # JULIA_AVATAR_URL=https://sua-cdn.com/imagens/julia-avatar.png
 # Fase 3: Scout + Verificador (apenas pautas aprovadas vão para Júlia)

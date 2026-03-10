@@ -5,11 +5,12 @@ Saída: True apenas quando publicação concluída no formato correto; falhas au
 """
 import logging
 import os
+import re
 from typing import Any
 from app.extensions import db
 from app.models import Pauta, NoticiaPortal, SerieItemEditorial
 from app.run_julia_agente_redacao import gerar_conteudo
-from app.run_julia_agente_imagem import gerar_url_imagem
+from app.run_julia_agente_imagem import gerar_url_imagem, classificar_origem_url_imagem
 from app.run_julia_agente_qualidade import validar_conteudo
 from app.run_julia_agente_publicacao import publicar
 from app.run_julia_agente_designer import gerar_assets_por_canal, normalizar_assets_json
@@ -18,6 +19,37 @@ from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
 from app.run_julia_regras import status_verificacao_permitidos
 
 logger = logging.getLogger(__name__)
+
+
+def _limpar_texto_prompt(v: str | None, limite: int) -> str:
+    txt = (v or "").strip()
+    txt = re.sub(r"\s+", " ", txt)
+    return txt[:limite]
+
+
+def _montar_prompt_imagem_contextual(conteudo: dict[str, Any], pauta: Pauta, tipo_missao: str) -> str:
+    """
+    Monta prompt semântico para imagem com base no texto gerado e na pauta aprovada.
+    Mantém isolamento: apenas compõe metadados para o agente de imagem.
+    """
+    prompt_base = _limpar_texto_prompt(conteudo.get("prompt_imagem"), 320)
+    titulo = _limpar_texto_prompt(conteudo.get("titulo_julia") or pauta.titulo_original, 140)
+    subtitulo = _limpar_texto_prompt(conteudo.get("subtitulo"), 160)
+    resumo = _limpar_texto_prompt(conteudo.get("resumo_julia"), 220)
+    fonte = _limpar_texto_prompt(pauta.fonte, 80)
+
+    if prompt_base and len(prompt_base) >= 30:
+        return prompt_base
+
+    contexto = " | ".join([x for x in [titulo, subtitulo, resumo] if x])
+    tipo_desc = "strategic long-form article" if (tipo_missao or "noticia") == "artigo" else "fast logistics insight"
+    prompt_final = (
+        "Create a professional editorial cover image, realistic photography style, "
+        "no text overlay, no watermark, logistics and supply chain theme. "
+        f"Content type: {tipo_desc}. Source: {fonte or 'logistics portal'}. "
+        f"Context: {contexto or 'global supply chain operations'}"
+    )
+    return prompt_final[:500]
 
 
 def _status_verificacao_permitidos() -> list[str]:
@@ -165,15 +197,19 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
         )
 
         # 2. Imagem
-        prompt_imagem = (conteudo.get("prompt_imagem") or "").strip()
+        prompt_imagem = _montar_prompt_imagem_contextual(conteudo, pauta, tipo_missao)
         fallback_usado = False
         try:
             url_imagem = gerar_url_imagem(prompt_imagem)
         except Exception as e:
             logger.exception("Júlia pipeline: falha inesperada na geração de imagem, usando fallback: %s", e)
-            url_imagem = gerar_url_imagem("")
+            url_imagem = gerar_url_imagem(prompt_imagem)
+            fallback_usado = True
+        origem_imagem = classificar_origem_url_imagem(url_imagem)
+        if origem_imagem in ("contingencia_fixa", "placeholder_remoto"):
             fallback_usado = True
         conteudo["url_imagem"] = url_imagem
+        conteudo["prompt_imagem"] = prompt_imagem
         conteudo["link"] = pauta.link
         conteudo["fonte_link"] = pauta.link
         conteudo["titulo_original"] = pauta.titulo_original
@@ -186,7 +222,9 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
                 "mission_id": mission_id,
                 "tipo_missao": tipo_missao,
                 "pauta_id": pauta.id,
-                "prompt_imagem_vazio": not bool(prompt_imagem),
+                "prompt_imagem_vazio": not bool(_limpar_texto_prompt(conteudo.get("prompt_imagem"), 500)),
+                "prompt_imagem_len": len(prompt_imagem or ""),
+                "origem_imagem": origem_imagem,
                 "fallback_usado": fallback_usado,
             },
             resultado="sucesso",
