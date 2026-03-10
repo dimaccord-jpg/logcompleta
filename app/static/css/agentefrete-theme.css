@@ -318,9 +318,36 @@ header.bg-light, header.border-bottom { background: var(--af-bg-card) !important
 .af-feature-item span { color: rgba(255, 255, 255, 0.8); font-size: 0.9rem; }
 
 /* 14. RESPONSIVO */
+.overlay {
+    display: none;
+    position: fixed;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 999;
+    opacity: 0;
+    transition: all 0.5s ease-in-out;
+}
+.overlay.show {
+    display: block;
+    opacity: 1;
+}
+
 @media (max-width: 768px) {
-  #sidebar { margin-left: calc(-1 * var(--sidebar-width)); position: fixed; }
-  #sidebar.active { margin-left: 0; width: var(--sidebar-width); }
-  #content { margin-left: 0; width: 100%; }
-  #content.active { margin-left: var(--sidebar-width); }
+  #sidebar { 
+    margin-left: calc(-1 * var(--sidebar-width)); 
+    position: fixed;
+    z-index: 1001; /* Garante que a sidebar fique acima do overlay */
+  }
+  #sidebar.active { 
+    margin-left: 0; 
+  }
+  #content { 
+    width: 100%; 
+    margin-left: 0;
+  }
+  /* Remove o empurrão do conteúdo em telas móveis, pois a sidebar é um overlay */
+  #content.active { 
+    margin-left: 0; 
+  }
 }
