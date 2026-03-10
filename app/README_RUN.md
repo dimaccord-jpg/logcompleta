@@ -1,6 +1,6 @@
 # 🏃 Guia de Execução Local
 
-Este projeto utiliza variáveis de ambiente para alternar entre configurações de Desenvolvimento e Homologação. A lógica de autenticação está em `app/auth_services.py`; a infraestrutura em `app/infra.py`; as rotas operacionais (diagnóstico OAuth, auditoria de usuários, promote-admin, health) estão em `app/ops_routes.py` (Blueprint). O `web.py` apenas expõe as rotas e registra os blueprints.
+Este projeto utiliza variáveis de ambiente para alternar entre configurações de Desenvolvimento e Homologação. A lógica de autenticação está em `app/auth_services.py`; a infraestrutura em `app/infra.py`; as rotas operacionais (diagnóstico OAuth, auditoria de usuários, promote-admin, reset de pautas e health) estão em `app/ops_routes.py` (Blueprint). O `web.py` apenas expõe as rotas e registra os blueprints.
 
 **Camada gerencial (Cleiton):** Orquestração em `run_cleiton_agente_orquestrador.py`; regras em `run_cleiton_agente_regras.py`; dispatch em `run_cleiton_agente_dispatcher.py`; auditoria em `run_cleiton_agente_auditoria.py`. `run_cleiton.py` é fachada que delega ao orquestrador.
 
@@ -74,7 +74,7 @@ APP_ENV=homolog gunicorn -w 2 -b 0.0.0.0:8000 web:app
 As rotas de ops (`app/ops_routes.py`) incluem:
 - `GET /health` — health check (não exige token).
 - `GET /oauth-diagnostics` — estado do OAuth; exige header `X-Ops-Token`.
-- `POST /ops/user-audit` e `POST /ops/promote-admin` — exigem `X-Ops-Token`.
+- `POST /ops/user-audit`, `POST /ops/promote-admin` e `POST /ops/reset-pautas` — exigem `X-Ops-Token`.
 
 Exemplo de diagnóstico OAuth:
 ```bash

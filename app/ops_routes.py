@@ -1,5 +1,6 @@
 """
-Rotas operacionais: diagnóstico OAuth, auditoria de usuários, promote-admin e health check.
+Rotas operacionais: diagnóstico OAuth, auditoria de usuários, promote-admin,
+reset de pautas e health check.
 Todas protegidas por X-Ops-Token (exceto /health). Registrado como Blueprint em web.py.
 """
 import os
@@ -9,7 +10,7 @@ from flask import Blueprint, request, current_app
 from sqlalchemy import text, func
 
 from app.extensions import db
-from app.models import User
+from app.models import User, Pauta
 from app.infra import ensure_database_schema, ops_token_required
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,21 @@ logger = logging.getLogger(__name__)
 ops_bp = Blueprint('ops', __name__)
 
 REDIRECT_URI_DEFAULT = 'http://127.0.0.1:5000/login/google/callback'
+
+
+@ops_bp.route('/ops/reset-pautas', methods=['POST'])
+def ops_reset_pautas():
+    """Reseta pautas presas em 'em_processamento' de volta para 'pendente'."""
+    ops_token_required()
+    try:
+        updated_count = Pauta.query.filter_by(status='em_processamento').update({'status': 'pendente'})
+        db.session.commit()
+        logger.info("Reset de pautas: %d pautas resetadas para 'pendente'.", updated_count)
+        return {'status': 'ok', 'reset_count': updated_count}, 200
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Falha ao resetar pautas: %s", e)
+        return {'status': 'error', 'message': str(e)}, 500
 
 
 @ops_bp.route('/oauth-diagnostics')

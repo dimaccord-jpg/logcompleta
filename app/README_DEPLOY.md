@@ -12,7 +12,7 @@ sudo apt install python3-pip python3-venv nginx git -y
 
 ## 2. Estrutura de Pastas e Código
 
-O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit` e `/ops/promote-admin`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. A camada gerencial Cleiton usa o bind `gerencial` (`DB_URI_GERENCIAL`); o carregamento de `.env` é por caminho absoluto via `app/env_loader.py` — defina `APP_ENV=prod` no systemd para carregar `.env.prod`.
+O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. A camada gerencial Cleiton usa o bind `gerencial` (`DB_URI_GERENCIAL`); o carregamento de `.env` é por caminho absoluto via `app/env_loader.py` — defina `APP_ENV=prod` no systemd para carregar `.env.prod`.
 
 Vamos criar uma estrutura organizada em `/srv`.
 
