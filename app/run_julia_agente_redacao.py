@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from google import genai
+from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +29,23 @@ def _get_model_text_candidates() -> list[str]:
 
 
 def _client_for_tipo(tipo: str):
-    """Retorna cliente Gemini: artigos usam GEMINI_API_KEY_2, notícias GEMINI_API_KEY_1."""
+    """
+    Retorna cliente Gemini: artigos usam GEMINI_API_KEY_2, notícias GEMINI_API_KEY_1.
+    Usa http_options com timeout configurável para evitar travar o worker em chamadas externas.
+    """
     key = os.getenv("GEMINI_API_KEY_2") if tipo == "artigo" else os.getenv("GEMINI_API_KEY_1")
     if not key:
         key = os.getenv("GEMINI_API_KEY")
     if not key:
         return None
     try:
-        return genai.Client(api_key=key)
+        timeout_ms_env = os.getenv("GEMINI_HTTP_TIMEOUT_MS", "").strip()
+        try:
+            timeout_ms = max(1_000, int(timeout_ms_env)) if timeout_ms_env else 20_000
+        except ValueError:
+            timeout_ms = 20_000
+        http_options = genai_types.HttpOptions(timeout=timeout_ms)
+        return genai.Client(api_key=key, http_options=http_options)
     except Exception as e:
         logger.error("Falha ao inicializar cliente Gemini (%s): %s", tipo, e)
         return None
@@ -127,7 +137,10 @@ def _chamar_modelo(client, prompt: str, tipo: str) -> dict | None:
         except Exception as e:
             last_error = e
             logger.warning("Modelo textual indisponível (%s) para %s: %s", model, tipo, e)
-    logger.exception("Falha na redação Júlia (%s) após fallback: %s", tipo, last_error)
+    if last_error is not None:
+        logger.exception("Falha na redação Júlia (%s) após fallback: %s", tipo, last_error)
+    else:
+        logger.error("Falha na redação Júlia (%s): sem erro detalhado retornado pelo cliente Gemini.", tipo)
     return None
 
 

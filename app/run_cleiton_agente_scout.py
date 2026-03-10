@@ -87,7 +87,26 @@ def _coletar_rss(url: str, max_itens: int, tipo_sugerido: str, fonte_tipo: str =
     except ImportError as e:
         raise RuntimeError("dependencia_feedparser_ausente") from e
 
-    feed = feedparser.parse(url, request_headers={"User-Agent": "LogCompleta-Scout/1.0"})
+    # Usa requests com timeout configurável para evitar que uma fonte lenta
+    # bloqueie o worker inteiro (ex.: ambiente de homolog/produção).
+    try:
+        import requests
+    except ImportError as e:
+        raise RuntimeError("dependencia_requests_ausente") from e
+
+    timeout_env = (os.getenv("SCOUT_HTTP_TIMEOUT_SECONDS", "").strip() or "10")
+    try:
+        timeout_s = max(1, int(timeout_env))
+    except ValueError:
+        timeout_s = 10
+
+    resp = requests.get(
+        url,
+        timeout=timeout_s,
+        headers={"User-Agent": "LogCompleta-Scout/1.0"},
+    )
+    resp.raise_for_status()
+    feed = feedparser.parse(resp.content)
     if getattr(feed, "bozo", False) and not getattr(feed, "entries", None):
         raise RuntimeError("parse_invalido_rss")
 
