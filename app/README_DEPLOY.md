@@ -103,8 +103,10 @@ GUNICORN_KEEPALIVE_SECONDS=5
 # IMPORTANTE: SCOUT_SOURCES_JSON deve ficar em UMA linha, sem comentarios e sem quebra.
 # SCOUT_SOURCES_JSON=[{"url":"https://g1.globo.com/rss/g1/","tipo":"noticia","tipo_fonte":"rss"},{"url":"https://news.google.com/rss/search?q=logistica&hl=pt-BR&gl=BR&ceid=BR:pt-419","tipo":"noticia","tipo_fonte":"rss"}]
 # SCOUT_MAX_ITENS_POR_CICLO=20
+# SCOUT_HTTP_TIMEOUT_SECONDS=10
 # VERIFICADOR_SCORE_MINIMO=0.5
 # VERIFICADOR_SIMILARIDADE_TITULO=0.85
+# VERIFICADOR_MAX_REGISTROS_SIMILARIDADE=500
 # VERIFICADOR_FONTES_CONFIAVEIS=valor.globo.com,g1.globo.com,transportemoderno.com.br,logweb.com.br,portosenavios.com.br,tecnologistica.com.br,supplychaindive.com,supplychainbrain.com,logisticsmgmt.com,freightwaves.com
 # VERIFICADOR_BLOQUEAR_DOMINIOS=example-spam.com,agregador-ruido.net,dominio-suspeito.xyz
 # Fase 4: Designer + Publisher (portal + canais; PUBLISHER_MODO=mock para canais externos)
@@ -118,7 +120,9 @@ GUNICORN_KEEPALIVE_SECONDS=5
 # INSIGHT_SCORE_ESCALAR=70
 # INSIGHT_SCORE_PAUSAR=25
 # INSIGHT_MIN_IMPRESSOES=100
-# Fase 6: Nenhuma variável nova; feedback loop e painel admin usam as mesmas configs.
+# Logs de importação do painel admin (opcional; se ausente usa logs_fallback)
+# LOG_DIR=/srv/logcompleta/logs
+# Fase 6/Sprint 6: feedback loop e operações admin reutilizam as mesmas configs base.
 ```
 
 Use credenciais distintas por ambiente (dev, homolog, prod) e rotacione imediatamente qualquer chave/tokens expostos.

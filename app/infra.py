@@ -46,6 +46,7 @@ PAUTAS_EXTRA_COLUMNS = [
     ("hash_conteudo", "VARCHAR(64)"),
     ("coletado_em", "DATETIME"),
     ("verificado_em", "DATETIME"),
+    ("arquivada", "BOOLEAN DEFAULT 0"),
 ]
 
 

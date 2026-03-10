@@ -42,15 +42,17 @@ def publicar(
 ) -> NoticiaPortal | None:
     """
     Cria registro em NoticiaPortal com campos normalizados (Fase 4: url_imagem_master, assets_canais_json, status_publicacao).
-    Não publica se link já existir (evita duplicata). Publisher marcará publicado_em após publicar no portal.
+    Se o link já existir, trata como operação idempotente e retorna o registro existente em vez de falhar.
+    Publisher marcará publicado_em após publicar no portal.
     """
     link = _normalizar_texto(link)
     if not link:
         logger.error("Publicação abortada: link obrigatório.")
         return None
-    if NoticiaPortal.query.filter_by(link=link).first():
-        logger.warning("Publicação ignorada: link já existe (%s).", link[:80])
-        return None
+    existente = NoticiaPortal.query.filter_by(link=link).first()
+    if existente:
+        logger.warning("Publicação idempotente: link já existe, reutilizando registro (%s).", link[:80])
+        return existente
     titulo_julia = _normalizar_texto(titulo_julia) or "Sem título"
     url_imagem = normalizar_url_imagem(url_imagem)
     url_master = normalizar_url_imagem(url_imagem_master or url_imagem)

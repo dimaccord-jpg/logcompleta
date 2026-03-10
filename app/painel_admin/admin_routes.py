@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, flash, redirect, url_for, request, current_app
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
+from markupsafe import Markup, escape
 from sqlalchemy import text
 import os
 import csv
@@ -10,7 +11,19 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime
 from app.extensions import db
-from app.models import FreteReal, RecomendacaoEstrategica, InsightCanal, AuditoriaGerencial, ConfigRegras
+from app.models import (
+    FreteReal,
+    RecomendacaoEstrategica,
+    InsightCanal,
+    AuditoriaGerencial,
+    ConfigRegras,
+    Pauta,
+    NoticiaPortal,
+    SerieEditorial,
+    SerieItemEditorial,
+)
+from app.run_julia_regras import status_verificacao_permitidos
+from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 pasta_templates = os.path.join(base_dir, 'template_admin')
@@ -56,6 +69,43 @@ def _executar_cleiton_em_background(app_obj, bypass_frequencia: bool) -> None:
 def verificar_acesso_admin():
     """Retorna True se o usuário estiver autenticado e for administrador."""
     return current_user.is_authenticated and getattr(current_user, 'is_admin', False)
+
+
+def _registrar_auditoria_admin(
+    tipo_decisao: str,
+    decisao: str,
+    entidade: str,
+    entidade_id: int | None,
+    estado_antes: dict | None,
+    estado_depois: dict | None,
+    motivo: str | None,
+    resultado: str,
+    detalhe: str | None = None,
+) -> None:
+    """
+    Helper padronizado para trilha de auditoria administrativa.
+    tipo_decisao: admin_operacao | admin_vinculo | admin_reprocessamento etc.
+    resultado: sucesso | falha | ignorado
+    """
+    try:
+        contexto = {
+            "ator": getattr(current_user, "email", None),
+            "entidade": entidade,
+            "entidade_id": entidade_id,
+            "antes": estado_antes,
+            "depois": estado_depois,
+            "motivo": motivo,
+        }
+        auditoria_registrar(
+            tipo_decisao=tipo_decisao,
+            decisao=decisao,
+            contexto=contexto,
+            resultado=resultado,
+            detalhe=detalhe,
+        )
+    except Exception:
+        # Auditoria não deve quebrar fluxo do admin.
+        logging.exception("Falha ao registrar auditoria admin para %s id=%s", entidade, entidade_id)
 
 # --- ROTA 1: DASHBOARD (Fase 6: KPIs insight + recomendações) ---
 @admin_bp.route('/')
@@ -136,6 +186,8 @@ def agentes_julia():
     frequencia_horas = _obter_frequencia_horas()
     ultima_execucao, proxima_prevista = _obter_ultima_e_proxima_execucao(frequencia_horas)
     janela_inicio, janela_fim = _obter_janela_publicacao()
+    status_pautas_artigo = _obter_status_pautas_artigo()
+    ultima_artigo = _obter_ultima_publicacao_artigo()
     return render_template(
         'agentes_julia.html',
         frequencia_horas=frequencia_horas,
@@ -143,6 +195,8 @@ def agentes_julia():
         proxima_prevista=proxima_prevista,
         janela_inicio=janela_inicio,
         janela_fim=janela_fim,
+        status_pautas_artigo=status_pautas_artigo,
+        ultima_artigo=ultima_artigo,
     )
 
 
@@ -184,6 +238,69 @@ def _obter_janela_publicacao() -> tuple[int, int]:
         return get_janela_publicacao()
     except Exception:
         return 6, 22
+
+
+def _obter_status_pautas_artigo() -> dict:
+    """Resumo de backlog de pautas de artigo para o painel admin."""
+    try:
+        status_permitidos = status_verificacao_permitidos()
+        total = Pauta.query.filter(Pauta.tipo == "artigo", Pauta.arquivada.isnot(True)).count()
+        pendentes = Pauta.query.filter(
+            Pauta.tipo == "artigo",
+            Pauta.status == "pendente",
+            Pauta.arquivada.isnot(True),
+        ).count()
+        elegiveis = (
+            Pauta.query.filter(
+                Pauta.tipo == "artigo",
+                Pauta.status == "pendente",
+                Pauta.status_verificacao.in_(status_permitidos),
+                Pauta.arquivada.isnot(True),
+            ).count()
+        )
+        em_proc = Pauta.query.filter(
+            Pauta.tipo == "artigo",
+            Pauta.status == "em_processamento",
+            Pauta.arquivada.isnot(True),
+        ).count()
+        falha = Pauta.query.filter(
+            Pauta.tipo == "artigo",
+            Pauta.status == "falha",
+            Pauta.arquivada.isnot(True),
+        ).count()
+        return {
+            "total": total,
+            "pendentes": pendentes,
+            "elegiveis": elegiveis,
+            "em_processamento": em_proc,
+            "falha": falha,
+        }
+    except Exception:
+        return {
+            "total": 0,
+            "pendentes": 0,
+            "elegiveis": 0,
+            "em_processamento": 0,
+            "falha": 0,
+        }
+
+
+def _obter_ultima_publicacao_artigo():
+    """Retorna a última data de publicação efetiva de artigo no portal (ou None)."""
+    try:
+        ultimo = (
+            NoticiaPortal.query.filter(
+                NoticiaPortal.tipo == "artigo",
+                NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+            )
+            .order_by(NoticiaPortal.publicado_em.desc(), NoticiaPortal.data_publicacao.desc())
+            .first()
+        )
+        if not ultimo:
+            return None
+        return ultimo.publicado_em or ultimo.data_publicacao
+    except Exception:
+        return None
 
 
 @admin_bp.route('/agentes/julia/frequencia', methods=['POST'])
@@ -299,20 +416,47 @@ def agentes_julia_executar_cleiton():
     return redirect(url_for('admin.agentes_julia'))
 
 
-@admin_bp.route('/agentes/julia/executar-insight', methods=['POST'])
+@admin_bp.route('/agentes/julia/executar-artigo-manual', methods=['POST'])
 @login_required
-def agentes_julia_executar_insight():
+def agentes_julia_executar_artigo_manual():
+    """Dispara manualmente uma missão de artigo, ignorando apenas a trava diária de artigo publicado hoje."""
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
     try:
         from app.run_cleiton import executar_orquestracao
-        executar_orquestracao(current_app)
-        flash("Ciclo completo executado (inclui Customer Insight).", "success")
+        resultado = executar_orquestracao(
+            current_app,
+            bypass_frequencia=True,
+            tipo_missao_forcado="artigo",
+            ignorar_trava_artigo_hoje=True,
+        ) or {}
+        status = resultado.get("status") or "falha"
+        motivo = resultado.get("motivo_final") or resultado.get("motivo") or "Execução manual de artigo concluída sem motivo detalhado."
+        caminho = resultado.get("caminho_usado")
+        partes_msg: list[str] = [motivo]
+        if caminho:
+            partes_msg.append(f"caminho_usado={caminho}")
+        if resultado.get("mission_id"):
+            partes_msg.append(f"mission_id={resultado.get('mission_id')}")
+
+        msg_texto = " | ".join(partes_msg)
+        link_em_proc = url_for('admin.pautas_admin', tipo='artigo', status='em_processamento')
+        link_publicadas = url_for('admin.pautas_admin', tipo='artigo', status='publicada')
+        mensagem = Markup(
+            f"{escape(msg_texto)} | "
+            f"<a href=\"{escape(link_em_proc)}\">Acompanhar em processamento</a> | "
+            f"<a href=\"{escape(link_publicadas)}\">Acompanhar publicadas</a>"
+        )
+        if status == "sucesso":
+            flash(mensagem, "success")
+        elif status == "ignorado":
+            flash(mensagem, "warning")
+        else:
+            flash(mensagem, "danger")
     except Exception as e:
-        flash(f"Erro ao executar ciclo com insight: {str(e)}", "danger")
+        logging.exception("Falha ao executar artigo manual via admin: %s", e)
+        flash(f"Erro ao executar artigo manual: {str(e)}", "danger")
     return redirect(url_for('admin.agentes_julia'))
-
-
 @admin_bp.route('/agentes/julia/coletar-noticias', methods=['POST'])
 @login_required
 def agentes_julia_coletar_noticias():
@@ -614,3 +758,741 @@ def executar_importacao(tipo):
                 db.session.rollback()
                 flash(f"Erro crítico: {str(e)}", "danger")
                 return redirect(url_for('admin.importacao_dados'))
+
+
+# --- ROTA 4: SÉRIES EDITORIAIS ---
+@admin_bp.route('/series', methods=['GET'])
+@login_required
+def series_editoriais():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    editar_id = request.args.get('editar_id', type=int)
+    serie_edicao = None
+    if editar_id:
+        serie_edicao = SerieEditorial.query.filter_by(id=editar_id).first()
+    series = (
+        SerieEditorial.query.order_by(SerieEditorial.ativo.desc(), SerieEditorial.created_at.desc()).all()
+    )
+    return render_template(
+        'series_editoriais.html',
+        series=series,
+        serie_edicao=serie_edicao,
+    )
+
+
+@admin_bp.route('/series/salvar', methods=['POST'])
+@login_required
+def series_salvar():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    serie_id = request.form.get('id', type=int)
+    nome = (request.form.get('nome') or '').strip()
+    tema = (request.form.get('tema') or '').strip()
+    objetivo_lead = (request.form.get('objetivo_lead') or '').strip()
+    cta_base = (request.form.get('cta_base') or '').strip()
+    descricao = (request.form.get('descricao') or '').strip()
+    cadencia_dias = request.form.get('cadencia_dias', type=int) or 1
+    ativo = bool(request.form.get('ativo'))
+    if not nome or not tema:
+        flash('Nome e tema são obrigatórios.', 'warning')
+        return redirect(url_for('admin.series_editoriais'))
+    try:
+        if serie_id:
+            serie = SerieEditorial.query.filter_by(id=serie_id).first()
+            if not serie:
+                flash('Série não encontrada.', 'warning')
+                return redirect(url_for('admin.series_editoriais'))
+        else:
+            serie = SerieEditorial()
+            db.session.add(serie)
+        serie.nome = nome
+        serie.tema = tema
+        serie.objetivo_lead = objetivo_lead or None
+        serie.cta_base = cta_base or None
+        serie.descricao = descricao or None
+        serie.cadencia_dias = max(1, cadencia_dias)
+        serie.ativo = ativo
+        db.session.commit()
+        flash('Série salva com sucesso.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erro ao salvar série: {str(e)}', 'danger')
+    return redirect(url_for('admin.series_editoriais'))
+
+
+@admin_bp.route('/series/<int:serie_id>/toggle', methods=['POST'])
+@login_required
+def series_toggle(serie_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    try:
+        serie = SerieEditorial.query.filter_by(id=serie_id).first()
+        if not serie:
+            flash('Série não encontrada.', 'warning')
+            return redirect(url_for('admin.series_editoriais'))
+        serie.ativo = not bool(serie.ativo)
+        db.session.commit()
+        flash('Status da série atualizado.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erro ao atualizar série: {str(e)}', 'danger')
+    return redirect(url_for('admin.series_editoriais'))
+
+
+@admin_bp.route('/series/<int:serie_id>/itens', methods=['GET'])
+@login_required
+def series_itens(serie_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    serie = SerieEditorial.query.filter_by(id=serie_id).first()
+    if not serie:
+        return "Série não encontrada", 404
+    editar_id = request.args.get('editar_id', type=int)
+    item_edicao = None
+    if editar_id:
+        item_edicao = SerieItemEditorial.query.filter_by(id=editar_id, serie_id=serie.id).first()
+    itens = (
+        SerieItemEditorial.query.filter_by(serie_id=serie.id)
+        .order_by(SerieItemEditorial.data_planejada.asc(), SerieItemEditorial.ordem.asc(), SerieItemEditorial.id.asc())
+        .all()
+    )
+    return render_template(
+        'series_itens.html',
+        serie=serie,
+        itens=itens,
+        item_edicao=item_edicao,
+    )
+
+
+@admin_bp.route('/series/<int:serie_id>/itens/salvar', methods=['POST'])
+@login_required
+def series_itens_salvar(serie_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    item_id = request.form.get('id', type=int)
+    ordem = request.form.get('ordem', type=int) or 1
+    titulo_planejado = (request.form.get('titulo_planejado') or '').strip()
+    subtitulo_planejado = (request.form.get('subtitulo_planejado') or '').strip()
+    data_str = (request.form.get('data_planejada') or '').strip()
+    status = (request.form.get('status') or 'planejado').strip()
+    if status not in ['planejado', 'em_andamento', 'publicado', 'falha', 'pulado']:
+        status = 'planejado'
+    data_planejada = None
+    if data_str:
+        try:
+            data_planejada = datetime.strptime(data_str, '%Y-%m-%d')
+        except Exception:
+            flash('Data planejada inválida.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+    try:
+        serie = SerieEditorial.query.filter_by(id=serie_id).first()
+        if not serie:
+            flash('Série não encontrada.', 'warning')
+            return redirect(url_for('admin.series_editoriais'))
+        if item_id:
+            item = SerieItemEditorial.query.filter_by(id=item_id, serie_id=serie.id).first()
+            if not item:
+                flash('Item não encontrado.', 'warning')
+                return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        else:
+            item = SerieItemEditorial(serie_id=serie.id)
+            db.session.add(item)
+        item.ordem = max(1, ordem)
+        item.titulo_planejado = titulo_planejado or None
+        item.subtitulo_planejado = subtitulo_planejado or None
+        item.data_planejada = data_planejada
+        item.status = status
+        db.session.commit()
+        flash('Item salvo com sucesso.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erro ao salvar item: {str(e)}', 'danger')
+    return redirect(url_for('admin.series_itens', serie_id=serie_id))
+
+
+@admin_bp.route('/series/<int:serie_id>/itens/<int:item_id>/reabrir', methods=['POST'])
+@login_required
+def series_itens_reabrir(serie_id, item_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    motivo = (request.form.get('motivo') or '').strip()
+    if not motivo:
+        flash('Informe um motivo para reabrir o item.', 'warning')
+        return redirect(url_for('admin.series_itens', serie_id=serie_id))
+    try:
+        item = SerieItemEditorial.query.filter_by(id=item_id, serie_id=serie_id).first()
+        if not item:
+            flash('Item não encontrado.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        estado_antes = {"status": item.status, "data_planejada": item.data_planejada.isoformat() if item.data_planejada else None}
+        from app.run_cleiton_agente_serie import atualizar_status_item
+        ok = atualizar_status_item(item.id, 'planejado', motivo=motivo)
+        if ok:
+            db.session.refresh(item)
+            estado_depois = {"status": item.status, "data_planejada": item.data_planejada.isoformat() if item.data_planejada else None}
+            _registrar_auditoria_admin(
+                tipo_decisao="admin_operacao",
+                decisao="Reabrir item de série para planejado",
+                entidade="serie_item",
+                entidade_id=item.id,
+                estado_antes=estado_antes,
+                estado_depois=estado_depois,
+                motivo=motivo,
+                resultado="sucesso",
+            )
+            flash('Item reaberto como planejado.', 'success')
+        else:
+            _registrar_auditoria_admin(
+                tipo_decisao="admin_operacao",
+                decisao="Reabertura de item de série bloqueada pela máquina de estados",
+                entidade="serie_item",
+                entidade_id=item.id,
+                estado_antes=estado_antes,
+                estado_depois=None,
+                motivo=motivo,
+                resultado="ignorado",
+            )
+            flash('Transição de status inválida para o item selecionado.', 'warning')
+    except Exception as e:
+        db.session.rollback()
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_operacao",
+            decisao="Erro ao reabrir item de série",
+            entidade="serie_item",
+            entidade_id=item_id,
+            estado_antes=None,
+            estado_depois=None,
+            motivo=motivo,
+            resultado="falha",
+            detalhe=str(e),
+        )
+        flash(f'Erro ao reabrir item: {str(e)}', 'danger')
+    return redirect(url_for('admin.series_itens', serie_id=serie_id))
+
+
+@admin_bp.route('/series/<int:serie_id>/itens/<int:item_id>/pular', methods=['POST'])
+@login_required
+def series_itens_pular(serie_id, item_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    motivo = (request.form.get('motivo') or '').strip()
+    if not motivo:
+        flash('Informe um motivo para pular o item.', 'warning')
+        return redirect(url_for('admin.series_itens', serie_id=serie_id))
+    try:
+        item = SerieItemEditorial.query.filter_by(id=item_id, serie_id=serie_id).first()
+        if not item:
+            flash('Item não encontrado.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        estado_antes = {"status": item.status, "data_planejada": item.data_planejada.isoformat() if item.data_planejada else None}
+        from app.run_cleiton_agente_serie import atualizar_status_item
+        ok = atualizar_status_item(item.id, 'pulado', motivo=motivo)
+        if ok:
+            db.session.refresh(item)
+            estado_depois = {"status": item.status, "data_planejada": item.data_planejada.isoformat() if item.data_planejada else None}
+            _registrar_auditoria_admin(
+                tipo_decisao="admin_operacao",
+                decisao="Pular item de série",
+                entidade="serie_item",
+                entidade_id=item.id,
+                estado_antes=estado_antes,
+                estado_depois=estado_depois,
+                motivo=motivo,
+                resultado="sucesso",
+            )
+            flash('Item marcado como pulado.', 'success')
+        else:
+            _registrar_auditoria_admin(
+                tipo_decisao="admin_operacao",
+                decisao="Marcação de item como pulado bloqueada pela máquina de estados",
+                entidade="serie_item",
+                entidade_id=item.id,
+                estado_antes=estado_antes,
+                estado_depois=None,
+                motivo=motivo,
+                resultado="ignorado",
+            )
+            flash('Transição de status inválida para o item selecionado.', 'warning')
+    except Exception as e:
+        db.session.rollback()
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_operacao",
+            decisao="Erro ao pular item de série",
+            entidade="serie_item",
+            entidade_id=item_id,
+            estado_antes=None,
+            estado_depois=None,
+            motivo=motivo,
+            resultado="falha",
+            detalhe=str(e),
+        )
+        flash(f'Erro ao pular item: {str(e)}', 'danger')
+    return redirect(url_for('admin.series_itens', serie_id=serie_id))
+
+
+@admin_bp.route('/series/<int:serie_id>/itens/<int:item_id>/vincular-pauta', methods=['POST'])
+@login_required
+def series_itens_vincular_pauta(serie_id, item_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.models import SerieItemEditorial, Pauta
+
+    pauta_id = request.form.get('pauta_id', type=int)
+    motivo = (request.form.get('motivo') or '').strip()
+    if not pauta_id:
+        flash('Informe o ID da pauta a vincular.', 'warning')
+        return redirect(url_for('admin.series_itens', serie_id=serie_id))
+    if not motivo:
+        flash('Informe um motivo para o vínculo.', 'warning')
+        return redirect(url_for('admin.series_itens', serie_id=serie_id))
+    try:
+        item = SerieItemEditorial.query.filter_by(id=item_id, serie_id=serie_id).first()
+        if not item:
+            flash('Item não encontrado.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        pauta = Pauta.query.filter_by(id=pauta_id).first()
+        if not pauta:
+            flash('Pauta não encontrada.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        if pauta.tipo != "artigo":
+            flash('Somente pautas do tipo artigo podem ser vinculadas a itens de série.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        if getattr(pauta, "arquivada", False):
+            flash('Pauta arquivada não pode ser vinculada.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        if item.status == "publicado":
+            flash('Item em estado publicado não pode receber novo vínculo de pauta.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        # Pauta já vinculada a outro item
+        from app.models import SerieItemEditorial as SerieItemModel
+
+        existente = SerieItemModel.query.filter(
+            SerieItemModel.pauta_id == pauta.id,
+            SerieItemModel.id != item.id,
+        ).first()
+        if existente:
+            _registrar_auditoria_admin(
+                tipo_decisao="admin_vinculo",
+                decisao="Tentativa de vínculo de pauta já vinculada a outro item",
+                entidade="serie_item",
+                entidade_id=item.id,
+                estado_antes={"pauta_id": item.pauta_id},
+                estado_depois=None,
+                motivo=motivo,
+                resultado="ignorado",
+            )
+            flash('Pauta já está vinculada a outro item de série.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        estado_antes = {"pauta_id": item.pauta_id}
+        if item.pauta_id == pauta.id:
+            # Idempotente: nada a mudar, mas registra auditoria amigável.
+            _registrar_auditoria_admin(
+                tipo_decisao="admin_vinculo",
+                decisao="Vínculo de pauta já existente (idempotente)",
+                entidade="serie_item",
+                entidade_id=item.id,
+                estado_antes=estado_antes,
+                estado_depois=estado_antes,
+                motivo=motivo,
+                resultado="sucesso",
+            )
+            flash('Pauta já estava vinculada a este item.', 'info')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        item.pauta_id = pauta.id
+        db.session.commit()
+        estado_depois = {"pauta_id": item.pauta_id}
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_vinculo",
+            decisao="Vincular pauta a item de série",
+            entidade="serie_item",
+            entidade_id=item.id,
+            estado_antes=estado_antes,
+            estado_depois=estado_depois,
+            motivo=motivo,
+            resultado="sucesso",
+        )
+        flash('Pauta vinculada ao item com sucesso.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_vinculo",
+            decisao="Erro ao vincular pauta a item de série",
+            entidade="serie_item",
+            entidade_id=item_id,
+            estado_antes=None,
+            estado_depois=None,
+            motivo=motivo,
+            resultado="falha",
+            detalhe=str(e),
+        )
+        flash(f'Erro ao vincular pauta ao item: {str(e)}', 'danger')
+    return redirect(url_for('admin.series_itens', serie_id=serie_id))
+
+
+@admin_bp.route('/series/<int:serie_id>/itens/<int:item_id>/desvincular-pauta', methods=['POST'])
+@login_required
+def series_itens_desvincular_pauta(serie_id, item_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.models import SerieItemEditorial
+
+    motivo = (request.form.get('motivo') or '').strip()
+    if not motivo:
+        flash('Informe um motivo para o desvínculo.', 'warning')
+        return redirect(url_for('admin.series_itens', serie_id=serie_id))
+    try:
+        item = SerieItemEditorial.query.filter_by(id=item_id, serie_id=serie_id).first()
+        if not item:
+            flash('Item não encontrado.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        if not item.pauta_id:
+            flash('Item já está sem pauta vinculada.', 'info')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        if item.status == "publicado":
+            flash('Item publicado não pode ter vínculo de pauta removido.', 'warning')
+            return redirect(url_for('admin.series_itens', serie_id=serie_id))
+        estado_antes = {"pauta_id": item.pauta_id}
+        item.pauta_id = None
+        db.session.commit()
+        estado_depois = {"pauta_id": item.pauta_id}
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_vinculo",
+            decisao="Desvincular pauta de item de série",
+            entidade="serie_item",
+            entidade_id=item.id,
+            estado_antes=estado_antes,
+            estado_depois=estado_depois,
+            motivo=motivo,
+            resultado="sucesso",
+        )
+        flash('Pauta desvinculada do item com sucesso.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_vinculo",
+            decisao="Erro ao desvincular pauta de item de série",
+            entidade="serie_item",
+            entidade_id=item_id,
+            estado_antes=None,
+            estado_depois=None,
+            motivo=motivo,
+            resultado="falha",
+            detalhe=str(e),
+        )
+        flash(f'Erro ao desvincular pauta do item: {str(e)}', 'danger')
+    return redirect(url_for('admin.series_itens', serie_id=serie_id))
+
+
+# --- ROTA 5: CRUD DE PAUTAS ---
+@admin_bp.route('/pautas', methods=['GET'])
+@login_required
+def pautas_admin():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.models import Pauta, SerieItemEditorial
+
+    tipo = (request.args.get('tipo') or '').strip()
+    status = (request.args.get('status') or '').strip()
+    status_verificacao = (request.args.get('status_verificacao') or '').strip()
+    data_ini = (request.args.get('data_ini') or '').strip()
+    data_fim = (request.args.get('data_fim') or '').strip()
+    serie_id = request.args.get('serie_id', type=int)
+    editar_id = request.args.get('editar_id', type=int)
+
+    query = Pauta.query
+    if tipo:
+        query = query.filter(Pauta.tipo == tipo)
+    if status:
+        query = query.filter(Pauta.status == status)
+    if status_verificacao:
+        query = query.filter(Pauta.status_verificacao == status_verificacao)
+    if data_ini:
+        try:
+            dt_ini = datetime.strptime(data_ini, '%Y-%m-%d')
+            query = query.filter(Pauta.created_at >= dt_ini)
+        except Exception:
+            pass
+    if data_fim:
+        try:
+            dt_fim = datetime.strptime(data_fim, '%Y-%m-%d')
+            dt_fim = dt_fim.replace(hour=23, minute=59, second=59, microsecond=999999)
+            query = query.filter(Pauta.created_at <= dt_fim)
+        except Exception:
+            pass
+    if serie_id:
+        query = query.join(SerieItemEditorial, SerieItemEditorial.pauta_id == Pauta.id).filter(
+            SerieItemEditorial.serie_id == serie_id
+        )
+
+    pautas_raw = query.order_by(Pauta.created_at.desc()).limit(200).all()
+    # Mapa de vínculos pauta -> item de série (se existir)
+    ids_pauta = [p.id for p in pautas_raw]
+    vinculos = {}
+    if ids_pauta:
+        itens = SerieItemEditorial.query.filter(SerieItemEditorial.pauta_id.in_(ids_pauta)).all()
+        for it in itens:
+            vinculos[it.pauta_id] = it
+    pautas = [(p, vinculos.get(p.id)) for p in pautas_raw]
+
+    pauta_edicao = None
+    if editar_id:
+        pauta_edicao = Pauta.query.filter_by(id=editar_id).first()
+
+    return render_template(
+        'pautas.html',
+        pautas=pautas,
+        pauta_edicao=pauta_edicao,
+        status_verificacao_permitidos=status_verificacao_permitidos(),
+    )
+
+
+@admin_bp.route('/pautas/salvar', methods=['POST'])
+@login_required
+def pautas_salvar():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.models import Pauta
+
+    pauta_id = request.form.get('id', type=int)
+    titulo_original = (request.form.get('titulo_original') or '').strip()
+    link = (request.form.get('link') or '').strip()
+    fonte = (request.form.get('fonte') or '').strip()
+    tipo = (request.form.get('tipo') or 'artigo').strip()
+    status = (request.form.get('status') or 'pendente').strip()
+    status_ver = (request.form.get('status_verificacao') or '').strip()
+    motivo_admin = (request.form.get('motivo_admin') or '').strip()
+
+    if not titulo_original or not link:
+        flash('Título e link são obrigatórios para a pauta.', 'warning')
+        return redirect(url_for('admin.pautas_admin'))
+
+    tipos_validos = {'noticia', 'artigo'}
+    if tipo not in tipos_validos:
+        tipo = 'artigo'
+    status_validos = {'pendente', 'em_processamento', 'publicada', 'falha'}
+    if status not in status_validos:
+        status = 'pendente'
+    status_permitidos = set(status_verificacao_permitidos() + ['revisar', 'rejeitado'])
+    if status_ver not in status_permitidos:
+        status_ver = status_verificacao_permitidos()[0]
+
+    try:
+        if pauta_id:
+            pauta = Pauta.query.filter_by(id=pauta_id).first()
+            if not pauta:
+                flash('Pauta não encontrada.', 'warning')
+                return redirect(url_for('admin.pautas_admin'))
+        else:
+            pauta = Pauta()
+            db.session.add(pauta)
+        estado_antes = None
+        if pauta.id:
+            estado_antes = {
+                "titulo_original": pauta.titulo_original,
+                "link": pauta.link,
+                "tipo": pauta.tipo,
+                "status": pauta.status,
+                "status_verificacao": pauta.status_verificacao,
+                "fonte": pauta.fonte,
+                "arquivada": bool(pauta.arquivada),
+            }
+        pauta.titulo_original = titulo_original[:500]
+        pauta.link = link[:500]
+        pauta.fonte = fonte[:200] or None
+        pauta.tipo = tipo
+        pauta.status = status
+        pauta.status_verificacao = status_ver
+        # Pautas criadas/alteradas via admin devem manter fonte manual para rastreabilidade.
+        pauta.fonte_tipo = "manual"
+        db.session.commit()
+        estado_depois = {
+            "titulo_original": pauta.titulo_original,
+            "link": pauta.link,
+            "tipo": pauta.tipo,
+            "status": pauta.status,
+            "status_verificacao": pauta.status_verificacao,
+            "fonte": pauta.fonte,
+            "arquivada": bool(pauta.arquivada),
+        }
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_operacao",
+            decisao="Criar/editar pauta via admin",
+            entidade="pauta",
+            entidade_id=pauta.id,
+            estado_antes=estado_antes,
+            estado_depois=estado_depois,
+            motivo=motivo_admin or None,
+            resultado="sucesso",
+        )
+        flash('Pauta salva com sucesso.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_operacao",
+            decisao="Erro ao salvar pauta via admin",
+            entidade="pauta",
+            entidade_id=pauta_id,
+            estado_antes=None,
+            estado_depois=None,
+            motivo=motivo_admin or None,
+            resultado="falha",
+            detalhe=str(e),
+        )
+        flash(f'Erro ao salvar pauta: {str(e)}', 'danger')
+    return redirect(url_for('admin.pautas_admin'))
+
+
+@admin_bp.route('/pautas/<int:pauta_id>/arquivar', methods=['POST'])
+@login_required
+def pautas_arquivar(pauta_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.models import Pauta
+
+    motivo = (request.form.get('motivo') or '').strip()
+    try:
+        pauta = Pauta.query.filter_by(id=pauta_id).first()
+        if not pauta:
+            flash('Pauta não encontrada.', 'warning')
+            return redirect(url_for('admin.pautas_admin'))
+        estado_antes = {
+            "status": pauta.status,
+            "status_verificacao": pauta.status_verificacao,
+            "arquivada": bool(pauta.arquivada),
+        }
+        pauta.arquivada = True
+        db.session.commit()
+        estado_depois = {
+            "status": pauta.status,
+            "status_verificacao": pauta.status_verificacao,
+            "arquivada": bool(pauta.arquivada),
+        }
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_operacao",
+            decisao="Arquivar pauta manualmente",
+            entidade="pauta",
+            entidade_id=pauta.id,
+            estado_antes=estado_antes,
+            estado_depois=estado_depois,
+            motivo=motivo or None,
+            resultado="sucesso",
+        )
+        flash('Pauta arquivada. Ela não será mais utilizada automaticamente pelo Cleiton.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_operacao",
+            decisao="Erro ao arquivar pauta",
+            entidade="pauta",
+            entidade_id=pauta_id,
+            estado_antes=None,
+            estado_depois=None,
+            motivo=motivo or None,
+            resultado="falha",
+            detalhe=str(e),
+        )
+        flash(f'Erro ao arquivar pauta: {str(e)}', 'danger')
+    return redirect(url_for('admin.pautas_admin'))
+
+
+@admin_bp.route('/pautas/<int:pauta_id>/reprocessar', methods=['POST'])
+@login_required
+def pautas_reprocessar(pauta_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.models import Pauta
+
+    motivo = (request.form.get('motivo') or '').strip()
+    try:
+        pauta = Pauta.query.filter_by(id=pauta_id).first()
+        if not pauta:
+            flash('Pauta não encontrada.', 'warning')
+            return redirect(url_for('admin.pautas_admin'))
+        estado_antes = {
+            "status": pauta.status,
+            "status_verificacao": pauta.status_verificacao,
+        }
+        pauta.status = "pendente"
+        # Mantém status_verificacao atual; admin pode combiná-lo com "revisar" se necessário.
+        db.session.commit()
+        estado_depois = {
+            "status": pauta.status,
+            "status_verificacao": pauta.status_verificacao,
+        }
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_reprocessamento",
+            decisao="Reprocessar pauta manualmente",
+            entidade="pauta",
+            entidade_id=pauta.id,
+            estado_antes=estado_antes,
+            estado_depois=estado_depois,
+            motivo=motivo or None,
+            resultado="sucesso",
+        )
+        flash('Pauta marcada para reprocessamento (status pendente).', 'success')
+    except Exception as e:
+        db.session.rollback()
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_reprocessamento",
+            decisao="Erro ao reprocessar pauta",
+            entidade="pauta",
+            entidade_id=pauta_id,
+            estado_antes=None,
+            estado_depois=None,
+            motivo=motivo or None,
+            resultado="falha",
+            detalhe=str(e),
+        )
+        flash(f'Erro ao reprocessar pauta: {str(e)}', 'danger')
+    return redirect(url_for('admin.pautas_admin'))
+
+
+@admin_bp.route('/pautas/<int:pauta_id>/marcar-revisao', methods=['POST'])
+@login_required
+def pautas_marcar_revisao(pauta_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.models import Pauta
+
+    motivo = (request.form.get('motivo') or '').strip()
+    try:
+        pauta = Pauta.query.filter_by(id=pauta_id).first()
+        if not pauta:
+            flash('Pauta não encontrada.', 'warning')
+            return redirect(url_for('admin.pautas_admin'))
+        estado_antes = {
+            "status": pauta.status,
+            "status_verificacao": pauta.status_verificacao,
+        }
+        pauta.status_verificacao = "revisar"
+        db.session.commit()
+        estado_depois = {
+            "status": pauta.status,
+            "status_verificacao": pauta.status_verificacao,
+        }
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_operacao",
+            decisao="Marcar pauta para revisão manual",
+            entidade="pauta",
+            entidade_id=pauta.id,
+            estado_antes=estado_antes,
+            estado_depois=estado_depois,
+            motivo=motivo or None,
+            resultado="sucesso",
+        )
+        flash('Pauta marcada para revisão manual.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        _registrar_auditoria_admin(
+            tipo_decisao="admin_operacao",
+            decisao="Erro ao marcar pauta para revisão",
+            entidade="pauta",
+            entidade_id=pauta_id,
+            estado_antes=None,
+            estado_depois=None,
+            motivo=motivo or None,
+            resultado="falha",
+            detalhe=str(e),
+        )
+        flash(f'Erro ao marcar pauta para revisão: {str(e)}', 'danger')
+    return redirect(url_for('admin.pautas_admin'))

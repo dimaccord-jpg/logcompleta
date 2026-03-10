@@ -36,15 +36,39 @@
         <div class="col-lg-6">
             <div class="card border-0 shadow-sm h-100">
                 <div class="card-body">
-                    <h5 class="card-title">Executar ciclo com Insight</h5>
+                    <h5 class="card-title">Backlog de artigos</h5>
                     <p class="card-text text-muted">
-                        Executa o ciclo do Cleiton incluindo Customer Insight ao final.
+                        Visão rápida das pautas de artigo disponíveis para a Júlia publicar (1 artigo/dia quando elegível).
                     </p>
-                    <form method="post" action="{{ url_for('admin.agentes_julia_executar_insight') }}">
-                        <button type="submit" class="btn btn-outline-primary">
-                            <i class="bi bi-lightning-charge me-1"></i> Executar Insight
+                    {% set art = status_pautas_artigo or {} %}
+                    <ul class="mb-2 small text-muted">
+                        <li><strong>Total de pautas de artigo:</strong> {{ art.total or 0 }}</li>
+                        <li><strong>Pendentes:</strong> {{ art.pendentes or 0 }}</li>
+                        <li><strong>Elegíveis (aprovadas pelo Verificador):</strong> {{ art.elegiveis or 0 }}</li>
+                        <li><strong>Em processamento:</strong> {{ art.em_processamento or 0 }}</li>
+                        <li><strong>Com falha:</strong> {{ art.falha or 0 }}</li>
+                        <li>
+                            <strong>Último artigo publicado:</strong>
+                            {% if ultima_artigo %}
+                                {{ ultima_artigo.strftime('%d/%m/%Y %H:%M') }} (UTC).
+                            {% else %}
+                                Nenhum artigo publicado ainda.
+                            {% endif %}
+                        </li>
+                    </ul>
+                    <form method="post" action="{{ url_for('admin.agentes_julia_executar_artigo_manual') }}" class="mt-2">
+                        <button type="submit" class="btn btn-outline-danger">
+                            <i class="bi bi-journal-medical me-1"></i> Executar artigo agora (bypass diário)
                         </button>
                     </form>
+                    <small class="text-muted d-block mt-2">
+                        Dispara manualmente uma missão de artigo, ignorando apenas a trava de artigo já publicado hoje.
+                        Não altera o comportamento automático de notícias rápidas ou do cron.
+                    </small>
+                    <small class="text-muted d-block">
+                        Para novos artigos, insira pautas com <code>tipo='artigo'</code> na tabela
+                        <code>pautas</code> (ou via importadores) e deixe o Verificador aprovar.
+                    </small>
                 </div>
             </div>
         </div>

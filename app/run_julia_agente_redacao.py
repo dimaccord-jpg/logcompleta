@@ -8,6 +8,7 @@ import os
 import re
 from google import genai
 from google.genai import types as genai_types
+from app.prompts import PERSONA, GERAR_NOTICIA_CURTA, GERAR_ARTIGO_COMPLETO
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +52,6 @@ def _client_for_tipo(tipo: str):
         return None
 
 
-PERSONA = """
-Você é Júlia, Editora-Chefe de 32 anos, executiva premium e assertiva.
-Tom elegante, profissional e estratégico. Foco em eficiência real e resultados.
-Use termos técnicos de Logística 4.0 corretamente. Evite linguagem genérica ou agressiva.
-Seja realista e orientada a dor/oportunidade/plano de ação (B2B logística/supply chain).
-"""
-
-
 def gerar_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict | None:
     """
     Gera notícia no padrão executivo curto.
@@ -66,26 +59,18 @@ def gerar_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict | N
     """
     client = _client_for_tipo("noticia")
     if not client:
-        logger.error("Nenhuma chave Gemini configurada para notícias.")
-        return None
-    instrucao = f'''
-TAREFA: Transforme esta pauta em NOTÍCIA CURTA no padrão executivo.
-
-PAUTA: "{titulo_original}"
-FONTE: {fonte}
-LINK ORIGINAL: {link}
-
-REQUISITOS:
-1. titulo_julia: título refraseado, premium e direto (máx. 120 caracteres).
-2. resumo_julia (insight_curto): 3 a 5 linhas destacando impacto prático (risco/oportunidade), objetivo e acionável. Sem texto genérico.
-3. prompt_imagem: uma frase em inglês para gerar imagem IA (logística/supply chain, cenário realista).
-
-Retorne APENAS um JSON válido com as chaves: "titulo_julia", "resumo_julia", "prompt_imagem".
-'''
+        logger.error("Nenhuma chave Gemini configurada para notícias. Usando fallback local de redação.")
+        return _fallback_noticia_curta(titulo_original, fonte, link)
+    instrucao = GERAR_NOTICIA_CURTA.format(
+        titulo_original=titulo_original,
+        fonte=fonte,
+        link=link,
+    )
     prompt = f"{PERSONA}\n{instrucao}"
     data = _chamar_modelo(client, prompt, "noticia")
     if not data:
-        return None
+        logger.warning("Redação de notícia retornou vazio/inválido. Usando fallback local de redação.")
+        return _fallback_noticia_curta(titulo_original, fonte, link)
     data["resumo_julia"] = _garantir_insight_3_5_linhas(data.get("resumo_julia", ""))
     return data
 
@@ -98,29 +83,19 @@ def gerar_artigo_completo(titulo_original: str, fonte: str, link: str) -> dict |
     """
     client = _client_for_tipo("artigo")
     if not client:
-        logger.error("Nenhuma chave Gemini configurada para artigos.")
-        return None
-    instrucao = f'''
-TAREFA: Escreva um ARTIGO ESTRATÉGICO PREMIUM com foco em lead generation.
-
-PAUTA: "{titulo_original}"
-FONTE: {fonte}
-LINK ORIGINAL: {link}
-
-REQUISITOS:
-1. titulo_julia: premium, forte, alta gestão (máx. 120 caracteres).
-2. subtitulo: uma frase de impacto que resuma a oportunidade estratégica.
-3. resumo_julia: insight executivo de 3 a 5 linhas para o card.
-4. conteudo_completo: texto técnico e fluido (mínimo 4 parágrafos) em HTML. Use APENAS <p>, <strong>, <ul>, <li>. Sem scripts ou estilos inline.
-5. prompt_imagem: frase em inglês para IA gerar imagem realista de logística high-tech.
-6. cta: chamada para ação explícita e profissional (ex.: "Receba o diagnóstico gratuito", "Fale com um especialista").
-7. objetivo_lead: um de: "newsletter", "diagnóstico", "contato_comercial", "material_rico".
-8. referencias: links e fontes de insights (texto curto).
-
-Retorne APENAS um JSON válido com as chaves: "titulo_julia", "subtitulo", "resumo_julia", "conteudo_completo", "prompt_imagem", "cta", "objetivo_lead", "referencias".
-'''
+        logger.error("Nenhuma chave Gemini configurada para artigos. Usando fallback local de redação.")
+        return _fallback_artigo_completo(titulo_original, fonte, link)
+    instrucao = GERAR_ARTIGO_COMPLETO.format(
+        titulo_original=titulo_original,
+        fonte=fonte,
+        link=link,
+    )
     prompt = f"{PERSONA}\n{instrucao}"
-    return _chamar_modelo(client, prompt, "artigo")
+    data = _chamar_modelo(client, prompt, "artigo")
+    if not data:
+        logger.warning("Redação de artigo retornou vazio/inválido. Usando fallback local de redação.")
+        return _fallback_artigo_completo(titulo_original, fonte, link)
+    return data
 
 
 def _chamar_modelo(client, prompt: str, tipo: str) -> dict | None:
@@ -193,3 +168,62 @@ def gerar_conteudo(pauta_titulo: str, pauta_fonte: str, pauta_link: str, tipo_mi
     if (tipo_missao or "").lower() == "artigo":
         return gerar_artigo_completo(pauta_titulo, pauta_fonte, pauta_link)
     return gerar_noticia_curta(pauta_titulo, pauta_fonte, pauta_link)
+
+
+def _fallback_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict:
+    """Fallback determinístico para notícia curta quando o provedor de IA falhar."""
+    titulo_base = (titulo_original or "Atualização logística").strip()
+    titulo_base = re.sub(r"\s+", " ", titulo_base)
+    if len(titulo_base) > 110:
+        titulo_base = titulo_base[:107].rstrip() + "..."
+
+    resumo = (
+        "O movimento reportado reforça atenção imediata sobre custo, prazo e previsibilidade operacional. "
+        "A recomendação é validar impacto por rota e priorizar ajustes de capacidade nas próximas janelas de decisão. "
+        "Com acompanhamento diário de indicadores, o time reduz risco de ruptura e melhora o nível de serviço."
+    )
+    return {
+        "titulo_julia": titulo_base,
+        "resumo_julia": _garantir_insight_3_5_linhas(resumo),
+        "prompt_imagem": "Modern logistics control tower, containers, trucks and data dashboards, realistic photo style",
+    }
+
+
+def _fallback_artigo_completo(titulo_original: str, fonte: str, link: str) -> dict:
+    """Fallback determinístico para artigo completo quando o provedor de IA falhar."""
+    titulo_base = (titulo_original or "Estratégia logística para ganho operacional").strip()
+    titulo_base = re.sub(r"\s+", " ", titulo_base)
+    if len(titulo_base) > 118:
+        titulo_base = titulo_base[:115].rstrip() + "..."
+
+    subtitulo = "Como transformar variações do mercado em decisões operacionais mais previsíveis e rentáveis."
+    resumo = _garantir_insight_3_5_linhas(
+        "A pauta indica uma oportunidade de revisão tática com impacto direto em custo e nível de serviço. "
+        "O caminho mais seguro é combinar leitura de cenário, priorização de rotas críticas e revisão de capacidade. "
+        "Com governança simples e cadência semanal, a operação tende a ganhar previsibilidade e margem."
+    )
+
+    fonte_txt = (fonte or "Fonte informada").strip()
+    link_txt = (link or "").strip()
+    conteudo = (
+        "<p><strong>Contexto executivo.</strong> A pauta aponta um cenário que exige resposta coordenada entre planejamento e operação. "
+        "Quando custo, prazo e disponibilidade variam ao mesmo tempo, a decisão mais eficiente depende de priorização objetiva e dados de execução confiáveis.</p>"
+        "<p><strong>Leitura de impacto.</strong> O primeiro passo é mapear onde a variação afeta receita e nível de serviço. "
+        "Em geral, rotas com maior concentração de volume e maior sensibilidade a atraso devem receber prioridade de ajuste no curto prazo.</p>"
+        "<p><strong>Plano de ação.</strong> Recomenda-se revisar capacidade por janela, atualizar parâmetros de alocação e definir gatilhos de contingência. "
+        "A rotina deve incluir ritos curtos de acompanhamento, com métricas de cumprimento de prazo, custo por operação e taxa de retrabalho.</p>"
+        f"<p><strong>Referência operacional.</strong> Fonte analisada: {fonte_txt}. "
+        f"Link original: {link_txt}. "
+        "A execução disciplinada dessas ações tende a elevar previsibilidade, reduzir desperdícios e sustentar crescimento com risco controlado.</p>"
+    )
+
+    return {
+        "titulo_julia": titulo_base,
+        "subtitulo": subtitulo,
+        "resumo_julia": resumo,
+        "conteudo_completo": conteudo,
+        "prompt_imagem": "Executive logistics strategy meeting with digital supply chain dashboard, realistic corporate style",
+        "cta": "Fale com um especialista e receba um plano prático para aumentar previsibilidade operacional.",
+        "objetivo_lead": "contato_comercial",
+        "referencias": f"Fonte: {fonte_txt} | Link: {link_txt}",
+    }

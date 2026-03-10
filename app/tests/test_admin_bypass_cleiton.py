@@ -64,6 +64,68 @@ class TestAdminBypassCleiton(unittest.TestCase):
                 self.assertIn("Fora da janela de publicação; ciclo não executado.", html)
                 self.assertIn("alert-warning", html)
 
+    def test_execucao_artigo_manual_repassa_parametros_forcados(self):
+        """Rota manual de artigo deve repassar parâmetros forçados ao Cleiton."""
+        from app.models import User
+
+        fake_resultado = {
+            "status": "ignorado",
+            "motivo": "Nenhum item de série ou pauta manual elegível para artigo.",
+            "motivo_final": "Nenhum item de série ou pauta manual elegível para artigo.",
+            "caminho_usado": "sem_fonte_artigo",
+            "mission_id": None,
+        }
+
+        with self.app.app_context():
+            admin = User.query.filter_by(is_admin=True).first()
+            if admin is None:
+                self.skipTest("Usuário admin não disponível no banco de teste")
+
+            with self.app.test_client() as client, patch("app.run_cleiton.executar_orquestracao", return_value=fake_resultado) as mock_exec:
+                with client.session_transaction() as sess:
+                    sess["_user_id"] = str(admin.id)
+                    sess["_fresh"] = True
+
+                resp = client.post("/admin/agentes/julia/executar-artigo-manual", follow_redirects=True)
+                self.assertEqual(resp.status_code, 200)
+                self.assertTrue(mock_exec.called)
+                _, kwargs = mock_exec.call_args
+                self.assertTrue(kwargs.get("bypass_frequencia"))
+                self.assertEqual(kwargs.get("tipo_missao_forcado"), "artigo")
+                self.assertTrue(kwargs.get("ignorar_trava_artigo_hoje"))
+
+    def test_execucao_artigo_manual_mostra_links_de_acompanhamento(self):
+        """Flash da rota manual de artigo deve incluir links de acompanhamento para pautas."""
+        from app.models import User
+
+        fake_resultado = {
+            "status": "sucesso",
+            "motivo": "Missão despachada com sucesso e agente operacional publicou conteúdo.",
+            "motivo_final": "Missão despachada com sucesso e agente operacional publicou conteúdo.",
+            "caminho_usado": "pauta_manual",
+            "mission_id": "mission-teste-123",
+        }
+
+        with self.app.app_context():
+            admin = User.query.filter_by(is_admin=True).first()
+            if admin is None:
+                self.skipTest("Usuário admin não disponível no banco de teste")
+
+            with self.app.test_client() as client, patch("app.run_cleiton.executar_orquestracao", return_value=fake_resultado):
+                with client.session_transaction() as sess:
+                    sess["_user_id"] = str(admin.id)
+                    sess["_fresh"] = True
+
+                resp = client.post("/admin/agentes/julia/executar-artigo-manual", follow_redirects=True)
+                self.assertEqual(resp.status_code, 200)
+                html = resp.get_data(as_text=True)
+                self.assertIn("alert-success", html)
+                self.assertIn("mission_id=mission-teste-123", html)
+                self.assertIn("href=\"/admin/pautas?tipo=artigo&amp;status=em_processamento\"", html)
+                self.assertIn("Acompanhar em processamento", html)
+                self.assertIn("href=\"/admin/pautas?tipo=artigo&amp;status=publicada\"", html)
+                self.assertIn("Acompanhar publicadas", html)
+
 
 class TestOrquestradorRetornoEstruturado(unittest.TestCase):
     """Testes mínimos do retorno estruturado do orquestrador."""
@@ -82,6 +144,7 @@ class TestOrquestradorRetornoEstruturado(unittest.TestCase):
                patch("app.run_cleiton_agente_orquestrador.auditoria_registrar"), \
              patch("app.run_cleiton_agente_orquestrador.obter_plano_ativo", return_value=None), \
              patch("app.run_cleiton_agente_orquestrador.ultima_auditoria_orquestracao", return_value=None), \
+                         patch("app.run_cleiton_agente_orquestrador._artigo_publicado_hoje", return_value=False), \
              patch("app.run_cleiton_agente_orquestrador.pode_executar_por_frequencia", return_value=False):
             resultado = executar_ciclo_gerencial(DummyApp(), bypass_frequencia=False)
         self.assertIsInstance(resultado, dict)
@@ -102,6 +165,7 @@ class TestOrquestradorRetornoEstruturado(unittest.TestCase):
                patch("app.run_cleiton_agente_orquestrador.auditoria_registrar"), \
              patch("app.run_cleiton_agente_orquestrador.obter_plano_ativo", return_value=None), \
              patch("app.run_cleiton_agente_orquestrador.ultima_auditoria_orquestracao", return_value=None), \
+                             patch("app.run_cleiton_agente_orquestrador._artigo_publicado_hoje", return_value=False), \
                patch("app.run_cleiton_agente_orquestrador.get_prioridade_padrao", return_value=5), \
              patch("app.run_cleiton_agente_orquestrador.get_janela_publicacao", return_value=(6, 22)), \
              patch("app.run_cleiton_agente_orquestrador.pode_executar_por_frequencia", return_value=True), \

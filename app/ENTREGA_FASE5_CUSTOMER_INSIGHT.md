@@ -30,7 +30,7 @@
 - Agente **Métricas** (Julia): consolida métricas a partir de PublicacaoCanal e NoticiaPortal na janela configurada; persiste em InsightCanal; modo mock (e futuro real).
 - Retenção 18 meses aplicada a InsightCanal e RecomendacaoEstrategica; purge registrado na auditoria.
 - Configurações: INSIGHT_ENABLED, INSIGHT_COLETA_MODO, INSIGHT_JANELA_DIAS, INSIGHT_SCORE_ESCALAR, INSIGHT_SCORE_PAUSAR, INSIGHT_MIN_IMPRESSOES.
-- Rota `POST /executar-insight` mantida por compatibilidade, porém alinhada ao objetivo principal: aciona o ciclo completo do Cleiton (o insight roda ao final do ciclo).
+- Rota `POST /executar-insight` mantida por compatibilidade técnica, alinhada ao objetivo principal: aciona o mesmo ciclo completo do Cleiton que `/executar-cleiton` (o Insight roda ao final do ciclo, não existe atalho “somente Insight”).
 
 ---
 
@@ -51,7 +51,7 @@
 | `app/models.py` | Novos modelos `InsightCanal` e `RecomendacaoEstrategica` (bind gerencial). Comentário em AuditoriaGerencial sobre tipo_decisao `insight`. |
 | `app/run_cleiton_agente_orquestrador.py` | Chamada a `executar_insight(app_flask)` ao final do ciclo; try/except com auditoria em falha. |
 | `app/run_cleiton_agente_retencao.py` | Purge de InsightCanal e RecomendacaoEstrategica (18 meses); contagem incluída no detalhe do purge_dados. |
-| `app/web.py` | Rota `POST /executar-insight` mantida por compatibilidade, alinhada ao ciclo completo do Cleiton (insight ao final). |
+| `app/web.py` | Rota `POST /executar-insight` mantida por compatibilidade, alinhada ao mesmo ciclo completo do Cleiton que `/executar-cleiton` (Insight ao final, sem ciclo separado). |
 | `app/.env.example` | Bloco Fase 5: INSIGHT_* . |
 | `app/README_RUN.md` | Seção Fase 5 – Customer Insight e variáveis. |
 | `app/README_DEPLOY.md` | Exemplo de variáveis Fase 5 em .env.prod. |

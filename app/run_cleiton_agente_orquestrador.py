@@ -5,10 +5,16 @@ registra auditoria e dispara jobs para agentes especializados. Nunca escreve con
 """
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from app.extensions import db
-from app.models import PlanoEstrategico, NoticiaPortal, AuditoriaGerencial, Pauta
+from app.models import (
+    PlanoEstrategico,
+    NoticiaPortal,
+    AuditoriaGerencial,
+    Pauta,
+    MissaoAgente,
+)
 from app.run_cleiton_agente_regras import (
     get_prioridade_padrao,
     get_janela_publicacao,
@@ -16,8 +22,14 @@ from app.run_cleiton_agente_regras import (
     get_max_retries,
     pode_executar_por_frequencia,
     bootstrap_regras,
+    get_max_tentativas_artigo_dia,
 )
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
+from app.run_julia_regras import status_verificacao_permitidos
+from app.run_cleiton_agente_serie import (
+    selecionar_item_para_missao,
+    preparar_pauta_para_item,
+)
 from app.run_cleiton_agente_dispatcher import (
     construir_payload,
     registrar_missao,
@@ -72,28 +84,86 @@ def ultima_auditoria_orquestracao() -> datetime | None:
         return None
 
 
+def _utcnow_naive() -> datetime:
+    """Retorna datetime UTC naive para comparações de data."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _artigo_publicado_hoje() -> bool:
+    """
+    Verdade única para 'artigo publicado hoje'.
+    Considera apenas status_publicacao publicado/parcial e publicado_em no dia atual.
+    """
+    hoje_inicio = _utcnow_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+    return bool(
+        NoticiaPortal.query.filter(
+            NoticiaPortal.tipo == "artigo",
+            NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+            NoticiaPortal.publicado_em >= hoje_inicio,
+        ).first()
+    )
+
+
+def _tentativas_artigo_hoje() -> int:
+    """
+    Conta quantas missões de artigo já foram disparadas hoje.
+    Usa MissaoAgente como fonte de verdade (tipo_missao='artigo').
+    """
+    hoje_inicio = _utcnow_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        return (
+            MissaoAgente.query.filter(
+                MissaoAgente.tipo_missao == "artigo",
+                MissaoAgente.created_at >= hoje_inicio,
+            ).count()
+        )
+    except Exception:
+        return 0
+
+
+def _buscar_pauta_manual_artigo() -> Pauta | None:
+    """Busca a pauta manual de artigo mais antiga e elegível para execução."""
+    try:
+        status_permitidos = status_verificacao_permitidos()
+        return (
+            Pauta.query.filter(
+                Pauta.tipo == "artigo",
+                Pauta.status == "pendente",
+                Pauta.status_verificacao.in_(status_permitidos),
+                Pauta.arquivada.isnot(True),
+            )
+            .order_by(Pauta.created_at.asc())
+            .first()
+        )
+    except Exception:
+        return None
+
+
 def decidir_tipo_missao() -> str:
     """
     Decide se a missão será artigo ou notícia.
     Regra atual:
-    - Se ainda não houve artigo hoje e existe pauta manual de artigo pendente/em processamento,
+    - Se ainda não houve artigo hoje e existe pauta de artigo elegível (pendente e aprovada pelo Verificador),
       prioriza artigo.
     - Caso contrário, prioriza notícia automática.
     Deve ser chamada dentro de app_context. Não gera conteúdo; apenas decide o tipo.
     """
-    hoje_inicio = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    tem_artigo_hoje = NoticiaPortal.query.filter(
-        NoticiaPortal.tipo == "artigo",
-        NoticiaPortal.data_publicacao >= hoje_inicio,
-    ).first()
+    tem_artigo_hoje = _artigo_publicado_hoje()
 
-    # Artigos nesta fase dependem de input manual (pauta de artigo no backlog).
+    status_permitidos = status_verificacao_permitidos()
+
     tem_artigo_backlog = Pauta.query.filter(
         Pauta.tipo == "artigo",
-        Pauta.status.in_(["pendente", "em_processamento"]),
+        Pauta.status == "pendente",
+        Pauta.status_verificacao.in_(status_permitidos),
+        Pauta.arquivada.isnot(True),
     ).first()
 
-    if not tem_artigo_hoje and tem_artigo_backlog:
+    # Série editorial ativa também conta como fonte elegível para artigo do dia.
+    item_serie, _motivo = selecionar_item_para_missao()
+    tem_item_serie = bool(item_serie)
+
+    if not tem_artigo_hoje and (tem_artigo_backlog or tem_item_serie):
         return "artigo"
     return "noticia"
 
@@ -138,7 +208,12 @@ def bootstrap_plano_se_necessario() -> None:
             pass
 
 
-def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict[str, Any]:
+def executar_ciclo_gerencial(
+    app_flask,
+    bypass_frequencia: bool = False,
+    tipo_missao_forcado: str | None = None,
+    ignorar_trava_artigo_hoje: bool = False,
+) -> dict[str, Any]:
     """
     Ciclo principal do Cleiton (gerencial):
     1. Garante bootstrap de regras e plano
@@ -169,6 +244,11 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict
             "dispatch_ok": None,
             "scout": None,
             "verificador": None,
+            # Sprint 4: meta diária de artigo
+            "artigo_publicado_hoje": _artigo_publicado_hoje(),
+            "tentativa_realizada": False,
+            "caminho_usado": "erro_ciclo",
+            "motivo_final": "Ciclo não concluído.",
         }
 
         ultima = ultima_auditoria_orquestracao()
@@ -186,6 +266,8 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict
             resultado["status"] = "ignorado"
             resultado["motivo"] = "Ciclo ignorado por frequência (última execução recente)."
             resultado["ignorado_frequencia"] = True
+            resultado["motivo_final"] = resultado["motivo"]
+            resultado["caminho_usado"] = "ignorado_frequencia"
             return resultado
 
         if bypass_frequencia:
@@ -213,13 +295,20 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict
             resultado["status"] = "ignorado"
             resultado["motivo"] = "Fora da janela de publicação; ciclo não executado."
             resultado["fora_janela"] = True
+            resultado["motivo_final"] = resultado["motivo"]
+            resultado["caminho_usado"] = "fora_janela_publicacao"
             return resultado
 
-        tipo_missao = decidir_tipo_missao()
+        # Define tipo de missão base (artigo x notícia) antes de aplicar recomendações.
+        if tipo_missao_forcado:
+            tipo_missao = str(tipo_missao_forcado).lower()
+        else:
+            tipo_missao = decidir_tipo_missao()
         resultado["tipo_missao"] = tipo_missao
         tema_efetivo = tema_serie
         prioridade_efetiva = get_prioridade_padrao()
         recomendacao_em_uso = None  # Fase 6: feedback loop estratégico
+        item_serie_usado = None
 
         try:
             from app.run_cleiton_agente_customer_insight import (
@@ -258,6 +347,80 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict
                 resultado="falha",
                 detalhe=str(e),
             )
+
+        # Limite de tentativas de artigo no dia (evita loop infinito de missão de artigo).
+        if tipo_missao == "artigo" and not ignorar_trava_artigo_hoje:
+            tentativas_hoje = _tentativas_artigo_hoje()
+            max_tentativas = get_max_tentativas_artigo_dia()
+            if tentativas_hoje >= max_tentativas:
+                msg = (
+                    f"Limite diário de tentativas de artigo atingido "
+                    f"({tentativas_hoje}/{max_tentativas}); ciclo não criará nova missão de artigo."
+                )
+                logger.info("Cleiton: %s", msg)
+                auditoria_registrar(
+                    tipo_decisao="orquestracao",
+                    decisao="Limite diário de tentativas de artigo atingido",
+                    contexto={"tentativas_hoje": tentativas_hoje, "max_tentativas": max_tentativas},
+                    resultado="ignorado",
+                )
+                resultado["status"] = "ignorado"
+                resultado["motivo"] = msg
+                resultado["motivo_final"] = msg
+                resultado["caminho_usado"] = "limite_artigo_dia"
+                return resultado
+
+        # Se a missão for artigo, tenta selecionar item de série editorial elegível e preparar pauta.
+        if tipo_missao == "artigo":
+            fonte_artigo_resolvida = False
+            item_serie, motivo_selecao = selecionar_item_para_missao()
+            if item_serie and motivo_selecao:
+                pauta = preparar_pauta_para_item(item_serie)
+                if pauta:
+                    item_serie_usado = item_serie
+                    resultado["serie_id"] = item_serie.serie_id
+                    resultado["serie_item_id"] = item_serie.id
+                    resultado["serie_motivo_selecao"] = motivo_selecao
+                    # Caminho explícito de artigo via série: série do dia ou atrasada.
+                    resultado["caminho_usado"] = motivo_selecao
+                    fonte_artigo_resolvida = True
+                else:
+                    auditoria_registrar(
+                        tipo_decisao="orquestracao",
+                        decisao="Falha ao preparar pauta de item de série; tentando fallback manual",
+                        contexto={"serie_item_id": item_serie.id, "serie_id": item_serie.serie_id},
+                        resultado="falha",
+                    )
+
+            if not fonte_artigo_resolvida:
+                # Fallback explícito: tentar pauta manual de artigo.
+                pauta_manual = _buscar_pauta_manual_artigo()
+                if pauta_manual:
+                    resultado["caminho_usado"] = "pauta_manual"
+                    fonte_artigo_resolvida = True
+                    auditoria_registrar(
+                        tipo_decisao="orquestracao",
+                        decisao="Fallback para pauta manual de artigo",
+                        contexto={
+                            "pauta_id": pauta_manual.id,
+                        },
+                        resultado="sucesso",
+                    )
+            if not fonte_artigo_resolvida:
+                resultado["status"] = "ignorado"
+                resultado["motivo"] = "Nenhum item de série ou pauta manual elegível para artigo."
+                resultado["motivo_final"] = resultado["motivo"]
+                resultado["caminho_usado"] = "sem_fonte_artigo"
+                auditoria_registrar(
+                    tipo_decisao="orquestracao",
+                    decisao="Nenhum item de série ou pauta manual elegível para artigo",
+                    contexto={},
+                    resultado="ignorado",
+                )
+                return resultado
+        else:
+            # Missão de notícia rápida mantém fluxo legado de notícias automáticas.
+            resultado["caminho_usado"] = "noticia_rapida"
 
         logger.info("Cleiton: missão definida tipo=%s | tema=%s", tipo_missao, tema_efetivo)
 
@@ -301,6 +464,9 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict
             janela_fim = janela_fim + timedelta(days=1)
 
         metadados = {"objetivo": objetivo, "estagio": plano.estagio_atual if plano else None}
+        if item_serie_usado:
+            metadados["serie_id"] = item_serie_usado.serie_id
+            metadados["serie_item_id"] = item_serie_usado.id
         if recomendacao_em_uso:
             metadados["recomendacao_id"] = recomendacao_em_uso.id
             metadados["insight_recomendacao"] = True
@@ -327,6 +493,7 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict
 
         ok = despachar(payload, app_flask)
         resultado["dispatch_ok"] = bool(ok)
+        resultado["tentativa_realizada"] = True
         if not ok:
             auditoria_registrar(
                 tipo_decisao="orquestracao",
@@ -339,6 +506,10 @@ def executar_ciclo_gerencial(app_flask, bypass_frequencia: bool = False) -> dict
         else:
             resultado["status"] = "sucesso"
             resultado["motivo"] = "Missão despachada com sucesso e agente operacional publicou conteúdo."
+
+        # Atualiza campos Sprint 4
+        resultado["artigo_publicado_hoje"] = _artigo_publicado_hoje()
+        resultado["motivo_final"] = resultado["motivo"]
         # Fase 6: se missão sucesso e havia recomendação em uso, marcar como aplicada
         if ok and recomendacao_em_uso:
             try:

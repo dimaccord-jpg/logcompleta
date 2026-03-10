@@ -57,14 +57,24 @@ def coordenar_analise_frete(historico_ia, rota_str):
         }
 
 
-def executar_orquestracao(app_flask, bypass_frequencia: bool = False):
+def executar_orquestracao(
+    app_flask,
+    bypass_frequencia: bool = False,
+    tipo_missao_forcado: str | None = None,
+    ignorar_trava_artigo_hoje: bool = False,
+):
     """
     Fachada: delega ao orquestrador gerencial (regras, auditoria, dispatch).
     Mantém compatibilidade com rota /executar-cleiton e script em loop.
     """
     from app.run_cleiton_agente_orquestrador import executar_ciclo_gerencial
     logger.info("MAESTRO CLEITON: Iniciando ciclo gerencial (delegação ao orquestrador).")
-    resultado = executar_ciclo_gerencial(app_flask, bypass_frequencia=bypass_frequencia)
+    resultado = executar_ciclo_gerencial(
+        app_flask,
+        bypass_frequencia=bypass_frequencia,
+        tipo_missao_forcado=tipo_missao_forcado,
+        ignorar_trava_artigo_hoje=ignorar_trava_artigo_hoje,
+    )
     return resultado
 
 

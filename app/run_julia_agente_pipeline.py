@@ -7,7 +7,7 @@ import logging
 import os
 from typing import Any
 from app.extensions import db
-from app.models import Pauta, NoticiaPortal
+from app.models import Pauta, NoticiaPortal, SerieItemEditorial
 from app.run_julia_agente_redacao import gerar_conteudo
 from app.run_julia_agente_imagem import gerar_url_imagem
 from app.run_julia_agente_qualidade import validar_conteudo
@@ -15,20 +15,17 @@ from app.run_julia_agente_publicacao import publicar
 from app.run_julia_agente_designer import gerar_assets_por_canal, normalizar_assets_json
 from app.run_julia_agente_publisher import publicar_multicanal, RESULTADO_FALHA_TOTAL
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
+from app.run_julia_regras import status_verificacao_permitidos
 
 logger = logging.getLogger(__name__)
 
 
 def _status_verificacao_permitidos() -> list[str]:
     """
-    Define quais status do Verificador podem alimentar a Júlia.
-    Padrão seguro: apenas 'aprovado'.
-    Exemplo em homolog: JULIA_STATUS_VERIFICACAO_PERMITIDOS=aprovado,revisar
+    Backward-compat wrapper: delega para app.run_julia_regras.status_verificacao_permitidos().
+    Mantém a assinatura usada por outros módulos sem acoplá-los à pipeline.
     """
-    raw = (os.getenv("JULIA_STATUS_VERIFICACAO_PERMITIDOS", "aprovado") or "aprovado").strip().lower()
-    permitidos = [x.strip() for x in raw.split(",") if x.strip()]
-    validos = [x for x in permitidos if x in ("aprovado", "revisar")]
-    return validos or ["aprovado"]
+    return status_verificacao_permitidos()
 
 
 def obter_pauta_validada(tipo_missao: str, mission_id: str | None) -> Pauta | None:
@@ -82,6 +79,21 @@ def marcar_pauta_falha(pauta_id: int) -> None:
         db.session.rollback()
 
 
+def _atualizar_item_serie_por_pauta(pauta_id: int, status: str, noticia_id: int | None = None) -> None:
+    """
+    Atualiza (se existir) o item de série associado a uma pauta,
+    delegando para o serviço de série (mantendo auditoria e ciclo de vida centralizados).
+    """
+    try:
+        item = SerieItemEditorial.query.filter_by(pauta_id=pauta_id).first()
+        if not item:
+            return
+        from app.run_cleiton_agente_serie import atualizar_status_item
+        atualizar_status_item(item.id, status, noticia_id=noticia_id)
+    except Exception:
+        db.session.rollback()
+
+
 def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
     """
     Pipeline: obter pauta → redigir → gerar imagem → validar → publicar.
@@ -108,32 +120,107 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
             )
             return False
 
+        auditoria_registrar(
+            tipo_decisao="julia",
+            decisao="Pauta selecionada para pipeline",
+            contexto={
+                "mission_id": mission_id,
+                "tipo_missao": tipo_missao,
+                "pauta_id": pauta.id,
+                "link": pauta.link,
+            },
+            resultado="sucesso",
+        )
+
         # 1. Redação
         conteudo = gerar_conteudo(pauta.titulo_original, pauta.fonte or "", pauta.link, tipo_missao)
         if not conteudo:
             logger.error("Júlia pipeline: falha na redação")
             marcar_pauta_falha(pauta.id)
+            _atualizar_item_serie_por_pauta(pauta.id, "falha")
+            auditoria_registrar(
+                tipo_decisao="julia",
+                decisao="Falha na redação",
+                contexto={
+                    "mission_id": mission_id,
+                    "tipo_missao": tipo_missao,
+                    "pauta_id": pauta.id,
+                },
+                resultado="falha",
+                detalhe="Agente de redação retornou conteúdo vazio ou inválido.",
+            )
             return False
+
+        auditoria_registrar(
+            tipo_decisao="julia",
+            decisao="Redação concluída",
+            contexto={
+                "mission_id": mission_id,
+                "tipo_missao": tipo_missao,
+                "pauta_id": pauta.id,
+                "tem_cta": bool(conteudo.get("cta")),
+                "tem_objetivo_lead": bool(conteudo.get("objetivo_lead")),
+            },
+            resultado="sucesso",
+        )
 
         # 2. Imagem
         prompt_imagem = (conteudo.get("prompt_imagem") or "").strip()
+        fallback_usado = False
         try:
             url_imagem = gerar_url_imagem(prompt_imagem)
         except Exception as e:
             logger.exception("Júlia pipeline: falha inesperada na geração de imagem, usando fallback: %s", e)
             url_imagem = gerar_url_imagem("")
+            fallback_usado = True
         conteudo["url_imagem"] = url_imagem
         conteudo["link"] = pauta.link
         conteudo["fonte_link"] = pauta.link
         conteudo["titulo_original"] = pauta.titulo_original
         conteudo["fonte"] = pauta.fonte or ""
 
+        auditoria_registrar(
+            tipo_decisao="julia",
+            decisao="Imagem gerada para conteúdo",
+            contexto={
+                "mission_id": mission_id,
+                "tipo_missao": tipo_missao,
+                "pauta_id": pauta.id,
+                "prompt_imagem_vazio": not bool(prompt_imagem),
+                "fallback_usado": fallback_usado,
+            },
+            resultado="sucesso",
+        )
+
         # 3. Qualidade
         ok, erros = validar_conteudo(conteudo, tipo_missao)
         if not ok:
             logger.error("Júlia pipeline: validação falhou: %s", erros)
             marcar_pauta_falha(pauta.id)
+            _atualizar_item_serie_por_pauta(pauta.id, "falha")
+            auditoria_registrar(
+                tipo_decisao="julia",
+                decisao="Validação de qualidade reprovada",
+                contexto={
+                    "mission_id": mission_id,
+                    "tipo_missao": tipo_missao,
+                    "pauta_id": pauta.id,
+                    "erros": erros,
+                },
+                resultado="falha",
+            )
             return False
+
+        auditoria_registrar(
+            tipo_decisao="julia",
+            decisao="Validação de qualidade aprovada",
+            contexto={
+                "mission_id": mission_id,
+                "tipo_missao": tipo_missao,
+                "pauta_id": pauta.id,
+            },
+            resultado="sucesso",
+        )
 
         # 4. Designer (assets por canal)
         design = gerar_assets_por_canal(
@@ -172,13 +259,37 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
         )
         if not n:
             marcar_pauta_falha(pauta.id)
+            auditoria_registrar(
+                tipo_decisao="julia",
+                decisao="Falha ao criar registro de publicação interna",
+                contexto={
+                    "mission_id": mission_id,
+                    "tipo_missao": tipo_missao,
+                    "pauta_id": pauta.id,
+                },
+                resultado="falha",
+            )
             return False
+
+        auditoria_registrar(
+            tipo_decisao="julia",
+            decisao="Publicação interna criada",
+            contexto={
+                "mission_id": mission_id,
+                "tipo_missao": tipo_missao,
+                "pauta_id": pauta.id,
+                "noticia_id": n.id,
+            },
+            resultado="sucesso",
+        )
 
         # 6. Publisher (portal + canais; atualiza status_publicacao e PublicacaoCanal)
         pub_result = publicar_multicanal(n, mission_id, assets_por_canal=assets_por_canal)
         if pub_result.get("resultado") == RESULTADO_FALHA_TOTAL:
             logger.error("Júlia pipeline: Publisher falha total (portal não publicado)")
             marcar_pauta_falha(pauta.id)
+            _atualizar_item_serie_por_pauta(pauta.id, "falha")
             return False
         marcar_pauta_publicada(pauta.id)
+        _atualizar_item_serie_por_pauta(pauta.id, "publicado", noticia_id=n.id)
         return True

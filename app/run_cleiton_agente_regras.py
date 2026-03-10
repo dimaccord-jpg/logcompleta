@@ -22,6 +22,8 @@ CHAVE_JANELA_FIM = "janela_publicacao_fim"
 CHAVE_MAX_RETRIES = "max_retries"
 CHAVE_RETENCAO_MESES_DADOS = "retencao_meses_dados"
 CHAVE_RETENCAO_MESES_IMAGENS = "retencao_meses_imagens"
+# Limite de tentativas de artigo por dia (meta diária) - Sprint 4
+CHAVE_MAX_TENTATIVAS_ARTIGO_DIA = "max_tentativas_artigo_dia"
 
 DEFAULTS = {
     CHAVE_FREQUENCIA_HORAS: 3,
@@ -31,6 +33,7 @@ DEFAULTS = {
     CHAVE_MAX_RETRIES: 3,
     CHAVE_RETENCAO_MESES_DADOS: 18,
     CHAVE_RETENCAO_MESES_IMAGENS: 2,
+    CHAVE_MAX_TENTATIVAS_ARTIGO_DIA: 3,
 }
 
 
@@ -98,6 +101,20 @@ def get_retencao_meses_imagens() -> int:
     """Retenção máxima em meses para imagens."""
     v = _get_valor(CHAVE_RETENCAO_MESES_IMAGENS, "inteiro")
     return v if v is not None else DEFAULTS[CHAVE_RETENCAO_MESES_IMAGENS]
+
+
+def get_max_tentativas_artigo_dia() -> int:
+    """
+    Limite de tentativas de artigo por dia.
+    Usado para evitar loops infinitos de missão de artigo em um mesmo dia.
+    """
+    v = _get_valor(CHAVE_MAX_TENTATIVAS_ARTIGO_DIA, "inteiro")
+    raw = v if v is not None else DEFAULTS[CHAVE_MAX_TENTATIVAS_ARTIGO_DIA]
+    try:
+        # Bound seguro: entre 1 e 10 tentativas no dia.
+        return max(1, min(10, int(raw)))
+    except (TypeError, ValueError):
+        return DEFAULTS[CHAVE_MAX_TENTATIVAS_ARTIGO_DIA]
 
 
 def pode_executar_por_frequencia(ultima_execucao: datetime | None, agora: datetime | None = None) -> bool:

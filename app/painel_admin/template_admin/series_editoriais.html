@@ -1,0 +1,128 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <h4 class="mb-3">Séries editoriais</h4>
+    <p class="text-muted mb-4">
+        Planejamento de séries de artigos (ex.: "5 pilares da logística"). Cada série ativa é usada como fonte
+        prioritária para o artigo diário da Júlia.
+    </p>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Criar / editar série</h5>
+            <form method="post" action="{{ url_for('admin.series_salvar') }}" class="row g-3">
+                <input type="hidden" name="id" value="{{ serie_edicao.id if serie_edicao else '' }}">
+                <div class="col-md-4">
+                    <label class="form-label">Nome da série</label>
+                    <input type="text" name="nome" class="form-control" required
+                           value="{{ serie_edicao.nome if serie_edicao else '' }}">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Tema</label>
+                    <input type="text" name="tema" class="form-control" required
+                           value="{{ serie_edicao.tema if serie_edicao else '' }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Cadência (dias)</label>
+                    <input type="number" name="cadencia_dias" class="form-control" min="1" step="1"
+                           value="{{ serie_edicao.cadencia_dias if serie_edicao else 1 }}">
+                </div>
+                <div class="col-md-2 d-flex align-items-end">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" value="1" id="ativo" name="ativo"
+                               {% if not serie_edicao or serie_edicao.ativo %}checked{% endif %}>
+                        <label class="form-check-label" for="ativo">
+                            Série ativa
+                        </label>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Objetivo de lead (ex.: newsletter)</label>
+                    <input type="text" name="objetivo_lead" class="form-control"
+                           value="{{ serie_edicao.objetivo_lead if serie_edicao else '' }}">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">CTA base</label>
+                    <input type="text" name="cta_base" class="form-control"
+                           value="{{ serie_edicao.cta_base if serie_edicao else '' }}">
+                </div>
+                <div class="col-md-12">
+                    <label class="form-label">Descrição</label>
+                    <textarea name="descricao" rows="2" class="form-control">{{ serie_edicao.descricao if serie_edicao else '' }}</textarea>
+                </div>
+                <div class="col-12 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save me-1"></i> Salvar série
+                    </button>
+                    {% if serie_edicao %}
+                    <a href="{{ url_for('admin.series_editoriais') }}" class="btn btn-outline-secondary">
+                        Cancelar edição
+                    </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Séries cadastradas</h5>
+            <div class="table-responsive">
+                <table class="table align-middle">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Nome</th>
+                            <th>Tema</th>
+                            <th>Cadência</th>
+                            <th>Ativa</th>
+                            <th>Itens</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for s in series %}
+                        <tr>
+                            <td>{{ s.id }}</td>
+                            <td>{{ s.nome }}</td>
+                            <td>{{ s.tema }}</td>
+                            <td>{{ s.cadencia_dias }}d</td>
+                            <td>
+                                {% if s.ativo %}
+                                    <span class="badge bg-success">Ativa</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">Inativa</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{{ url_for('admin.series_itens', serie_id=s.id) }}" class="btn btn-sm btn-outline-primary">
+                                    Gerenciar itens
+                                </a>
+                            </td>
+                            <td class="d-flex gap-2">
+                                <a href="{{ url_for('admin.series_editoriais', editar_id=s.id) }}" class="btn btn-sm btn-outline-secondary">
+                                    Editar
+                                </a>
+                                <form method="post" action="{{ url_for('admin.series_toggle', serie_id=s.id) }}">
+                                    <button type="submit" class="btn btn-sm {% if s.ativo %}btn-outline-warning{% else %}btn-outline-success{% endif %}">
+                                        {% if s.ativo %}Desativar{% else %}Ativar{% endif %}
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="7" class="text-muted text-center">
+                                Nenhuma série cadastrada ainda.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

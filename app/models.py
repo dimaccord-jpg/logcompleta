@@ -90,6 +90,7 @@ class Pauta(db.Model):
     hash_conteudo = db.Column(db.String(64), index=True)
     coletado_em = db.Column(db.DateTime)
     verificado_em = db.Column(db.DateTime)
+    arquivada = db.Column(db.Boolean, default=False, index=True)
 
 
 class NoticiaPortal(db.Model):
@@ -167,6 +168,51 @@ class ConfigRegras(db.Model):
     valor_inteiro = db.Column(db.Integer)
     valor_real = db.Column(db.Float)
     descricao = db.Column(db.String(255))
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive)
+
+
+class SerieEditorial(db.Model):
+    """
+    Série editorial de artigos com tema, objetivo de lead e cadência.
+    Permite planejar sequências (ex.: "5 pilares da logística") de forma configurável.
+    """
+    __bind_key__ = 'gerencial'
+    __tablename__ = 'serie_editorial'
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(255), nullable=False)
+    tema = db.Column(db.String(255), nullable=False)
+    objetivo_lead = db.Column(db.String(100))
+    cta_base = db.Column(db.Text)
+    descricao = db.Column(db.Text)
+    cadencia_dias = db.Column(db.Integer, default=1)  # intervalo desejado entre artigos da série
+    ativo = db.Column(db.Boolean, default=True, index=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive)
+
+
+class SerieItemEditorial(db.Model):
+    """
+    Item da série editorial (ex.: post 1..5 de uma série).
+    Conecta planejamento (data_planejada) com a pauta/artigo efetivamente publicado.
+    """
+    __bind_key__ = 'gerencial'
+    __tablename__ = 'serie_editorial_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    serie_id = db.Column(db.Integer, nullable=False, index=True)
+    ordem = db.Column(db.Integer, nullable=False, index=True)
+    titulo_planejado = db.Column(db.String(500))
+    subtitulo_planejado = db.Column(db.String(500))
+    data_planejada = db.Column(db.DateTime, nullable=True, index=True)
+    status = db.Column(
+        db.String(30),
+        default='planejado',
+        index=True,
+    )  # planejado | em_andamento | publicado | falha | pulado
+    pauta_id = db.Column(db.Integer, nullable=True, index=True)
+    noticia_id = db.Column(db.Integer, nullable=True, index=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive)
     updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
 

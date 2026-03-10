@@ -10,9 +10,9 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
 
 **Fase 4 – Designer + Publisher:** `run_julia_agente_designer.py` gera assets por canal (url_imagem_master, assets_por_canal); `run_julia_agente_publisher.py` publica no portal (obrigatório) e em canais configurados (linkedin, instagram, email em modo mock). Status por canal (pendente/publicado/falha/ignorado); duplicidade por canal bloqueada. Janela e intervalo entre posts podem ser aplicados nos canais externos por `PUBLISHER_JANELA_PUBLICACAO_*` e `PUBLISHER_INTERVALO_MINUTOS_ENTRE_POSTS`. Tabela `publicacao_canal` e colunas em NoticiaPortal (url_imagem_master, assets_canais_json, status_publicacao, publicado_em). Retenção de 18 meses inclui histórico de PublicacaoCanal.
 
-**Fase 5 – Customer Insight:** `run_cleiton_agente_customer_insight.py` mede desempenho por conteúdo/canal, gera recomendações estratégicas (tema, tipo, canal, horário, frequência) e audita com `tipo_decisao=insight`. `run_julia_agente_metricas.py` consolida métricas em `InsightCanal`; recomendações em `RecomendacaoEstrategica`. `POST /executar-insight` aciona o ciclo completo do Cleiton (governança centralizada).
+**Fase 5 – Customer Insight:** `run_cleiton_agente_customer_insight.py` mede desempenho por conteúdo/canal, gera recomendações estratégicas (tema, tipo, canal, horário, frequência) e audita com `tipo_decisao=insight`. `run_julia_agente_metricas.py` consolida métricas em `InsightCanal`; recomendações em `RecomendacaoEstrategica`. A rota `POST /executar-insight` é mantida por compatibilidade e aciona o ciclo completo do Cleiton (mesmo fluxo do `/executar-cleiton`, com Insight ao final).
 
-**Fase 6 – Encerramento:** Feedback loop estratégico: o orquestrador consome recomendações pendentes (prioridade DESC) antes do dispatch e aplica tema, tipo_missao e prioridade ao payload; em missão sucesso a recomendação é marcada como aplicada; em falha permanece pendente. Serviço de gestão: `listar_recomendacoes_pendentes`, `selecionar_recomendacao_prioritaria`, `parse_recomendacao_json`/`parse_contexto_json`, `atualizar_status_recomendacao` (com auditoria). Painel admin (Dashboard): KPIs de insight (pendentes, aplicadas, descartadas, total métricas, auditorias) e lista de recomendações recentes com ações **Aplicar** e **Descartar** (POST `/admin/recomendacoes/<id>/aplicar` e `/descartar`). Rotas principais: `/health`, `/executar-cleiton`, `/executar-insight` (ciclo completo), login/home. Suite de testes: `app/tests/test_fase5_insight.py` e `app/tests/test_fase6_encerramento.py` (unitários, integração, regressão Fases 3–5, smoke de rotas). Comando: `python -m unittest app.tests.test_fase6_encerramento -v` (a partir da raiz do projeto, com `PYTHONPATH` e `APP_ENV=dev`).
+**Fase 6 – Encerramento:** Feedback loop estratégico: o orquestrador consome recomendações pendentes (prioridade DESC) antes do dispatch e aplica tema, tipo_missao e prioridade ao payload; em missão sucesso a recomendação é marcada como aplicada; em falha permanece pendente. Serviço de gestão: `listar_recomendacoes_pendentes`, `selecionar_recomendacao_prioritaria`, `parse_recomendacao_json`/`parse_contexto_json`, `atualizar_status_recomendacao` (com auditoria). Painel admin inclui operações de backoffice para série/pauta: CRUD de séries e itens, vincular/desvincular pauta, reabrir/pular item, criação/edição de pautas manuais, arquivar pauta e reprocessar/marcar revisão; pautas arquivadas saem do backlog elegível de artigo. Dashboard mantém KPIs de insight e ações em recomendações (`/admin/recomendacoes/<id>/aplicar` e `/descartar`). Rotas principais: `/health`, `/executar-cleiton` (ciclo completo) e `/executar-insight` (compatibilidade, mesmo ciclo completo), login/home.
 
 **Execução manual no Admin (hotfix homolog/prod):** A rota `/admin/agentes/julia/executar-cleiton` roda em **background** por padrão quando `APP_ENV` é `homolog` ou `prod`, evitando timeout de worker na requisição HTTP. Em `dev`, o padrão continua síncrono para facilitar validação local. É possível forçar via `ADMIN_CLEITON_EXEC_MODE=sync|async`.
 
@@ -161,10 +161,13 @@ Observação: o match de domínio é exato (`valor.globo.com` é diferente de `g
 
 ## 6. Testes (Fase 6 – suite robusta)
 
-- **Fase 5:** `python -m unittest app.tests.test_fase5_insight -v`
+- **Sprint 4 (meta diaria e fallback):** `python -m unittest app.tests.test_fase4_meta_diaria -v`
+- **Sprint 5 (estado de serie):** `python -m unittest app.tests.test_fase5_estado_serie -v`
+- **Fase 5 (insight):** `python -m unittest app.tests.test_fase5_insight -v`
+- **Sprint 6 (admin pautas e series):** `python -m unittest app.tests.test_sprint6_admin_pautas_e_series -v`
 - **Fase 6 (encerramento):** `python -m unittest app.tests.test_fase6_encerramento -v`
 
-Execute a partir da raiz do projeto com `PYTHONPATH` apontando para a raiz e `APP_ENV=dev`. Testes que dependem do app Flask (ex.: rotas, contexto de BD) podem ser ignorados (skip) se dependências não estiverem disponíveis; os demais validam parser, classificação, payload, regressão e alinhamento de `/executar-insight` ao ciclo completo.
+Execute a partir da raiz do projeto com `PYTHONPATH` apontando para a raiz e `APP_ENV=dev`. Testes que dependem do app Flask (ex.: rotas, contexto de BD) podem ser ignorados (skip) se dependências não estiverem disponíveis; os demais validam parser, classificação, payload, regressão e o alinhamento de `/executar-insight` ao mesmo ciclo completo disparado por `/executar-cleiton`.
 
 ---
 

@@ -39,6 +39,11 @@
                     </a>
                 </li>
                 <li>
+                    <a href="{{ url_for('admin.pautas_admin') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.pautas_admin', 'admin.pautas_salvar'] }}">
+                        <i class="bi bi-journal-text me-2"></i> Pautas
+                    </a>
+                </li>
+                <li>
                     <a href="{{ url_for('admin.agentes_home') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.agentes_home', 'admin.agentes_julia', 'admin.agentes_roberto'] }}">
                         <i class="bi bi-diagram-3 me-2"></i> Agentes
                     </a>

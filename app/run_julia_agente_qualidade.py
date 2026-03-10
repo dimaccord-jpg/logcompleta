@@ -3,6 +3,7 @@ Júlia - Agente Qualidade: validação de conteúdo por tipo antes de publicar.
 Garante campos mínimos, tamanho e evita duplicidade por link.
 """
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,15 @@ MIN_RESUMO_ARTIGO = 80
 MIN_CONTEUDO_ARTIGO = 400
 MIN_TITULO = 10
 MIN_CTA = 10
+MIN_PARAGRAFOS_ARTIGO = 4
+
+OBJETIVOS_LEAD_VALIDOS = {
+    "newsletter",
+    "diagnóstico",
+    "diagnostico",
+    "contato_comercial",
+    "material_rico",
+}
 
 
 def _str_val(val: Any) -> str:
@@ -72,12 +82,21 @@ def validar_artigo(d: dict) -> tuple[bool, list[str]]:
         err.append("resumo_julia ausente ou menor que %d caracteres" % MIN_RESUMO_ARTIGO)
     if not conteudo or len(conteudo) < MIN_CONTEUDO_ARTIGO:
         err.append("conteudo_completo ausente ou menor que %d caracteres" % MIN_CONTEUDO_ARTIGO)
+    else:
+        # Garante artigo mais elaborado que notícia: ao menos N parágrafos HTML.
+        paragrafos = re.findall(r"<p\b", conteudo, flags=re.IGNORECASE)
+        if len(paragrafos) < MIN_PARAGRAFOS_ARTIGO:
+            err.append(f"conteudo_completo deve conter ao menos {MIN_PARAGRAFOS_ARTIGO} parágrafos <p> para artigo")
     if not link:
         err.append("fonte_link (link original) obrigatório para artigo")
     if not cta or len(cta) < MIN_CTA:
         err.append("cta obrigatória e com pelo menos %d caracteres" % MIN_CTA)
     if not objetivo:
         err.append("objetivo_lead obrigatório para artigo (ex.: newsletter, diagnóstico, contato_comercial)")
+    else:
+        objetivo_norm = objetivo.strip().lower()
+        if objetivo_norm not in OBJETIVOS_LEAD_VALIDOS:
+            err.append("objetivo_lead deve ser um de: " + ", ".join(sorted(OBJETIVOS_LEAD_VALIDOS)))
     return (len(err) == 0, err)
 
 
