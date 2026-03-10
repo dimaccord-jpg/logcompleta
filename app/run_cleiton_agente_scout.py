@@ -203,11 +203,58 @@ def _inserir_pauta(item: dict) -> bool:
         return False
 
 
+def _reativar_pauta_falha(item: dict) -> bool:
+    """
+    Reativa pauta existente quando o mesmo link reaparece e a pauta anterior está em falha.
+    Isso evita ficar preso indefinidamente em "duplicata" para links que nunca chegaram a publicar.
+    """
+    link = _link_canonico((item.get("link") or "").strip())
+    if not link:
+        return False
+    # Se já existe notícia publicada, não reativamos pauta para o mesmo link.
+    if NoticiaPortal.query.filter_by(link=link).first():
+        return False
+
+    pauta = Pauta.query.filter_by(link=link).first()
+    if not pauta:
+        return False
+    if (pauta.status or "").strip().lower() != "falha":
+        return False
+
+    titulo = (item.get("titulo_original") or pauta.titulo_original or "Sem título").strip()
+    fonte = (item.get("fonte") or pauta.fonte or "")[:200]
+    tipo = (item.get("tipo") or pauta.tipo or "noticia").strip().lower()
+    if tipo not in ("noticia", "artigo"):
+        tipo = "noticia"
+    fonte_tipo = (item.get("fonte_tipo") or pauta.fonte_tipo or "manual")[:30]
+
+    try:
+        agora = _utcnow_naive()
+        pauta.titulo_original = titulo
+        pauta.fonte = fonte
+        pauta.tipo = tipo
+        pauta.fonte_tipo = fonte_tipo
+        pauta.hash_conteudo = _hash_conteudo(link, titulo)
+        pauta.status = "pendente"
+        pauta.status_verificacao = "pendente"
+        pauta.score_confiabilidade = None
+        pauta.motivo_verificacao = None
+        pauta.verificado_em = None
+        pauta.coletado_em = agora
+        db.session.commit()
+        return True
+    except Exception as e:
+        logger.exception("Falha ao reativar pauta em falha: %s", e)
+        db.session.rollback()
+        return False
+
+
 def executar_coleta() -> dict[str, Any]:
     """
     Executa ciclo de coleta: lê fontes configuradas, normaliza e insere em Pauta.
     Retorna dict com (chaves legadas + novas):
       - inseridas
+            - reativadas
       - ignoradas_duplicata
       - erros
       - fontes_processadas
@@ -220,6 +267,7 @@ def executar_coleta() -> dict[str, Any]:
         logger.info("Scout desabilitado (SCOUT_ENABLED=false).")
         resultado = {
             "inseridas": 0,
+            "reativadas": 0,
             "ignoradas_duplicata": 0,
             "erros": 0,
             "fontes_processadas": 0,
@@ -241,6 +289,7 @@ def executar_coleta() -> dict[str, Any]:
         logger.info("Scout: nenhuma fonte configurada (SCOUT_SOURCES_JSON).")
         resultado = {
             "inseridas": 0,
+            "reativadas": 0,
             "ignoradas_duplicata": 0,
             "erros": 0,
             "fontes_processadas": 0,
@@ -259,6 +308,7 @@ def executar_coleta() -> dict[str, Any]:
         return resultado
     max_itens = _scout_max_itens()
     inseridas = 0
+    reativadas = 0
     ignoradas = 0
     erros = 0
     fontes_com_erro = 0
@@ -321,11 +371,10 @@ def executar_coleta() -> dict[str, Any]:
                 fontes_com_itens += 1
 
             for item in itens:
-                if _link_ja_existe(item.get("link") or ""):
-                    ignoradas += 1
-                    continue
                 if _inserir_pauta(item):
                     inseridas += 1
+                elif _reativar_pauta_falha(item):
+                    reativadas += 1
                 else:
                     ignoradas += 1
         except Exception as e:
@@ -340,6 +389,7 @@ def executar_coleta() -> dict[str, Any]:
 
     resultado = {
         "inseridas": inseridas,
+        "reativadas": reativadas,
         "ignoradas_duplicata": ignoradas,
         "erros": erros,
         "fontes_processadas": len(sources),
@@ -350,7 +400,7 @@ def executar_coleta() -> dict[str, Any]:
     }
     auditoria_registrar(
         tipo_decisao="scout",
-        decisao=f"Coleta Scout: {inseridas} pautas inseridas, {ignoradas} ignoradas",
+        decisao=f"Coleta Scout: {inseridas} inseridas, {reativadas} reativadas, {ignoradas} ignoradas",
         contexto=resultado,
         resultado="sucesso" if erros == 0 else "falha",
         detalhe=str(resultado),

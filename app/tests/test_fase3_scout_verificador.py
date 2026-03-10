@@ -34,7 +34,7 @@ class TestFase3ScoutVerificador(unittest.TestCase):
         self.assertGreaterEqual(resultado.get("inseridas", 0), 0)
         # Mantém chaves legadas e adiciona diagnósticos (retrocompatibilidade + observabilidade)
         for chave in ("inseridas", "ignoradas_duplicata", "erros", "fontes_processadas",
-                      "fontes_com_erro", "fontes_sem_itens", "fontes_com_itens", "diagnostico_fontes"):
+                      "reativadas", "fontes_com_erro", "fontes_sem_itens", "fontes_com_itens", "diagnostico_fontes"):
             self.assertIn(chave, resultado)
 
     def test_scout_fonte_com_erro_nao_aborta_ciclo(self):
@@ -197,8 +197,47 @@ class TestFase3ScoutVerificador(unittest.TestCase):
             scout.auditoria_registrar = original_auditoria
 
         for chave in ("inseridas", "ignoradas_duplicata", "erros", "fontes_processadas",
-                      "fontes_com_erro", "fontes_sem_itens", "fontes_com_itens", "diagnostico_fontes"):
+                      "reativadas", "fontes_com_erro", "fontes_sem_itens", "fontes_com_itens", "diagnostico_fontes"):
             self.assertIn(chave, resultado)
+
+    def test_scout_reativa_pauta_falha_quando_link_duplicado(self):
+        """Quando não insere por duplicata, Scout pode reativar pauta em falha para novo ciclo."""
+        import app.run_cleiton_agente_scout as scout
+
+        def fake_scout_sources():
+            return [{"url": "https://exemplo.com/feed", "tipo": "noticia", "tipo_fonte": "rss"}]
+
+        def fake_coletar_rss(url, max_itens, tipo_sugerido, fonte_tipo="rss"):
+            return [{
+                "titulo_original": "Notícia logística",
+                "fonte": "Fonte Teste",
+                "link": "https://exemplo.com/noticia",
+                "tipo": "noticia",
+                "fonte_tipo": "rss",
+            }]
+
+        original_sources = scout._scout_sources
+        original_rss = scout._coletar_rss
+        original_inserir = scout._inserir_pauta
+        original_reativar = scout._reativar_pauta_falha
+        original_auditoria = scout.auditoria_registrar
+        scout._scout_sources = fake_scout_sources
+        scout._coletar_rss = fake_coletar_rss
+        scout._inserir_pauta = lambda item: False
+        scout._reativar_pauta_falha = lambda item: True
+        scout.auditoria_registrar = lambda **kwargs: None
+        try:
+            resultado = scout.executar_coleta()
+        finally:
+            scout._scout_sources = original_sources
+            scout._coletar_rss = original_rss
+            scout._inserir_pauta = original_inserir
+            scout._reativar_pauta_falha = original_reativar
+            scout.auditoria_registrar = original_auditoria
+
+        self.assertEqual(resultado.get("inseridas", 0), 0)
+        self.assertEqual(resultado.get("reativadas", 0), 1)
+        self.assertEqual(resultado.get("ignoradas_duplicata", 0), 0)
 
     def test_scout_suporta_google_alerts_rss(self):
         """Fonte com tipo_fonte=google_alerts_rss deve usar o coletor RSS especializado sem quebrar."""

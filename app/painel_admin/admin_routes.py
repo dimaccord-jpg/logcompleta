@@ -214,6 +214,7 @@ def agentes_julia_executar_cleiton():
         if scout:
             partes_msg.append(
                 f"Scout: inseridas={scout.get('inseridas', 0)}, "
+                f"reativadas={scout.get('reativadas', 0)}, "
                 f"ignoradas={scout.get('ignoradas_duplicata', 0)}, "
                 f"erros={scout.get('erros', 0)}"
             )
