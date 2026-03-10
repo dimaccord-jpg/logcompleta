@@ -6,6 +6,8 @@ import os
 import csv
 import io
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime
 from app.extensions import db
 from app.models import FreteReal, RecomendacaoEstrategica, InsightCanal, AuditoriaGerencial, ConfigRegras
@@ -16,6 +18,39 @@ pasta_templates = os.path.join(base_dir, 'template_admin')
 admin_bp = Blueprint('admin', __name__, 
                      template_folder=pasta_templates, 
                      url_prefix='/admin')
+
+_CLEITON_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cleiton-admin")
+_CLEITON_FUTURE: Future | None = None
+_CLEITON_LOCK = threading.Lock()
+
+
+def _admin_exec_mode() -> str:
+    """
+    Define modo de execução do botão admin:
+    - homolog/prod: async (evita timeout de worker)
+    - dev: sync (mantém feedback detalhado para testes locais)
+    Pode ser sobrescrito por ADMIN_CLEITON_EXEC_MODE=sync|async.
+    """
+    forced = (os.getenv("ADMIN_CLEITON_EXEC_MODE", "") or "").strip().lower()
+    if forced in ("sync", "async"):
+        return forced
+    app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
+    return "async" if app_env in ("homolog", "prod") else "sync"
+
+
+def _executar_cleiton_em_background(app_obj, bypass_frequencia: bool) -> None:
+    """Executa ciclo completo no background e registra resultado no log."""
+    try:
+        from app.run_cleiton import executar_orquestracao
+        resultado = executar_orquestracao(app_obj, bypass_frequencia=bypass_frequencia) or {}
+        logging.info(
+            "Cleiton admin (async) concluído: status=%s mission_id=%s motivo=%s",
+            resultado.get("status"),
+            resultado.get("mission_id"),
+            resultado.get("motivo"),
+        )
+    except Exception as e:
+        logging.exception("Falha no ciclo Cleiton admin (async): %s", e)
 
 # --- FUNÇÃO DE APOIO (BACKOFFICE SEGURANÇA) ---
 def verificar_acesso_admin():
@@ -197,6 +232,25 @@ def agentes_julia_executar_cleiton():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
     bypass_frequencia = (request.form.get('bypass_frequencia') or '').strip() in ('1', 'true', 'True')
+
+    if _admin_exec_mode() == "async":
+        global _CLEITON_FUTURE
+        with _CLEITON_LOCK:
+            if _CLEITON_FUTURE and not _CLEITON_FUTURE.done():
+                flash("Já existe uma execução do Cleiton em andamento. Aguarde a conclusão.", "warning")
+                return redirect(url_for('admin.agentes_julia'))
+            app_obj = current_app._get_current_object()
+            _CLEITON_FUTURE = _CLEITON_EXECUTOR.submit(
+                _executar_cleiton_em_background,
+                app_obj,
+                bypass_frequencia,
+            )
+        flash(
+            "Execução do Cleiton iniciada em segundo plano. Acompanhe os logs para status final.",
+            "info",
+        )
+        return redirect(url_for('admin.agentes_julia'))
+
     try:
         from app.run_cleiton import executar_orquestracao
         resultado = executar_orquestracao(current_app, bypass_frequencia=bypass_frequencia) or {}
