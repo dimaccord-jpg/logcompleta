@@ -38,7 +38,7 @@ O Cron Job do Render executa um **comando** em um schedule. Use `curl` para cham
 1. **Schedule:** `0 * * * *` (a cada hora em ponto; para 1h está de acordo com o quadro).
 2. **Command:**
    ```bash
-   curl -s -H "X-Cron-Secret: $CRON_SECRET" "https://homolog0514.agentefrete.com.br/cron/executar-cleiton"
+   curl -s -X POST -H "X-Cron-Secret: $CRON_SECRET" -H "Cache-Control: no-cache, no-store, must-revalidate" -H "Pragma: no-cache" "https://homolog0514.agentefrete.com.br/cron/executar-cleiton?ts=$(date +%s)"
    ```
    Ou, se o Cron não tiver acesso a variáveis de ambiente, use o segredo na URL (não compartilhe essa URL):
    ```bash
@@ -75,3 +75,4 @@ Se preferir um worker em vez de Cron:
   ```
 - Resposta esperada (200): `{"ok": true ou false, "status": "sucesso"|"ignorado"|"falha", "motivo": "...", "mission_id": "..."}`.
 - Em **Admin** → **Agentes - Júlia**, a seção “Próxima notícia automática” deve mostrar a **última execução** atualizada após o cron rodar.
+- Se o `mission_id` repetir em execuções seguidas, há cache na borda. No Cloudflare, crie uma **Cache Rule** para `path contains /cron/` com `Bypass cache` e execute `Purge Everything`.

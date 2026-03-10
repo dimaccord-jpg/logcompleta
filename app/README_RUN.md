@@ -179,9 +179,11 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
   3. Clique em **Executar agora (bypass de frequencia)**.
   4. Mensagem esperada no topo:
      - Em caso de sucesso: texto contendo o motivo e os contadores do Scout/Verificador, por exemplo  
-       `Scout: inseridas=..., ignoradas=..., erros=... | Fontes Scout: processadas=..., com_erro=..., sem_itens=... | Verificador: aprovadas=...`.
+       `Scout: inseridas=..., reativadas=..., ignoradas=..., erros=... | Fontes Scout: processadas=..., com_erro=..., sem_itens=... | Verificador: aprovadas=...`.
      - Se não houver pauta elegível (nenhuma pauta com `status_verificacao` permitido): a mensagem pode indicar falha de publicação; o detalhe auditável fica registrado em `AuditoriaGerencial` com `tipo_decisao="julia"` e decisão `"Nenhuma pauta elegível para processamento"`.
   5. Após sucesso, confirme que existe uma nova linha em `noticias_portal` e que a home (`/`) exibe a notícia recente.
+
+  Observação importante: o Scout pode reativar pautas em `status="falha"` quando o mesmo link reaparece e ainda não existe publicação em `noticias_portal`. Isso evita ficar preso em ciclos com muitas duplicatas históricas.
 
 - **7.2 – Validar rota de cron `/cron/executar-cleiton`**
   1. Sem segredo (apenas para teste rápido de deploy):
@@ -192,10 +194,11 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
      - Se retornar **404**, o problema é de deploy/roteamento (serviço/branch errado ou domínio apontando para outro backend).
   2. Com segredo correto:
      ```bash
-     curl -H "X-Cron-Secret: SEU_CRON_SECRET" "https://SEU_DOMINIO_HOMOLOG/cron/executar-cleiton"
+      curl -X POST -H "X-Cron-Secret: SEU_CRON_SECRET" -H "Cache-Control: no-cache, no-store, must-revalidate" -H "Pragma: no-cache" "https://SEU_DOMINIO_HOMOLOG/cron/executar-cleiton?ts=$(date +%s)"
      ```
      - Esperado: `HTTP 200` com JSON `{ "ok": true|false, "status": "...", "motivo": "...", "mission_id": "..." }`.
      - Se `status` for `"ignorado"`, verifique frequência/janela (`run_cleiton_agente_regras.py` e painel `Agentes - Júlia`).
+      - Se o mesmo `mission_id` se repetir em execuções consecutivas, há indício de cache na borda (Cloudflare). Configure regra para **bypass de cache** no path `/cron/*`.
 
 - **7.3 – Validar execução automática (Cron/worker)**
   - Configure o Cron Job conforme `RENDER_CRON_HOMOLOG.md` (ou o worker `python -m app.run_cleiton` com `APP_ENV=homolog`).
