@@ -98,6 +98,18 @@ def _limiar_similaridade() -> float:
         return 0.85
 
 
+def _limite_registros_similaridade() -> int:
+    """
+    Limita quantidade de registros considerados na verificação de similaridade de título.
+    Evita percorrer toda a base em ambientes com muitos registros (timeout de worker).
+    Configurável via VERIFICADOR_MAX_REGISTROS_SIMILARIDADE (default: 500).
+    """
+    try:
+        return max(50, min(2000, int(os.getenv("VERIFICADOR_MAX_REGISTROS_SIMILARIDADE", "500").strip())))
+    except ValueError:
+        return 500
+
+
 def _dominio_confiavel(dominio: str, fontes_ok: list[str]) -> bool:
     """Retorna True quando domínio está coberto pela whitelist (exato ou subdomínio)."""
     if not dominio or not fontes_ok:
@@ -141,18 +153,27 @@ def _titulo_similar_existente(titulo: str, link: str, pauta_id: int | None) -> t
     if not titulo or len(titulo) < 5:
         return False, 0.0
     limiar = _limiar_similaridade()
+    limite = _limite_registros_similaridade()
     titulo_norm = (titulo or "").strip().lower()
     maior = 0.0
-    # Pautas (outras que não esta)
-    for p in Pauta.query.filter(Pauta.id != pauta_id).all():
+    # Pautas (outras que não esta) - considera apenas as mais recentes para evitar varrer a base inteira
+    pautas_q = (
+        Pauta.query.filter(Pauta.id != pauta_id)
+        .order_by(Pauta.created_at.desc())
+        .limit(limite)
+    )
+    for p in pautas_q:
         t = (p.titulo_original or "").strip().lower()
         if t:
             r = SequenceMatcher(None, titulo_norm, t).ratio()
             maior = max(maior, r)
             if r >= limiar:
                 return True, r
-    # Noticias já publicadas
-    for n in NoticiaPortal.query.all():
+    # Notícias já publicadas - também limitado pelas mais recentes
+    noticias_q = (
+        NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(limite)
+    )
+    for n in noticias_q:
         t = (n.titulo_original or n.titulo_julia or "").strip().lower()
         if t:
             r = SequenceMatcher(None, titulo_norm, t).ratio()
