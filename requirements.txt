@@ -10,3 +10,4 @@ itsdangerous
 Flask-Dance
 feedparser
 requests
+google-generativeai
