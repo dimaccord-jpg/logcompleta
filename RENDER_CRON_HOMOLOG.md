@@ -1,4 +1,13 @@
-# Cron Job no Render (homolog) – ciclo Cleiton a cada 1h
+# Cron Jobs no Render (homolog)
+
+Este guia cobre dois agendamentos independentes em homolog:
+
+1. **Ciclo Cleiton** (`/cron/executar-cleiton`) para pipeline editorial.
+2. **Coleta de índices da Home** (`python -m app.finance`) para manter Petróleo, BDI, FBX e Dólar atualizados no ticker da `/`.
+
+---
+
+# Parte A - ciclo Cleiton a cada 1h
 
 Para que a **próxima notícia seja publicada automaticamente** em homolog na frequência configurada (ex.: 1h), use o **Cron Job** do Render chamando a rota `/cron/executar-cleiton`.
 
@@ -106,3 +115,50 @@ Após mudanças de credenciais ou deploy em homolog, valide o login Google:
 3. Em janela anônima, iniciar login Google e concluir callback.
 4. Não deve aparecer a mensagem de falha de validação de segurança.
 5. Confirmar redirecionamento para dashboard ou completar perfil.
+
+---
+
+# Parte B - coleta dos índices da Home (2x ao dia)
+
+Objetivo de negócio: manter no topo da Home os indicadores **Petróleo, BDI, FBX e Dólar** atualizados com base no último registro salvo em `app/indices.json`.
+
+## 1. Pré-requisitos
+
+1. O projeto deve instalar dependências de runtime (`requirements.txt`).
+2. O Cron Job deve executar no mesmo código/ambiente do backend homolog.
+3. Não há segredo de rota para este job, pois a coleta roda por comando Python (sem endpoint HTTP).
+
+## 2. Criar Cron Job para índices
+
+1. No Render: **Add New** → **Cron Job**.
+2. Configure:
+    - **Name:** `indices-home-homolog`.
+    - **Schedule:** duas execuções por dia útil (exemplo):
+       - `0 9 * * 1-5` (abertura)
+       - `10 14 * * 1-5` (após 14h)
+    - **Command:**
+       ```bash
+       python -m app.finance
+       ```
+
+Observação: se quiser rastrear execução no log com timestamp, use:
+
+```bash
+echo "[indices] start $(date -Iseconds)"; python -m app.finance; echo "[indices] end $(date -Iseconds)"
+```
+
+## 3. Validar
+
+1. Execute o job manualmente uma vez no painel do Render.
+2. Confirme nos logs mensagens de sucesso da rotina de coleta.
+3. Verifique `app/indices.json` atualizado com `ultima_atualizacao` e `historico`.
+4. Abra a Home (`/`) e confirme ticker sem campos vazios.
+
+## 4. Troubleshooting rápido
+
+- **Ticker vazio na Home:**
+   - Verifique se `app/indices.json` contém `historico` com ao menos um item.
+   - Verifique se a rota `/` está extraindo o último registro do histórico antes de renderizar o template.
+- **Job executa, mas sem atualização:**
+   - Confirme conectividade externa para yfinance e fontes de scraping.
+   - Revise possíveis bloqueios temporários das páginas de BDI/FBX.

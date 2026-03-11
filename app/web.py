@@ -143,11 +143,34 @@ def load_user(user_id):
 def index():
     # Localiza o arquivo de índices dinâmicos
     path_indices = os.path.join(_diretorio_app, 'indices.json')
+    fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
     try:
         with open(path_indices, 'r', encoding='utf-8') as f:
-            indicadores = json.load(f)
+            conteudo_indices = json.load(f)
+
+        # Compatibilidade com os dois formatos:
+        # 1) formato antigo: {"dolar", "petroleo", "bdi", "fbx"}
+        # 2) formato historico: {"ultima_atualizacao", "historico": [...]} 
+        if isinstance(conteudo_indices, dict) and isinstance(conteudo_indices.get('historico'), list):
+            historico = conteudo_indices.get('historico') or []
+            ultimo_registro = historico[-1] if historico else {}
+            indicadores = {
+                "dolar": ultimo_registro.get("dolar", fallback_indicadores["dolar"]),
+                "petroleo": ultimo_registro.get("petroleo", fallback_indicadores["petroleo"]),
+                "bdi": ultimo_registro.get("bdi", fallback_indicadores["bdi"]),
+                "fbx": ultimo_registro.get("fbx", fallback_indicadores["fbx"]),
+            }
+        elif isinstance(conteudo_indices, dict):
+            indicadores = {
+                "dolar": conteudo_indices.get("dolar", fallback_indicadores["dolar"]),
+                "petroleo": conteudo_indices.get("petroleo", fallback_indicadores["petroleo"]),
+                "bdi": conteudo_indices.get("bdi", fallback_indicadores["bdi"]),
+                "fbx": conteudo_indices.get("fbx", fallback_indicadores["fbx"]),
+            }
+        else:
+            indicadores = fallback_indicadores
     except (FileNotFoundError, json.JSONDecodeError):
-        indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
+        indicadores = fallback_indicadores
 
     try:
         noticias_reais = NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(10).all()

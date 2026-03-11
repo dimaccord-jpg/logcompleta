@@ -16,6 +16,12 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
 
 **Execução manual no Admin (hotfix homolog/prod):** A rota `/admin/agentes/julia/executar-cleiton` roda em **background** por padrão quando `APP_ENV` é `homolog` ou `prod`, evitando timeout de worker na requisição HTTP. Em `dev`, o padrão continua síncrono para facilitar validação local. É possível forçar via `ADMIN_CLEITON_EXEC_MODE=sync|async`.
 
+**Indicadores no topo da Home (Petróleo, BDI, FBX e Dólar):**
+- Coleta: `app/finance.py` (`atualizar_indices`) escreve em `app/indices.json`.
+- Persistência: formato histórico (`ultima_atualizacao` + `historico`).
+- Exibição: a rota `/` em `app/web.py` extrai o último item do histórico e envia para `index.html` no formato plano esperado pelo ticker (`dolar`, `petroleo`, `bdi`, `fbx`).
+- Contrato importante: o formato histórico deve ser mantido para análises do Roberto (`run_roberto.py`), e a conversão para formato plano deve ficar restrita à rota da Home.
+
 ## Seguranca de Segredos (obrigatorio)
 
 O projeto possui padrao anti-vazamento com bloqueio local e no CI.
@@ -279,3 +285,31 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
   GEMINI_HTTP_TIMEOUT_MS=20000
   GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000
   ```
+
+  ---
+
+  ## 8. Homolog – índices do ticker da Home (2x ao dia)
+
+  Objetivo: manter a faixa da Home (`/`) atualizada com **Petróleo, BDI, FBX e Dólar** sem depender do carregamento da página.
+
+  - **Fonte da coleta:** `python -m app.finance`
+  - **Arquivo persistido:** `app/indices.json`
+  - **Leitura na web:** `GET /` (rota `index` em `app/web.py`)
+
+  ### 8.1 Agendamento recomendado (homolog/prod)
+
+  Crie um job dedicado para índices com duas execuções diárias (abertura do mercado e após 14h).
+
+  Exemplo de referência de horários (ajuste ao fuso da operação):
+  - `0 9 * * 1-5`
+  - `10 14 * * 1-5`
+
+  ### 8.2 Validação rápida pós-agendamento
+
+  1. Execute uma coleta manual no mesmo ambiente:
+    ```bash
+    APP_ENV=homolog python -m app.finance
+    ```
+  2. Verifique se `app/indices.json` recebeu novo registro em `historico`.
+  3. Abra `/` e confirme valores visíveis no ticker (sem campos vazios).
+  4. Se o ticker ficar vazio, valide o contrato: `indices.json` em formato histórico + extração do último registro na rota `/`.

@@ -147,6 +147,11 @@ Checklist rapido de validacao (Fase 3):
 - Se uma fonte RSS falhar (parse/rede), o Scout registra erro dessa fonte e continua o ciclo com as demais.
 - Reiniciar o serviço (`systemctl restart logcompleta`) após alterar `.env.prod`.
 
+Checklist rapido de validacao (Indices da Home):
+- A coleta de índices roda por `python -m app.finance` e atualiza `app/indices.json`.
+- A rota `/` deve exibir o último registro do histórico (`historico[-1]`) no ticker.
+- Se houver formato histórico no JSON, a conversão para formato plano deve acontecer apenas na camada web (`index`).
+
 ## 4. Configurar Gunicorn com Systemd
 
 Crie o serviço para gerenciar o app:
@@ -207,3 +212,22 @@ Adicione no crontab (`crontab -e`) para backup diário às 03:00am:
 ```bash
 0 3 * * * cp -r /srv/logcompleta/data /srv/logcompleta/backup_$(date +\%Y\%m\%d)
 ```
+
+## 7. Agendamento de índices (homolog/prod)
+
+Além do ciclo editorial do Cleiton, agende a coleta de indicadores da Home em dois horários diários.
+
+Exemplo com cron (dias úteis):
+
+```bash
+# Abertura do mercado
+0 9 * * 1-5 cd /srv/logcompleta/code && /srv/logcompleta/code/venv/bin/python -m app.finance >> /var/log/logcompleta_indices.log 2>&1
+
+# Após as 14h
+10 14 * * 1-5 cd /srv/logcompleta/code && /srv/logcompleta/code/venv/bin/python -m app.finance >> /var/log/logcompleta_indices.log 2>&1
+```
+
+Validação pós-configuração:
+1. Rodar uma execução manual do comando.
+2. Confirmar atualização de `app/indices.json`.
+3. Abrir `/` e conferir ticker com Petróleo, BDI, FBX e Dólar preenchidos.
