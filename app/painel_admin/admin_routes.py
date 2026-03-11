@@ -34,6 +34,7 @@ admin_bp = Blueprint('admin', __name__,
 
 _CLEITON_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cleiton-admin")
 _CLEITON_FUTURE: Future | None = None
+_ARTIGO_MANUAL_FUTURE: Future | None = None
 _CLEITON_LOCK = threading.Lock()
 
 
@@ -64,6 +65,27 @@ def _executar_cleiton_em_background(app_obj, bypass_frequencia: bool) -> None:
         )
     except Exception as e:
         logging.exception("Falha no ciclo Cleiton admin (async): %s", e)
+
+
+def _executar_artigo_manual_em_background(app_obj) -> None:
+    """Executa missão manual de artigo no background e registra resultado no log."""
+    try:
+        from app.run_cleiton import executar_orquestracao
+        resultado = executar_orquestracao(
+            app_obj,
+            bypass_frequencia=True,
+            tipo_missao_forcado="artigo",
+            ignorar_trava_artigo_hoje=True,
+        ) or {}
+        logging.info(
+            "Artigo manual admin (async) concluído: status=%s mission_id=%s motivo=%s caminho=%s",
+            resultado.get("status"),
+            resultado.get("mission_id"),
+            resultado.get("motivo_final") or resultado.get("motivo"),
+            resultado.get("caminho_usado"),
+        )
+    except Exception as e:
+        logging.exception("Falha no artigo manual admin (async): %s", e)
 
 # --- FUNÇÃO DE APOIO (BACKOFFICE SEGURANÇA) ---
 def verificar_acesso_admin():
@@ -422,6 +444,24 @@ def agentes_julia_executar_artigo_manual():
     """Dispara manualmente uma missão de artigo, ignorando apenas a trava diária de artigo publicado hoje."""
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
+
+    if _admin_exec_mode() == "async":
+        global _ARTIGO_MANUAL_FUTURE
+        with _CLEITON_LOCK:
+            if _ARTIGO_MANUAL_FUTURE and not _ARTIGO_MANUAL_FUTURE.done():
+                flash("Já existe uma execução manual de artigo em andamento. Aguarde a conclusão.", "warning")
+                return redirect(url_for('admin.agentes_julia'))
+            app_obj = current_app._get_current_object()
+            _ARTIGO_MANUAL_FUTURE = _CLEITON_EXECUTOR.submit(
+                _executar_artigo_manual_em_background,
+                app_obj,
+            )
+        flash(
+            "Execução manual de artigo iniciada em segundo plano. Acompanhe os logs para status final.",
+            "info",
+        )
+        return redirect(url_for('admin.agentes_julia'))
+
     try:
         from app.run_cleiton import executar_orquestracao
         resultado = executar_orquestracao(
