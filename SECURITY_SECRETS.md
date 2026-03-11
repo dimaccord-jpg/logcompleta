@@ -14,6 +14,8 @@ Este projeto adota um padrao de prevencao de vazamento em camadas.
 1. `.gitignore` bloqueia `.env` e `.env.*` (exceto `.env.example`).
 2. `pre-commit` com hook do `gitleaks` bloqueia commit local com segredo detectado.
 3. GitHub Actions roda scan em pull requests e pushes para branches principais.
+4. No CI, o scan do diretório atual é bloqueante (previne novos vazamentos);
+	o scan de histórico completo é informativo para auditoria de legado.
 
 ## Setup local (obrigatorio)
 
