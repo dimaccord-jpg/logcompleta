@@ -76,7 +76,14 @@ a:hover { color: var(--af-cyan-bright); }
 }
 
 .logo-img { max-width: 180px; height: auto; margin-bottom: 15px; transition: 0.3s; }
-.logo-icon { display: none; color: var(--af-cyan) !important; font-size: 2rem; margin-bottom: 10px; }
+.logo-icon {
+  display: none;
+  width: 52px;
+  height: auto;
+  max-height: 52px;
+  object-fit: contain;
+  margin-bottom: 10px;
+}
 #sidebar.active .logo-img { display: none; }
 #sidebar.active .logo-icon { display: block !important; }
 
