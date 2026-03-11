@@ -38,6 +38,28 @@
                         <i class="bi bi-database-up me-2"></i> Importação
                     </a>
                 </li>
+                <li>
+                    <a href="{{ url_for('admin.pautas_admin') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.pautas_admin', 'admin.pautas_salvar'] }}">
+                        <i class="bi bi-journal-text me-2"></i> Pautas
+                    </a>
+                </li>
+                <li>
+                    <a href="{{ url_for('admin.agentes_home') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.agentes_home', 'admin.agentes_julia', 'admin.agentes_roberto'] }}">
+                        <i class="bi bi-diagram-3 me-2"></i> Agentes
+                    </a>
+                    <ul class="nav flex-column ms-4 mt-1">
+                        <li>
+                            <a href="{{ url_for('admin.agentes_julia') }}" class="nav-link py-1 {{ 'active' if request.endpoint == 'admin.agentes_julia' }}">
+                                <i class="bi bi-stars me-2"></i> Júlia
+                            </a>
+                        </li>
+                        <li>
+                            <a href="{{ url_for('admin.agentes_roberto') }}" class="nav-link py-1 {{ 'active' if request.endpoint == 'admin.agentes_roberto' }}">
+                                <i class="bi bi-graph-up-arrow me-2"></i> Roberto
+                            </a>
+                        </li>
+                    </ul>
+                </li>
                 <li class="mt-4">
                     <a href="{{ url_for('index') }}" class="nav-link text-warning">
                         <i class="bi bi-arrow-left-circle me-2"></i> Sair do Painel

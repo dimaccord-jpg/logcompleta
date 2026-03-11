@@ -1,0 +1,226 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <h4 class="mb-3">Pautas editoriais</h4>
+    <p class="text-muted mb-3">
+        Gestão manual de pautas para Júlia. Use com cuidado para não interferir no fluxo automático de notícias rápidas.
+    </p>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Filtros</h5>
+            <form method="get" class="row g-3">
+                <div class="col-md-2">
+                    <label class="form-label">Tipo</label>
+                    <select name="tipo" class="form-select">
+                        {% set tipo_sel = request.args.get('tipo', '') %}
+                        <option value="">Todos</option>
+                        {% for opt in ['noticia','artigo'] %}
+                            <option value="{{ opt }}" {% if tipo_sel == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Status</label>
+                    <select name="status" class="form-select">
+                        {% set st_sel = request.args.get('status', '') %}
+                        <option value="">Todos</option>
+                        {% for opt in ['pendente','em_processamento','publicada','falha'] %}
+                            <option value="{{ opt }}" {% if st_sel == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Status verificação</label>
+                    <select name="status_verificacao" class="form-select">
+                        {% set sv_sel = request.args.get('status_verificacao', '') %}
+                        <option value="">Todos</option>
+                        {% for opt in status_verificacao_permitidos %}
+                            <option value="{{ opt }}" {% if sv_sel == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                        <option value="revisar" {% if sv_sel == 'revisar' %}selected{% endif %}>revisar</option>
+                        <option value="rejeitado" {% if sv_sel == 'rejeitado' %}selected{% endif %}>rejeitado</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">De (criada em)</label>
+                    <input type="date" name="data_ini" class="form-control" value="{{ request.args.get('data_ini', '') }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Até</label>
+                    <input type="date" name="data_fim" class="form-control" value="{{ request.args.get('data_fim', '') }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Série vinculada (ID)</label>
+                    <input type="number" name="serie_id" class="form-control" min="1" step="1"
+                           value="{{ request.args.get('serie_id', '') }}">
+                </div>
+                <div class="col-12 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-funnel me-1"></i> Aplicar filtros
+                    </button>
+                    <a href="{{ url_for('admin.pautas_admin') }}" class="btn btn-outline-secondary">Limpar</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Criar / editar pauta manual</h5>
+            <form method="post" action="{{ url_for('admin.pautas_salvar') }}" class="row g-3">
+                <input type="hidden" name="id" value="{{ pauta_edicao.id if pauta_edicao else '' }}">
+                <div class="col-md-6">
+                    <label class="form-label">Título original *</label>
+                    <input type="text" name="titulo_original" class="form-control" required
+                           value="{{ pauta_edicao.titulo_original if pauta_edicao else '' }}">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Link original *</label>
+                    <input type="url" name="link" class="form-control" required
+                           value="{{ pauta_edicao.link if pauta_edicao else '' }}">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Fonte</label>
+                    <input type="text" name="fonte" class="form-control"
+                           value="{{ pauta_edicao.fonte if pauta_edicao else '' }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Tipo</label>
+                    {% set tipo_form = pauta_edicao.tipo if pauta_edicao else 'artigo' %}
+                    <select name="tipo" class="form-select">
+                        {% for opt in ['noticia','artigo'] %}
+                            <option value="{{ opt }}" {% if tipo_form == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Status</label>
+                    {% set st_form = pauta_edicao.status if pauta_edicao else 'pendente' %}
+                    <select name="status" class="form-select">
+                        {% for opt in ['pendente','em_processamento','publicada','falha'] %}
+                            <option value="{{ opt }}" {% if st_form == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Status verificação</label>
+                    {% set sv_form = pauta_edicao.status_verificacao if pauta_edicao else status_verificacao_permitidos[0] %}
+                    <select name="status_verificacao" class="form-select">
+                        {% for opt in status_verificacao_permitidos %}
+                            <option value="{{ opt }}" {% if sv_form == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                        <option value="revisar" {% if sv_form == 'revisar' %}selected{% endif %}>revisar</option>
+                        <option value="rejeitado" {% if sv_form == 'rejeitado' %}selected{% endif %}>rejeitado</option>
+                    </select>
+                </div>
+                <div class="col-md-12">
+                    <label class="form-label">Motivo / observações (opcional)</label>
+                    <textarea name="motivo_admin" rows="2" class="form-control"></textarea>
+                </div>
+                <div class="col-12 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save me-1"></i> Salvar pauta
+                    </button>
+                    {% if pauta_edicao %}
+                    <a href="{{ url_for('admin.pautas_admin') }}" class="btn btn-outline-secondary">
+                        Cancelar edição
+                    </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Pautas cadastradas</h5>
+            <div class="table-responsive">
+                <table class="table align-middle">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Título</th>
+                            <th>Tipo</th>
+                            <th>Status</th>
+                            <th>Verificação</th>
+                            <th>Fonte</th>
+                            <th>Criada em</th>
+                            <th>Vínculo série</th>
+                            <th>Arquivada</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p, vinculo in pautas %}
+                        <tr>
+                            <td>{{ p.id }}</td>
+                            <td class="text-truncate" style="max-width: 260px;" title="{{ p.titulo_original }}">
+                                {{ p.titulo_original }}
+                            </td>
+                            <td>{{ p.tipo }}</td>
+                            <td><span class="badge bg-light text-dark">{{ p.status }}</span></td>
+                            <td>{{ p.status_verificacao }}</td>
+                            <td>{{ p.fonte or '-' }}</td>
+                            <td>{{ p.created_at.strftime('%d/%m/%Y %H:%M') if p.created_at else '-' }}</td>
+                            <td>
+                                {% if vinculo %}
+                                    Série {{ vinculo.serie_id }} / Item {{ vinculo.id }}
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if p.arquivada %}
+                                    <span class="badge bg-secondary">Arquivada</span>
+                                {% else %}
+                                    <span class="badge bg-success">Ativa</span>
+                                {% endif %}
+                            </td>
+                            <td class="d-flex flex-wrap gap-2">
+                                <a href="{{ url_for('admin.pautas_admin', editar_id=p.id) }}" class="btn btn-sm btn-outline-secondary">
+                                    Editar
+                                </a>
+                                {% if not p.arquivada %}
+                                <form method="post" action="{{ url_for('admin.pautas_arquivar', pauta_id=p.id) }}">
+                                    <input type="hidden" name="motivo" value="Arquivada manualmente pelo admin">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                                            onclick="return confirm('Arquivar esta pauta? Ela não será mais usada automaticamente.');">
+                                        Arquivar
+                                    </button>
+                                </form>
+                                {% endif %}
+                                {% if p.status != 'pendente' %}
+                                <form method="post" action="{{ url_for('admin.pautas_reprocessar', pauta_id=p.id) }}" class="d-inline">
+                                    <input type="hidden" name="motivo" value="Reprocessar pauta manualmente pelo admin">
+                                    <button type="submit" class="btn btn-sm btn-outline-primary">
+                                        Reprocessar
+                                    </button>
+                                </form>
+                                {% endif %}
+                                {% if p.status_verificacao != 'revisar' %}
+                                <form method="post" action="{{ url_for('admin.pautas_marcar_revisao', pauta_id=p.id) }}" class="d-inline">
+                                    <input type="hidden" name="motivo" value="Marcada para revisão manual pelo admin">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        Revisão manual
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="10" class="text-muted text-center">
+                                Nenhuma pauta encontrada com os filtros atuais.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

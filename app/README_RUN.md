@@ -12,21 +12,21 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
 
 **Fase 5 – Customer Insight:** `run_cleiton_agente_customer_insight.py` mede desempenho por conteúdo/canal, gera recomendações estratégicas (tema, tipo, canal, horário, frequência) e audita com `tipo_decisao=insight`. `run_julia_agente_metricas.py` consolida métricas em `InsightCanal`; recomendações em `RecomendacaoEstrategica`. A rota `POST /executar-insight` é mantida por compatibilidade e aciona o ciclo completo do Cleiton (mesmo fluxo do `/executar-cleiton`, com Insight ao final).
 
-**Fase 6 – Encerramento:** Feedback loop estratégico: o orquestrador consome recomendações pendentes (prioridade DESC) antes do dispatch e aplica tema, tipo_missao e prioridade ao payload; em missão sucesso a recomendação é marcada como aplicada; em falha permanece pendente. Serviço de gestão: `listar_recomendacoes_pendentes`, `selecionar_recomendacao_prioritaria`, `parse_recomendacao_json`/`parse_contexto_json`, `atualizar_status_recomendacao` (com auditoria). Painel admin inclui operações de backoffice para série/pauta: CRUD de séries e itens, vincular/desvincular pauta, reabrir/pular item, criação/edição de pautas manuais, arquivar pauta e reprocessar/marcar revisão; pautas arquivadas saem do backlog elegível de artigo. Dashboard mantém KPIs de insight e ações em recomendações (`/admin/recomendacoes/<id>/aplicar` e `/descartar`). Rotas principais: `/health`, `/executar-cleiton` (ciclo completo) e `/executar-insight` (compatibilidade, mesmo ciclo completo), login/home.
+**Fase 6 – Encerramento:** Feedback loop estratégico: o orquestrador consome recomendações pendentes (prioridade DESC) antes do dispatch e aplica tema, tipo_missao e prioridade ao payload; em missão sucesso a recomendação é marcada como aplicada; em falha permanece pendente. Serviço de gestão: `listar_recomendacoes_pendentes`, `selecionar_recomendacao_prioritaria`, `parse_recomendacao_json`/`parse_contexto_json`, `atualizar_status_recomendacao` (com auditoria). Painel admin inclui operações de backoffice para série/pauta: CRUD de séries e itens, vincular/desvincular pauta, reabrir/pular item, criação/edição de pautas manuais, arquivar pauta e reprocessar/marcar revisão; pautas arquivadas saem do backlog elegível de artigo. Dashboard mantém KPIs de insight e ações em recomendações (`/admin/recomendacoes/<id>/aplicar` e `/descartar`). Rotas principais: `/health/liveness`, `/health/readiness`, `/executar-cleiton` (ciclo completo) e `/executar-insight` (compatibilidade, mesmo ciclo completo), login/home.
 
 **Execução manual no Admin (hotfix homolog/prod):** A rota `/admin/agentes/julia/executar-cleiton` roda em **background** por padrão quando `APP_ENV` é `homolog` ou `prod`, evitando timeout de worker na requisição HTTP. Em `dev`, o padrão continua síncrono para facilitar validação local. É possível forçar via `ADMIN_CLEITON_EXEC_MODE=sync|async`.
 
 **Indicadores no topo da Home (Petróleo, BDI, FBX e Dólar):**
-- Coleta: `app/finance.py` (`atualizar_indices`) escreve no caminho resolvido por ambiente (`INDICES_FILE_PATH` ou `RENDER_DISK_PATH/indices.json`; em dev, fallback para `app/indices.json`).
-- Persistência: formato histórico (`ultima_atualizacao` + `historico`).
-- Exibição: a rota `/` em `app/web.py` extrai o último item do histórico e envia para `index.html` no formato plano esperado pelo ticker (`dolar`, `petroleo`, `bdi`, `fbx`).
-- Contrato importante: o formato histórico deve ser mantido para análises do Roberto (`run_roberto.py`), e a conversão para formato plano deve ficar restrita à rota da Home.
+- Coleta: `app/finance.py` (`atualizar_indices`) usa configuração centralizada em `app/settings.py` (`settings.indices_file_path`) para resolver o caminho persistente dos índices por ambiente.
+- Persistência (fase atual): formato histórico em arquivo (`ultima_atualizacao` + `historico`), armazenado em diretório de dados resolvido por `env_loader.resolve_data_dir` / `APP_DATA_DIR` / `RENDER_DISK_PATH` (nunca depende de caminho efêmero dentro da release em homolog/prod).
+- Exibição: a rota `/` em `app/web.py` lê o mesmo caminho de índices via `settings.indices_file_path`, extrai o último item do histórico e envia para `index.html` no formato plano esperado pelo ticker (`dolar`, `petroleo`, `bdi`, `fbx`), mantendo compatibilidade com o JSON legado simples e o formato histórico.
+- Contrato importante: o formato histórico deve ser mantido para análises do Roberto (`run_roberto.py`), e a conversão para formato plano deve ficar restrita à rota da Home. Em caso de falha na leitura, a Home continua exibindo um fallback seguro (campos não são zerados silenciosamente pelo backend).
 
 **Hardening de ambiente (homolog/prod):**
-- `APP_ENV` deve estar explícito no serviço (`homolog` ou `prod`), sem fallback implícito.
-- `DB_URI_*` críticos devem estar definidos no ambiente.
-- `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta `app` (ex.: `/var/data/indices.json`).
-- Sem essas condições, a aplicação falha no boot para evitar subir em modo inseguro e perder dados em deploy.
+- A configuração de ambiente é centralizada em `app/settings.py`. O módulo determina `APP_ENV` em um único ponto e chama `env_loader` apenas uma vez.
+- Em ambientes gerenciados (ex.: Render, com `RENDER=true`), `APP_ENV` é obrigatório e deve estar explícito no serviço (`homolog` ou `prod`). Fora desse contexto, o default é `dev` apenas para execução local.
+- `DB_URI_*` críticos continuam devendo ser definidos no ambiente ou serão resolvidos para caminhos persistentes em diretório de dados dedicado (por padrão fora da pasta da release).
+- `INDICES_FILE_PATH` passa a apontar para storage persistente fora da pasta `app` (ex.: `/var/data/indices.json` ou diretório definido por `APP_DATA_DIR`/`RENDER_DISK_PATH`). A validação em `env_loader.validate_runtime_env` apenas emite `WARN` quando o caminho é inválido em homolog/prod, mantendo a aplicação viva em modo degradado até que a configuração seja ajustada.
 
 ## Status Atual
 
@@ -63,6 +63,7 @@ pre-commit run --all-files
 2. Garanta que os arquivos `.env.dev` e `.env.homolog` existam na pasta `app/`.
    - O arquivo `.env` simples é legado e **não deve ser usado**.
    - Use `app/.env.example` como base, copiando para `.env.dev` e `.env.homolog` e ajustando apenas os valores.
+   - A leitura desses arquivos é feita de forma centralizada por `app/settings.py`, que carrega `.env.{APP_ENV}` via `env_loader` em um único ponto antes de construir o objeto `settings`.
    - Para login com Google, defina `GOOGLE_OAUTH_REDIRECT_URI` (ex.: `http://127.0.0.1:5000/login/google/callback`) e, em dev, `OAUTHLIB_INSECURE_TRANSPORT=1`.
    - Para a camada gerencial, configure `DB_URI_GERENCIAL` (ex.: `sqlite:///gerencial.db`) no `.env.*`; se omitido, usa `app/gerencial.db`.
    - Para a Júlia, `GEMINI_MODEL_TEXT` permite definir o modelo preferencial; se indisponível, o sistema tenta fallback automático.
@@ -95,12 +96,12 @@ pre-commit run --all-files
 
 **Comando (Windows PowerShell):**
 ```powershell
-$env:APP_ENV="dev"; python web.py
+$env:APP_ENV="dev"; python app/web.py
 ```
 
 **Comando (Linux/Mac):**
 ```bash
-APP_ENV=dev python web.py
+APP_ENV=dev python -m app.web
 ```
 
 ---
@@ -111,12 +112,12 @@ APP_ENV=dev python web.py
 
 **Comando (Windows PowerShell):**
 ```powershell
-$env:APP_ENV="homolog"; python web.py
+$env:APP_ENV="homolog"; python app/web.py
 ```
 
 **Comando (Linux/Mac - Via Gunicorn - Recomendado):**
 ```bash
-APP_ENV=homolog gunicorn -w 2 -b 0.0.0.0:8000 web:app
+APP_ENV=homolog gunicorn -w 2 -b 0.0.0.0:8000 app.web:app
 ```
 
 ---
@@ -308,20 +309,28 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
   - **Arquivo persistido:** `app/indices.json`
   - **Leitura na web:** `GET /` (rota `index` em `app/web.py`)
 
-  ### 8.1 Agendamento recomendado (homolog/prod)
+### 8.1 Agendamento recomendado (homolog/prod)
 
-  Crie um job dedicado para índices com duas execuções diárias (abertura do mercado e após 14h).
+Crie um job dedicado para índices com duas execuções diárias (abertura do mercado e após 14h).
 
-  Exemplo de referência de horários (ajuste ao fuso da operação):
-  - `0 9 * * 1-5`
-  - `10 14 * * 1-5`
+Exemplo de referência de horários (ajuste ao fuso da operação):
+- `0 9 * * 1-5`
+- `10 14 * * 1-5`
 
-  ### 8.2 Validação rápida pós-agendamento
+O comando deve sempre respeitar a configuração centralizada de ambiente:
 
-  1. Execute uma coleta manual no mesmo ambiente:
-    ```bash
-    APP_ENV=homolog python -m app.finance
-    ```
-  2. Verifique se `app/indices.json` recebeu novo registro em `historico`.
-  3. Abra `/` e confirme valores visíveis no ticker (sem campos vazios).
-  4. Se o ticker ficar vazio, valide o contrato: `indices.json` em formato histórico + extração do último registro na rota `/`.
+```bash
+APP_ENV=homolog python -m app.finance
+```
+
+Neste fluxo, `app/finance.py` utilizará `app/settings.py` para resolver o caminho persistente dos índices de forma consistente com o serviço web.
+
+### 8.2 Validação rápida pós-agendamento
+
+1. Execute uma coleta manual no mesmo ambiente:
+   ```bash
+   APP_ENV=homolog python -m app.finance
+   ```
+2. Verifique se o arquivo apontado por `INDICES_FILE_PATH` (resolvido por `settings.indices_file_path`) recebeu novo registro em `historico`.
+3. Abra `/` e confirme valores visíveis no ticker (sem campos vazios).
+4. Se o ticker ficar vazio, valide o contrato: JSON em formato histórico (ou legado) + extração do último registro na rota `/`. Enquanto a migração completa para banco não estiver concluída, este JSON continua sendo a fonte de verdade dos índices.
