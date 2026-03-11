@@ -61,10 +61,11 @@ if not _env_loaded:
     )
 
 app = Flask(__name__)
+_diretorio_dados = env_loader.resolve_data_dir()
 
 # 3. Configurações de Segurança e Banco de Dados (OBRIGATÓRIO ANTES DO INIT_APP)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'chave_insegura_padrao_dev')
-db_uri_auth = os.getenv('DB_URI_AUTH', 'sqlite:///' + os.path.join(_diretorio_app, 'painel_admin', 'auth.db'))
+db_uri_auth = os.getenv('DB_URI_AUTH', 'sqlite:///' + os.path.join(_diretorio_dados, 'auth.db'))
 app.config['SQLALCHEMY_DATABASE_URI'] = resolve_sqlite_path(db_uri_auth, _diretorio_app)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
@@ -97,11 +98,11 @@ mail = Mail(app)
 # Configuração dos Binds (Bancos adicionais)
 # Tenta pegar do .env, se não existir, usa o caminho padrão relativo (fallback)
 db_binds = {
-    'localidades': os.getenv('DB_URI_LOCALIDADES', 'sqlite:///' + os.path.join(_diretorio_app, 'base_localidades.db')),
-    'historico':   os.getenv('DB_URI_HISTORICO', 'sqlite:///' + os.path.join(_diretorio_app, 'historico_frete.db')),
-    'leads':       os.getenv('DB_URI_LEADS', 'sqlite:///' + os.path.join(_diretorio_app, 'leads.db')),
-    'noticias':    os.getenv('DB_URI_NOTICIAS', 'sqlite:///' + os.path.join(_diretorio_app, 'noticias.db')),
-    'gerencial':   os.getenv('DB_URI_GERENCIAL', 'sqlite:///' + os.path.join(_diretorio_app, 'gerencial.db'))
+    'localidades': os.getenv('DB_URI_LOCALIDADES', 'sqlite:///' + os.path.join(_diretorio_dados, 'base_localidades.db')),
+    'historico':   os.getenv('DB_URI_HISTORICO', 'sqlite:///' + os.path.join(_diretorio_dados, 'historico_frete.db')),
+    'leads':       os.getenv('DB_URI_LEADS', 'sqlite:///' + os.path.join(_diretorio_dados, 'leads.db')),
+    'noticias':    os.getenv('DB_URI_NOTICIAS', 'sqlite:///' + os.path.join(_diretorio_dados, 'noticias.db')),
+    'gerencial':   os.getenv('DB_URI_GERENCIAL', 'sqlite:///' + os.path.join(_diretorio_dados, 'gerencial.db'))
 }
 app.config['SQLALCHEMY_BINDS'] = {k: resolve_sqlite_path(v, _diretorio_app) for k, v in db_binds.items()}
 
