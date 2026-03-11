@@ -3,6 +3,7 @@ Infraestrutura: configuração de banco, bootstrap de admin, segurança (decorat
 web.py usa estas funções; não contém lógica de negócio de domínio.
 """
 import os
+import shutil
 import logging
 import threading
 from functools import wraps
@@ -134,11 +135,55 @@ def _warn_non_sqlite_migration_limits(db_instance):
 
 
 def resolve_sqlite_path(uri: str, base_dir: str) -> str:
-    """Converte URIs relativas de SQLite em absolutas e garante que o diretório exista."""
+    """
+    Converte URIs relativas de SQLite em absolutas e garante que o diretório exista.
+
+    Em Render homolog/prod, URIs relativas são redirecionadas para diretório persistente
+    quando disponível, evitando perda de dados entre deploys.
+    """
+
+    def _prefer_persistent_sqlite_dir() -> str | None:
+        app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
+        render_service = (os.getenv("RENDER_SERVICE_ID") or "").strip()
+        if app_env not in ("homolog", "prod") or not render_service:
+            return None
+
+        candidates = [
+            (os.getenv("PERSISTENT_DATA_DIR") or "").strip(),
+            (os.getenv("RENDER_DISK_MOUNT_PATH") or "").strip(),
+            "/var/data",
+        ]
+        for c in candidates:
+            if c and os.path.isdir(c):
+                return c
+        return None
+
     if uri and uri.startswith('sqlite:///'):
         path_part = uri[len('sqlite:///'):]
         if not os.path.isabs(path_part):
-            absolute_path = os.path.join(base_dir, path_part)
+            preferred_dir = _prefer_persistent_sqlite_dir()
+            if preferred_dir:
+                absolute_path = os.path.join(preferred_dir, os.path.basename(path_part))
+                # Migração suave: se existia arquivo no caminho antigo do app e ainda não existe no persistente, copia.
+                old_path = os.path.join(base_dir, path_part)
+                if os.path.exists(old_path) and not os.path.exists(absolute_path):
+                    os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
+                    try:
+                        shutil.copy2(old_path, absolute_path)
+                        logger.warning(
+                            "SQLite movido para diretório persistente (%s -> %s).",
+                            old_path,
+                            absolute_path,
+                        )
+                    except Exception as copy_err:
+                        logger.warning(
+                            "Falha ao copiar SQLite para diretório persistente (%s -> %s): %s",
+                            old_path,
+                            absolute_path,
+                            copy_err,
+                        )
+            else:
+                absolute_path = os.path.join(base_dir, path_part)
             os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
             return 'sqlite:///' + absolute_path.replace('\\', '/')
     return uri

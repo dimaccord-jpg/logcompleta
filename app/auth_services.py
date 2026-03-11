@@ -320,10 +320,12 @@ def handle_google_oauth_callback(
             if email in admin_emails and not user.is_admin:
                 user.is_admin = True
 
+        first_login = user.last_login_at is None
         user.last_login_at = _utcnow_naive()
         db.session.commit()
 
-        needs_profile = not _is_profile_complete(user)
+        # Onboarding obrigatório apenas no primeiro login OAuth do usuário.
+        needs_profile = first_login and (not _is_profile_complete(user))
         return user, None, needs_profile
 
     except requests.RequestException as e:
