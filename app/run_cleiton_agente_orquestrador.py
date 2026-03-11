@@ -213,6 +213,7 @@ def executar_ciclo_gerencial(
     bypass_frequencia: bool = False,
     tipo_missao_forcado: str | None = None,
     ignorar_trava_artigo_hoje: bool = False,
+    ignorar_janela_publicacao: bool = False,
 ) -> dict[str, Any]:
     """
     Ciclo principal do Cleiton (gerencial):
@@ -281,7 +282,7 @@ def executar_ciclo_gerencial(
                 resultado="sucesso",
             )
 
-        if not dentro_janela_publicacao():
+        if not ignorar_janela_publicacao and not dentro_janela_publicacao():
             logger.info("Cleiton: fora da janela de publicação; ciclo adiado.")
             auditoria_registrar(
                 tipo_decisao="orquestracao",

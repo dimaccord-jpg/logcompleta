@@ -93,6 +93,7 @@ class TestAdminBypassCleiton(unittest.TestCase):
                 self.assertTrue(kwargs.get("bypass_frequencia"))
                 self.assertEqual(kwargs.get("tipo_missao_forcado"), "artigo")
                 self.assertTrue(kwargs.get("ignorar_trava_artigo_hoje"))
+                self.assertTrue(kwargs.get("ignorar_janela_publicacao"))
 
     def test_execucao_artigo_manual_mostra_links_de_acompanhamento(self):
         """Flash da rota manual de artigo deve incluir links de acompanhamento para pautas."""

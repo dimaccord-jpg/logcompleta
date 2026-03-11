@@ -68,6 +68,7 @@ logging.basicConfig(
 app = Flask(__name__)
 
 _diretorio_dados = settings.data_dir
+app.config["DATA_DIR"] = settings.data_dir  # usado pelo Admin para persistir última execução manual
 
 # 3. Configurações de Segurança e Banco de Dados (OBRIGATÓRIO ANTES DO INIT_APP)
 app.config['SECRET_KEY'] = settings.secret_key

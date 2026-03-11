@@ -81,10 +81,12 @@ def executar_orquestracao(
     bypass_frequencia: bool = False,
     tipo_missao_forcado: str | None = None,
     ignorar_trava_artigo_hoje: bool = False,
+    ignorar_janela_publicacao: bool = False,
 ):
     """
     Fachada: delega ao orquestrador gerencial (regras, auditoria, dispatch).
     Mantém compatibilidade com rota /executar-cleiton e script em loop.
+    ignorar_janela_publicacao: quando True (ex.: botão "Executar artigo agora"), não bloqueia por janela de publicação.
     """
     from app.run_cleiton_agente_orquestrador import executar_ciclo_gerencial
     logger.info("MAESTRO CLEITON: Iniciando ciclo gerencial (delegação ao orquestrador).")
@@ -93,6 +95,7 @@ def executar_orquestracao(
         bypass_frequencia=bypass_frequencia,
         tipo_missao_forcado=tipo_missao_forcado,
         ignorar_trava_artigo_hoje=ignorar_trava_artigo_hoje,
+        ignorar_janela_publicacao=ignorar_janela_publicacao,
     )
     return resultado
 

@@ -130,6 +130,24 @@
                     <br><em>Só ocorre se houver processo/cron rodando o ciclo (ex.: script Cleiton em loop ou job no Render).</em>
                 </li>
             </ul>
+            <hr class="my-3">
+            <h6 class="mb-2">Última execução manual (Admin)</h6>
+            <p class="text-muted small mb-2">
+                Resultado do último disparo manual (Executar Cleiton ou Executar artigo agora). Em homolog/prod as execuções rodam em segundo plano — atualize esta página após alguns segundos para ver o resultado e o <strong>motivo exato</strong> em caso de falha.
+            </p>
+            {% if ultima_execucao_manual %}
+            <div class="border rounded p-2 bg-light small">
+                <strong>Origem:</strong> {{ ultima_execucao_manual.origem or '—' }} &nbsp;|&nbsp;
+                <strong>Status:</strong> <span class="badge {% if ultima_execucao_manual.status == 'sucesso' %}bg-success{% elif ultima_execucao_manual.status == 'ignorado' %}bg-warning text-dark{% else %}bg-danger{% endif %}">{{ ultima_execucao_manual.status or '—' }}</span>
+                {% if ultima_execucao_manual.tipo_missao %}| <strong>Tipo:</strong> {{ ultima_execucao_manual.tipo_missao }}{% endif %}
+                {% if ultima_execucao_manual.mission_id %}| <strong>mission_id:</strong> {{ ultima_execucao_manual.mission_id }}{% endif %}
+                <br><strong>Motivo:</strong> {{ ultima_execucao_manual.motivo or '—' }}
+                {% if ultima_execucao_manual.caminho_usado %}<br><strong>Caminho usado:</strong> <code>{{ ultima_execucao_manual.caminho_usado }}</code>{% endif %}
+                <br><strong>Em:</strong> {{ ultima_execucao_manual.timestamp or '—' }}
+            </div>
+            {% else %}
+            <p class="text-muted small mb-0">Nenhuma execução manual registrada ainda.</p>
+            {% endif %}
         </div>
     </div>
 

@@ -6,6 +6,7 @@ from sqlalchemy import text
 import os
 import csv
 import io
+import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -52,23 +53,81 @@ def _admin_exec_mode() -> str:
     return "async" if app_env in ("homolog", "prod") else "sync"
 
 
+def _data_dir(app_flask=None):
+    """Retorna o diretório de dados (para uso em thread de background ou request)."""
+    app = app_flask or (current_app._get_current_object() if current_app else None)
+    if app and app.config.get("DATA_DIR"):
+        return app.config["DATA_DIR"]
+    try:
+        from app.settings import settings
+        return settings.data_dir
+    except Exception:
+        return os.path.join(os.path.dirname(os.path.dirname(base_dir)), "data")
+
+
+def _persistir_ultima_execucao_manual(resultado: dict, origem: str, app_flask=None) -> None:
+    """Persiste o resultado da última execução manual para exibição no Admin (homolog: ver erro real após async)."""
+    try:
+        data_dir = _data_dir(app_flask)
+        path = os.path.join(data_dir, "last_admin_run.json")
+        os.makedirs(data_dir, exist_ok=True)
+        payload = {
+            "status": resultado.get("status") or "falha",
+            "motivo": resultado.get("motivo_final") or resultado.get("motivo") or "",
+            "caminho_usado": resultado.get("caminho_usado") or "",
+            "mission_id": resultado.get("mission_id"),
+            "tipo_missao": resultado.get("tipo_missao"),
+            "origem": origem,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=0)
+    except Exception as e:
+        logging.warning("Falha ao persistir última execução manual: %s", e)
+
+
+def _ler_ultima_execucao_manual():
+    """Lê o resultado da última execução manual (para exibir no Admin)."""
+    try:
+        data_dir = _data_dir()
+        path = os.path.join(data_dir, "last_admin_run.json")
+        if not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 def _executar_cleiton_em_background(app_obj, bypass_frequencia: bool) -> None:
-    """Executa ciclo completo no background e registra resultado no log."""
+    """Executa ciclo completo no background e registra resultado no log e em arquivo para exibição no Admin."""
     try:
         from app.run_cleiton import executar_orquestracao
-        resultado = executar_orquestracao(app_obj, bypass_frequencia=bypass_frequencia) or {}
+        # Em execução manual (bypass), ignora também a janela para publicar em qualquer horário (homolog).
+        resultado = executar_orquestracao(
+            app_obj,
+            bypass_frequencia=bypass_frequencia,
+            ignorar_janela_publicacao=bypass_frequencia,
+        ) or {}
         logging.info(
-            "Cleiton admin (async) concluído: status=%s mission_id=%s motivo=%s",
+            "Cleiton admin (async) concluído: status=%s mission_id=%s motivo=%s caminho=%s",
             resultado.get("status"),
             resultado.get("mission_id"),
-            resultado.get("motivo"),
+            resultado.get("motivo_final") or resultado.get("motivo"),
+            resultado.get("caminho_usado"),
         )
+        _persistir_ultima_execucao_manual(resultado, origem="Executar Cleiton", app_flask=app_obj)
     except Exception as e:
         logging.exception("Falha no ciclo Cleiton admin (async): %s", e)
+        _persistir_ultima_execucao_manual(
+            {"status": "falha", "motivo": str(e), "caminho_usado": "excecao"},
+            origem="Executar Cleiton",
+            app_flask=app_obj,
+        )
 
 
 def _executar_artigo_manual_em_background(app_obj) -> None:
-    """Executa missão manual de artigo no background e registra resultado no log."""
+    """Executa missão manual de artigo no background e registra resultado no log e em arquivo para exibição no Admin."""
     try:
         from app.run_cleiton import executar_orquestracao
         resultado = executar_orquestracao(
@@ -76,6 +135,7 @@ def _executar_artigo_manual_em_background(app_obj) -> None:
             bypass_frequencia=True,
             tipo_missao_forcado="artigo",
             ignorar_trava_artigo_hoje=True,
+            ignorar_janela_publicacao=True,
         ) or {}
         logging.info(
             "Artigo manual admin (async) concluído: status=%s mission_id=%s motivo=%s caminho=%s",
@@ -84,8 +144,14 @@ def _executar_artigo_manual_em_background(app_obj) -> None:
             resultado.get("motivo_final") or resultado.get("motivo"),
             resultado.get("caminho_usado"),
         )
+        _persistir_ultima_execucao_manual(resultado, origem="Executar artigo agora", app_flask=app_obj)
     except Exception as e:
         logging.exception("Falha no artigo manual admin (async): %s", e)
+        _persistir_ultima_execucao_manual(
+            {"status": "falha", "motivo": str(e), "caminho_usado": "excecao"},
+            origem="Executar artigo agora",
+            app_flask=app_obj,
+        )
 
 # --- FUNÇÃO DE APOIO (BACKOFFICE SEGURANÇA) ---
 def verificar_acesso_admin():
@@ -210,6 +276,7 @@ def agentes_julia():
     janela_inicio, janela_fim = _obter_janela_publicacao()
     status_pautas_artigo = _obter_status_pautas_artigo()
     ultima_artigo = _obter_ultima_publicacao_artigo()
+    ultima_execucao_manual = _ler_ultima_execucao_manual()
     return render_template(
         'agentes_julia.html',
         frequencia_horas=frequencia_horas,
@@ -219,6 +286,7 @@ def agentes_julia():
         janela_fim=janela_fim,
         status_pautas_artigo=status_pautas_artigo,
         ultima_artigo=ultima_artigo,
+        ultima_execucao_manual=ultima_execucao_manual,
     )
 
 
@@ -392,7 +460,12 @@ def agentes_julia_executar_cleiton():
 
     try:
         from app.run_cleiton import executar_orquestracao
-        resultado = executar_orquestracao(current_app, bypass_frequencia=bypass_frequencia) or {}
+        resultado = executar_orquestracao(
+            current_app,
+            bypass_frequencia=bypass_frequencia,
+            ignorar_janela_publicacao=bypass_frequencia,
+        ) or {}
+        _persistir_ultima_execucao_manual(resultado, origem="Executar Cleiton")
         status = resultado.get("status") or "falha"
         motivo = resultado.get("motivo") or "Ciclo não informou motivo detalhado."
         mission_id = resultado.get("mission_id")
@@ -469,7 +542,9 @@ def agentes_julia_executar_artigo_manual():
             bypass_frequencia=True,
             tipo_missao_forcado="artigo",
             ignorar_trava_artigo_hoje=True,
+            ignorar_janela_publicacao=True,
         ) or {}
+        _persistir_ultima_execucao_manual(resultado, origem="Executar artigo agora")
         status = resultado.get("status") or "falha"
         motivo = resultado.get("motivo_final") or resultado.get("motivo") or "Execução manual de artigo concluída sem motivo detalhado."
         caminho = resultado.get("caminho_usado")
