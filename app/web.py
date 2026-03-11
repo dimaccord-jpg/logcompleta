@@ -42,6 +42,17 @@ from app.auth_services import (
 # 2. Configuração de ambiente centralizada
 from app.settings import settings
 
+
+def resolve_indices_file_path():
+    """Resolve caminho de índices com prioridade para storage persistente."""
+    explicit_path = (os.getenv("INDICES_FILE_PATH") or "").strip()
+    if explicit_path:
+        return explicit_path
+    render_disk = (os.getenv("RENDER_DISK_PATH") or "").strip()
+    if render_disk:
+        return os.path.join(render_disk, "indices.json")
+    return os.path.join(diretorio_atual, 'indices.json')
+
 # Configuração de Logging (Global para o Flask e Gunicorn)
 log_level = settings.log_level
 logging.basicConfig(

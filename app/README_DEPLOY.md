@@ -157,6 +157,12 @@ Checklist rapido de validacao (Indices da Home):
 - Se houver formato histórico no JSON, a conversão para formato plano deve acontecer apenas na camada web (`index`), mantendo compatibilidade com o JSON legado simples enquanto durar a janela de transição.
 - Em homolog/prod, `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta da release. Caso a configuração esteja incorreta, `env_loader.validate_runtime_env` emitirá apenas um aviso (modo degradado) sem derrubar o serviço.
 
+Checklist rapido de validacao (Indices da Home):
+- A coleta de índices roda por `python -m app.finance` e atualiza o arquivo apontado por `INDICES_FILE_PATH`.
+- A rota `/` deve exibir o último registro do histórico (`historico[-1]`) no ticker.
+- Se houver formato histórico no JSON, a conversão para formato plano deve acontecer apenas na camada web (`index`).
+- Em homolog/prod, `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta da release.
+
 ## 4. Configurar Gunicorn com Systemd
 
 Crie o serviço para gerenciar o app:

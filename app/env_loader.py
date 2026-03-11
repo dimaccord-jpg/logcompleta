@@ -36,6 +36,7 @@ def load_app_env() -> bool:
     return load_dotenv(dotenv_path)
 
 
+
 def resolve_data_dir() -> str:
     """
     Resolve diretório de dados persistentes com prioridade:
