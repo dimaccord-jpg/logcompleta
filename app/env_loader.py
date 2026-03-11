@@ -5,6 +5,20 @@ Evita inconsistência por CWD ao rodar scripts de qualquer pasta.
 import os
 from pathlib import Path
 
+
+def _can_use_dir(path_str: str) -> bool:
+    """Retorna True quando o diretório existe/pode ser criado e é gravável."""
+    try:
+        path = Path(path_str)
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_probe"
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        probe.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
 def get_app_dir() -> str:
     """Retorna o diretório absoluto da pasta app."""
     return str(Path(__file__).resolve().parent)
@@ -32,14 +46,22 @@ def resolve_data_dir() -> str:
     """
     explicit_data_dir = (os.getenv("APP_DATA_DIR") or "").strip()
     if explicit_data_dir:
-        return str(Path(explicit_data_dir).expanduser())
+        explicit_data_dir = str(Path(explicit_data_dir).expanduser())
+        if _can_use_dir(explicit_data_dir):
+            return explicit_data_dir
+        print(f"[WARN] APP_DATA_DIR inválido/inacessível: {explicit_data_dir}. Aplicando fallback.")
 
     render_disk = (os.getenv("RENDER_DISK_PATH") or "").strip()
     if render_disk:
-        return str(Path(render_disk))
+        if _can_use_dir(render_disk):
+            return str(Path(render_disk))
+        print(f"[WARN] RENDER_DISK_PATH inválido/inacessível: {render_disk}. Aplicando fallback.")
 
     if (os.getenv("RENDER") or "").strip().lower() == "true":
-        return "/var/data"
+        render_default = "/var/data"
+        if _can_use_dir(render_default):
+            return render_default
+        print("[WARN] /var/data indisponível. Usando fallback local em app/.")
 
     return get_app_dir()
 
