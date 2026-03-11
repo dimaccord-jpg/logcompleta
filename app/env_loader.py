@@ -95,8 +95,13 @@ def validate_runtime_env() -> None:
     app_dir = Path(get_app_dir()).resolve()
     try:
         indices_resolved = Path(indices_path).resolve()
-    except Exception:
-        raise RuntimeError("INDICES_FILE_PATH inválido em homolog/prod.")
+    except Exception as exc:
+        print(
+            "[WARN] INDICES_FILE_PATH inválido em homolog/prod "
+            f"({indices_path}): {exc}. Aplicação seguirá em modo degradado; "
+            "ajuste a configuração para garantir persistência dos índices."
+        )
+        return
 
     # Em homolog/prod, alertamos quando índices apontam para pasta da release.
     if app_dir in indices_resolved.parents or indices_resolved == app_dir / "indices.json":

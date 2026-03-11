@@ -2,12 +2,14 @@
 Júlia - Entrypoint e fachada de compatibilidade.
 Mantém assinatura processar_insight_do_momento(tipo_desejado) e delega ao pipeline operacional.
 Remove dependência direta de processadas.json: pautas vêm da tabela Pauta.
+
+A configuração de ambiente (APP_ENV, .env.{APP_ENV} e diretórios persistentes)
+é carregada de forma centralizada em app.settings, evitando divergência entre
+web, jobs e runners.
 """
 import logging
 import uuid
-from app.env_loader import load_app_env
-
-load_app_env()
+from app.settings import settings  # noqa: F401  (import side-effect: garante carga centralizada de env)
 
 logger = logging.getLogger(__name__)
 

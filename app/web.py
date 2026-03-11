@@ -9,6 +9,9 @@ if os.path.dirname(_diretorio_app) not in sys.path:
 import json
 import logging
 from urllib.parse import urlparse
+from pathlib import Path
+
+from sqlalchemy import text
 
 # 1. Imports do Flask e Extensões Base
 from flask import Flask, render_template, redirect, url_for, request, flash, abort, session
@@ -36,91 +39,67 @@ from app.auth_services import (
     register_user,
 )
 
-# 2. Configuração de ambiente e dotenv (via loader centralizado)
-from app import env_loader
-
-_env_loaded = env_loader.load_app_env()
-env_loader.validate_runtime_env()
+# 2. Configuração de ambiente centralizada
+from app.settings import settings
 
 # Configuração de Logging (Global para o Flask e Gunicorn)
-log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+log_level = settings.log_level
 logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
     format='%(asctime)s | %(levelname)s | FLASK_APP | %(message)s',
     stream=sys.stdout
 )
 
-if not _env_loaded:
-    _env_name_for_log = (os.getenv('APP_ENV', 'dev') or 'dev').strip() or 'dev'
-    _dotenv_path_for_log = os.path.join(env_loader.get_app_dir(), f'.env.{_env_name_for_log}')
-    logging.warning(
-        "Arquivo de ambiente .env.%s não foi encontrado/carregado em %s. "
-        "Seguindo apenas com variáveis já definidas no ambiente.",
-        _env_name_for_log,
-        _dotenv_path_for_log,
-    )
-
 app = Flask(__name__)
-_diretorio_dados = env_loader.resolve_data_dir()
+
+_diretorio_dados = settings.data_dir
 
 # 3. Configurações de Segurança e Banco de Dados (OBRIGATÓRIO ANTES DO INIT_APP)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'chave_insegura_padrao_dev')
-db_uri_auth = os.getenv('DB_URI_AUTH', 'sqlite:///' + os.path.join(_diretorio_dados, 'auth.db'))
-app.config['SQLALCHEMY_DATABASE_URI'] = resolve_sqlite_path(db_uri_auth, _diretorio_app)
+app.config['SECRET_KEY'] = settings.secret_key
+app.config['SQLALCHEMY_DATABASE_URI'] = settings.sqlalchemy_database_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
+app.config['DEBUG'] = settings.debug
 app.config['JULIA_AVATAR_URL'] = (os.getenv('JULIA_AVATAR_URL', '') or '').strip()
 
 # Configurações de Sessão (Filesystem é mais simples e funciona bem SEM reloader)
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['PERMANENT_SESSION_LIFETIME'] = 24 * 3600  # 24 horas
-app.config['SESSION_COOKIE_SECURE'] = False  # Allow HTTP em dev
-app.config['SESSION_COOKIE_HTTPONLY'] = True  # Protege de XSS
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Protege de CSRF
+app.config['SESSION_TYPE'] = settings.session_type
+app.config['PERMANENT_SESSION_LIFETIME'] = settings.session_lifetime_seconds
+app.config['SESSION_COOKIE_SECURE'] = settings.session_cookie_secure
+app.config['SESSION_COOKIE_HTTPONLY'] = settings.session_cookie_httponly
+app.config['SESSION_COOKIE_SAMESITE'] = settings.session_cookie_samesite
 
 # Configuração para OAuth em HTTPS com auto-redirecionamento
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.
-if os.getenv('OAUTHLIB_INSECURE_TRANSPORT', '').strip().lower() in ('1', 'true', 't'):
-    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-else:
-    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '0'
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' if settings.oauth_insecure_transport else '0'
 
 # Configurações de e-mail (para recuperação de senha)
-app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
-app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
-app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'True').lower() in ('true', '1', 't')
-app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
-app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
-app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', app.config['MAIL_USERNAME'])
+app.config['MAIL_SERVER'] = settings.mail_server
+app.config['MAIL_PORT'] = settings.mail_port
+app.config['MAIL_USE_TLS'] = settings.mail_use_tls
+app.config['MAIL_USERNAME'] = settings.mail_username
+app.config['MAIL_PASSWORD'] = settings.mail_password
+app.config['MAIL_DEFAULT_SENDER'] = settings.mail_default_sender
 
 mail = Mail(app)
 
 # Configuração dos Binds (Bancos adicionais)
-# Tenta pegar do .env, se não existir, usa o caminho padrão relativo (fallback)
-db_binds = {
-    'localidades': os.getenv('DB_URI_LOCALIDADES', 'sqlite:///' + os.path.join(_diretorio_dados, 'base_localidades.db')),
-    'historico':   os.getenv('DB_URI_HISTORICO', 'sqlite:///' + os.path.join(_diretorio_dados, 'historico_frete.db')),
-    'leads':       os.getenv('DB_URI_LEADS', 'sqlite:///' + os.path.join(_diretorio_dados, 'leads.db')),
-    'noticias':    os.getenv('DB_URI_NOTICIAS', 'sqlite:///' + os.path.join(_diretorio_dados, 'noticias.db')),
-    'gerencial':   os.getenv('DB_URI_GERENCIAL', 'sqlite:///' + os.path.join(_diretorio_dados, 'gerencial.db'))
-}
-app.config['SQLALCHEMY_BINDS'] = {k: resolve_sqlite_path(v, _diretorio_app) for k, v in db_binds.items()}
+app.config['SQLALCHEMY_BINDS'] = settings.sqlalchemy_binds
 
 # 4. Inicializar extensões e Blueprints
-db.init_app(app) # Agora o db encontrará as configurações acima
-login_manager.init_app(app) #
+db.init_app(app)
+login_manager.init_app(app)
 
 # Inicializar Flask-Session
 session_mgr = Session(app)
 
 # Configurações do Google OAuth (será usado manualmente)
-GOOGLE_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID', '')
-GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', '')
+GOOGLE_CLIENT_ID = settings.google_client_id
+GOOGLE_CLIENT_SECRET = settings.google_client_secret
 GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo'
 # URI de redirecionamento OAuth - deve ser EXATAMENTE a mesma no Google Cloud Console (Credenciais → URIs de redirecionamento)
-REDIRECT_URI = os.getenv('GOOGLE_OAUTH_REDIRECT_URI', 'http://127.0.0.1:5000/login/google/callback')
+REDIRECT_URI = settings.google_redirect_uri
 
 app.register_blueprint(admin_bp)
 app.register_blueprint(ops_bp)
@@ -144,7 +123,7 @@ def load_user(user_id):
 @app.route('/')
 def index():
     # Localiza o arquivo de índices dinâmicos com fallback de caminhos legados.
-    path_indices = env_loader.resolve_indices_file_path()
+    path_indices = settings.indices_file_path
     candidate_paths = [
         path_indices,
         '/var/data/indices.json',
@@ -185,7 +164,7 @@ def index():
                     "fbx": conteudo_indices.get("fbx", fallback_indicadores["fbx"]),
                 }
                 break
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
             continue
 
     try:
@@ -488,6 +467,54 @@ def executar_insight():
     return redirect(url_for("index"))
 
 
+@app.route("/health/liveness")
+def health_liveness():
+    """
+    Indica apenas se o processo web está vivo.
+    Não verifica dependências externas.
+    """
+    return {
+        "status": "ok",
+        "app_env": settings.app_env,
+    }, 200
+
+
+@app.route("/health/readiness")
+def health_readiness():
+    """
+    Verifica dependências essenciais: banco default e acesso ao armazenamento de índices.
+    Em caso de falha parcial, responde 503 mas não derruba o processo.
+    """
+    checks = {}
+    ok = True
+
+    # Banco de dados principal
+    try:
+        db.session.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        logging.exception("Healthcheck readiness: falha ao acessar banco principal: %s", e)
+        checks["database"] = f"error: {e}"
+        ok = False
+
+    # Armazenamento de índices (fase 1 ainda em arquivo)
+    try:
+        idx_path = Path(settings.indices_file_path)
+        checks["indices_path"] = str(idx_path)
+        checks["indices_exists"] = idx_path.exists()
+    except Exception as e:
+        logging.exception("Healthcheck readiness: falha ao inspecionar indices: %s", e)
+        checks["indices_error"] = str(e)
+        ok = False
+
+    status = "ok" if ok else "degraded"
+    return {
+        "status": status,
+        "app_env": settings.app_env,
+        "checks": checks,
+    }, 200 if ok else 503
+
+
 # --- CRON: execução automática do ciclo Cleiton (Render Cron Job / agendador externo) ---
 @app.route("/cron/executar-cleiton", methods=["GET", "POST"])
 def cron_executar_cleiton():
@@ -496,7 +523,7 @@ def cron_executar_cleiton():
     Protegida por CRON_SECRET: header X-Cron-Secret ou query ?secret=<CRON_SECRET>.
     """
     secret = request.headers.get("X-Cron-Secret") or request.args.get("secret")
-    expected = (os.getenv("CRON_SECRET") or "").strip()
+    expected = settings.cron_secret
     if not expected or secret != expected:
         return {"ok": False, "error": "unauthorized"}, 403
     try:

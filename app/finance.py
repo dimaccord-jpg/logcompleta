@@ -4,10 +4,9 @@ import requests
 from bs4 import BeautifulSoup
 from pathlib import Path
 from datetime import datetime, timedelta
-from app import env_loader
+from app.settings import settings
 
-env_loader.load_app_env()
-INDICES_FILE = Path(env_loader.resolve_indices_file_path())
+INDICES_FILE = Path(settings.indices_file_path)
 LEGACY_INDICES_FILE = Path(__file__).resolve().parent / 'indices.json'
 
 

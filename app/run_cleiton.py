@@ -1,7 +1,10 @@
 """
 Cleiton - Entrypoint e fachada de compatibilidade.
 Delega orquestração gerencial ao run_cleiton_agente_orquestrador.
-Carregamento de .env via caminho absoluto (app/env_loader).
+
+A configuração de ambiente (APP_ENV, .env.{APP_ENV}, diretórios persistentes e
+tokens operacionais) é carregada de forma centralizada em app.settings, evitando
+divergência entre web, jobs e runners.
 """
 import time
 import logging
@@ -9,11 +12,12 @@ import sys
 import os
 import json
 
-# --- CARREGAMENTO DE AMBIENTE (caminho absoluto baseado no diretório app) ---
-from app.env_loader import load_app_env
-load_app_env()
+from pathlib import Path
 
-from app.extensions import db
+from app.settings import settings  # noqa: F401  (import side-effect: garante carga centralizada de env)
+from app.finance import LEGACY_INDICES_FILE
+from app.settings import settings
+
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -34,16 +38,31 @@ def coordenar_analise_frete(historico_ia, rota_str):
     """
     from app.run_roberto import roberto
     logger.info("GESTOR CLEITON: Recebendo solicitação de análise para %s", rota_str)
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    caminho_indices = os.path.join(base_dir, "indices.json")
-    indices = {}
-    try:
-        with open(caminho_indices, "r", encoding="utf-8") as f:
-            indices = json.load(f)
-        logger.info("Contexto de mercado (indices.json) carregado com sucesso.")
-    except Exception as e:
-        logger.warning("Cleiton: Falha ao ler índices de mercado: %s", e)
-        indices = {"historico": [], "ultima_atualizacao": "N/A"}
+
+    # Caminhos de índices unificados com a configuração central,
+    # mantendo compatibilidade com o arquivo legado em app/indices.json.
+    primary_indices_path = Path(settings.indices_file_path)
+    candidate_paths = [
+        primary_indices_path,
+        LEGACY_INDICES_FILE,
+    ]
+
+    indices = {"historico": [], "ultima_atualizacao": "N/A"}
+    for p in candidate_paths:
+        try:
+            if not p:
+                continue
+            path_obj = Path(p)
+            if not path_obj.exists():
+                continue
+            with path_obj.open("r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                indices = loaded
+                logger.info("Contexto de mercado carregado com sucesso de %s.", path_obj)
+                break
+        except Exception as e:
+            logger.warning("Cleiton: Falha ao ler índices de mercado em %s: %s", p, e)
     try:
         insight = roberto.analisar_frete(historico_ia, indices, rota_str)
         logger.info("Análise concluída pelo Roberto para a rota %s", rota_str)
@@ -81,7 +100,7 @@ def executar_orquestracao(
 if __name__ == "__main__":
     from app.web import app
     segundos_ciclo = 3 * 3600
-    app_env = (os.getenv("APP_ENV", "dev").strip() or "dev").lower()
+    app_env = settings.app_env
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | AGENTE: %(message)s",

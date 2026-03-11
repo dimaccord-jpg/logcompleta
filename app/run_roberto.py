@@ -2,10 +2,7 @@ import os
 import json
 from google import genai
 import logging
-from app.env_loader import load_app_env
-
-# Carrega .env por caminho absoluto (independente do CWD)
-load_app_env()
+from app.settings import settings  # noqa: F401  (import side-effect: garante carga centralizada de env)
 
 logger = logging.getLogger(__name__)
 
