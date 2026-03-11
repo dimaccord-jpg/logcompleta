@@ -15,7 +15,15 @@ Param(
         "GEMINI_API_KEY_ROBERTO"
     ),
 
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    # Seguranca: a API de env-vars pode substituir todo o conjunto de variaveis.
+    # Exige opt-in explicito para evitar apagao acidental de ambiente.
+    [switch]$UnsafeReplaceAll,
+
+    # Confirmacoes explicitas para execucao destrutiva.
+    [string]$ConfirmServiceId,
+    [string]$ConfirmPhrase
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,6 +70,32 @@ if ($DryRun) {
     Write-Host "Dry-run: as seguintes chaves seriam enviadas para Render:"
     $envVars | ForEach-Object { Write-Host "- $($_.key)" }
     exit 0
+}
+
+if (-not $UnsafeReplaceAll) {
+    throw "Operacao bloqueada por seguranca. Este script pode substituir todas as env vars do servico na Render. Use -UnsafeReplaceAll somente apos confirmar backup completo do ambiente."
+}
+
+$requiredPhrase = "EU_ASSUMO_REPLACE_TOTAL_DA_RENDER"
+if ([string]::IsNullOrWhiteSpace($ConfirmServiceId) -or $ConfirmServiceId -ne $serviceId) {
+    throw "Confirmacao invalida: informe -ConfirmServiceId com o mesmo valor de RENDER_SERVICE_ID."
+}
+if ([string]::IsNullOrWhiteSpace($ConfirmPhrase) -or $ConfirmPhrase -ne $requiredPhrase) {
+    throw "Confirmacao invalida: informe -ConfirmPhrase '$requiredPhrase' para executar operacao destrutiva."
+}
+
+# Backup automatico do ambiente remoto antes de qualquer tentativa de replace.
+$backupDir = "scripts/security/backups"
+New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$backupFile = Join-Path $backupDir "render-env-$serviceId-$timestamp.json"
+try {
+    $remoteEnv = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
+    $remoteEnv | ConvertTo-Json -Depth 20 | Out-File -FilePath $backupFile -Encoding utf8
+    Write-Host "Backup remoto salvo em: $backupFile"
+}
+catch {
+    throw "Falha ao gerar backup remoto antes do replace. Operacao abortada. Erro: $($_.Exception.Message)"
 }
 
 $payloadAttempts = @(

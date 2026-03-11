@@ -65,6 +65,12 @@ Somente diretorio local:
 4. Sync de env em deploy Render: `scripts/security/render_sync_env.ps1`
 5. Smoke test pos-rotacao: `scripts/security/post_rotation_check.ps1`
 
+Protecao anti-apagao em Render:
+
+1. `render_sync_env.ps1` nao executa update real sem `-UnsafeReplaceAll`.
+2. Exige dupla confirmacao (`-ConfirmServiceId` e `-ConfirmPhrase`).
+3. Gera backup automatico do ambiente remoto antes de qualquer replace.
+
 Exemplo rapido (preview):
 
 ```powershell

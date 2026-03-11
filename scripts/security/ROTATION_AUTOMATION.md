@@ -77,6 +77,14 @@ Workflow: `.github/workflows/rotate-internal-secrets.yml`
 
 Script: `scripts/security/render_sync_env.ps1`
 
+ATENCAO: a operacao de update de env-vars na Render pode substituir o conjunto inteiro de variaveis.
+Por seguranca, o script exige:
+
+1. `-UnsafeReplaceAll`
+2. `-ConfirmServiceId` igual ao valor de `RENDER_SERVICE_ID`
+3. `-ConfirmPhrase "EU_ASSUMO_REPLACE_TOTAL_DA_RENDER"`
+4. Backup automatico do ambiente remoto em `scripts/security/backups/` antes de aplicar
+
 Variaveis obrigatorias no shell:
 
 1. `RENDER_API_TOKEN`
@@ -91,7 +99,7 @@ Exemplo de preview (sem aplicar):
 Exemplo aplicando no servico:
 
 ```powershell
-./scripts/security/render_sync_env.ps1 -EnvFile app/.env.homolog
+./scripts/security/render_sync_env.ps1 -EnvFile app/.env.homolog -UnsafeReplaceAll -ConfirmServiceId $env:RENDER_SERVICE_ID -ConfirmPhrase "EU_ASSUMO_REPLACE_TOTAL_DA_RENDER"
 ```
 
 ## Validacao pos-rotacao
