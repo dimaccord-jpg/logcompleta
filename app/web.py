@@ -223,7 +223,15 @@ def login_google():
         redirect_uri=REDIRECT_URI,
         auth_url=GOOGLE_AUTH_URL,
     )
+    # Mantem compatibilidade com a chave legada e suporta multiplos fluxos iniciados
+    # na mesma sessao (ex.: duplo clique), evitando falso negativo de CSRF no callback.
     session['oauth_state'] = state
+    pending_states = session.get('oauth_states') or []
+    if not isinstance(pending_states, list):
+        pending_states = []
+    pending_states.append(state)
+    # Limita historico para evitar crescimento indefinido na sessao.
+    session['oauth_states'] = pending_states[-5:]
     session.permanent = True
     logging.info("Redirect URI enviado: %s", REDIRECT_URI)
     return redirect(auth_url)
@@ -236,6 +244,13 @@ def google_callback():
     ensure_database_schema(db)
     state = request.args.get('state')
     session_state = session.get('oauth_state')
+    session_states = session.get('oauth_states') or []
+    if not isinstance(session_states, list):
+        session_states = []
+    # Se o state de callback existir na lista pendente, usa-o como state de sessao.
+    # Isso evita quebra quando outro fluxo OAuth atualizou oauth_state antes do retorno.
+    if state and state in session_states:
+        session_state = state
     error = request.args.get('error')
     if error:
         logging.error("Erro do Google: %s", error)
@@ -258,6 +273,12 @@ def google_callback():
     login_user(user)
     flash('Login com Google realizado com sucesso.', 'success')
     session.pop('oauth_state', None)
+    if state and state in session_states:
+        session_states = [s for s in session_states if s != state]
+        if session_states:
+            session['oauth_states'] = session_states
+        else:
+            session.pop('oauth_states', None)
     if needs_profile:
         session['pending_profile_completion'] = True
         return redirect(url_for('complete_profile'))

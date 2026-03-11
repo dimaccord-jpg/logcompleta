@@ -96,3 +96,13 @@ Se preferir um worker em vez de Cron:
 - Resposta esperada (200): `{"ok": true ou false, "status": "sucesso"|"ignorado"|"falha", "motivo": "...", "mission_id": "..."}`.
 - Em **Admin** → **Agentes - Júlia**, a seção “Próxima notícia automática” deve mostrar a **última execução** atualizada após o cron rodar.
 - Se o `mission_id` repetir em execuções seguidas, há cache na borda. No Cloudflare, crie uma **Cache Rule** para `path contains /cron/` com `Bypass cache` e execute `Purge Everything`.
+
+## 4. Validar OAuth em homolog (pós-hotfix)
+
+Após mudanças de credenciais ou deploy em homolog, valide o login Google:
+
+1. `GET /health` deve responder `status=ok`.
+2. `GET /oauth-diagnostics` com `X-Ops-Token` deve responder 200.
+3. Em janela anônima, iniciar login Google e concluir callback.
+4. Não deve aparecer a mensagem de falha de validação de segurança.
+5. Confirmar redirecionamento para dashboard ou completar perfil.

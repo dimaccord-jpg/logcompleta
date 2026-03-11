@@ -14,6 +14,8 @@ sudo apt install python3-pip python3-venv nginx git -y
 
 O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. A camada gerencial Cleiton usa o bind `gerencial` (`DB_URI_GERENCIAL`); o carregamento de `.env` é por caminho absoluto via `app/env_loader.py` — defina `APP_ENV=prod` no systemd para carregar `.env.prod`.
 
+Importante: para `APP_ENV=prod`, o arquivo lido pela aplicação é `app/.env.prod` (dentro da pasta `app`). Arquivos `.env.*` fora dessa pasta não são usados pelo loader principal.
+
 Vamos criar uma estrutura organizada em `/srv`.
 
 ```bash
@@ -64,6 +66,8 @@ DB_URI_GERENCIAL=sqlite:////srv/logcompleta/data/gerencial.db
 # Não defina OAUTHLIB_INSECURE_TRANSPORT em produção (ou use 0). OAuth deve usar HTTPS.
 # Login Google: use a URL pública do seu domínio (auth em app/auth_services.py)
 GOOGLE_OAUTH_REDIRECT_URI=https://SEU_DOMINIO/login/google/callback
+# Hotfix OAuth state/CSRF: o callback aceita múltiplos states pendentes na sessão
+# para evitar falso negativo quando o fluxo OAuth é iniciado mais de uma vez.
 
 # E-mail (recuperação de senha)
 MAIL_SERVER=smtp.gmail.com

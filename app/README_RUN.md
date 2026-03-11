@@ -16,6 +16,25 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
 
 **Execução manual no Admin (hotfix homolog/prod):** A rota `/admin/agentes/julia/executar-cleiton` roda em **background** por padrão quando `APP_ENV` é `homolog` ou `prod`, evitando timeout de worker na requisição HTTP. Em `dev`, o padrão continua síncrono para facilitar validação local. É possível forçar via `ADMIN_CLEITON_EXEC_MODE=sync|async`.
 
+## Seguranca de Segredos (obrigatorio)
+
+O projeto possui padrao anti-vazamento com bloqueio local e no CI.
+
+1. Instale hooks locais:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+2. Rode validacao antes de commit/PR:
+
+```bash
+pre-commit run --all-files
+```
+
+3. Consulte o guia completo em `SECURITY_SECRETS.md`.
+
 ## Pré-requisitos
 
 1. Instale as dependências:
@@ -95,6 +114,22 @@ Exemplo de diagnóstico OAuth:
 ```bash
 curl -H "X-Ops-Token: SEU_OPS_TOKEN" http://127.0.0.1:5000/oauth-diagnostics
 ```
+
+### Hotfix OAuth (state/CSRF)
+
+- O fluxo de login Google agora suporta mais de um `state` pendente na mesma sessão,
+  evitando falso erro de segurança quando o usuário inicia o OAuth mais de uma vez
+  antes do callback retornar.
+- Implementação no backend: `app/web.py` (`/login/google` e `/login/google/callback`).
+- Mensagem relacionada na UI: `Falha na validação de segurança. Tente novamente.`
+
+Checklist pós-deploy:
+
+1. Abrir a página de login em janela anônima.
+2. Clicar uma única vez em "Entrar com Google".
+3. Concluir consentimento Google e confirmar callback sem erro.
+4. Se houver falha de state, limpar cookies da origem e repetir.
+5. Validar `GET /oauth-diagnostics` com `X-Ops-Token`.
 
 ---
 
