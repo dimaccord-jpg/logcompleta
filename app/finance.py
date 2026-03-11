@@ -8,6 +8,23 @@ from app import env_loader
 
 env_loader.load_app_env()
 INDICES_FILE = Path(env_loader.resolve_indices_file_path())
+LEGACY_INDICES_FILE = Path(__file__).resolve().parent / 'indices.json'
+
+
+def _load_historico(path: Path):
+    if not path.exists():
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            conteudo = json.load(f)
+        if isinstance(conteudo, dict):
+            if isinstance(conteudo.get('historico'), list):
+                return conteudo.get('historico') or []
+            if all(k in conteudo for k in ('dolar', 'petroleo', 'bdi', 'fbx')):
+                return [conteudo]
+        return []
+    except Exception:
+        return []
 
 def get_live_index(url, selector, fallback_val):
     """Busca genérica para aumentar resiliência de scraping"""
@@ -32,15 +49,10 @@ def atualizar_indices():
 
     try:
         # 1. Carregar histórico existente para fallback seguro
-        if INDICES_FILE.exists():
-            with open(INDICES_FILE, 'r', encoding='utf-8') as f:
-                try:
-                    conteudo = json.load(f)
-                    historico = conteudo.get('historico', []) if isinstance(conteudo, dict) else []
-                except json.JSONDecodeError:
-                    historico = []
-        else:
-            historico = []
+        historico = _load_historico(INDICES_FILE)
+        # Migração suave: se caminho atual ainda não tem histórico, tenta arquivo legado.
+        if not historico and LEGACY_INDICES_FILE != INDICES_FILE:
+            historico = _load_historico(LEGACY_INDICES_FILE)
 
         ultimo_registro = historico[-1] if historico else {}
 

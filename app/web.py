@@ -143,36 +143,50 @@ def load_user(user_id):
 # --- ROTAS PÚBLICAS E ACESSO ---
 @app.route('/')
 def index():
-    # Localiza o arquivo de índices dinâmicos
+    # Localiza o arquivo de índices dinâmicos com fallback de caminhos legados.
     path_indices = env_loader.resolve_indices_file_path()
-    fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
-    try:
-        with open(path_indices, 'r', encoding='utf-8') as f:
-            conteudo_indices = json.load(f)
+    candidate_paths = [
+        path_indices,
+        '/var/data/indices.json',
+        os.path.join(_diretorio_app, 'indices.json'),
+    ]
+    ordered_paths = []
+    for p in candidate_paths:
+        if p and p not in ordered_paths:
+            ordered_paths.append(p)
 
-        # Compatibilidade com os dois formatos:
-        # 1) formato antigo: {"dolar", "petroleo", "bdi", "fbx"}
-        # 2) formato historico: {"ultima_atualizacao", "historico": [...]} 
-        if isinstance(conteudo_indices, dict) and isinstance(conteudo_indices.get('historico'), list):
-            historico = conteudo_indices.get('historico') or []
-            ultimo_registro = historico[-1] if historico else {}
-            indicadores = {
-                "dolar": ultimo_registro.get("dolar", fallback_indicadores["dolar"]),
-                "petroleo": ultimo_registro.get("petroleo", fallback_indicadores["petroleo"]),
-                "bdi": ultimo_registro.get("bdi", fallback_indicadores["bdi"]),
-                "fbx": ultimo_registro.get("fbx", fallback_indicadores["fbx"]),
-            }
-        elif isinstance(conteudo_indices, dict):
-            indicadores = {
-                "dolar": conteudo_indices.get("dolar", fallback_indicadores["dolar"]),
-                "petroleo": conteudo_indices.get("petroleo", fallback_indicadores["petroleo"]),
-                "bdi": conteudo_indices.get("bdi", fallback_indicadores["bdi"]),
-                "fbx": conteudo_indices.get("fbx", fallback_indicadores["fbx"]),
-            }
-        else:
-            indicadores = fallback_indicadores
-    except (FileNotFoundError, json.JSONDecodeError):
-        indicadores = fallback_indicadores
+    fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
+    indicadores = fallback_indicadores
+    for p in ordered_paths:
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                conteudo_indices = json.load(f)
+
+            # Compatibilidade com os dois formatos:
+            # 1) formato antigo: {"dolar", "petroleo", "bdi", "fbx"}
+            # 2) formato historico: {"ultima_atualizacao", "historico": [...]} 
+            if isinstance(conteudo_indices, dict) and isinstance(conteudo_indices.get('historico'), list):
+                historico = conteudo_indices.get('historico') or []
+                if not historico:
+                    continue
+                ultimo_registro = historico[-1]
+                indicadores = {
+                    "dolar": ultimo_registro.get("dolar", fallback_indicadores["dolar"]),
+                    "petroleo": ultimo_registro.get("petroleo", fallback_indicadores["petroleo"]),
+                    "bdi": ultimo_registro.get("bdi", fallback_indicadores["bdi"]),
+                    "fbx": ultimo_registro.get("fbx", fallback_indicadores["fbx"]),
+                }
+                break
+            if isinstance(conteudo_indices, dict):
+                indicadores = {
+                    "dolar": conteudo_indices.get("dolar", fallback_indicadores["dolar"]),
+                    "petroleo": conteudo_indices.get("petroleo", fallback_indicadores["petroleo"]),
+                    "bdi": conteudo_indices.get("bdi", fallback_indicadores["bdi"]),
+                    "fbx": conteudo_indices.get("fbx", fallback_indicadores["fbx"]),
+                }
+                break
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
 
     try:
         noticias_reais = NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(10).all()
