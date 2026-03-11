@@ -19,6 +19,8 @@ logs/
 
 # === Caches / artefatos locais ===
 cache_*.json
+app/indices.json
+scripts/security/rotation-report*.json
 *.tmp
 flask_session/
 diagnose_logcompleta.sh

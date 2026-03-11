@@ -35,6 +35,17 @@ env_name = os.getenv('APP_ENV', 'dev')
 dotenv_path = os.path.join(diretorio_atual, f'.env.{env_name}')
 load_dotenv(dotenv_path)
 
+
+def resolve_indices_file_path():
+    """Resolve caminho de índices com prioridade para storage persistente."""
+    explicit_path = (os.getenv("INDICES_FILE_PATH") or "").strip()
+    if explicit_path:
+        return explicit_path
+    render_disk = (os.getenv("RENDER_DISK_PATH") or "").strip()
+    if render_disk:
+        return os.path.join(render_disk, "indices.json")
+    return os.path.join(diretorio_atual, 'indices.json')
+
 # Configuração de Logging (Global para o Flask e Gunicorn)
 log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
@@ -386,7 +397,7 @@ def health_check():
 @app.route('/')
 def index():
     # Localiza o arquivo de índices dinâmicos
-    path_indices = os.path.join(diretorio_atual, 'indices.json')
+    path_indices = resolve_indices_file_path()
     fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
     try:
         with open(path_indices, 'r', encoding='utf-8') as f:
