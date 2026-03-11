@@ -69,7 +69,14 @@
         /* MODO RECOLHIDO */
         #sidebar.active .logo-img { display: none; }
         #sidebar.active .logo-icon { display: block !important; }
-        .logo-icon { display: none; color: var(--laranja-log); font-size: 2rem; margin-bottom: 10px; }
+        .logo-icon {
+            display: none;
+            width: 52px;
+            height: auto;
+            max-height: 52px;
+            object-fit: contain;
+            margin-bottom: 10px;
+        }
 
         /* MENU ITENS */
         .nav-list { list-style: none; padding: 20px 0; flex-grow: 1; }
@@ -137,7 +144,7 @@
     <nav id="sidebar">
         <div class="sidebar-header">
             <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Logo" class="logo-img">
-            <i class="bi bi-box-seam logo-icon"></i>
+            <img src="{{ url_for('static', filename='img/logo_simples.png') }}" alt="Logo simplificada" class="logo-icon">
             
             <button type="button" id="sidebarCollapse" class="btn text-white shadow-none">
                 <i class="bi bi-list fs-4"></i>
