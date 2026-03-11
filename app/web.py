@@ -8,7 +8,10 @@ if os.path.dirname(_diretorio_app) not in sys.path:
 
 import json
 import logging
-from dotenv import load_dotenv
+from urllib.parse import urlparse
+from pathlib import Path
+
+from sqlalchemy import text
 
 # 1. Imports do Flask e Extensões Base
 from flask import Flask, render_template, redirect, url_for, request, flash, abort, session
@@ -36,15 +39,11 @@ from app.auth_services import (
     register_user,
 )
 
-# 2. Configuração de ambiente e dotenv (via loader centralizado)
-from app import env_loader
-
-_env_loaded = env_loader.load_app_env()
-env_loader.validate_runtime_env()
-env_name = (os.getenv('APP_ENV', 'dev') or 'dev').strip() or 'dev'
+# 2. Configuração de ambiente centralizada
+from app.settings import settings
 
 # Configuração de Logging (Global para o Flask e Gunicorn)
-log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+log_level = settings.log_level
 logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
     format='%(asctime)s | %(levelname)s | FLASK_APP | %(message)s',
@@ -53,62 +52,54 @@ logging.basicConfig(
 
 app = Flask(__name__)
 
+_diretorio_dados = settings.data_dir
+
 # 3. Configurações de Segurança e Banco de Dados (OBRIGATÓRIO ANTES DO INIT_APP)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'chave_insegura_padrao_dev')
-db_uri_auth = os.getenv('DB_URI_AUTH', 'sqlite:///' + os.path.join(_diretorio_app, 'painel_admin', 'auth.db'))
-app.config['SQLALCHEMY_DATABASE_URI'] = resolve_sqlite_path(db_uri_auth, _diretorio_app)
+app.config['SECRET_KEY'] = settings.secret_key
+app.config['SQLALCHEMY_DATABASE_URI'] = settings.sqlalchemy_database_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
+app.config['DEBUG'] = settings.debug
+app.config['JULIA_AVATAR_URL'] = (os.getenv('JULIA_AVATAR_URL', '') or '').strip()
 
 # Configurações de Sessão (Filesystem é mais simples e funciona bem SEM reloader)
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['PERMANENT_SESSION_LIFETIME'] = 24 * 3600  # 24 horas
-app.config['SESSION_COOKIE_SECURE'] = False  # Allow HTTP em dev
-app.config['SESSION_COOKIE_HTTPONLY'] = True  # Protege de XSS
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Protege de CSRF
+app.config['SESSION_TYPE'] = settings.session_type
+app.config['PERMANENT_SESSION_LIFETIME'] = settings.session_lifetime_seconds
+app.config['SESSION_COOKIE_SECURE'] = settings.session_cookie_secure
+app.config['SESSION_COOKIE_HTTPONLY'] = settings.session_cookie_httponly
+app.config['SESSION_COOKIE_SAMESITE'] = settings.session_cookie_samesite
 
 # Configuração para OAuth em HTTPS com auto-redirecionamento
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.
-if os.getenv('OAUTHLIB_INSECURE_TRANSPORT', '').strip().lower() in ('1', 'true', 't'):
-    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-else:
-    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '0'
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' if settings.oauth_insecure_transport else '0'
 
 # Configurações de e-mail (para recuperação de senha)
-app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
-app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
-app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'True').lower() in ('true', '1', 't')
-app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
-app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
-app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', app.config['MAIL_USERNAME'])
+app.config['MAIL_SERVER'] = settings.mail_server
+app.config['MAIL_PORT'] = settings.mail_port
+app.config['MAIL_USE_TLS'] = settings.mail_use_tls
+app.config['MAIL_USERNAME'] = settings.mail_username
+app.config['MAIL_PASSWORD'] = settings.mail_password
+app.config['MAIL_DEFAULT_SENDER'] = settings.mail_default_sender
 
 mail = Mail(app)
 
 # Configuração dos Binds (Bancos adicionais)
-# Tenta pegar do .env, se não existir, usa o caminho padrão relativo (fallback)
-db_binds = {
-    'localidades': os.getenv('DB_URI_LOCALIDADES', 'sqlite:///' + os.path.join(_diretorio_app, 'base_localidades.db')),
-    'historico':   os.getenv('DB_URI_HISTORICO', 'sqlite:///' + os.path.join(_diretorio_app, 'historico_frete.db')),
-    'leads':       os.getenv('DB_URI_LEADS', 'sqlite:///' + os.path.join(_diretorio_app, 'leads.db')),
-    'noticias':    os.getenv('DB_URI_NOTICIAS', 'sqlite:///' + os.path.join(_diretorio_app, 'noticias.db'))
-}
-app.config['SQLALCHEMY_BINDS'] = {k: resolve_sqlite_path(v, _diretorio_app) for k, v in db_binds.items()}
+app.config['SQLALCHEMY_BINDS'] = settings.sqlalchemy_binds
 
 # 4. Inicializar extensões e Blueprints
-db.init_app(app) # Agora o db encontrará as configurações acima
-login_manager.init_app(app) #
+db.init_app(app)
+login_manager.init_app(app)
 
 # Inicializar Flask-Session
 session_mgr = Session(app)
 
 # Configurações do Google OAuth (será usado manualmente)
-GOOGLE_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID', '')
-GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', '')
+GOOGLE_CLIENT_ID = settings.google_client_id
+GOOGLE_CLIENT_SECRET = settings.google_client_secret
 GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo'
 # URI de redirecionamento OAuth - deve ser EXATAMENTE a mesma no Google Cloud Console (Credenciais → URIs de redirecionamento)
-REDIRECT_URI = os.getenv('GOOGLE_OAUTH_REDIRECT_URI', 'http://127.0.0.1:5000/login/google/callback')
+REDIRECT_URI = settings.google_redirect_uri
 
 app.register_blueprint(admin_bp)
 app.register_blueprint(ops_bp)
@@ -131,36 +122,50 @@ def load_user(user_id):
 # --- ROTAS PÚBLICAS E ACESSO ---
 @app.route('/')
 def index():
-    # Localiza o arquivo de índices dinâmicos
-    path_indices = env_loader.resolve_indices_file_path()
-    fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
-    try:
-        with open(path_indices, 'r', encoding='utf-8') as f:
-            conteudo_indices = json.load(f)
+    # Localiza o arquivo de índices dinâmicos com fallback de caminhos legados.
+    path_indices = settings.indices_file_path
+    candidate_paths = [
+        path_indices,
+        '/var/data/indices.json',
+        os.path.join(_diretorio_app, 'indices.json'),
+    ]
+    ordered_paths = []
+    for p in candidate_paths:
+        if p and p not in ordered_paths:
+            ordered_paths.append(p)
 
-        # Compatibilidade com os dois formatos:
-        # 1) formato antigo: {"dolar", "petroleo", "bdi", "fbx"}
-        # 2) formato historico: {"ultima_atualizacao", "historico": [...]} 
-        if isinstance(conteudo_indices, dict) and isinstance(conteudo_indices.get('historico'), list):
-            historico = conteudo_indices.get('historico') or []
-            ultimo_registro = historico[-1] if historico else {}
-            indicadores = {
-                "dolar": ultimo_registro.get("dolar", fallback_indicadores["dolar"]),
-                "petroleo": ultimo_registro.get("petroleo", fallback_indicadores["petroleo"]),
-                "bdi": ultimo_registro.get("bdi", fallback_indicadores["bdi"]),
-                "fbx": ultimo_registro.get("fbx", fallback_indicadores["fbx"]),
-            }
-        elif isinstance(conteudo_indices, dict):
-            indicadores = {
-                "dolar": conteudo_indices.get("dolar", fallback_indicadores["dolar"]),
-                "petroleo": conteudo_indices.get("petroleo", fallback_indicadores["petroleo"]),
-                "bdi": conteudo_indices.get("bdi", fallback_indicadores["bdi"]),
-                "fbx": conteudo_indices.get("fbx", fallback_indicadores["fbx"]),
-            }
-        else:
-            indicadores = fallback_indicadores
-    except (FileNotFoundError, json.JSONDecodeError):
-        indicadores = fallback_indicadores
+    fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
+    indicadores = fallback_indicadores
+    for p in ordered_paths:
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                conteudo_indices = json.load(f)
+
+            # Compatibilidade com os dois formatos:
+            # 1) formato antigo: {"dolar", "petroleo", "bdi", "fbx"}
+            # 2) formato historico: {"ultima_atualizacao", "historico": [...]} 
+            if isinstance(conteudo_indices, dict) and isinstance(conteudo_indices.get('historico'), list):
+                historico = conteudo_indices.get('historico') or []
+                if not historico:
+                    continue
+                ultimo_registro = historico[-1]
+                indicadores = {
+                    "dolar": ultimo_registro.get("dolar", fallback_indicadores["dolar"]),
+                    "petroleo": ultimo_registro.get("petroleo", fallback_indicadores["petroleo"]),
+                    "bdi": ultimo_registro.get("bdi", fallback_indicadores["bdi"]),
+                    "fbx": ultimo_registro.get("fbx", fallback_indicadores["fbx"]),
+                }
+                break
+            if isinstance(conteudo_indices, dict):
+                indicadores = {
+                    "dolar": conteudo_indices.get("dolar", fallback_indicadores["dolar"]),
+                    "petroleo": conteudo_indices.get("petroleo", fallback_indicadores["petroleo"]),
+                    "bdi": conteudo_indices.get("bdi", fallback_indicadores["bdi"]),
+                    "fbx": conteudo_indices.get("fbx", fallback_indicadores["fbx"]),
+                }
+                break
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+            continue
 
     try:
         noticias_reais = NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(10).all()
@@ -236,7 +241,15 @@ def login_google():
         redirect_uri=REDIRECT_URI,
         auth_url=GOOGLE_AUTH_URL,
     )
+    # Mantem compatibilidade com a chave legada e suporta multiplos fluxos iniciados
+    # na mesma sessao (ex.: duplo clique), evitando falso negativo de CSRF no callback.
     session['oauth_state'] = state
+    pending_states = session.get('oauth_states') or []
+    if not isinstance(pending_states, list):
+        pending_states = []
+    pending_states.append(state)
+    # Limita historico para evitar crescimento indefinido na sessao.
+    session['oauth_states'] = pending_states[-5:]
     session.permanent = True
     logging.info("Redirect URI enviado: %s", REDIRECT_URI)
     return redirect(auth_url)
@@ -249,6 +262,13 @@ def google_callback():
     ensure_database_schema(db)
     state = request.args.get('state')
     session_state = session.get('oauth_state')
+    session_states = session.get('oauth_states') or []
+    if not isinstance(session_states, list):
+        session_states = []
+    # Se o state de callback existir na lista pendente, usa-o como state de sessao.
+    # Isso evita quebra quando outro fluxo OAuth atualizou oauth_state antes do retorno.
+    if state and state in session_states:
+        session_state = state
     error = request.args.get('error')
     if error:
         logging.error("Erro do Google: %s", error)
@@ -271,6 +291,12 @@ def google_callback():
     login_user(user)
     flash('Login com Google realizado com sucesso.', 'success')
     session.pop('oauth_state', None)
+    if state and state in session_states:
+        session_states = [s for s in session_states if s != state]
+        if session_states:
+            session['oauth_states'] = session_states
+        else:
+            session.pop('oauth_states', None)
     if needs_profile:
         session['pending_profile_completion'] = True
         return redirect(url_for('complete_profile'))
@@ -392,10 +418,30 @@ def analise():
 def detalhe_noticia(noticia_id):
     # Busca a notícia específica no banco pelo ID
     noticia = NoticiaPortal.query.get_or_404(noticia_id)
+
+    def _resolver_url_imagem(raw_url: str | None) -> str | None:
+        """Converte caminhos locais de imagem para URL pública de static com url_for."""
+        val = (raw_url or "").strip()
+        if not val:
+            return None
+        # URLs remotas ou data-uri seguem como vieram.
+        parsed = urlparse(val)
+        if parsed.scheme in ("http", "https", "data"):
+            return val
+        local = val.replace("\\", "/")
+        if local.startswith("/static/"):
+            return url_for("static", filename=local[len("/static/"):])
+        if local.startswith("static/"):
+            return url_for("static", filename=local[len("static/"):])
+        if local.startswith("generated/"):
+            return url_for("static", filename=local)
+        return val
+
+    url_imagem_resolvida = _resolver_url_imagem(noticia.url_imagem)
     
     # Redirecionamos ambos para o mesmo template, 
     # pois ele já gerencia a lógica de exibição interna.
-    return render_template('noticia_interna.html', noticia=noticia)
+    return render_template('noticia_interna.html', noticia=noticia, url_imagem_resolvida=url_imagem_resolvida)
 
 # Criando lazy: importar dentro da função, na hora que você realmente vai usar.
 @app.route("/executar-cleiton", methods=["POST"])
@@ -407,6 +453,93 @@ def executar_cleiton():
     executar_orquestracao(app)
     flash("Cleiton executado com sucesso.", "success")
     return redirect(url_for("index"))
+
+
+# Fase 5: Customer Insight (delegação; lógica em run_cleiton_agente_customer_insight)
+@app.route("/executar-insight", methods=["POST"])
+@login_required
+def executar_insight():
+    # Mantemos esta rota por compatibilidade, mas preservamos o objetivo principal:
+    # insight roda ao final do ciclo gerencial completo do Cleiton.
+    from app.run_cleiton import executar_orquestracao
+    executar_orquestracao(app)
+    flash("Ciclo do Cleiton executado (inclui Customer Insight no final).", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/health/liveness")
+def health_liveness():
+    """
+    Indica apenas se o processo web está vivo.
+    Não verifica dependências externas.
+    """
+    return {
+        "status": "ok",
+        "app_env": settings.app_env,
+    }, 200
+
+
+@app.route("/health/readiness")
+def health_readiness():
+    """
+    Verifica dependências essenciais: banco default e acesso ao armazenamento de índices.
+    Em caso de falha parcial, responde 503 mas não derruba o processo.
+    """
+    checks = {}
+    ok = True
+
+    # Banco de dados principal
+    try:
+        db.session.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        logging.exception("Healthcheck readiness: falha ao acessar banco principal: %s", e)
+        checks["database"] = f"error: {e}"
+        ok = False
+
+    # Armazenamento de índices (fase 1 ainda em arquivo)
+    try:
+        idx_path = Path(settings.indices_file_path)
+        checks["indices_path"] = str(idx_path)
+        checks["indices_exists"] = idx_path.exists()
+    except Exception as e:
+        logging.exception("Healthcheck readiness: falha ao inspecionar indices: %s", e)
+        checks["indices_error"] = str(e)
+        ok = False
+
+    status = "ok" if ok else "degraded"
+    return {
+        "status": status,
+        "app_env": settings.app_env,
+        "checks": checks,
+    }, 200 if ok else 503
+
+
+# --- CRON: execução automática do ciclo Cleiton (Render Cron Job / agendador externo) ---
+@app.route("/cron/executar-cleiton", methods=["GET", "POST"])
+def cron_executar_cleiton():
+    """
+    Rota para agendador (ex.: Render Cron Job). Respeita frequência e janela; não usa bypass.
+    Protegida por CRON_SECRET: header X-Cron-Secret ou query ?secret=<CRON_SECRET>.
+    """
+    secret = request.headers.get("X-Cron-Secret") or request.args.get("secret")
+    expected = settings.cron_secret
+    if not expected or secret != expected:
+        return {"ok": False, "error": "unauthorized"}, 403
+    try:
+        from app.run_cleiton import executar_orquestracao
+        resultado = executar_orquestracao(app, bypass_frequencia=False) or {}
+        status = resultado.get("status", "falha")
+        return {
+            "ok": status == "sucesso",
+            "status": status,
+            "motivo": resultado.get("motivo", ""),
+            "mission_id": resultado.get("mission_id"),
+        }, 200
+    except Exception as e:
+        logging.exception("Cron executar-cleiton: %s", e)
+        return {"ok": False, "error": str(e)}, 500
+
 
 # --- EXECUÇÃO E MANUTENÇÃO ---
 if __name__ == '__main__':

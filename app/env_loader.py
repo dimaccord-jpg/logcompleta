@@ -5,6 +5,20 @@ Evita inconsistência por CWD ao rodar scripts de qualquer pasta.
 import os
 from pathlib import Path
 
+
+def _can_use_dir(path_str: str) -> bool:
+    """Retorna True quando o diretório existe/pode ser criado e é gravável."""
+    try:
+        path = Path(path_str)
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_probe"
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        probe.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
 def get_app_dir() -> str:
     """Retorna o diretório absoluto da pasta app."""
     return str(Path(__file__).resolve().parent)
@@ -22,6 +36,36 @@ def load_app_env() -> bool:
     return load_dotenv(dotenv_path)
 
 
+def resolve_data_dir() -> str:
+    """
+    Resolve diretório de dados persistentes com prioridade:
+    1) APP_DATA_DIR explícito
+    2) RENDER_DISK_PATH
+    3) /var/data (Render)
+    4) fallback local em app/
+    """
+    explicit_data_dir = (os.getenv("APP_DATA_DIR") or "").strip()
+    if explicit_data_dir:
+        explicit_data_dir = str(Path(explicit_data_dir).expanduser())
+        if _can_use_dir(explicit_data_dir):
+            return explicit_data_dir
+        print(f"[WARN] APP_DATA_DIR inválido/inacessível: {explicit_data_dir}. Aplicando fallback.")
+
+    render_disk = (os.getenv("RENDER_DISK_PATH") or "").strip()
+    if render_disk:
+        if _can_use_dir(render_disk):
+            return str(Path(render_disk))
+        print(f"[WARN] RENDER_DISK_PATH inválido/inacessível: {render_disk}. Aplicando fallback.")
+
+    if (os.getenv("RENDER") or "").strip().lower() == "true":
+        render_default = "/var/data"
+        if _can_use_dir(render_default):
+            return render_default
+        print("[WARN] /var/data indisponível. Usando fallback local em app/.")
+
+    return get_app_dir()
+
+
 def resolve_indices_file_path() -> str:
     """
     Resolve o caminho do arquivo de índices com prioridade:
@@ -33,11 +77,7 @@ def resolve_indices_file_path() -> str:
     if explicit_path:
         return str(Path(explicit_path).expanduser())
 
-    render_disk = (os.getenv("RENDER_DISK_PATH") or "").strip()
-    if render_disk:
-        return str(Path(render_disk) / "indices.json")
-
-    return str(Path(get_app_dir()) / "indices.json")
+    return str(Path(resolve_data_dir()) / "indices.json")
 
 
 def validate_runtime_env() -> None:
@@ -45,34 +85,27 @@ def validate_runtime_env() -> None:
     Evita boot inseguro em homolog/prod com fallbacks locais efêmeros.
     """
     app_env = (os.getenv("APP_ENV") or "dev").strip().lower() or "dev"
+    if app_env not in ("dev", "homolog", "prod"):
+        raise RuntimeError("APP_ENV inválido. Valores aceitos: dev|homolog|prod")
+
     if app_env not in ("homolog", "prod"):
         return
-
-    required_db_vars = [
-        "DB_URI_AUTH",
-        "DB_URI_LOCALIDADES",
-        "DB_URI_HISTORICO",
-        "DB_URI_LEADS",
-        "DB_URI_NOTICIAS",
-        "DB_URI_GERENCIAL",
-    ]
-    missing_db = [name for name in required_db_vars if not (os.getenv(name) or "").strip()]
-    if missing_db:
-        raise RuntimeError(
-            "Ambiente inseguro: faltam variáveis DB_URI_* obrigatórias em homolog/prod: "
-            + ", ".join(missing_db)
-        )
 
     indices_path = resolve_indices_file_path()
     app_dir = Path(get_app_dir()).resolve()
     try:
         indices_resolved = Path(indices_path).resolve()
-    except Exception:
-        raise RuntimeError("INDICES_FILE_PATH inválido em homolog/prod.")
+    except Exception as exc:
+        print(
+            "[WARN] INDICES_FILE_PATH inválido em homolog/prod "
+            f"({indices_path}): {exc}. Aplicação seguirá em modo degradado; "
+            "ajuste a configuração para garantir persistência dos índices."
+        )
+        return
 
-    # Em homolog/prod, não aceitamos índices dentro da pasta da release.
+    # Em homolog/prod, alertamos quando índices apontam para pasta da release.
     if app_dir in indices_resolved.parents or indices_resolved == app_dir / "indices.json":
-        raise RuntimeError(
-            "Ambiente inseguro: configure INDICES_FILE_PATH (ou RENDER_DISK_PATH) "
-            "para persistência fora da pasta app em homolog/prod."
+        print(
+            "[WARN] INDICES_FILE_PATH aponta para pasta da app em homolog/prod. "
+            "Configure APP_DATA_DIR/RENDER_DISK_PATH/INDICES_FILE_PATH para persistência real."
         )

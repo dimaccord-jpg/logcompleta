@@ -1,0 +1,20 @@
+title = "Log Completa Secret Scanning Policy"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholders and examples that are intentionally non-secret"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)README.*\.md$'''
+]
+regexes = [
+  '''troque_por_[a-zA-Z0-9_]+''',
+  '''sua_chave_aqui''',
+  '''seu_google_oauth_client_id''',
+  '''seu_google_oauth_client_secret''',
+  '''admin@seu-dominio\.com''',
+  '''SEU_OPS_TOKEN''',
+  '''CHAVE_MUITO_SEGURA_E_LONGA_GERADA_ALEATORIAMENTE'''
+]

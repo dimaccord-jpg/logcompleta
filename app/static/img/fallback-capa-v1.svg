@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-label="Capa estatico de contingencia">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#143a52"/>
+      <stop offset="100%" stop-color="#1b263b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2ec4b6"/>
+      <stop offset="100%" stop-color="#ff9f1c"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="675" fill="url(#bg)"/>
+  <rect x="54" y="54" width="1092" height="567" rx="20" fill="none" stroke="#5f7a95" stroke-width="2"/>
+  <rect x="86" y="88" width="12" height="499" fill="url(#accent)" rx="6"/>
+
+  <rect x="128" y="452" width="120" height="86" fill="#24425c" rx="10"/>
+  <rect x="264" y="412" width="120" height="126" fill="#2a5777" rx="10"/>
+  <rect x="400" y="378" width="120" height="160" fill="#317099" rx="10"/>
+
+  <path d="M130 360 C250 290, 380 340, 520 265" stroke="#b8d8ff" stroke-width="6" fill="none" stroke-linecap="round"/>
+  <circle cx="520" cy="265" r="9" fill="#b8d8ff"/>
+
+  <text x="620" y="296" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#f4f9ff">
+    Log Completa
+  </text>
+  <text x="620" y="352" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="600" fill="#d9ecff">
+    Capa estatica de contingencia
+  </text>
+  <text x="620" y="422" font-family="Segoe UI, Arial, sans-serif" font-size="24" fill="#9fd3ff">
+    Julia IA
+  </text>
+</svg>

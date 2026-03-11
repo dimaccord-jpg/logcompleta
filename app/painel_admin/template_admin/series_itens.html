@@ -1,0 +1,158 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <h4 class="mb-1">Itens da série: {{ serie.nome }}</h4>
+    <p class="text-muted mb-3">
+        Controle de cronograma editorial por item (planejado, em andamento, publicado, falha, pulado).
+    </p>
+
+    <a href="{{ url_for('admin.series_editoriais') }}" class="btn btn-link mb-3">
+        &larr; Voltar para séries
+    </a>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Adicionar / editar item</h5>
+            <form method="post" action="{{ url_for('admin.series_itens_salvar', serie_id=serie.id) }}" class="row g-3">
+                <input type="hidden" name="id" value="{{ item_edicao.id if item_edicao else '' }}">
+                <div class="col-md-2">
+                    <label class="form-label">Ordem</label>
+                    <input type="number" name="ordem" class="form-control" min="1" step="1"
+                           value="{{ item_edicao.ordem if item_edicao else 1 }}" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Data planejada</label>
+                    <input type="date" name="data_planejada" class="form-control"
+                           value="{{ item_edicao.data_planejada.date().isoformat() if item_edicao and item_edicao.data_planejada else '' }}">
+                </div>
+                <div class="col-md-7">
+                    <label class="form-label">Título planejado</label>
+                    <input type="text" name="titulo_planejado" class="form-control"
+                           value="{{ item_edicao.titulo_planejado if item_edicao else '' }}">
+                </div>
+                <div class="col-md-12">
+                    <label class="form-label">Subtítulo planejado</label>
+                    <input type="text" name="subtitulo_planejado" class="form-control"
+                           value="{{ item_edicao.subtitulo_planejado if item_edicao else '' }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Status</label>
+                    <select name="status" class="form-select">
+                        {% set st = item_edicao.status if item_edicao else 'planejado' %}
+                        {% for opt in ['planejado','em_andamento','publicado','falha','pulado'] %}
+                            <option value="{{ opt }}" {% if st == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-12 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save me-1"></i> Salvar item
+                    </button>
+                    {% if item_edicao %}
+                    <a href="{{ url_for('admin.series_itens', serie_id=serie.id) }}" class="btn btn-outline-secondary">
+                        Cancelar edição
+                    </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Cronograma da série</h5>
+            <div class="table-responsive">
+                <table class="table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Ordem</th>
+                            <th>Data planejada</th>
+                            <th>Título</th>
+                            <th>Status</th>
+                            <th>Pauta</th>
+                            <th>Notícia</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for it in itens %}
+                        <tr>
+                            <td>{{ it.ordem }}</td>
+                            <td>
+                                {% if it.data_planejada %}
+                                    {{ it.data_planejada.strftime('%d/%m/%Y') }}
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ it.titulo_planejado or '-' }}</td>
+                            <td>
+                                <span class="badge bg-light text-dark">{{ it.status }}</span>
+                            </td>
+                            <td>
+                                {% if it.pauta_id %}
+                                    <div class="d-flex flex-column gap-1">
+                                        <span>ID {{ it.pauta_id }}</span>
+                                        <form method="post" action="{{ url_for('admin.series_itens_desvincular_pauta', serie_id=serie.id, item_id=it.id) }}">
+                                            <input type="hidden" name="motivo" value="Desvinculado manualmente pelo admin">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                                Desvincular
+                                            </button>
+                                        </form>
+                                    </div>
+                                {% else %}
+                                    <form method="post" action="{{ url_for('admin.series_itens_vincular_pauta', serie_id=serie.id, item_id=it.id) }}" class="d-flex flex-column gap-1">
+                                        <input type="number" name="pauta_id" class="form-control form-control-sm" min="1" step="1" placeholder="ID pauta">
+                                        <input type="text" name="motivo" class="form-control form-control-sm" placeholder="Motivo (obrigatório)">
+                                        <button type="submit" class="btn btn-sm btn-outline-primary">
+                                            Vincular pauta
+                                        </button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if it.noticia_id %}
+                                    ID {{ it.noticia_id }}
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="d-flex flex-wrap gap-2">
+                                <a href="{{ url_for('admin.series_itens', serie_id=serie.id, editar_id=it.id) }}"
+                                   class="btn btn-sm btn-outline-secondary">
+                                    Editar
+                                </a>
+                                {% if it.status in ['planejado','falha','pulado'] %}
+                                <form method="post" action="{{ url_for('admin.series_itens_reabrir', serie_id=serie.id, item_id=it.id) }}" class="d-flex align-items-center gap-1">
+                                    <input type="text" name="motivo" class="form-control form-control-sm" placeholder="Motivo (obrigatório)">
+                                    <button type="submit" class="btn btn-sm btn-outline-success">
+                                        Reabrir (planejado)
+                                    </button>
+                                </form>
+                                {% endif %}
+                                {% if it.status in ['planejado','em_andamento'] %}
+                                <form method="post" action="{{ url_for('admin.series_itens_pular', serie_id=serie.id, item_id=it.id) }}" class="d-flex align-items-center gap-1">
+                                    <input type="text" name="motivo" class="form-control form-control-sm" placeholder="Motivo (obrigatório)">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        Pular
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="7" class="text-muted text-center">
+                                Nenhum item cadastrado ainda para esta série.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

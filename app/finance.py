@@ -4,10 +4,26 @@ import requests
 from bs4 import BeautifulSoup
 from pathlib import Path
 from datetime import datetime, timedelta
-from app import env_loader
+from app.settings import settings
 
-env_loader.load_app_env()
-INDICES_FILE = Path(env_loader.resolve_indices_file_path())
+INDICES_FILE = Path(settings.indices_file_path)
+LEGACY_INDICES_FILE = Path(__file__).resolve().parent / 'indices.json'
+
+
+def _load_historico(path: Path):
+    if not path.exists():
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            conteudo = json.load(f)
+        if isinstance(conteudo, dict):
+            if isinstance(conteudo.get('historico'), list):
+                return conteudo.get('historico') or []
+            if all(k in conteudo for k in ('dolar', 'petroleo', 'bdi', 'fbx')):
+                return [conteudo]
+        return []
+    except Exception:
+        return []
 
 def get_live_index(url, selector, fallback_val):
     """Busca genérica para aumentar resiliência de scraping"""
@@ -31,37 +47,47 @@ def atualizar_indices():
     novos_dados = {}
 
     try:
-        # 1. Coleta de dados (Mantendo sua lógica original)
+        # 1. Carregar histórico existente para fallback seguro
+        historico = _load_historico(INDICES_FILE)
+        # Migração suave: se caminho atual ainda não tem histórico, tenta arquivo legado.
+        if not historico and LEGACY_INDICES_FILE != INDICES_FILE:
+            historico = _load_historico(LEGACY_INDICES_FILE)
+
+        ultimo_registro = historico[-1] if historico else {}
+
+        # 2. Coleta resiliente com fallback no último valor conhecido
         print("💵 Consultando Câmbio e Petróleo...")
-        dolar = yf.Ticker("USDBRL=X").history(period="1d")['Close'].iloc[-1]
-        petroleo = yf.Ticker("CL=F").history(period="1d")['Close'].iloc[-1]
-        
         novos_dados['data'] = datetime.now().strftime("%Y-%m-%d")
-        novos_dados['dolar'] = round(dolar, 2)
-        novos_dados['petroleo'] = round(petroleo, 2)
+
+        try:
+            dolar_hist = yf.Ticker("USDBRL=X").history(period="5d")
+            dolar = float(dolar_hist['Close'].dropna().iloc[-1])
+            novos_dados['dolar'] = round(dolar, 2)
+        except Exception as e:
+            print(f"⚠️ Falha ao coletar Dólar: {e}. Usando último valor conhecido.")
+            novos_dados['dolar'] = ultimo_registro.get('dolar', 0.0)
+
+        try:
+            petroleo_hist = yf.Ticker("CL=F").history(period="5d")
+            petroleo = float(petroleo_hist['Close'].dropna().iloc[-1])
+            novos_dados['petroleo'] = round(petroleo, 2)
+        except Exception as e:
+            print(f"⚠️ Falha ao coletar Petróleo: {e}. Usando último valor conhecido.")
+            novos_dados['petroleo'] = ultimo_registro.get('petroleo', 0.0)
 
         print("🚢 Capturando BDI (Baltic Dry)...")
-        novos_dados['bdi'] = get_live_index("https://www.cnbc.com/quotes/.BDI", "span.QuoteStrip-lastPrice", "2117")
+        novos_dados['bdi'] = get_live_index(
+            "https://www.cnbc.com/quotes/.BDI",
+            "span.QuoteStrip-lastPrice",
+            str(ultimo_registro.get('bdi', '-')),
+        )
 
         print("📦 Capturando FBX (Freightos)...")
-        novos_dados['fbx'] = get_live_index("https://fbx.freightos.com/", ".fbx-index-value", "2280")
-
-        # --- NOVA LÓGICA DE HISTÓRICO (18 MESES) ---
-        
-        # 2. Carregar arquivo existente ou criar nova estrutura
-        if INDICES_FILE.exists():
-            with open(INDICES_FILE, 'r', encoding='utf-8') as f:
-                try:
-                    conteudo = json.load(f)
-                    # Se o formato for o antigo (só um dict), converte para o novo
-                    if "historico" not in conteudo:
-                        historico = []
-                    else:
-                        historico = conteudo['historico']
-                except json.JSONDecodeError:
-                    historico = []
-        else:
-            historico = []
+        novos_dados['fbx'] = get_live_index(
+            "https://fbx.freightos.com/",
+            ".fbx-index-value",
+            str(ultimo_registro.get('fbx', '-')),
+        )
 
         # 3. Adicionar novos dados (evitando duplicidade no mesmo dia)
         historico = [h for h in historico if h.get('data') != novos_dados['data']]
