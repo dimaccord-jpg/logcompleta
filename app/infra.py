@@ -144,8 +144,7 @@ def resolve_sqlite_path(uri: str, base_dir: str) -> str:
 
     def _prefer_persistent_sqlite_dir() -> str | None:
         app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
-        render_service = (os.getenv("RENDER_SERVICE_ID") or "").strip()
-        if app_env not in ("homolog", "prod") or not render_service:
+        if app_env not in ("homolog", "prod"):
             return None
 
         candidates = [
@@ -154,8 +153,14 @@ def resolve_sqlite_path(uri: str, base_dir: str) -> str:
             "/var/data",
         ]
         for c in candidates:
-            if c and os.path.isdir(c):
+            if not c:
+                continue
+            try:
+                os.makedirs(c, exist_ok=True)
                 return c
+            except Exception:
+                # Tenta próximo candidato; não interrompe startup.
+                continue
         return None
 
     if uri and uri.startswith('sqlite:///'):
