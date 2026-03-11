@@ -321,7 +321,8 @@ def executar_ciclo_gerencial(
                 parsed = parse_recomendacao_json(rec.recomendacao)
                 if parsed.get("tema_sugerido"):
                     tema_efetivo = str(parsed["tema_sugerido"])[:255]
-                if parsed.get("tipo") and str(parsed["tipo"]).lower() in ("noticia", "artigo"):
+                # Não sobrescrever tipo_missao quando foi forçado (ex.: botão "Executar artigo agora").
+                if not tipo_missao_forcado and parsed.get("tipo") and str(parsed["tipo"]).lower() in ("noticia", "artigo"):
                     tipo_missao = str(parsed["tipo"]).lower()
                     resultado["tipo_missao"] = tipo_missao
                 if isinstance(parsed.get("prioridade"), (int, float)):
@@ -506,6 +507,8 @@ def executar_ciclo_gerencial(
         else:
             resultado["status"] = "sucesso"
             resultado["motivo"] = "Missão despachada com sucesso e agente operacional publicou conteúdo."
+            if tipo_missao == "artigo":
+                resultado["caminho_usado"] = "artigo"
 
         # Atualiza campos Sprint 4
         resultado["artigo_publicado_hoje"] = _artigo_publicado_hoje()

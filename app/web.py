@@ -43,6 +43,10 @@ from app.auth_services import (
 from app.settings import settings
 
 
+
+# Define diretorio_atual para uso em resolve_indices_file_path
+diretorio_atual = os.path.dirname(os.path.abspath(__file__))
+
 def resolve_indices_file_path():
     """Resolve caminho de índices com prioridade para storage persistente."""
     explicit_path = (os.getenv("INDICES_FILE_PATH") or "").strip()
