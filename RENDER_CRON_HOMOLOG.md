@@ -127,6 +127,7 @@ Objetivo de negócio: manter no topo da Home os indicadores **Petróleo, BDI, FB
 1. O projeto deve instalar dependências de runtime (`requirements.txt`).
 2. O Cron Job deve executar no mesmo código/ambiente do backend homolog.
 3. Não há segredo de rota para este job, pois a coleta roda por comando Python (sem endpoint HTTP).
+4. Configure `INDICES_FILE_PATH` no Web Service para storage persistente (ex.: `/var/data/indices.json`).
 
 ## 2. Criar Cron Job para índices
 
@@ -162,3 +163,12 @@ echo "[indices] start $(date -Iseconds)"; python -m app.finance; echo "[indices]
 - **Job executa, mas sem atualização:**
    - Confirme conectividade externa para yfinance e fontes de scraping.
    - Revise possíveis bloqueios temporários das páginas de BDI/FBX.
+
+## 5. Checklist final de homolog
+
+Use este checklist para encerrar a validação de ambiente:
+
+1. Cron do Cleiton executa e retorna 200 na rota protegida.
+2. Cron de índices executa `python -m app.finance` 2x ao dia útil.
+3. `app/indices.json` mantém histórico e data de atualização recente.
+4. Home (`/`) exibe Dólar, Petróleo, BDI e FBX sem campos vazios.

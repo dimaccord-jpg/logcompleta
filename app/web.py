@@ -36,10 +36,12 @@ from app.auth_services import (
     register_user,
 )
 
-# 2. Configuração de ambiente e dotenv
-env_name = os.getenv('APP_ENV', 'dev')
-dotenv_path = os.path.join(_diretorio_app, f'.env.{env_name}')
-load_dotenv(dotenv_path)
+# 2. Configuração de ambiente e dotenv (via loader centralizado)
+from app import env_loader
+
+_env_loaded = env_loader.load_app_env()
+env_loader.validate_runtime_env()
+env_name = (os.getenv('APP_ENV', 'dev') or 'dev').strip() or 'dev'
 
 # Configuração de Logging (Global para o Flask e Gunicorn)
 log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
@@ -130,7 +132,7 @@ def load_user(user_id):
 @app.route('/')
 def index():
     # Localiza o arquivo de índices dinâmicos
-    path_indices = os.path.join(_diretorio_app, 'indices.json')
+    path_indices = env_loader.resolve_indices_file_path()
     fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
     try:
         with open(path_indices, 'r', encoding='utf-8') as f:
