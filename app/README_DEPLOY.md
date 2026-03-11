@@ -101,6 +101,8 @@ GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000
 GUNICORN_TIMEOUT_SECONDS=120
 GUNICORN_GRACEFUL_TIMEOUT_SECONDS=30
 GUNICORN_KEEPALIVE_SECONDS=5
+# Índices da Home em storage persistente (obrigatório em homolog/prod)
+INDICES_FILE_PATH=/srv/logcompleta/data/indices.json
 # Execução manual no painel admin: em homolog/prod o padrão já é async
 # ADMIN_CLEITON_EXEC_MODE=async
 # Opcional: fallback visual estático prioritário (CDN própria)
@@ -148,9 +150,10 @@ Checklist rapido de validacao (Fase 3):
 - Reiniciar o serviço (`systemctl restart logcompleta`) após alterar `.env.prod`.
 
 Checklist rapido de validacao (Indices da Home):
-- A coleta de índices roda por `python -m app.finance` e atualiza `app/indices.json`.
+- A coleta de índices roda por `python -m app.finance` e atualiza o arquivo apontado por `INDICES_FILE_PATH`.
 - A rota `/` deve exibir o último registro do histórico (`historico[-1]`) no ticker.
 - Se houver formato histórico no JSON, a conversão para formato plano deve acontecer apenas na camada web (`index`).
+- Em homolog/prod, `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta da release.
 
 ## 4. Configurar Gunicorn com Systemd
 
@@ -231,3 +234,13 @@ Validação pós-configuração:
 1. Rodar uma execução manual do comando.
 2. Confirmar atualização de `app/indices.json`.
 3. Abrir `/` e conferir ticker com Petróleo, BDI, FBX e Dólar preenchidos.
+
+## 8. Status de validação recomendado (pós-deploy)
+
+Após cada deploy em homolog/prod, validar este fluxo mínimo:
+
+1. `/health` responde 200.
+2. Job de índices executa com sucesso (`python -m app.finance`).
+3. `app/indices.json` contém `historico` com pelo menos um registro.
+4. Home (`/`) exibe os quatro indicadores sem campos vazios.
+5. Fluxos de login e admin seguem sem regressão.

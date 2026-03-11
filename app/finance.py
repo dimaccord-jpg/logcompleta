@@ -4,9 +4,10 @@ import requests
 from bs4 import BeautifulSoup
 from pathlib import Path
 from datetime import datetime, timedelta
+from app import env_loader
 
-BASE_DIR = Path(__file__).resolve().parent
-INDICES_FILE = BASE_DIR / 'indices.json'
+env_loader.load_app_env()
+INDICES_FILE = Path(env_loader.resolve_indices_file_path())
 
 def get_live_index(url, selector, fallback_val):
     """Busca genérica para aumentar resiliência de scraping"""
@@ -79,6 +80,7 @@ def atualizar_indices():
             "historico": sorted(historico_filtrado, key=lambda x: x['data'])
         }
 
+        INDICES_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(INDICES_FILE, 'w', encoding='utf-8') as f:
             json.dump(final_json, f, indent=4, ensure_ascii=False)
             

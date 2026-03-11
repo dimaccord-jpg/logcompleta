@@ -7,6 +7,12 @@ Use este checklist após deploy ou alterações na orquestração.
 - [ ] **/executar-cleiton** — POST (usuário logado) executa ciclo gerencial e redireciona com flash de sucesso.
 - [ ] **Rotas de login/fretes/home** — Sem regressão; login, cálculo de fretes e página inicial funcionando.
 
+## Indicadores da Home
+
+- [ ] **Coleta desacoplada** — `python -m app.finance` atualiza `app/indices.json` sem depender de acesso web.
+- [ ] **Contrato de leitura** — Home (`/`) lê o JSON e extrai o último item de `historico` para renderização do ticker.
+- [ ] **Renderização** — Dólar, Petróleo, BDI e FBX aparecem preenchidos no topo da página inicial.
+
 ## Comportamento do Cleiton
 
 - [ ] **Janela de publicação** — Fora da janela configurada (ex.: 6h–22h), o ciclo registra "ignorado" na auditoria e não despacha.

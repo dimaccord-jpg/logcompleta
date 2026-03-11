@@ -17,10 +17,22 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
 **Execução manual no Admin (hotfix homolog/prod):** A rota `/admin/agentes/julia/executar-cleiton` roda em **background** por padrão quando `APP_ENV` é `homolog` ou `prod`, evitando timeout de worker na requisição HTTP. Em `dev`, o padrão continua síncrono para facilitar validação local. É possível forçar via `ADMIN_CLEITON_EXEC_MODE=sync|async`.
 
 **Indicadores no topo da Home (Petróleo, BDI, FBX e Dólar):**
-- Coleta: `app/finance.py` (`atualizar_indices`) escreve em `app/indices.json`.
+- Coleta: `app/finance.py` (`atualizar_indices`) escreve no caminho resolvido por ambiente (`INDICES_FILE_PATH` ou `RENDER_DISK_PATH/indices.json`; em dev, fallback para `app/indices.json`).
 - Persistência: formato histórico (`ultima_atualizacao` + `historico`).
 - Exibição: a rota `/` em `app/web.py` extrai o último item do histórico e envia para `index.html` no formato plano esperado pelo ticker (`dolar`, `petroleo`, `bdi`, `fbx`).
 - Contrato importante: o formato histórico deve ser mantido para análises do Roberto (`run_roberto.py`), e a conversão para formato plano deve ficar restrita à rota da Home.
+
+**Hardening de ambiente (homolog/prod):**
+- `APP_ENV` deve estar explícito no serviço (`homolog` ou `prod`), sem fallback implícito.
+- `DB_URI_*` críticos devem estar definidos no ambiente.
+- `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta `app` (ex.: `/var/data/indices.json`).
+- Sem essas condições, a aplicação falha no boot para evitar subir em modo inseguro e perder dados em deploy.
+
+## Status Atual
+
+- Status operacional vigente: Home (`/`) renderiza os quatro indicadores com compatibilidade para JSON histórico e JSON legado.
+- Fluxo recomendado em homolog/prod: coleta desacoplada por agendamento (`python -m app.finance`) e leitura somente do último registro na camada web.
+- Critério de aceite funcional: ticker sem campos vazios para Dólar, Petróleo, BDI e FBX.
 
 ## Seguranca de Segredos (obrigatorio)
 
