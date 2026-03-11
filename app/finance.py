@@ -31,37 +31,52 @@ def atualizar_indices():
     novos_dados = {}
 
     try:
-        # 1. Coleta de dados (Mantendo sua lógica original)
-        print("💵 Consultando Câmbio e Petróleo...")
-        dolar = yf.Ticker("USDBRL=X").history(period="1d")['Close'].iloc[-1]
-        petroleo = yf.Ticker("CL=F").history(period="1d")['Close'].iloc[-1]
-        
-        novos_dados['data'] = datetime.now().strftime("%Y-%m-%d")
-        novos_dados['dolar'] = round(dolar, 2)
-        novos_dados['petroleo'] = round(petroleo, 2)
-
-        print("🚢 Capturando BDI (Baltic Dry)...")
-        novos_dados['bdi'] = get_live_index("https://www.cnbc.com/quotes/.BDI", "span.QuoteStrip-lastPrice", "2117")
-
-        print("📦 Capturando FBX (Freightos)...")
-        novos_dados['fbx'] = get_live_index("https://fbx.freightos.com/", ".fbx-index-value", "2280")
-
-        # --- NOVA LÓGICA DE HISTÓRICO (18 MESES) ---
-        
-        # 2. Carregar arquivo existente ou criar nova estrutura
+        # 1. Carregar histórico existente para fallback seguro
         if INDICES_FILE.exists():
             with open(INDICES_FILE, 'r', encoding='utf-8') as f:
                 try:
                     conteudo = json.load(f)
-                    # Se o formato for o antigo (só um dict), converte para o novo
-                    if "historico" not in conteudo:
-                        historico = []
-                    else:
-                        historico = conteudo['historico']
+                    historico = conteudo.get('historico', []) if isinstance(conteudo, dict) else []
                 except json.JSONDecodeError:
                     historico = []
         else:
             historico = []
+
+        ultimo_registro = historico[-1] if historico else {}
+
+        # 2. Coleta resiliente com fallback no último valor conhecido
+        print("💵 Consultando Câmbio e Petróleo...")
+        novos_dados['data'] = datetime.now().strftime("%Y-%m-%d")
+
+        try:
+            dolar_hist = yf.Ticker("USDBRL=X").history(period="5d")
+            dolar = float(dolar_hist['Close'].dropna().iloc[-1])
+            novos_dados['dolar'] = round(dolar, 2)
+        except Exception as e:
+            print(f"⚠️ Falha ao coletar Dólar: {e}. Usando último valor conhecido.")
+            novos_dados['dolar'] = ultimo_registro.get('dolar', 0.0)
+
+        try:
+            petroleo_hist = yf.Ticker("CL=F").history(period="5d")
+            petroleo = float(petroleo_hist['Close'].dropna().iloc[-1])
+            novos_dados['petroleo'] = round(petroleo, 2)
+        except Exception as e:
+            print(f"⚠️ Falha ao coletar Petróleo: {e}. Usando último valor conhecido.")
+            novos_dados['petroleo'] = ultimo_registro.get('petroleo', 0.0)
+
+        print("🚢 Capturando BDI (Baltic Dry)...")
+        novos_dados['bdi'] = get_live_index(
+            "https://www.cnbc.com/quotes/.BDI",
+            "span.QuoteStrip-lastPrice",
+            str(ultimo_registro.get('bdi', '-')),
+        )
+
+        print("📦 Capturando FBX (Freightos)...")
+        novos_dados['fbx'] = get_live_index(
+            "https://fbx.freightos.com/",
+            ".fbx-index-value",
+            str(ultimo_registro.get('fbx', '-')),
+        )
 
         # 3. Adicionar novos dados (evitando duplicidade no mesmo dia)
         historico = [h for h in historico if h.get('data') != novos_dados['data']]
