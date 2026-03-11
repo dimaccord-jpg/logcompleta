@@ -1,10 +1,10 @@
 import os
+import json
 import logging
 from datetime import datetime
 from app.extensions import db
-from app.models import Lead, NoticiaPortal # Certifique-se que NoticiaPortal está no models.py
+from app.models import Lead, NoticiaPortal, Pauta
 
-# Configuração de Log para acompanhar as ações do Cleiton
 logger = logging.getLogger(__name__)
 
 # --- LÓGICA DE LEADS (NEWSLETTER) ---
@@ -47,10 +47,51 @@ def buscar_noticias_portal():
 
 def processar_ciclo_noticias():
     """
-    Esta função será chamada pelo run_cleiton.py 3x ao dia.
-    Ela vai varrer o RSS, passar pelo crivo da IA e salvar no banco.
+    Será chamada pelo Cleiton para varredura RSS/coleta.
+    Preenche a tabela Pauta para o pipeline da Júlia consumir.
     """
-    logger.info("🤖 Cleiton iniciando varredura de RSS para o Portal...")
-    # Aqui entrará a lógica que você já tem de feedparser + Gemini
-    # Mas agora, em vez de processadas.json, salvaremos no banco de dados.
+    logger.info("Cleiton: varredura de RSS para o Portal (preenche Pauta).")
+    # Futuro: feedparser + curadoria → Pauta.query.add(...)
     pass
+
+
+def popular_pautas_de_arquivo_json(caminho: str | None = None, tipo_padrao: str = "noticia") -> int:
+    """
+    Importa pautas de um arquivo no formato legado processadas.json
+    (dict[link, {titulo_original, fonte}]) para a tabela Pauta.
+    Retorna quantidade inserida. Idempotente: não duplica por link.
+    Use uma vez para migrar ou semear pautas antes do pipeline.
+    """
+    if not caminho:
+        base = os.path.dirname(os.path.abspath(__file__))
+        caminho = os.path.join(base, "processadas.json")
+    if not os.path.exists(caminho):
+        logger.warning("Arquivo de pautas não encontrado: %s", caminho)
+        return 0
+    try:
+        with open(caminho, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.exception("Erro ao ler JSON de pautas: %s", e)
+        return 0
+    inseridas = 0
+    for link, info in (data.items() if isinstance(data, dict) else []):
+        if not link or not isinstance(info, dict):
+            continue
+        if Pauta.query.filter_by(link=link).first():
+            continue
+        titulo = (info.get("titulo_original") or "").strip() or link[:200]
+        fonte = (info.get("fonte") or "").strip()
+        p = Pauta(
+            titulo_original=titulo,
+            fonte=fonte,
+            link=link,
+            tipo=tipo_padrao,
+            status="pendente",
+        )
+        db.session.add(p)
+        inseridas += 1
+    if inseridas:
+        db.session.commit()
+        logger.info("Pautas importadas: %d de %s", inseridas, caminho)
+    return inseridas

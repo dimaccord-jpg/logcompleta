@@ -12,6 +12,10 @@ sudo apt install python3-pip python3-venv nginx git -y
 
 ## 2. Estrutura de Pastas e Código
 
+O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. A camada gerencial Cleiton usa o bind `gerencial` (`DB_URI_GERENCIAL`). A configuração de ambiente (incluindo o carregamento de `.env`) é centralizada em `app/settings.py`, que usa `app/env_loader.py` internamente — defina `APP_ENV=prod` no systemd para carregar `app/.env.prod` de forma consistente.
+
+Importante: para `APP_ENV=prod`, o arquivo lido pela aplicação é `app/.env.prod` (dentro da pasta `app`). Arquivos `.env.*` fora dessa pasta não são usados pelo loader principal.
+
 Vamos criar uma estrutura organizada em `/srv`.
 
 ```bash
@@ -31,6 +35,8 @@ pip install -r requirements.txt
 pip install gunicorn
 ```
 
+`requirements.txt` já inclui `google-generativeai`, necessário para integrações Gemini.
+
 ## 3. Configuração de Dados e Persistência
 
 Para evitar perder dados em novos deploys, o banco de dados ficará fora da pasta do código.
@@ -39,10 +45,10 @@ Para evitar perder dados em novos deploys, o banco de dados ficará fora da past
 mkdir -p /srv/logcompleta/data
 ```
 
-**Crie o arquivo `.env.prod` no servidor:**
+**Crie o arquivo `.env.prod` no servidor (lido por `app/settings.py`):**
 `nano /srv/logcompleta/code/app/.env.prod`
 
-Conteúdo (Ajuste os caminhos do DB para serem absolutos):
+Conteúdo (Ajuste os caminhos do DB e a URL do site):
 ```ini
 APP_ENV=prod
 FLASK_DEBUG=False
@@ -55,9 +61,26 @@ DB_URI_LOCALIDADES=sqlite:////srv/logcompleta/data/base_localidades.db
 DB_URI_HISTORICO=sqlite:////srv/logcompleta/data/historico_frete.db
 DB_URI_LEADS=sqlite:////srv/logcompleta/data/leads.db
 DB_URI_NOTICIAS=sqlite:////srv/logcompleta/data/noticias.db
+DB_URI_GERENCIAL=sqlite:////srv/logcompleta/data/gerencial.db
 
-# Chaves de API
-GEMINI_API_KEY=...          # Cleiton (orquestrador)
+# Não defina OAUTHLIB_INSECURE_TRANSPORT em produção (ou use 0). OAuth deve usar HTTPS.
+# Login Google: use a URL pública do seu domínio (auth em app/auth_services.py)
+GOOGLE_OAUTH_REDIRECT_URI=https://SEU_DOMINIO/login/google/callback
+# Hotfix OAuth state/CSRF: o callback aceita múltiplos states pendentes na sessão
+# para evitar falso negativo quando o fluxo OAuth é iniciado mais de uma vez.
+
+# E-mail (recuperação de senha)
+MAIL_SERVER=smtp.gmail.com
+MAIL_PORT=587
+MAIL_USE_TLS=True
+MAIL_USERNAME=...
+MAIL_PASSWORD=...
+
+# Token para rotas de operação e diagnóstico OAuth (header X-Ops-Token). Gere um valor secreto.
+OPS_TOKEN=seu_token_secreto_aqui
+
+# Chaves de API e modelos (Etapa 2: Júlia pipeline + imagem)
+GEMINI_API_KEY=...
 GEMINI_API_KEY_ROBERTO=...
 GEMINI_API_KEY_1=...        # Júlia notícias
 GEMINI_API_KEY_2=...        # Júlia artigos
@@ -78,7 +101,9 @@ GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000
 GUNICORN_TIMEOUT_SECONDS=120
 GUNICORN_GRACEFUL_TIMEOUT_SECONDS=30
 GUNICORN_KEEPALIVE_SECONDS=5
-# Índices da Home em storage persistente (obrigatório em homolog/prod)
+# Índices da Home em storage persistente (obrigatório em homolog/prod).
+# Este caminho será usado tanto pelo serviço web (rota `/`) quanto pelo job de coleta (`python -m app.finance`),
+# via configuração centralizada em app/settings.py.
 INDICES_FILE_PATH=/srv/logcompleta/data/indices.json
 # Execução manual no painel admin: em homolog/prod o padrão já é async
 # ADMIN_CLEITON_EXEC_MODE=async
@@ -117,7 +142,20 @@ INDICES_FILE_PATH=/srv/logcompleta/data/indices.json
 # Fase 6/Sprint 6: feedback loop e operações admin reutilizam as mesmas configs base.
 ```
 
-Neste momento, você pode utilizar os mesmos valores de chave de API em DEV, HOMOLOG e PROD; a diferença entre ambientes é controlada principalmente por `APP_ENV` e pelos caminhos de banco de dados.
+Use credenciais distintas por ambiente (dev, homolog, prod) e rotacione imediatamente qualquer chave/tokens expostos.
+
+Checklist rapido de validacao (Fase 3):
+- `SCOUT_SOURCES_JSON` em linha unica e JSON valido.
+- Sem comentarios dentro do valor de `SCOUT_SOURCES_JSON`.
+- Em caso de restricao de fontes, informar domínios sem `https://` e sem caminho.
+- Se uma fonte RSS falhar (parse/rede), o Scout registra erro dessa fonte e continua o ciclo com as demais.
+- Reiniciar o serviço (`systemctl restart logcompleta`) após alterar `.env.prod`.
+
+Checklist rapido de validacao (Indices da Home):
+- A coleta de índices roda por `python -m app.finance` e atualiza o arquivo apontado por `INDICES_FILE_PATH`, resolvido por `app/settings.py`.
+- A rota `/` deve exibir o último registro do histórico (`historico[-1]`) no ticker, lendo o mesmo caminho via `settings.indices_file_path`.
+- Se houver formato histórico no JSON, a conversão para formato plano deve acontecer apenas na camada web (`index`), mantendo compatibilidade com o JSON legado simples enquanto durar a janela de transição.
+- Em homolog/prod, `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta da release. Caso a configuração esteja incorreta, `env_loader.validate_runtime_env` emitirá apenas um aviso (modo degradado) sem derrubar o serviço.
 
 Checklist rapido de validacao (Indices da Home):
 - A coleta de índices roda por `python -m app.finance` e atualiza o arquivo apontado por `INDICES_FILE_PATH`.
@@ -141,7 +179,7 @@ Group=www-data
 WorkingDirectory=/srv/logcompleta/code/app
 Environment="PATH=/srv/logcompleta/code/venv/bin"
 Environment="APP_ENV=prod"
-ExecStart=/srv/logcompleta/code/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:5000 web:app
+ExecStart=/srv/logcompleta/code/venv/bin/gunicorn --config /srv/logcompleta/code/gunicorn_config.py --workers 3 --bind 127.0.0.1:5000 app.web:app
 
 [Install]
 WantedBy=multi-user.target
@@ -194,23 +232,24 @@ Exemplo com cron (dias úteis):
 
 ```bash
 # Abertura do mercado
-0 9 * * 1-5 cd /srv/logcompleta/code && /srv/logcompleta/code/venv/bin/python -m app.finance >> /var/log/logcompleta_indices.log 2>&1
+0 9 * * 1-5 cd /srv/logcompleta/code && APP_ENV=prod /srv/logcompleta/code/venv/bin/python -m app.finance >> /var/log/logcompleta_indices.log 2>&1
 
 # Após as 14h
-10 14 * * 1-5 cd /srv/logcompleta/code && /srv/logcompleta/code/venv/bin/python -m app.finance >> /var/log/logcompleta_indices.log 2>&1
+10 14 * * 1-5 cd /srv/logcompleta/code && APP_ENV=prod /srv/logcompleta/code/venv/bin/python -m app.finance >> /var/log/logcompleta_indices.log 2>&1
 ```
 
 Validação pós-configuração:
-1. Rodar uma execução manual do comando.
-2. Confirmar atualização de `app/indices.json`.
+1. Rodar uma execução manual do comando com `APP_ENV=prod`.
+2. Confirmar atualização do arquivo apontado por `INDICES_FILE_PATH` (ex.: `/srv/logcompleta/data/indices.json`).
 3. Abrir `/` e conferir ticker com Petróleo, BDI, FBX e Dólar preenchidos.
 
 ## 8. Status de validação recomendado (pós-deploy)
 
 Após cada deploy em homolog/prod, validar este fluxo mínimo:
 
-1. `/health` responde 200.
-2. Job de índices executa com sucesso (`python -m app.finance`).
-3. `app/indices.json` contém `historico` com pelo menos um registro.
-4. Home (`/`) exibe os quatro indicadores sem campos vazios.
-5. Fluxos de login e admin seguem sem regressão.
+1. `/health/liveness` responde 200.
+2. `/health/readiness` responde 200 com `checks.database="ok"` e `checks.indices_exists=true`.
+3. Job de índices executa com sucesso (`python -m app.finance` no mesmo `APP_ENV` do serviço).
+4. O arquivo apontado por `INDICES_FILE_PATH` contém `historico` com pelo menos um registro.
+5. Home (`/`) exibe os quatro indicadores sem campos vazios.
+6. Fluxos de login e admin seguem sem regressão.

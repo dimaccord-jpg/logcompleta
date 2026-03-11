@@ -8,3 +8,6 @@ Flask-Mail
 Flask-Session
 itsdangerous
 Flask-Dance
+feedparser
+requests
+google-genai>=0.3.0

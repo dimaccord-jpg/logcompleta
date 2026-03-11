@@ -110,7 +110,7 @@ Se preferir um worker em vez de Cron:
 
 Após mudanças de credenciais ou deploy em homolog, valide o login Google:
 
-1. `GET /health` deve responder `status=ok`.
+1. `GET /health/liveness` deve responder `status=ok`.
 2. `GET /oauth-diagnostics` com `X-Ops-Token` deve responder 200.
 3. Em janela anônima, iniciar login Google e concluir callback.
 4. Não deve aparecer a mensagem de falha de validação de segurança.
@@ -127,7 +127,7 @@ Objetivo de negócio: manter no topo da Home os indicadores **Petróleo, BDI, FB
 1. O projeto deve instalar dependências de runtime (`requirements.txt`).
 2. O Cron Job deve executar no mesmo código/ambiente do backend homolog.
 3. Não há segredo de rota para este job, pois a coleta roda por comando Python (sem endpoint HTTP).
-4. Configure `INDICES_FILE_PATH` no Web Service para storage persistente (ex.: `/var/data/indices.json`).
+4. Configure `INDICES_FILE_PATH` no Web Service para storage persistente (ex.: `/var/data/indices.json`); esse caminho será resolvido de forma centralizada por `app/settings.py` para o serviço web e para o job de coleta.
 
 ## 2. Criar Cron Job para índices
 
@@ -137,10 +137,10 @@ Objetivo de negócio: manter no topo da Home os indicadores **Petróleo, BDI, FB
     - **Schedule:** duas execuções por dia útil (exemplo):
        - `0 9 * * 1-5` (abertura)
        - `10 14 * * 1-5` (após 14h)
-    - **Command:**
-       ```bash
-       python -m app.finance
-       ```
+   - **Command:**
+   ```bash
+   APP_ENV=homolog python -m app.finance
+   ```
 
 Observação: se quiser rastrear execução no log com timestamp, use:
 
@@ -152,7 +152,7 @@ echo "[indices] start $(date -Iseconds)"; python -m app.finance; echo "[indices]
 
 1. Execute o job manualmente uma vez no painel do Render.
 2. Confirme nos logs mensagens de sucesso da rotina de coleta.
-3. Verifique `app/indices.json` atualizado com `ultima_atualizacao` e `historico`.
+3. Verifique o arquivo apontado por `INDICES_FILE_PATH` atualizado com `ultima_atualizacao` e `historico`.
 4. Abra a Home (`/`) e confirme ticker sem campos vazios.
 
 ## 4. Troubleshooting rápido
@@ -169,6 +169,6 @@ echo "[indices] start $(date -Iseconds)"; python -m app.finance; echo "[indices]
 Use este checklist para encerrar a validação de ambiente:
 
 1. Cron do Cleiton executa e retorna 200 na rota protegida.
-2. Cron de índices executa `python -m app.finance` 2x ao dia útil.
-3. `app/indices.json` mantém histórico e data de atualização recente.
+2. Cron de índices executa `python -m app.finance` 2x ao dia útil com `APP_ENV=homolog`.
+3. O arquivo apontado por `INDICES_FILE_PATH` mantém histórico e data de atualização recente.
 4. Home (`/`) exibe Dólar, Petróleo, BDI e FBX sem campos vazios.

@@ -28,5 +28,91 @@
     <div class="alert alert-info mt-4">
         {{ status.mensagem_sistema }}
     </div>
+
+    {# Fase 6: Painel estratégico – KPIs de Insight #}
+    {% set kpis = kpis_insight or {} %}
+    <h5 class="mt-4 mb-3">Insight Estratégico (Customer Insight)</h5>
+    <div class="row g-3 mb-4">
+        <div class="col-md-2">
+            <div class="card border-0 shadow-sm p-2">
+                <small class="text-muted">Pendentes</small>
+                <h4 class="text-warning mb-0">{{ kpis.get('recomendacoes_pendentes', 0) }}</h4>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card border-0 shadow-sm p-2">
+                <small class="text-muted">Aplicadas</small>
+                <h4 class="text-success mb-0">{{ kpis.get('recomendacoes_aplicadas', 0) }}</h4>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card border-0 shadow-sm p-2">
+                <small class="text-muted">Descartadas</small>
+                <h4 class="text-secondary mb-0">{{ kpis.get('recomendacoes_descartadas', 0) }}</h4>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card border-0 shadow-sm p-2">
+                <small class="text-muted">Métricas</small>
+                <h4 class="text-info mb-0">{{ kpis.get('total_metricas', 0) }}</h4>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card border-0 shadow-sm p-2">
+                <small class="text-muted">Auditorias insight</small>
+                <h4 class="text-dark mb-0">{{ kpis.get('total_auditorias_insight', 0) }}</h4>
+            </div>
+        </div>
+    </div>
+
+    {# Lista de recomendações recentes com ação Aplicar/Descartar #}
+    <h5 class="mb-3">Recomendações recentes</h5>
+    {% set recs = recomendacoes_recentes or [] %}
+    {% if recs %}
+    <div class="table-responsive">
+        <table class="table table-sm table-hover">
+            <thead>
+                <tr>
+                    <th>Id</th>
+                    <th>Prioridade</th>
+                    <th>Status</th>
+                    <th>Resumo</th>
+                    <th>Criado em</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in recs %}
+                <tr>
+                    <td>{{ r.id }}</td>
+                    <td>{{ r.prioridade or '-' }}</td>
+                    <td>
+                        <span class="badge {% if r.status == 'pendente' %}bg-warning{% elif r.status == 'aplicada' %}bg-success{% else %}bg-secondary{% endif %}">
+                            {{ r.status or 'pendente' }}
+                        </span>
+                    </td>
+                    <td>
+                        {% set rec_texto = r.recomendacao or '' %}
+                        {% if rec_texto %}{{ (rec_texto[:80] + '...') if rec_texto|length > 80 else rec_texto }}{% else %}-{% endif %}
+                    </td>
+                    <td>{{ r.criado_em.strftime('%d/%m/%Y %H:%M') if r.criado_em else '-' }}</td>
+                    <td>
+                        {% if r.status == 'pendente' %}
+                        <form method="post" action="{{ url_for('admin.recomendacao_aplicar', recomendacao_id=r.id) }}" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-success">Aplicar</button>
+                        </form>
+                        <form method="post" action="{{ url_for('admin.recomendacao_descartar', recomendacao_id=r.id) }}" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">Descartar</button>
+                        </form>
+                        {% else %}-{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="text-muted">Nenhuma recomendação registrada.</p>
+    {% endif %}
 </div>
 {% endblock %}

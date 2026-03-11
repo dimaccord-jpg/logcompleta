@@ -1,0 +1,183 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <h4 class="mb-3">Agentes - Júlia</h4>
+    <p class="text-muted mb-4">
+        Central de execução das rotinas da Júlia e do ciclo gerencial do Cleiton.
+        Os comandos foram concentrados aqui para manter a Home limpa.
+    </p>
+
+    <div class="row g-3 mb-4">
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title">Executar Cleiton</h5>
+                    <p class="card-text text-muted">
+                        Dispara o ciclo gerencial completo com foco no processamento operacional da Júlia.
+                    </p>
+                    <form method="post" action="{{ url_for('admin.agentes_julia_executar_cleiton') }}">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-play-circle me-1"></i> Executar Cleiton
+                        </button>
+                    </form>
+                    <form method="post" action="{{ url_for('admin.agentes_julia_executar_cleiton') }}" class="mt-2">
+                        <input type="hidden" name="bypass_frequencia" value="1">
+                        <button type="submit" class="btn btn-outline-danger">
+                            <i class="bi bi-shield-lock me-1"></i> Executar agora (bypass de frequencia)
+                        </button>
+                    </form>
+                    <small class="text-muted d-block mt-2">
+                        Bypass exclusivo para admin: ignora apenas a regra de frequencia neste disparo manual.
+                    </small>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title">Backlog de artigos</h5>
+                    <p class="card-text text-muted">
+                        Visão rápida das pautas de artigo disponíveis para a Júlia publicar (1 artigo/dia quando elegível).
+                    </p>
+                    {% set art = status_pautas_artigo or {} %}
+                    <ul class="mb-2 small text-muted">
+                        <li><strong>Total de pautas de artigo:</strong> {{ art.total or 0 }}</li>
+                        <li><strong>Pendentes:</strong> {{ art.pendentes or 0 }}</li>
+                        <li><strong>Elegíveis (aprovadas pelo Verificador):</strong> {{ art.elegiveis or 0 }}</li>
+                        <li><strong>Em processamento:</strong> {{ art.em_processamento or 0 }}</li>
+                        <li><strong>Com falha:</strong> {{ art.falha or 0 }}</li>
+                        <li>
+                            <strong>Último artigo publicado:</strong>
+                            {% if ultima_artigo %}
+                                {{ ultima_artigo.strftime('%d/%m/%Y %H:%M') }} (UTC).
+                            {% else %}
+                                Nenhum artigo publicado ainda.
+                            {% endif %}
+                        </li>
+                    </ul>
+                    <form method="post" action="{{ url_for('admin.agentes_julia_executar_artigo_manual') }}" class="mt-2">
+                        <button type="submit" class="btn btn-outline-danger">
+                            <i class="bi bi-journal-medical me-1"></i> Executar artigo agora (bypass diário)
+                        </button>
+                    </form>
+                    <small class="text-muted d-block mt-2">
+                        Dispara manualmente uma missão de artigo, ignorando apenas a trava de artigo já publicado hoje.
+                        Não altera o comportamento automático de notícias rápidas ou do cron.
+                    </small>
+                    <small class="text-muted d-block">
+                        Para novos artigos, insira pautas com <code>tipo='artigo'</code> na tabela
+                        <code>pautas</code> (ou via importadores) e deixe o Verificador aprovar.
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h6 class="mb-3">Ajuste de frequencia do ciclo</h6>
+            <p class="text-muted mb-3">
+                Defina a frequencia em horas para os ciclos automaticos em producao. Em ambiente de desenvolvimento,
+                o loop automatico permanece desabilitado por seguranca de custo.
+            </p>
+            <form method="post" action="{{ url_for('admin.agentes_julia_configurar_frequencia') }}" class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label for="frequencia_horas" class="form-label">Frequencia (horas)</label>
+                    <input
+                        id="frequencia_horas"
+                        name="frequencia_horas"
+                        type="number"
+                        min="1"
+                        step="1"
+                        class="form-control"
+                        value="{{ frequencia_horas|default(3) }}"
+                        required
+                    >
+                </div>
+                <div class="col-md-8">
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save me-1"></i> Salvar frequencia
+                        </button>
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_horas" value="1">1h</button>
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_horas" value="3">3h</button>
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_horas" value="6">6h</button>
+                    </div>
+                    <small class="text-muted d-block mt-2">
+                        Valor atual: {{ frequencia_horas|default(3) }}h.
+                    </small>
+                </div>
+            </form>
+            <hr class="my-3">
+            <h6 class="mb-2">Próxima notícia automática (homolog/prod)</h6>
+            <ul class="mb-0 text-muted small">
+                <li><strong>Frequência atual:</strong> {{ frequencia_horas|default(3) }}h entre ciclos.</li>
+                <li><strong>Janela de publicação:</strong> {{ janela_inicio|default(6) }}h às {{ janela_fim|default(22) }}h (ciclo só roda dentro desse horário).</li>
+                <li><strong>Última execução (ciclo automático):</strong>
+                    {% if ultima_execucao %}
+                        {{ ultima_execucao.strftime('%d/%m/%Y %H:%M') }} (UTC).
+                    {% else %}
+                        Nunca registrada (ou só execuções com bypass).
+                    {% endif %}
+                </li>
+                <li><strong>Próxima execução prevista:</strong>
+                    {% if proxima_prevista %}
+                        {{ proxima_prevista.strftime('%d/%m/%Y %H:%M') }} (UTC).
+                    {% else %}
+                        —
+                    {% endif %}
+                    <br><em>Só ocorre se houver processo/cron rodando o ciclo (ex.: script Cleiton em loop ou job no Render).</em>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h6 class="mb-3">Fluxo de validação rápida</h6>
+            <p class="text-muted mb-2">
+                A arquitetura permanece: Cleiton (gerencial) decide o ciclo e dispara a Júlia (operacional).
+            </p>
+            <ul class="mb-3">
+                <li>
+                    <strong>Notícias</strong>: coletadas automaticamente pelo Scout a partir das fontes configuradas em
+                    <code>SCOUT_SOURCES_JSON</code> (RSS, incluindo Google Alerts Notícias). Não é necessário inserir
+                    pautas de notícia manualmente; o Scout preenche a tabela <code>pautas</code> com
+                    <code>tipo='noticia'</code> e <code>status_verificacao='pendente'</code>.
+                </li>
+                <li>
+                    <strong>Artigos</strong>: continuam aceitando input manual. Insira a pauta na tabela
+                    <code>pautas</code> com <code>tipo='artigo'</code> (ou use importadores legados) e, em seguida,
+                    execute o ciclo do Cleiton para que a Júlia processe apenas as pautas aprovadas pelo Verificador.
+                </li>
+            </ul>
+            <ol class="mb-0">
+                <li>Configurar fontes em <code>SCOUT_SOURCES_JSON</code> para notícias automáticas (RSS/Google Alerts).</li>
+                <li>Se necessário, inserir pautas de <strong>artigo</strong> manualmente na tabela <code>pautas</code>.</li>
+                <li>Clicar em <strong>Executar Cleiton</strong> para rodar o ciclo completo.</li>
+                <li>Validar publicação em <code>noticias_portal</code> e no front.</li>
+            </ol>
+        </div>
+    </div>
+
+    <div class="row g-3 mt-4">
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Coleta de notícias agora (opcional)</h6>
+                    <p class="card-text text-muted">
+                        Executa apenas a Fase 3 (Scout + Verificador) para acelerar a entrada de novas notícias
+                        automáticas na Júlia, sem alterar o restante do ciclo gerencial.
+                    </p>
+                    <form method="post" action="{{ url_for('admin.agentes_julia_coletar_noticias') }}">
+                        <button type="submit" class="btn btn-outline-secondary">
+                            <i class="bi bi-rss-fill me-1"></i> Rodar coleta de notícias agora
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
