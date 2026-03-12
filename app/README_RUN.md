@@ -122,6 +122,19 @@ APP_ENV=homolog gunicorn -w 2 -b 0.0.0.0:8000 app.web:app
 
 ---
 
+### 2.1 Configuração de e-mail (recuperação de senha via Resend)
+
+- O fluxo de “esqueci minha senha” usa a API do Resend a partir de `app/auth_services.py`.
+- Configure no `.env.{APP_ENV}` dentro de `app/`:
+
+```env
+MAIL_DEFAULT_SENDER=noreply@agentefrete.com.br
+MAIL_FROM=noreply@agentefrete.com.br
+RESEND_API_KEY=sua_resend_api_key_aqui
+```
+
+- `MAIL_USERNAME` permanece opcional e é usado apenas para bootstrap/admin (ver `app/infra.py` e `app/auth_services.py`); não é mais utilizado como conta SMTP.
+
 ## 3. Diagnóstico OAuth (opcional)
 
 As rotas de ops (`app/ops_routes.py`) incluem:

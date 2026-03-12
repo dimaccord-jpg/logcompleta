@@ -18,7 +18,6 @@ from flask import Flask, render_template, redirect, url_for, request, flash, abo
 from flask_session import Session
 from flask_login import login_user, login_required, logout_user, current_user
 from app.extensions import db, login_manager
-from flask_mail import Mail
 from app.painel_admin.admin_routes import admin_bp
 from app.ops_routes import ops_bp
 from app.infra import (
@@ -87,16 +86,6 @@ app.config['SESSION_COOKIE_SAMESITE'] = settings.session_cookie_samesite
 # Configuração para OAuth em HTTPS com auto-redirecionamento
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' if settings.oauth_insecure_transport else '0'
-
-# Configurações de e-mail (para recuperação de senha)
-app.config['MAIL_SERVER'] = settings.mail_server
-app.config['MAIL_PORT'] = settings.mail_port
-app.config['MAIL_USE_TLS'] = settings.mail_use_tls
-app.config['MAIL_USERNAME'] = settings.mail_username
-app.config['MAIL_PASSWORD'] = settings.mail_password
-app.config['MAIL_DEFAULT_SENDER'] = settings.mail_default_sender
-
-mail = Mail(app)
 
 # Configuração dos Binds (Bancos adicionais)
 app.config['SQLALCHEMY_BINDS'] = settings.sqlalchemy_binds
@@ -217,7 +206,6 @@ def request_password_reset():
         success, message, dev_reset_url = auth_request_password_reset(
             email,
             secret_key=app.config['SECRET_KEY'],
-            mail=mail,
             build_reset_url=lambda token: url_for('reset_password', token=token, _external=True),
         )
         flash(message, 'info' if success else 'danger')
