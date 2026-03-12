@@ -39,7 +39,8 @@ pip install gunicorn
 
 ## 3. Configuração de Dados e Persistência
 
-Para evitar perder dados em novos deploys, o banco de dados ficará fora da pasta do código.
+Para evitar perder dados em novos deploys, o banco de dados e os arquivos de índices **precisam** ficar fora da pasta do código.  
+Homologação e Produção são tratados como ambientes com persistência **obrigatória**: se a aplicação detectar apenas filesystem efêmero para dados/índices, ela **falhará no boot** em vez de subir “saudável” com dados voláteis.
 
 ```bash
 mkdir -p /srv/logcompleta/data
@@ -48,14 +49,19 @@ mkdir -p /srv/logcompleta/data
 **Crie o arquivo `.env.prod` no servidor (lido por `app/settings.py`):**
 `nano /srv/logcompleta/code/app/.env.prod`
 
-Conteúdo (Ajuste os caminhos do DB e a URL do site):
+Conteúdo (ajuste o diretório de dados, os caminhos do DB e a URL do site):
 ```ini
 APP_ENV=prod
 FLASK_DEBUG=False
 SECRET_KEY=CHAVE_MUITO_SEGURA_E_LONGA_GERADA_ALEATORIAMENTE
 LOG_LEVEL=WARNING
 
-# Caminhos Absolutos para Persistência
+# Diretório de dados (persistente) – obrigatório em homolog/prod
+# Em servidores próprios, use um caminho fora da pasta do código.
+APP_DATA_DIR=/srv/logcompleta/data
+
+# Caminhos absolutos para persistência (opcional).
+# Se você omitir os DB_URI_*, o código usará APP_DATA_DIR/auth.db, APP_DATA_DIR/base_localidades.db etc.
 DB_URI_AUTH=sqlite:////srv/logcompleta/data/auth.db
 DB_URI_LOCALIDADES=sqlite:////srv/logcompleta/data/base_localidades.db
 DB_URI_HISTORICO=sqlite:////srv/logcompleta/data/historico_frete.db
@@ -103,7 +109,7 @@ GUNICORN_GRACEFUL_TIMEOUT_SECONDS=30
 GUNICORN_KEEPALIVE_SECONDS=5
 # Índices da Home em storage persistente (obrigatório em homolog/prod).
 # Este caminho será usado tanto pelo serviço web (rota `/`) quanto pelo job de coleta (`python -m app.finance`),
-# via configuração centralizada em app/settings.py.
+# via configuração centralizada em app/settings.py e validação rígida em app/env_loader.validate_runtime_env.
 INDICES_FILE_PATH=/srv/logcompleta/data/indices.json
 # Execução manual no painel admin: em homolog/prod o padrão já é async
 # ADMIN_CLEITON_EXEC_MODE=async
@@ -155,13 +161,7 @@ Checklist rapido de validacao (Indices da Home):
 - A coleta de índices roda por `python -m app.finance` e atualiza o arquivo apontado por `INDICES_FILE_PATH`, resolvido por `app/settings.py`.
 - A rota `/` deve exibir o último registro do histórico (`historico[-1]`) no ticker, lendo o mesmo caminho via `settings.indices_file_path`.
 - Se houver formato histórico no JSON, a conversão para formato plano deve acontecer apenas na camada web (`index`), mantendo compatibilidade com o JSON legado simples enquanto durar a janela de transição.
-- Em homolog/prod, `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta da release. Caso a configuração esteja incorreta, `env_loader.validate_runtime_env` emitirá apenas um aviso (modo degradado) sem derrubar o serviço.
-
-Checklist rapido de validacao (Indices da Home):
-- A coleta de índices roda por `python -m app.finance` e atualiza o arquivo apontado por `INDICES_FILE_PATH`.
-- A rota `/` deve exibir o último registro do histórico (`historico[-1]`) no ticker.
-- Se houver formato histórico no JSON, a conversão para formato plano deve acontecer apenas na camada web (`index`).
-- Em homolog/prod, `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta da release.
+- Em homolog/prod, `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta da release. Caso a configuração esteja incorreta, `env_loader.validate_runtime_env` agora interromperá o boot com erro explícito para evitar rodar em filesystem efêmero.
 
 ## 4. Configurar Gunicorn com Systemd
 

@@ -18,15 +18,17 @@ Este projeto utiliza variáveis de ambiente para alternar entre configurações 
 
 **Indicadores no topo da Home (Petróleo, BDI, FBX e Dólar):**
 - Coleta: `app/finance.py` (`atualizar_indices`) usa configuração centralizada em `app/settings.py` (`settings.indices_file_path`) para resolver o caminho persistente dos índices por ambiente.
-- Persistência (fase atual): formato histórico em arquivo (`ultima_atualizacao` + `historico`), armazenado em diretório de dados resolvido por `env_loader.resolve_data_dir` / `APP_DATA_DIR` / `RENDER_DISK_PATH` (nunca depende de caminho efêmero dentro da release em homolog/prod).
+- Persistência (fase atual): formato histórico em arquivo (`ultima_atualizacao` + `historico`), armazenado em diretório de dados resolvido por `env_loader.resolve_data_dir` / `APP_DATA_DIR` / `RENDER_DISK_PATH`.  
+  - Em **dev**, se nada estiver configurado, o fallback é o diretório local do app.
+  - Em **homolog/prod**, `env_loader.resolve_data_dir` **não permite** fallback para diretório efêmero da release: se não houver diretório persistente válido, a aplicação falha no boot com erro explícito.
 - Exibição: a rota `/` em `app/web.py` lê o mesmo caminho de índices via `settings.indices_file_path`, extrai o último item do histórico e envia para `index.html` no formato plano esperado pelo ticker (`dolar`, `petroleo`, `bdi`, `fbx`), mantendo compatibilidade com o JSON legado simples e o formato histórico.
 - Contrato importante: o formato histórico deve ser mantido para análises do Roberto (`run_roberto.py`), e a conversão para formato plano deve ficar restrita à rota da Home. Em caso de falha na leitura, a Home continua exibindo um fallback seguro (campos não são zerados silenciosamente pelo backend).
 
 **Hardening de ambiente (homolog/prod):**
 - A configuração de ambiente é centralizada em `app/settings.py`. O módulo determina `APP_ENV` em um único ponto e chama `env_loader` apenas uma vez.
 - Em ambientes gerenciados (ex.: Render, com `RENDER=true`), `APP_ENV` é obrigatório e deve estar explícito no serviço (`homolog` ou `prod`). Fora desse contexto, o default é `dev` apenas para execução local.
-- `DB_URI_*` críticos continuam devendo ser definidos no ambiente ou serão resolvidos para caminhos persistentes em diretório de dados dedicado (por padrão fora da pasta da release).
-- `INDICES_FILE_PATH` passa a apontar para storage persistente fora da pasta `app` (ex.: `/var/data/indices.json` ou diretório definido por `APP_DATA_DIR`/`RENDER_DISK_PATH`). A validação em `env_loader.validate_runtime_env` apenas emite `WARN` quando o caminho é inválido em homolog/prod, mantendo a aplicação viva em modo degradado até que a configuração seja ajustada.
+- `DB_URI_*` críticos continuam devendo ser definidos no ambiente ou serão resolvidos para caminhos persistentes em diretório de dados dedicado (por padrão fora da pasta da release, via `APP_DATA_DIR` / `RENDER_DISK_PATH` / `/var/data`).
+- `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta `app` (ex.: `/var/data/indices.json` ou diretório definido por `APP_DATA_DIR`/`RENDER_DISK_PATH`). A validação em `env_loader.validate_runtime_env` agora é **reativa**: em homolog/prod, um caminho inválido ou apontando para a pasta da release provoca erro de boot, evitando deploy “verde” com persistência quebrada.
 
 ## Status Atual
 

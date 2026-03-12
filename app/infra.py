@@ -143,8 +143,8 @@ def resolve_sqlite_path(uri: str, base_dir: str) -> str:
     """
 
     def _prefer_persistent_sqlite_dir() -> str | None:
-        app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
-        if app_env not in ("homolog", "prod"):
+        app_env_inner = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
+        if app_env_inner not in ("homolog", "prod"):
             return None
 
         candidates = [
@@ -162,6 +162,8 @@ def resolve_sqlite_path(uri: str, base_dir: str) -> str:
                 # Tenta próximo candidato; não interrompe startup.
                 continue
         return None
+
+    app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
 
     if uri and uri.startswith('sqlite:///'):
         path_part = uri[len('sqlite:///'):]
@@ -188,6 +190,14 @@ def resolve_sqlite_path(uri: str, base_dir: str) -> str:
                             copy_err,
                         )
             else:
+                # Em homolog/prod, não permitimos cair para base_dir (pasta da release),
+                # pois isso leva à perda de dados entre deploys em ambientes efêmeros.
+                if app_env in ("homolog", "prod"):
+                    raise RuntimeError(
+                        "Em homolog/prod, URIs SQLite relativas exigem diretório persistente "
+                        "configurado (PERSISTENT_DATA_DIR, RENDER_DISK_MOUNT_PATH ou /var/data). "
+                        "Ajuste a configuração para apontar para o disco persistente."
+                    )
                 absolute_path = os.path.join(base_dir, path_part)
             os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
             return 'sqlite:///' + absolute_path.replace('\\', '/')

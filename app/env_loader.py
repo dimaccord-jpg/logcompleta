@@ -45,6 +45,9 @@ def resolve_data_dir() -> str:
     3) /var/data (Render)
     4) fallback local em app/
     """
+    app_env = (os.getenv("APP_ENV") or "dev").strip().lower() or "dev"
+    is_render = (os.getenv("RENDER") or "").strip().lower() == "true"
+
     explicit_data_dir = (os.getenv("APP_DATA_DIR") or "").strip()
     if explicit_data_dir:
         explicit_data_dir = str(Path(explicit_data_dir).expanduser())
@@ -58,13 +61,30 @@ def resolve_data_dir() -> str:
             return str(Path(render_disk))
         print(f"[WARN] RENDER_DISK_PATH inválido/inacessível: {render_disk}. Aplicando fallback.")
 
-    if (os.getenv("RENDER") or "").strip().lower() == "true":
+    if is_render:
         render_default = "/var/data"
         if _can_use_dir(render_default):
             return render_default
-        print("[WARN] /var/data indisponível. Usando fallback local em app/.")
+        msg = "[ERROR] /var/data indisponível em ambiente Render."
+        if app_env in ("homolog", "prod"):
+            # Em homolog/prod, não permitimos cair silenciosamente para diretório efêmero.
+            raise RuntimeError(
+                msg
+                + " Configure o disco persistente (ex.: mount em /var/data) "
+                "e/ou APP_DATA_DIR/RENDER_DISK_PATH antes de subir a aplicação."
+            )
+        print(msg + " Usando fallback local em app/ apenas para desenvolvimento.")
 
-    return get_app_dir()
+    # Fallback final: apenas aceitável em desenvolvimento local.
+    app_dir = get_app_dir()
+    if app_env in ("homolog", "prod"):
+        raise RuntimeError(
+            "[ERROR] Diretório de dados não pôde ser resolvido para um volume persistente "
+            "em homolog/prod. Configure APP_DATA_DIR ou RENDER_DISK_PATH apontando para "
+            "o disco persistente (ex.: /var/data)."
+        )
+    print(f"[WARN] DATA_DIR caindo para diretório local do app (dev only): {app_dir}")
+    return app_dir
 
 
 def resolve_indices_file_path() -> str:
@@ -97,16 +117,18 @@ def validate_runtime_env() -> None:
     try:
         indices_resolved = Path(indices_path).resolve()
     except Exception as exc:
-        print(
-            "[WARN] INDICES_FILE_PATH inválido em homolog/prod "
-            f"({indices_path}): {exc}. Aplicação seguirá em modo degradado; "
-            "ajuste a configuração para garantir persistência dos índices."
-        )
-        return
+        # Em homolog/prod, falha de resolução de índices deve ser fatal para evitar
+        # boot "saudável" sem persistência garantida.
+        raise RuntimeError(
+            "[ERROR] INDICES_FILE_PATH inválido em homolog/prod "
+            f"({indices_path}): {exc}. Configure APP_DATA_DIR/RENDER_DISK_PATH/"
+            "INDICES_FILE_PATH apontando para volume persistente antes de subir a aplicação."
+        ) from exc
 
-    # Em homolog/prod, alertamos quando índices apontam para pasta da release.
+    # Em homolog/prod, não aceitamos índices apontando para pasta da release (efêmera).
     if app_dir in indices_resolved.parents or indices_resolved == app_dir / "indices.json":
-        print(
-            "[WARN] INDICES_FILE_PATH aponta para pasta da app em homolog/prod. "
-            "Configure APP_DATA_DIR/RENDER_DISK_PATH/INDICES_FILE_PATH para persistência real."
+        raise RuntimeError(
+            "[ERROR] INDICES_FILE_PATH aponta para pasta da aplicação em homolog/prod. "
+            "Configure APP_DATA_DIR/RENDER_DISK_PATH/INDICES_FILE_PATH para um diretório "
+            "montado em disco persistente (ex.: /var/data/indices.json)."
         )
