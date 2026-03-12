@@ -11,3 +11,5 @@ Flask-Dance
 feedparser
 requests
 google-genai>=0.3.0
+yfinance
+beautifulsoup4
