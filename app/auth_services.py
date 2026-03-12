@@ -10,13 +10,70 @@ from urllib.parse import urlencode
 
 import requests
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from flask_mail import Message
 from sqlalchemy import func
 
 from app.extensions import db
 from app.models import User
 
 logger = logging.getLogger(__name__)
+
+
+def send_email(
+    to_email: str,
+    subject: str,
+    html: str,
+    text: str | None = None,
+) -> None:
+    """
+    Envia e-mail usando a API do Resend.
+    Centraliza o envio para facilitar manutenção e troca de provider.
+    """
+    api_key = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        raise RuntimeError("RESEND_API_KEY não configurada")
+
+    mail_from = (
+        os.getenv("MAIL_FROM")
+        or os.getenv("MAIL_DEFAULT_SENDER")
+        or "noreply@agentefrete.com.br"
+    )
+
+    payload: dict = {
+        "from": f"Agentefrete <{mail_from}>",
+        "to": [to_email],
+        "subject": subject,
+        "html": html,
+    }
+    if text:
+        payload["text"] = text
+
+    try:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        logger.exception("Erro de rede ao enviar e-mail via Resend: %s", e)
+        raise RuntimeError("Falha de rede ao enviar e-mail de recuperação de senha.") from e
+
+    if response.status_code >= 400:
+        logger.error(
+            "Erro ao enviar e-mail via Resend: status=%s, body=%s",
+            response.status_code,
+            response.text,
+        )
+        raise RuntimeError("Erro ao enviar e-mail de recuperação de senha.")
+
+    logger.info(
+        "E-mail de recuperação enviado via Resend para %s com assunto '%s'.",
+        to_email,
+        subject,
+    )
 
 
 def _utcnow_naive() -> datetime:
@@ -119,7 +176,6 @@ def request_password_reset(
     email: str,
     *,
     secret_key: str,
-    mail,
     build_reset_url,
 ):
     """
@@ -140,15 +196,20 @@ def request_password_reset(
     reset_url = build_reset_url(token)
 
     subject = PASSWORD_RESET_EMAIL_SUBJECT
-    body = _password_reset_email_body(user.full_name, reset_url)
+    body_text = _password_reset_email_body(user.full_name, reset_url)
+    html_body = body_text.replace("\n", "<br>")
 
     try:
-        msg = Message(subject=subject, recipients=[user.email], body=body)
-        mail.send(msg)
+        send_email(
+            to_email=user.email,
+            subject=subject,
+            html=html_body,
+            text=body_text,
+        )
         dev_link = reset_url  # caller pode usar em debug
         return True, "Se o e-mail estiver cadastrado, enviaremos um link de recuperação. Confira também a pasta de spam ou lixo eletrônico.", dev_link
     except Exception as e:
-        logger.error("Erro ao enviar e-mail de recuperação de senha: %s", e)
+        logger.error("Erro ao enviar e-mail de recuperação de senha via Resend: %s", e)
         return False, "Não foi possível enviar o e-mail de recuperação. Tente novamente mais tarde.", None
 
 

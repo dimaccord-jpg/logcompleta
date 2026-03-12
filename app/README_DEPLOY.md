@@ -75,12 +75,11 @@ GOOGLE_OAUTH_REDIRECT_URI=https://SEU_DOMINIO/login/google/callback
 # Hotfix OAuth state/CSRF: o callback aceita múltiplos states pendentes na sessão
 # para evitar falso negativo quando o fluxo OAuth é iniciado mais de uma vez.
 
-# E-mail (recuperação de senha)
-MAIL_SERVER=smtp.gmail.com
-MAIL_PORT=587
-MAIL_USE_TLS=True
-MAIL_USERNAME=...
-MAIL_PASSWORD=...
+# E-mail (recuperação de senha via Resend)
+# O envio de e-mails de recuperação de senha é feito via Resend API (sem SMTP).
+# MAIL_USERNAME é usado apenas para bootstrap/admin; não é mais usado como conta SMTP.
+MAIL_FROM=noreply@agentefrete.com.br
+RESEND_API_KEY=RE_SUA_CHAVE_RESSEND_AQUI
 
 # Token para rotas de operação e diagnóstico OAuth (header X-Ops-Token). Gere um valor secreto.
 OPS_TOKEN=seu_token_secreto_aqui
