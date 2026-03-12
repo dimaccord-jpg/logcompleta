@@ -23,11 +23,10 @@ Estas chaves precisam ser renovadas no provedor antes de atualizar localmente:
 
 1. GOOGLE_OAUTH_CLIENT_ID
 2. GOOGLE_OAUTH_CLIENT_SECRET
-3. MAIL_PASSWORD
-4. GEMINI_API_KEY
-5. GEMINI_API_KEY_1
-6. GEMINI_API_KEY_2
-7. GEMINI_API_KEY_ROBERTO
+3. GEMINI_API_KEY
+4. GEMINI_API_KEY_1
+5. GEMINI_API_KEY_2
+6. GEMINI_API_KEY_ROBERTO
 
 ## Uso rapido (PowerShell)
 
@@ -51,11 +50,13 @@ Se precisar inserir chaves ausentes no arquivo alvo:
 
 Rotacao completa (internos + externos ja renovados no provedor):
 
+> OBS: `MAIL_PASSWORD` era usado na configuracao SMTP/Gmail legada e nao e mais utilizado pelo app.
+> A rotacao de segredos de e-mail agora deve focar em `RESEND_API_KEY` configurado nos arquivos `.env.*` dentro de `app/`.
+
 ```powershell
 ./scripts/security/rotate-secrets.ps1 \
   -SetValues "GOOGLE_OAUTH_CLIENT_ID=NOVO_ID" \
   -SetValues "GOOGLE_OAUTH_CLIENT_SECRET=NOVO_SECRET" \
-  -SetValues "MAIL_PASSWORD=NOVA_SENHA_APP" \
   -SetValues "GEMINI_API_KEY=NOVA_KEY" \
   -SetValues "GEMINI_API_KEY_1=NOVA_KEY_1" \
   -SetValues "GEMINI_API_KEY_2=NOVA_KEY_2" \
