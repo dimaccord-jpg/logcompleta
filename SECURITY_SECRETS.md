@@ -87,11 +87,13 @@ Se precisar inserir chaves ausentes no arquivo alvo, adicione `-InsertMissing`.
 
 Exemplo completo com segredos externos ja renovados no provedor:
 
+> OBS: `MAIL_PASSWORD` era usado na configuracao SMTP/Gmail legada e nao e mais utilizado pelo app.
+> A rotacao de segredos de e-mail agora deve focar em `RESEND_API_KEY`.
+
 ```powershell
 ./scripts/security/rotate-secrets.ps1 \
 	-SetValues "GOOGLE_OAUTH_CLIENT_ID=NOVO_ID" \
 	-SetValues "GOOGLE_OAUTH_CLIENT_SECRET=NOVO_SECRET" \
-	-SetValues "MAIL_PASSWORD=NOVA_SENHA_APP" \
 	-SetValues "GEMINI_API_KEY=NOVA_KEY" \
 	-SetValues "GEMINI_API_KEY_1=NOVA_KEY_1" \
 	-SetValues "GEMINI_API_KEY_2=NOVA_KEY_2" \

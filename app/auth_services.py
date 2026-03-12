@@ -150,6 +150,22 @@ Equipe Agentefrete
 """
 
 
+def _password_reset_email_html_body(full_name: str, reset_url: str) -> str:
+    """
+    Versão HTML do e-mail de recuperação com link clicável.
+    Mantém o conteúdo equivalente ao texto plano.
+    """
+    return f"""
+<p>Olá {full_name},</p>
+<p>Recebemos uma solicitação para redefinir sua senha no Agentefrete.</p>
+<p>Para criar uma nova senha, clique no link abaixo (válido por 1 hora):<br>
+<a href="{reset_url}">{reset_url}</a></p>
+<p>Se você não solicitou esta redefinição, ignore este e-mail.</p>
+<p>Atenciosamente,<br>
+Equipe Agentefrete</p>
+""".strip()
+
+
 # --- Autenticação local (email/senha) ---
 
 
@@ -197,7 +213,7 @@ def request_password_reset(
 
     subject = PASSWORD_RESET_EMAIL_SUBJECT
     body_text = _password_reset_email_body(user.full_name, reset_url)
-    html_body = body_text.replace("\n", "<br>")
+    html_body = _password_reset_email_html_body(user.full_name, reset_url)
 
     try:
         send_email(
