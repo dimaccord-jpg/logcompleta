@@ -58,7 +58,8 @@ class TestUserArea(unittest.TestCase):
                     sess["_user_id"] = str(user.id)
                     sess["_fresh"] = True
 
-                resp = client.get(url_for("user.perfil"))
+                # Chama diretamente a rota, evitando url_for fora de request
+                resp = client.get("/perfil")
                 self.assertEqual(resp.status_code, 200)
                 html = resp.get_data(as_text=True)
                 self.assertIn("Área do Usuário", html)
@@ -78,7 +79,8 @@ class TestUserArea(unittest.TestCase):
                     sess["_user_id"] = str(admin.id)
                     sess["_fresh"] = True
 
-                resp = client.get(url_for("user.perfil"))
+                # Chama diretamente a rota, evitando url_for fora de request
+                resp = client.get("/perfil")
                 self.assertEqual(resp.status_code, 200)
                 html = resp.get_data(as_text=True)
                 self.assertIn("Área do Usuário", html)
