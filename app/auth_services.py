@@ -213,7 +213,7 @@ def request_password_reset(
 
     subject = PASSWORD_RESET_EMAIL_SUBJECT
     body_text = _password_reset_email_body(user.full_name, reset_url)
-    html_body = body_text.replace("\n", "<br>")
+        html_body = _password_reset_email_html_body(user.full_name, reset_url)
 
     try:
         send_email(
