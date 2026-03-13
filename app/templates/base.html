@@ -71,9 +71,9 @@
         #sidebar.active .logo-icon { display: block !important; }
         .logo-icon {
             display: none;
-            width: 52px;
+            width: 72px;
             height: auto;
-            max-height: 52px;
+            max-height: 72px;
             object-fit: contain;
             margin-bottom: 10px;
         }
@@ -124,6 +124,25 @@
             right: 20px;
             z-index: 1050;
         }
+
+        /* NAVBAR MOBILE (substitui sidebar em celulares) */
+        .mobile-navbar {
+            background: var(--sidebar-bg);
+        }
+
+        @media (max-width: 767.98px) {
+            #sidebar {
+                display: none;
+            }
+            #content,
+            #content.active {
+                margin-left: 0;
+                width: 100%;
+            }
+            .flash-messages {
+                top: 70px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -142,7 +161,67 @@
         {% endwith %}
     </div>
 
-    <nav id="sidebar" class="active">
+    <!-- NAVBAR MOBILE (exibida apenas em celulares) -->
+    <nav class="navbar navbar-dark mobile-navbar d-md-none px-3">
+        <div class="d-flex align-items-center justify-content-between w-100">
+            <button class="btn btn-outline-light border-0 p-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileMenu" aria-controls="mobileMenu" aria-label="Abrir menu de navegação">
+                <i class="bi bi-list fs-4"></i>
+            </button>
+            <span class="navbar-brand mb-0 h6 text-truncate ms-2">
+                Agentefrete
+            </span>
+        </div>
+    </nav>
+
+    <!-- MENU OFFCANVAS MOBILE -->
+    <div class="offcanvas offcanvas-start text-bg-dark d-md-none" tabindex="-1" id="mobileMenu" aria-labelledby="mobileMenuLabel">
+        <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="mobileMenuLabel">Menu</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+        </div>
+        <div class="offcanvas-body d-flex flex-column">
+            <a href="{{ url_for('index') }}" class="nav-item mb-1">
+                <i class="bi bi-house-door"></i>
+                <span class="menu-text">Home / Notícias</span>
+            </a>
+            <a href="{{ url_for('fretes') }}" class="nav-item mb-1">
+                <i class="bi bi-truck"></i>
+                <span class="menu-text">Consulta de Frete</span>
+                {% if not current_user.is_authenticated %}
+                <i class="bi bi-lock-fill ms-auto opacity-50 menu-text" style="font-size: 0.8rem;"></i>
+                {% endif %}
+            </a>
+
+            <hr class="border-secondary my-3">
+
+            {% if current_user.is_authenticated %}
+                <div class="mb-3 small text-muted">
+                    <div class="d-flex align-items-center mb-2">
+                        <i class="bi bi-person-circle fs-4 me-2 text-warning"></i>
+                        <div>
+                            <div class="text-uppercase" style="font-size: 0.65rem;">Bem-vindo</div>
+                            <div class="fw-semibold">
+                                {{ current_user.full_name or current_user.email }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ url_for('user.perfil') }}" class="btn btn-outline-light btn-sm mb-2 text-start">
+                    <i class="bi bi-gear me-1"></i> Área do Usuário
+                </a>
+                <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm text-start">
+                    <i class="bi bi-box-arrow-right me-1"></i> Sair
+                </a>
+            {% else %}
+                <a href="{{ url_for('login') }}" class="btn btn-outline-light btn-sm text-start">
+                    <i class="bi bi-box-arrow-in-right me-1"></i> Login / Cadastro
+                </a>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- SIDEBAR DESKTOP/TABLET -->
+    <nav id="sidebar" class="active d-none d-md-flex">
         <div class="sidebar-header">
             <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Logo" class="logo-img">
             <img src="{{ url_for('static', filename='img/logo_simples.png') }}" alt="Logo simplificada" class="logo-icon">
@@ -168,12 +247,16 @@
 
         <div class="sidebar-footer">
             {% if current_user.is_authenticated %}
-                <div class="d-flex align-items-center">
-                    <i class="bi bi-person-circle fs-3 me-3 text-warning"></i>
-                    <div class="menu-text">
-                        <small class="d-block text-muted" style="font-size: 0.65rem;">BEM-VINDO</small>
-                        <a href="{{ url_for('logout') }}" class="text-white text-decoration-none small fw-bold">Sair</a>
-                    </div>
+                <div class="d-flex align-items-center justify-content-between">
+                    <a href="{{ url_for('user.perfil') }}" class="d-flex align-items-center text-white text-decoration-none flex-grow-1">
+                        <i class="bi bi-person-circle fs-3 me-3 text-warning"></i>
+                        <div class="menu-text">
+                            <small class="d-block text-muted" style="font-size: 0.65rem;">BEM-VINDO</small>
+                            <span class="d-block small fw-semibold">
+                                {{ current_user.full_name or current_user.email }}
+                            </span>
+                        </div>
+                    </a>
                 </div>
             {% else %}
                 <a href="{{ url_for('login') }}" class="nav-item p-0 text-white">

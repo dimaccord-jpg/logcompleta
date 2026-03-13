@@ -20,6 +20,7 @@ from flask_login import login_user, login_required, logout_user, current_user
 from app.extensions import db, login_manager
 from app.painel_admin.admin_routes import admin_bp
 from app.ops_routes import ops_bp
+from app.user_area import user_bp
 from app.infra import (
     resolve_sqlite_path,
     ensure_database_schema,
@@ -108,6 +109,7 @@ REDIRECT_URI = settings.google_redirect_uri
 
 app.register_blueprint(admin_bp)
 app.register_blueprint(ops_bp)
+app.register_blueprint(user_bp)
 
 # 5. Imports que dependem do Contexto (Executados após a vinculação do DB)
 with app.app_context():

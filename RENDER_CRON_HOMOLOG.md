@@ -1,3 +1,5 @@
+## Novidade: Área do Usuário
+Admins podem acessar o Painel ADM diretamente pela Área do Usuário, disponível no rodapé da sidebar após login.
 # Cron Jobs no Render (homolog)
 
 Este guia cobre dois agendamentos independentes em homolog:
