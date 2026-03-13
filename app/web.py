@@ -1,4 +1,7 @@
 import os
+import logging
+logging.basicConfig(level=logging.INFO)
+logging.info("[VALIDAÇÃO] APP_DATA_DIR: %s", os.environ.get("APP_DATA_DIR"))
 import sys
 
 # Garante que o pacote 'app' seja encontrado ao rodar este arquivo como script (ex.: python app/web.py)

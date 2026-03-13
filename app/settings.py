@@ -66,6 +66,7 @@ def _build_settings() -> Settings:
     # 1) Determina e fixa APP_ENV
     app_env = _detect_app_env()
     os.environ["APP_ENV"] = app_env
+    print("[VALIDAÇÃO] APP_DATA_DIR:", os.environ.get("APP_DATA_DIR"))
 
     # 2) Carrega .env.{APP_ENV} uma vez e valida runtime
     env_loader.load_app_env()
