@@ -87,8 +87,11 @@ Se precisar inserir chaves ausentes no arquivo alvo, adicione `-InsertMissing`.
 
 Exemplo completo com segredos externos ja renovados no provedor:
 
-> OBS: `MAIL_PASSWORD` era usado na configuracao SMTP/Gmail legada e nao e mais utilizado pelo app.
-> A rotacao de segredos de e-mail agora deve focar em `RESEND_API_KEY`.
+> OBS: `MAIL_PASSWORD` era usado na configuração SMTP/Gmail legada e não é mais utilizado pelo app.
+> A rotação de segredos de e-mail agora deve focar em `RESEND_API_KEY`.
+
+## Novidade: Área do Usuário
+O acesso à Área do Usuário e Painel ADM depende de autenticação segura. Segredos de admin e usuário nunca devem ser versionados. O `RESEND_API_KEY` é usado para recuperação de senha e deve ser rotacionado conforme política.
 
 ```powershell
 ./scripts/security/rotate-secrets.ps1 \

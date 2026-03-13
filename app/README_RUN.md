@@ -1,6 +1,20 @@
 # 🏃 Guia de Execução Local
 
 Este projeto utiliza variáveis de ambiente para alternar entre configurações de Desenvolvimento e Homologação. A lógica de autenticação está em `app/auth_services.py`; a infraestrutura em `app/infra.py`; as rotas operacionais (diagnóstico OAuth, auditoria de usuários, promote-admin, reset de pautas e health) estão em `app/ops_routes.py` (Blueprint). O `web.py` apenas expõe as rotas e registra os blueprints.
+## Novidade: Área do Usuário
+
+O sistema possui uma Área do Usuário acessível pelo avatar no rodapé da sidebar. Usuários autenticados podem acessar `/perfil` para visualizar cards de Segurança, Pagamento e Notificações. Admins veem um atalho Painel ADM.
+
+### Teste manual
+- Faça login com usuário comum: clique no avatar/BEM-VINDO → `/perfil` exibe os cards, sem Painel ADM.
+- Faça login com admin: clique no avatar/BEM-VINDO → `/perfil` exibe os cards e o Painel ADM.
+- Logout funciona normalmente.
+- Acesso a `/perfil` sem login redireciona para tela de login.
+
+### Referência
+- Blueprint: `user_bp` em `app/user_area.py`
+- Template: `app/templates/user_area.html`
+- Testes: `app/tests/test_user_area.py`
 
 **Camada gerencial (Cleiton):** Orquestração em `run_cleiton_agente_orquestrador.py`; regras em `run_cleiton_agente_regras.py`; dispatch em `run_cleiton_agente_dispatcher.py`; auditoria em `run_cleiton_agente_auditoria.py`. `run_cleiton.py` é fachada que delega ao orquestrador.
 

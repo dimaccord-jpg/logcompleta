@@ -3,6 +3,12 @@
 Este guia cobre a instalação do projeto em um servidor Ubuntu usando Gunicorn, Systemd e Nginx.
 
 ## 1. Preparação do Servidor
+## Novidade: Área do Usuário
+
+O sistema agora possui uma Área do Usuário acessível pelo avatar no rodapé da sidebar. O blueprint `user_bp` está registrado em `app/web.py`, expondo a rota `/perfil` (protegida por login). O template `user_area.html` exibe cards de Segurança, Pagamento e Notificações, além de um atalho Painel ADM exclusivo para admin.
+
+Testes automatizados em `app/tests/test_user_area.py` garantem o correto funcionamento da rota, visibilidade do Painel ADM e proteção de acesso.
+
 
 Acesse o servidor via SSH e instale os pacotes básicos:
 ```bash
@@ -13,6 +19,15 @@ sudo apt install python3-pip python3-venv nginx git -y
 ## 2. Estrutura de Pastas e Código
 
 O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. A camada gerencial Cleiton usa o bind `gerencial` (`DB_URI_GERENCIAL`). A configuração de ambiente (incluindo o carregamento de `.env`) é centralizada em `app/settings.py`, que usa `app/env_loader.py` internamente — defina `APP_ENV=prod` no systemd para carregar `app/.env.prod` de forma consistente.
+### Rotas principais
+- `/perfil`: Área do Usuário (acesso pelo avatar)
+- `/admin`: Painel ADM (acesso exclusivo para admin)
+### Testes automatizados
+Os testes em `app/tests/test_user_area.py` cobrem:
+- Redirecionamento para login ao acessar `/perfil` sem autenticação
+- Usuário comum acessa `/perfil` e não vê Painel ADM
+- Admin acessa `/perfil` e vê Painel ADM
+
 
 Importante: para `APP_ENV=prod`, o arquivo lido pela aplicação é `app/.env.prod` (dentro da pasta `app`). Arquivos `.env.*` fora dessa pasta não são usados pelo loader principal.
 
