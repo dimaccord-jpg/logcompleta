@@ -22,10 +22,10 @@ from app.models import (
     NoticiaPortal,
     SerieEditorial,
     SerieItemEditorial,
-)
+) 
 from app.run_julia_regras import status_verificacao_permitidos
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
-
+from app.finance import atualizar_indices
 base_dir = os.path.dirname(os.path.abspath(__file__))
 pasta_templates = os.path.join(base_dir, 'template_admin')
 
@@ -97,6 +97,62 @@ def _ler_ultima_execucao_manual():
             return json.load(f)
     except Exception:
         return None
+
+
+def _indices_admin_log_path(app_flask=None) -> str:
+    """Caminho do arquivo de log das execuções manuais de índices financeiros."""
+    data_dir = _data_dir(app_flask)
+    return os.path.join(data_dir, "indices_manual_log.json")
+
+
+def _persistir_execucao_indices_admin(resultado: dict, app_flask=None) -> None:
+    """
+    Persiste histórico compacto de execuções manuais dos índices financeiros.
+    Mantém apenas as últimas 20 entradas para o painel admin.
+    """
+    try:
+        path = _indices_admin_log_path(app_flask)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        execucoes: list[dict] = []
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                antigo = json.load(f)
+                if isinstance(antigo, dict):
+                    execucoes = antigo.get("execucoes") or []
+                elif isinstance(antigo, list):
+                    execucoes = antigo
+        registro = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "status_global": resultado.get("status_global") or "desconhecido",
+            "mensagem": resultado.get("mensagem") or "",
+            "indices": resultado.get("indices") or {},
+            "arquivo_destino": resultado.get("arquivo_destino"),
+            "data_referencia": resultado.get("data_referencia"),
+        }
+        execucoes.append(registro)
+        execucoes = execucoes[-20:]
+        payload = {"execucoes": execucoes}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.warning("Falha ao persistir log de índices admin: %s", e)
+
+
+def _ler_execucoes_indices_admin():
+    """Retorna lista de execuções manuais de índices para exibição no painel de importação."""
+    try:
+        path = _indices_admin_log_path(None)
+        if not os.path.isfile(path):
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            conteudo = json.load(f)
+        if isinstance(conteudo, dict):
+            return conteudo.get("execucoes") or []
+        if isinstance(conteudo, list):
+            return conteudo
+        return []
+    except Exception:
+        return []
 
 
 def _executar_cleiton_em_background(app_obj, bypass_frequencia: bool) -> None:
@@ -678,7 +734,8 @@ def atualizar_precos():
 def importacao_dados():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
-    return render_template('importacao.html')
+    execucoes_indices = _ler_execucoes_indices_admin()
+    return render_template('importacao.html', execucoes_indices=execucoes_indices)
 
 # --- ROTAS DE AÇÃO (POST) ---
 
@@ -873,6 +930,33 @@ def executar_importacao(tipo):
                 db.session.rollback()
                 flash(f"Erro crítico: {str(e)}", "danger")
                 return redirect(url_for('admin.importacao_dados'))
+
+
+# --- ROTA: BYPASS DE FREQUÊNCIA PARA ÍNDICES FINANCEIROS ---
+@admin_bp.route('/indices/atualizar-manual', methods=['POST'])
+@login_required
+def indices_atualizar_manual():
+    """
+    Executa atualização manual dos índices financeiros (Dólar, Petróleo, BDI, FBX),
+    ignorando qualquer agendamento de frequência externo. Uso exclusivo de administradores.
+    """
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    try:
+        resultado = atualizar_indices() or {}
+        _persistir_execucao_indices_admin(resultado)
+        status_global = resultado.get("status_global") or "desconhecido"
+        mensagem = resultado.get("mensagem") or "Execução manual dos índices concluída."
+        if status_global == "sucesso":
+            flash(mensagem, "success")
+        elif status_global == "sucesso_parcial":
+            flash(mensagem, "warning")
+        else:
+            flash(mensagem, "danger")
+    except Exception as e:
+        logging.exception("Falha ao executar atualização manual de índices via admin: %s", e)
+        flash(f"Erro ao atualizar índices financeiros: {str(e)}", "danger")
+    return redirect(url_for('admin.importacao_dados'))
 
 
 # --- ROTA 4: SÉRIES EDITORIAIS ---

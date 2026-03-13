@@ -1,0 +1,79 @@
+{
+  "execucoes": [
+    {
+      "timestamp": "2026-03-13T14:24:50.268352Z",
+      "status_global": "sucesso_parcial",
+      "mensagem": "Atualização concluída com sucesso.",
+      "indices": {
+        "dolar": {
+          "status": "ok",
+          "valor": 5.23
+        },
+        "petroleo": {
+          "status": "ok",
+          "valor": 94.55
+        },
+        "bdi": {
+          "status": "fallback",
+          "valor": "-"
+        },
+        "fbx": {
+          "status": "fallback",
+          "valor": "-"
+        }
+      },
+      "arquivo_destino": "C:\\Users\\User\\Desktop\\LLM\\Feature\\Log Completa\\app\\indices.json",
+      "data_referencia": "2026-03-13"
+    },
+    {
+      "timestamp": "2026-03-13T14:32:14.465398Z",
+      "status_global": "sucesso",
+      "mensagem": "Atualização concluída com sucesso.",
+      "indices": {
+        "dolar": {
+          "status": "ok",
+          "valor": 5.23
+        },
+        "petroleo": {
+          "status": "ok",
+          "valor": 94.34
+        },
+        "bdi": {
+          "status": "ok",
+          "valor": "2028.00"
+        },
+        "fbx": {
+          "status": "ok",
+          "valor": "1637.40"
+        }
+      },
+      "arquivo_destino": "C:\\Users\\User\\Desktop\\LLM\\Feature\\Log Completa\\app\\indices.json",
+      "data_referencia": "2026-03-13"
+    },
+    {
+      "timestamp": "2026-03-13T14:42:57.203172Z",
+      "status_global": "sucesso_parcial",
+      "mensagem": "Atualização concluída com sucesso.",
+      "indices": {
+        "dolar": {
+          "status": "ok",
+          "valor": 5.24
+        },
+        "petroleo": {
+          "status": "ok",
+          "valor": 94.27
+        },
+        "bdi": {
+          "status": "fallback",
+          "valor": "2028.00"
+        },
+        "fbx": {
+          "status": "fallback",
+          "valor": "1637.40"
+        }
+      },
+      "arquivo_destino": "C:\\Users\\User\\Desktop\\LLM\\Feature\\Log Completa\\app\\indices.json",
+      "data_referencia": "2026-03-13"
+    }
+  ]
+}

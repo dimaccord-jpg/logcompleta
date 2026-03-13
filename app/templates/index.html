@@ -90,10 +90,30 @@
     <div class="ticker-content">
   {# Criamos um loop que repete o conteúdo 2 vezes para o efeito visual #}
   {% for i in range(2) %}
-    <div class="ticker-item"><span class="ticker-label">DÓLAR:</span> <span class="ticker-value">R$ {{ indicadores.dolar }}</span></div>
-    <div class="ticker-item"><span class="ticker-label">PETRÓLEO:</span> <span class="ticker-value">US$ {{ indicadores.petroleo }}</span></div>
-    <div class="ticker-item"><span class="ticker-label">BDI:</span> <span class="ticker-value">{{ indicadores.bdi }}</span></div>
-    <div class="ticker-item"><span class="ticker-label">FBX:</span> <span class="ticker-value">{{ indicadores.fbx }}</span></div>
+    <div class="ticker-item">
+      <span class="ticker-label">DÓLAR:</span>
+      <span class="ticker-value">
+        R$ {{ indicadores.dolar|default('0,00') }}
+      </span>
+    </div>
+    <div class="ticker-item">
+      <span class="ticker-label">PETRÓLEO:</span>
+      <span class="ticker-value">
+        US$ {{ indicadores.petroleo|default('0,00') }}
+      </span>
+    </div>
+    <div class="ticker-item">
+      <span class="ticker-label">BDI:</span>
+      <span class="ticker-value">
+        {{ indicadores.bdi|default('-') }}
+      </span>
+    </div>
+    <div class="ticker-item">
+      <span class="ticker-label">FBX:</span>
+      <span class="ticker-value">
+        {{ indicadores.fbx|default('-') }}
+      </span>
+    </div>
   {% endfor %}
 </div>
 
@@ -107,7 +127,7 @@
           <span class="af-text-gradient">Agentefrete</span>
         </h1>
         <p class="lead mb-4" style="color: var(--af-text-secondary); font-size: 1.1rem;">
-          Inteligencia de Dados e Noticias para Logistica 4.0
+          Inteligência de Dados e Notícias para Logística 4.0
         </p>
       </div>
     </div>

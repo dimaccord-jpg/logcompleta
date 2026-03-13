@@ -1,5 +1,16 @@
 # 🚀 Manual de Deploy - Produção (DigitalOcean)
 
+## 📢 Changelog - Última Atualização (Mar 2026)
+
+- Área do Usuário criada: acesso pelo avatar, cards de Segurança, Pagamento e Notificações.
+- Painel ADM exclusivo para admin, visível na área do usuário.
+- Blueprint `user_bp` registrado em `app/web.py`.
+- Template `user_area.html` implementado.
+- Testes automatizados em `app/tests/test_user_area.py`.
+- Ajustes de UX na navegação e login.
+- Deploy validado em homologação e atualizado em produção.
+
+
 Este guia cobre a instalação do projeto em um servidor Ubuntu usando Gunicorn, Systemd e Nginx.
 
 ## 1. Preparação do Servidor

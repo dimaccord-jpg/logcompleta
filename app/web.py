@@ -150,28 +150,28 @@ def index():
         try:
             with open(p, 'r', encoding='utf-8') as f:
                 conteudo_indices = json.load(f)
+            # Compatibilidade com múltiplos formatos:
+            # 1) formato histórico: {"ultima_atualizacao", "historico": [...]}
+            # 2) formato antigo:    {"dolar", "petroleo", "bdi", "fbx"}
+            # 3) formato lista:     [{"data", "dolar", "petroleo", "bdi", "fbx"}, ...]
+            ultimo_registro = None
 
-            # Compatibilidade com os dois formatos:
-            # 1) formato antigo: {"dolar", "petroleo", "bdi", "fbx"}
-            # 2) formato historico: {"ultima_atualizacao", "historico": [...]} 
             if isinstance(conteudo_indices, dict) and isinstance(conteudo_indices.get('historico'), list):
                 historico = conteudo_indices.get('historico') or []
                 if not historico:
                     continue
                 ultimo_registro = historico[-1]
+            elif isinstance(conteudo_indices, dict):
+                ultimo_registro = conteudo_indices
+            elif isinstance(conteudo_indices, list) and conteudo_indices:
+                ultimo_registro = conteudo_indices[-1]
+
+            if ultimo_registro:
                 indicadores = {
                     "dolar": ultimo_registro.get("dolar", fallback_indicadores["dolar"]),
                     "petroleo": ultimo_registro.get("petroleo", fallback_indicadores["petroleo"]),
                     "bdi": ultimo_registro.get("bdi", fallback_indicadores["bdi"]),
                     "fbx": ultimo_registro.get("fbx", fallback_indicadores["fbx"]),
-                }
-                break
-            if isinstance(conteudo_indices, dict):
-                indicadores = {
-                    "dolar": conteudo_indices.get("dolar", fallback_indicadores["dolar"]),
-                    "petroleo": conteudo_indices.get("petroleo", fallback_indicadores["petroleo"]),
-                    "bdi": conteudo_indices.get("bdi", fallback_indicadores["bdi"]),
-                    "fbx": conteudo_indices.get("fbx", fallback_indicadores["fbx"]),
                 }
                 break
         except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):

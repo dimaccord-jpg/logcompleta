@@ -1,5 +1,16 @@
 # 🏃 Guia de Execução Local
 
+## 📢 Changelog - Última Atualização (Mar 2026)
+
+- Área do Usuário criada: acesso pelo avatar, cards de Segurança, Pagamento e Notificações.
+- Painel ADM exclusivo para admin, visível na área do usuário.
+- Blueprint `user_bp` registrado em `app/web.py`.
+- Template `user_area.html` implementado.
+- Testes automatizados em `app/tests/test_user_area.py`.
+- Ajustes de UX na navegação e login.
+- Deploy validado em homologação e atualizado em produção.
+
+
 Este projeto utiliza variáveis de ambiente para alternar entre configurações de Desenvolvimento e Homologação. A lógica de autenticação está em `app/auth_services.py`; a infraestrutura em `app/infra.py`; as rotas operacionais (diagnóstico OAuth, auditoria de usuários, promote-admin, reset de pautas e health) estão em `app/ops_routes.py` (Blueprint). O `web.py` apenas expõe as rotas e registra os blueprints.
 ## Novidade: Área do Usuário
 

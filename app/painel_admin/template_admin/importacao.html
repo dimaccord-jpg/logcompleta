@@ -32,5 +32,89 @@
             </div>
         </div>
     </section>
+
+    <section class="card border-0 shadow-sm mt-4">
+        <div class="card-header bg-white fw-bold py-3 d-flex justify-content-between align-items-center">
+            <div>
+                <i class="bi bi-currency-exchange text-primary me-2"></i>
+                Atualização Manual de Índices Financeiros
+            </div>
+            <form action="{{ url_for('admin.indices_atualizar_manual') }}" method="POST" class="ms-3">
+                <button type="submit" class="btn btn-primary btn-sm"
+                        onclick="return confirm('Deseja realmente atualizar agora os índices financeiros? Esta ação ignora a programação automática.');">
+                    Executar agora (bypass frequência)
+                </button>
+            </form>
+        </div>
+        <div class="card-body">
+            <p class="small text-muted">
+                Esta ação força uma nova coleta de Dólar, Petróleo, BDI e FBX imediatamente,
+                independente do agendamento em produção. Use apenas em situações de necessidade
+                operacional ou validação em homologação.
+            </p>
+
+            <hr>
+
+            <h6 class="fw-bold text-muted small mb-3 text-uppercase">Log de Execuções Manuais</h6>
+            {% if execucoes_indices %}
+                {% set exec = execucoes_indices[-1] %}
+                {% set idx = exec.indices or {} %}
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="white-space: nowrap;">Data/Hora (UTC)</th>
+                                <th>Status Global</th>
+                                <th>Dólar</th>
+                                <th>Petróleo</th>
+                                <th>BDI</th>
+                                <th>FBX</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td style="white-space: nowrap;">{{ exec.timestamp }}</td>
+                                <td>
+                                    {% if exec.status_global == 'sucesso' %}
+                                        <span class="badge bg-success">Sucesso</span>
+                                    {% elif exec.status_global == 'sucesso_parcial' %}
+                                        <span class="badge bg-warning text-dark">Sucesso parcial</span>
+                                    {% elif exec.status_global == 'falha' %}
+                                        <span class="badge bg-danger">Falha</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ exec.status_global }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% set d = idx.get('dolar') or {} %}
+                                    <span class="badge bg-light text-dark">{{ d.get('status', '-') }}</span>
+                                    <div class="small text-muted">valor: {{ d.get('valor', '-') }}</div>
+                                </td>
+                                <td>
+                                    {% set p = idx.get('petroleo') or {} %}
+                                    <span class="badge bg-light text-dark">{{ p.get('status', '-') }}</span>
+                                    <div class="small text-muted">valor: {{ p.get('valor', '-') }}</div>
+                                </td>
+                                <td>
+                                    {% set b = idx.get('bdi') or {} %}
+                                    <span class="badge bg-light text-dark">{{ b.get('status', '-') }}</span>
+                                    <div class="small text-muted">valor: {{ b.get('valor', '-') }}</div>
+                                </td>
+                                <td>
+                                    {% set f = idx.get('fbx') or {} %}
+                                    <span class="badge bg-light text-dark">{{ f.get('status', '-') }}</span>
+                                    <div class="small text-muted">valor: {{ f.get('valor', '-') }}</div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p class="text-muted small mb-0">
+                    Nenhuma execução manual registrada ainda para os índices financeiros.
+                </p>
+            {% endif %}
+        </div>
+    </section>
 </div>
 {% endblock %}
