@@ -9,18 +9,18 @@
         <span class="julia-chat-avatar-placeholder me-2"><i class="bi bi-robot"></i></span>
         {% endif %}
         <div>
-          <span class="fw-bold">Júlia</span>
-          <small class="d-block text-muted" style="font-size: 0.75rem;">Assistente de logística</small>
+          <span class="fw-bold julia-chat-name">Júlia, Editora Virtual de AgenteFrete</span>
+          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Personagem digital criada por inteligência artificial para produzir análises estratégicas com base em dados e fontes de mercado.</small>
         </div>
       </div>
     </div>
     <div class="julia-chat-messages" id="juliaChatMessages">
-      <div class="julia-chat-welcome text-muted small py-3 px-2" id="juliaChatWelcome">
+      <div class="julia-chat-welcome small py-3 px-2" id="juliaChatWelcome">
         Faça uma pergunta sobre logística, fretes, supply chain ou indicadores (BDI, FBX). Ex.: "Como o dólar impacta o frete?"
       </div>
     </div>
     <div class="julia-chat-input-area">
-      <div class="julia-chat-counter small text-muted mb-1" id="juliaChatCounter" style="display: none;"></div>
+      <div class="julia-chat-counter small mb-1" id="juliaChatCounter" style="display: none;"></div>
       <form class="julia-chat-form" id="juliaChatForm" role="form">
         <div class="input-group">
           <input type="text" class="form-control julia-chat-input" id="juliaChatInput"
@@ -30,21 +30,22 @@
           </button>
         </div>
       </form>
-      <div class="julia-chat-limit-msg small text-danger mt-1" id="juliaChatLimitMsg" style="display: none;"></div>
+      <div class="julia-chat-limit-msg small mt-1" id="juliaChatLimitMsg" style="display: none;"></div>
     </div>
   </div>
 </div>
 
 <style>
-  /* CSS modular do chat Júlia — não afeta outros componentes */
+  /* Chat Júlia — identidade visual Agentefrete (tema escuro, bordas cyan) */
   .julia-chat-wrapper {
-    --julia-chat-bg: #f8f9fa;
-    --julia-chat-border: rgba(0,0,0,.08);
-    --julia-chat-msg-user-bg: #0d6efd;
-    --julia-chat-msg-bot-bg: #e9ecef;
+    --julia-chat-bg: var(--af-bg-card, #111119);
+    --julia-chat-border: var(--af-cyan);
+    --julia-chat-msg-user-bg: rgba(0, 191, 255, 0.25);
+    --julia-chat-msg-bot-bg: var(--af-bg-muted, #1E1E2E);
     margin-bottom: 1.5rem;
-    border-radius: 0.75rem;
+    border-radius: var(--af-radius-md, 0.75rem);
     border: 1px solid var(--julia-chat-border);
+    box-shadow: 0 0 20px var(--af-cyan-glow, rgba(0, 191, 255, 0.15));
     background: var(--julia-chat-bg);
     overflow: hidden;
     transition: flex-grow 0.25s ease, max-height 0.25s ease;
@@ -59,13 +60,16 @@
   .julia-chat-wrapper.julia-chat-expanded .julia-chat-container { flex: 1; display: flex; flex-direction: column; }
   .julia-chat-header {
     padding: 0.6rem 1rem;
-    background: #fff;
-    border-bottom: 1px solid var(--julia-chat-border);
+    background: var(--julia-chat-bg);
+    border-bottom: 1px solid rgba(0, 191, 255, 0.2);
     font-size: 0.95rem;
   }
-  .julia-chat-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+  .julia-chat-name { color: var(--af-text-primary, #F0F0F5) !important; }
+  .julia-chat-role { color: var(--af-text-secondary, #8A8AA3) !important; }
+  .julia-chat-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid rgba(0, 191, 255, 0.3); }
   .julia-chat-avatar-placeholder {
-    width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--af-cyan, #00BFFF) 0%, #0077CC 100%);
     color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem;
   }
   .julia-chat-messages {
@@ -74,14 +78,58 @@
     padding: 0.75rem 1rem;
     min-height: 120px;
     max-height: 280px;
+    background: var(--julia-chat-bg);
   }
   .julia-chat-wrapper.julia-chat-expanded .julia-chat-messages { max-height: none; flex: 1; }
-  .julia-chat-welcome { border-radius: 0.5rem; }
+  .julia-chat-welcome {
+    color: var(--af-text-secondary, #8A8AA3);
+    border-radius: 0.5rem;
+  }
+  .julia-chat-counter { color: var(--af-text-secondary, #8A8AA3) !important; }
   .julia-chat-msg { margin-bottom: 0.75rem; }
   .julia-chat-msg-inner { max-width: 85%; padding: 0.5rem 0.75rem; border-radius: 0.75rem; white-space: pre-wrap; }
-  .julia-chat-msg-user .julia-chat-msg-inner { background: var(--julia-chat-msg-user-bg); color: #fff; margin-left: auto; }
-  .julia-chat-msg-bot .julia-chat-msg-inner { background: var(--julia-chat-msg-bot-bg); color: #212529; }
-  .julia-chat-input-area { padding: 0.75rem 1rem; border-top: 1px solid var(--julia-chat-border); background: #fff; }
-  .julia-chat-form .form-control { border-radius: 1.5rem 0 0 1.5rem; }
-  .julia-chat-form .btn { border-radius: 0 1.5rem 1.5rem 0; }
+  .julia-chat-msg-user .julia-chat-msg-inner {
+    background: var(--julia-chat-msg-user-bg);
+    color: var(--af-text-primary, #F0F0F5);
+    border: 1px solid rgba(0, 191, 255, 0.3);
+    margin-left: auto;
+  }
+  .julia-chat-msg-bot .julia-chat-msg-inner {
+    background: var(--julia-chat-msg-bot-bg);
+    color: var(--af-text-primary, #F0F0F5);
+    border: 1px solid var(--af-border, rgba(255,255,255,0.06));
+  }
+  .julia-chat-input-area {
+    padding: 0.75rem 1rem;
+    border-top: 1px solid rgba(0, 191, 255, 0.2);
+    background: var(--julia-chat-bg);
+  }
+  .julia-chat-form .form-control {
+    border-radius: 1.5rem 0 0 1.5rem;
+    background: var(--af-bg-muted, #1E1E2E) !important;
+    border: 1px solid var(--af-cyan) !important;
+    color: var(--af-text-primary, #F0F0F5) !important;
+    box-shadow: 0 0 12px var(--af-cyan-glow, rgba(0, 191, 255, 0.12));
+  }
+  .julia-chat-form .form-control::placeholder {
+    color: var(--af-text-muted, #5A5A72);
+  }
+  .julia-chat-form .form-control:focus {
+    border-color: var(--af-cyan-bright, #00D4FF) !important;
+    box-shadow: 0 0 16px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.25)) !important;
+    outline: none;
+  }
+  .julia-chat-form .btn {
+    border-radius: 0 1.5rem 1.5rem 0;
+    background: var(--af-cyan, #00BFFF) !important;
+    border: 1px solid var(--af-cyan) !important;
+    color: #fff !important;
+    box-shadow: 0 0 12px var(--af-cyan-glow, rgba(0, 191, 255, 0.15));
+  }
+  .julia-chat-form .btn:hover {
+    background: var(--af-cyan-bright, #00D4FF) !important;
+    border-color: var(--af-cyan-bright) !important;
+    box-shadow: 0 0 20px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.3));
+  }
+  .julia-chat-limit-msg { color: var(--af-danger, #FF4D6A) !important; }
 </style>

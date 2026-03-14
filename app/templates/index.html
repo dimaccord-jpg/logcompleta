@@ -142,7 +142,15 @@
   </div>
 
   <div class="container mb-5 julia-home-content">
-    <div class="card ri-card border-0 shadow-sm af-glow">
+    <div class="row g-4">
+      <div class="col-lg-8">
+        {% include 'noticias.html' %}
+      </div>
+      <div class="col-lg-4">
+        {% include 'artigos.html' %}
+      </div>
+    </div>
+    <div class="card ri-card border-0 shadow-sm af-glow mt-5">
       <div class="card-header fw-bold pt-3">
         <i class="bi bi-rocket-takeoff-fill me-1" style="color: var(--af-cyan);" aria-hidden="true"></i>
         Newsletter Agentefrete
@@ -155,17 +163,6 @@
             <button class="btn btn-primary" type="submit">Subscrever</button>
           </div>
         </form>
-      </div>
-    </div>
-  </div>
-
-  <div class="container julia-home-content">
-    <div class="row g-4">
-      <div class="col-lg-8">
-        {% include 'noticias.html' %}
-      </div>
-      <div class="col-lg-4">
-        {% include 'artigos.html' %}
       </div>
     </div>
   </div>

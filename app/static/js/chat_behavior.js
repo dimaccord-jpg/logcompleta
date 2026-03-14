@@ -26,7 +26,7 @@
     if (!counterEl || !limitMsgEl || !sendBtn) return;
     if (chatLimits && limiteDia != null && restantes != null && !chatLimits.in_trial) {
       counterEl.style.display = 'block';
-      counterEl.textContent = restantes + ' de ' + limiteDia + ' interações diárias restantes';
+      counterEl.textContent = restantes + ' de ' + limiteDia + ' interações diárias restantes. A Júlia é uma IA e pode cometer erros.';
       if (limitReached || restantes <= 0) {
         limitMsgEl.style.display = 'block';
         limitMsgEl.textContent = 'Limite diário atingido. Volte amanhã ou assine um plano para continuar.';

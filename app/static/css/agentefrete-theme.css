@@ -162,6 +162,27 @@ a:hover { color: var(--af-cyan-bright); }
 .card-noticia { transition: transform 0.3s, box-shadow 0.3s; }
 .card-noticia:hover { transform: translateY(-5px); box-shadow: 0 12px 35px var(--af-cyan-glow) !important; }
 
+/* 5.1 Artigos da Júlia — bordas em destaque (cyan) */
+.artigos-julia-card .list-group-item,
+.artigos-julia-card .artigos-julia-item {
+  border: 1px solid rgba(0, 191, 255, 0.25) !important;
+  border-radius: var(--af-radius-md) !important;
+  margin-bottom: 0.5rem !important;
+  margin-left: 0.25rem !important;
+  margin-right: 0.25rem !important;
+  background: var(--af-bg-card) !important;
+  color: var(--af-text-primary) !important;
+  transition: var(--af-transition);
+}
+.artigos-julia-card .list-group-item:last-child,
+.artigos-julia-card .artigos-julia-item:last-child { margin-bottom: 0.5rem !important; }
+.artigos-julia-card .list-group-item:hover,
+.artigos-julia-card .artigos-julia-item:hover {
+  border-color: var(--af-cyan) !important;
+  box-shadow: 0 0 14px var(--af-cyan-glow) !important;
+}
+.artigos-julia-card .list-group-flush { padding: 0.5rem 0.25rem 0.25rem; }
+
 /* 6. TICKER */
 .ticker-wrapper {
   background: var(--af-bg-card) !important;
