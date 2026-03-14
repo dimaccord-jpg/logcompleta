@@ -46,10 +46,23 @@
                 </div>
 
                 <!-- Newsletter -->
-                <div class="mb-4 form-check">
+                <div class="mb-3 form-check">
                     <input class="form-check-input" type="checkbox" value="1" id="newsletter" name="subscribes_to_newsletter">
                     <label class="form-check-label small" for="newsletter">
                         Desejo receber novidades, conteúdos e atualizações por e-mail.
+                    </label>
+                </div>
+
+                <!-- Termo de Uso -->
+                <div class="mb-4 form-check">
+                    <input class="form-check-input" type="checkbox" value="1" id="accept_terms" name="accept_terms" required>
+                    <label class="form-check-label small" for="accept_terms">
+                        Li e aceito os
+                        {% if active_term %}
+                        <a href="{{ url_for('static', filename='terms/' + active_term.filename) }}" target="_blank" rel="noopener noreferrer">Termos de Uso</a>.
+                        {% else %}
+                        Termos de Uso.
+                        {% endif %}
                     </label>
                 </div>
 

@@ -22,8 +22,12 @@ from app.models import (
     NoticiaPortal,
     SerieEditorial,
     SerieItemEditorial,
+    User,
+    TermsOfUse,
 ) 
 from app.run_julia_regras import status_verificacao_permitidos
+from app.terms_services import get_terms_upload_dir, ensure_terms_dir_exists, get_active_term
+from app.auth_services import send_terms_updated_notification
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
 from app.finance import atualizar_indices
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -706,12 +710,77 @@ def gestao_planos():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
     
-    # Mantendo seus dados de exemplo para preencher o esqueleto da tela
     config_atual = {
         "plano_ativo": "Premium",
         "indice_reajuste": 1.05
     }
-    return render_template('planos.html', config=config_atual)
+    active_term = get_active_term()
+    return render_template('planos.html', config=config_atual, active_term=active_term)
+
+
+ALLOWED_TERMS_EXTENSION = ".pdf"
+
+
+@admin_bp.route('/planos/termos/upload', methods=['POST'])
+@login_required
+def planos_termos_upload():
+    """Upload de PDF dos Termos de Uso: salva em app/static/terms/, ativa novo termo, desativa anterior e notifica usuários."""
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+
+    if 'termo_pdf' not in request.files:
+        flash("Selecione um arquivo PDF para enviar.", "danger")
+        return redirect(url_for('admin.gestao_planos'))
+
+    file = request.files['termo_pdf']
+    if not file or not file.filename:
+        flash("Nenhum arquivo selecionado.", "warning")
+        return redirect(url_for('admin.gestao_planos'))
+
+    fn = (file.filename or "").strip().lower()
+    if not fn.endswith(ALLOWED_TERMS_EXTENSION):
+        flash("Apenas arquivos .pdf são permitidos para os Termos de Uso.", "danger")
+        return redirect(url_for('admin.gestao_planos'))
+
+    try:
+        ensure_terms_dir_exists(current_app)
+        terms_dir = get_terms_upload_dir(current_app)
+        safe_name = secure_filename(file.filename) or "termo.pdf"
+        if not safe_name.lower().endswith(ALLOWED_TERMS_EXTENSION):
+            safe_name = f"termo_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ALLOWED_TERMS_EXTENSION}"
+        else:
+            base, ext = os.path.splitext(safe_name)
+            safe_name = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+        filepath = os.path.join(terms_dir, safe_name)
+        file.save(filepath)
+
+        # Desativa todos os termos atuais
+        TermsOfUse.query.filter_by(is_active=True).update({"is_active": False})
+        # Novo registro ativo (upload_date preenchido pelo default do modelo)
+        new_term = TermsOfUse(filename=safe_name, is_active=True)
+        db.session.add(new_term)
+        db.session.commit()
+
+        terms_url = url_for("static", filename=f"terms/{safe_name}", _external=True)
+        sent, failed = 0, 0
+        for u in User.query.all():
+            try:
+                send_terms_updated_notification(u.email, u.full_name or u.email, terms_url)
+                sent += 1
+            except Exception as e:
+                logging.warning("Falha ao enviar notificação de termo para %s: %s", u.email, e)
+                failed += 1
+
+        flash(
+            f"Termo de Uso atualizado com sucesso. Notificações enviadas: {sent}."
+            + (f" Falhas: {failed}." if failed else ""),
+            "success",
+        )
+    except Exception as e:
+        db.session.rollback()
+        logging.exception("Erro ao fazer upload do termo de uso: %s", e)
+        flash(f"Erro ao enviar termo de uso: {str(e)}", "danger")
+    return redirect(url_for('admin.gestao_planos'))
 
 # --- ROTA DE APOIO: ATUALIZAR PREÇOS (O que resolve o erro 500) ---
 @admin_bp.route('/planos/atualizar', methods=['POST'])

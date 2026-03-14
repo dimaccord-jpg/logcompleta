@@ -1,7 +1,12 @@
 # 🏃 Guia de Execução Local
 
+
 ## 📢 Changelog - Última Atualização (Mar 2026)
 
+- **Ciclo de atualização completo:**
+  - Merge e validação de todas as alterações recentes das branches de feature/dev para homolog e produção.
+  - Testes automatizados executados e validados em todos os ambientes.
+  - Hardening de ambiente: validação reativa de paths críticos, bloqueio de fallback em produção/homolog.
 - Área do Usuário criada: acesso pelo avatar, cards de Segurança, Pagamento e Notificações.
 - Painel ADM exclusivo para admin, visível na área do usuário.
 - Blueprint `user_bp` registrado em `app/web.py`.
@@ -9,6 +14,10 @@
 - Testes automatizados em `app/tests/test_user_area.py`.
 - Ajustes de UX na navegação e login.
 - Deploy validado em homologação e atualizado em produção.
+
+**Checklist final executado:**
+- Documentação e changelog atualizados.
+- Equipe informada sobre ciclo de atualização, merges e validações.
 
 
 Este projeto utiliza variáveis de ambiente para alternar entre configurações de Desenvolvimento e Homologação. A lógica de autenticação está em `app/auth_services.py`; a infraestrutura em `app/infra.py`; as rotas operacionais (diagnóstico OAuth, auditoria de usuários, promote-admin, reset de pautas e health) estão em `app/ops_routes.py` (Blueprint). O `web.py` apenas expõe as rotas e registra os blueprints.

@@ -45,6 +45,32 @@
                         <li><i class="bi bi-check-circle text-success me-2"></i>Login protegido por credenciais seguras</li>
                         <li><i class="bi bi-check-circle text-success me-2"></i>Controle de sessão autenticada</li>
                     </ul>
+                    <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#modalEncerrarContrato">
+                        <i class="bi bi-x-circle me-1"></i>Encerrar Contrato / Cancelar Registro
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal de confirmação: Encerrar Contrato -->
+        <div class="modal fade" id="modalEncerrarContrato" tabindex="-1" aria-labelledby="modalEncerrarContratoLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="modalEncerrarContratoLabel">Encerrar contrato</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-0">
+                            Tem certeza que deseja encerrar seu contrato e cancelar seu registro? Seus dados serão anonimizados e você será deslogado imediatamente. Esta ação não pode ser desfeita.
+                        </p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                        <form action="{{ url_for('user.encerrar_contrato_route') }}" method="POST" class="d-inline">
+                            <button type="submit" class="btn btn-danger">Sim, encerrar e sair</button>
+                        </form>
+                    </div>
                 </div>
             </div>
         </div>

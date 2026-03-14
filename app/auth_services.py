@@ -76,6 +76,36 @@ def send_email(
     )
 
 
+def send_terms_updated_notification(
+    to_email: str,
+    full_name: str,
+    terms_url: str | None = None,
+) -> None:
+    """
+    Notifica o usuário sobre atualização dos Termos de Uso.
+    terms_url: URL completa do PDF (opcional); se None, o e-mail não inclui link.
+    """
+    subject = "Atualização dos Termos de Uso - Agentefrete"
+    link_phrase = f" Acesse aqui: {terms_url}" if terms_url else ""
+    text = f"""Olá {full_name},
+
+Informamos que os Termos de Uso da plataforma Agentefrete foram atualizados.{link_phrase}
+
+Recomendamos que você leia a nova versão quando possível.
+
+Atenciosamente,
+Equipe Agentefrete
+"""
+    html = f"""
+<p>Olá {full_name},</p>
+<p>Informamos que os Termos de Uso da plataforma Agentefrete foram atualizados.</p>
+{f'<p><a href="{terms_url}">Acesse aqui a nova versão</a>.</p>' if terms_url else ''}
+<p>Recomendamos que você leia a nova versão quando possível.</p>
+<p>Atenciosamente,<br>Equipe Agentefrete</p>
+""".strip()
+    send_email(to_email=to_email, subject=subject, html=html, text=text)
+
+
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -421,6 +451,8 @@ def complete_user_profile(
     job_role: str,
     usage_purpose: str,
     subscribes_to_newsletter: bool,
+    *,
+    accept_terms: bool = False,
 ):
     """Atualiza perfil do usuário. Retorna (success: bool, message: str)."""
     if not (job_role or "").strip() or not (usage_purpose or "").strip():
@@ -428,6 +460,8 @@ def complete_user_profile(
     user.job_role = (job_role or "").strip()
     user.usage_purpose = (usage_purpose or "").strip()
     user.subscribes_to_newsletter = bool(subscribes_to_newsletter)
+    if accept_terms:
+        user.accepted_terms_at = _utcnow_naive()
     db.session.commit()
     return True, "Perfil completado com sucesso! Bem-vindo!"
 
@@ -439,6 +473,8 @@ def register_user(
     job_role: str = "",
     usage_purpose: str = "",
     subscribes_to_newsletter: bool = False,
+    *,
+    accept_terms: bool = False,
 ):
     """
     Cria novo usuário (cadastro local).
@@ -463,6 +499,28 @@ def register_user(
         job_role=job_role or None,
     )
     new_user.set_password(password)
+    if accept_terms:
+        new_user.accepted_terms_at = _utcnow_naive()
     db.session.add(new_user)
     db.session.commit()
     return new_user, None
+
+
+def encerrar_contrato(user) -> None:
+    """
+    Anonimiza os dados do usuário e de tabelas relacionadas conforme política,
+    mantendo o registro para integridade referencial e auditoria.
+    Não faz logout; a rota deve invalidar a sessão após chamar esta função.
+    """
+    uid = user.id
+    user.email = f"encerrado_{uid}@anon.local"
+    user.full_name = "Conta encerrada"
+    user.password_hash = None
+    user.oauth_provider = None
+    user.oauth_sub = None
+    user.subscribes_to_newsletter = False
+    user.job_role = None
+    user.usage_purpose = None
+    user.accepted_terms_at = None
+    db.session.commit()
+    logger.info("Contrato encerrado e dados anonimizados para user id=%s", uid)

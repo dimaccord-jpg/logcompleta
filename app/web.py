@@ -119,6 +119,7 @@ with app.app_context():
     from app.models import User, DeParaLogistica, FreteReal, NoticiaPortal
     from app.brain import processar_inteligencia_frete
     from app.news_ai import registrar_lead_newsletter
+    from app.terms_services import get_active_term
 
 with app.app_context():
     ensure_database_schema(db)
@@ -201,7 +202,7 @@ def login():
                 return redirect(url_for('admin.admin_dashboard'))
             return redirect(url_for('index'))
         flash(error or 'Email ou senha incorretos.', 'danger')
-    return render_template('login.html')
+    return render_template('login.html', active_term=get_active_term())
 
 
 @app.route('/request-password-reset', methods=['GET', 'POST'])
@@ -323,10 +324,16 @@ def complete_profile():
         flash('Seu perfil já está completo.', 'info')
         return redirect(url_for('index'))
     if request.method == 'POST':
+        accept_terms = bool(request.form.get('accept_terms'))
+        if not accept_terms:
+            flash('É obrigatório aceitar os Termos de Uso para continuar.', 'danger')
+            return redirect(url_for('complete_profile'))
         job_role = (request.form.get('job_role') or '').strip()
         usage_purpose = (request.form.get('usage_purpose') or '').strip()
         subscribes_to_newsletter = bool(request.form.get('subscribes_to_newsletter'))
-        success, message = auth_complete_user_profile(user, job_role, usage_purpose, subscribes_to_newsletter)
+        success, message = auth_complete_user_profile(
+            user, job_role, usage_purpose, subscribes_to_newsletter, accept_terms=True
+        )
         flash(message, 'success' if success else 'danger')
         if not success:
             return redirect(url_for('complete_profile'))
@@ -334,11 +341,15 @@ def complete_profile():
         if user.is_admin:
             return redirect(url_for('admin.admin_dashboard'))
         return redirect(url_for('index'))
-    return render_template('complete_profile.html')
+    return render_template('complete_profile.html', active_term=get_active_term())
 
 
 @app.route('/register', methods=['POST'])
 def register():
+    accept_terms = bool(request.form.get('accept_terms'))
+    if not accept_terms:
+        flash('É obrigatório aceitar os Termos de Uso para criar sua conta.', 'danger')
+        return redirect(url_for('login'))
     full_name = request.form.get('nome') or ""
     email = request.form.get('email') or ""
     password = request.form.get('password') or ""
@@ -350,6 +361,7 @@ def register():
         job_role=job_role,
         usage_purpose=usage_purpose,
         subscribes_to_newsletter=subscribes_to_newsletter,
+        accept_terms=True,
     )
     if new_user is None:
         flash(error or 'Erro ao cadastrar.', 'danger')

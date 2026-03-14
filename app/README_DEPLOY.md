@@ -1,7 +1,12 @@
 # 🚀 Manual de Deploy - Produção (DigitalOcean)
 
+
 ## 📢 Changelog - Última Atualização (Mar 2026)
 
+- **Ciclo de atualização completo:**
+    - Merge e validação de todas as alterações recentes das branches de feature/dev para homolog e produção.
+    - Testes automatizados executados e validados em todos os ambientes.
+    - Hardening de ambiente: validação reativa de paths críticos, bloqueio de fallback em produção/homolog.
 - Área do Usuário criada: acesso pelo avatar, cards de Segurança, Pagamento e Notificações.
 - Painel ADM exclusivo para admin, visível na área do usuário.
 - Blueprint `user_bp` registrado em `app/web.py`.
@@ -9,6 +14,10 @@
 - Testes automatizados em `app/tests/test_user_area.py`.
 - Ajustes de UX na navegação e login.
 - Deploy validado em homologação e atualizado em produção.
+
+**Checklist final executado:**
+- Documentação e changelog atualizados.
+- Equipe informada sobre ciclo de atualização, merges e validações.
 
 
 Este guia cobre a instalação do projeto em um servidor Ubuntu usando Gunicorn, Systemd e Nginx.

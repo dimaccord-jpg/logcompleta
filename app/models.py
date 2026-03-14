@@ -19,6 +19,7 @@ class User(db.Model, UserMixin):
     created_at = db.Column(db.DateTime, default=utcnow_naive)
     last_login_at = db.Column(db.DateTime, nullable=True)
     subscribes_to_newsletter = db.Column(db.Boolean, default=False)
+    accepted_terms_at = db.Column(db.DateTime, nullable=True)
     usage_purpose = db.Column(db.String(50), nullable=True)
     job_role = db.Column(db.String(100), nullable=True)
     oauth_provider = db.Column(db.String(50), nullable=True)
@@ -33,6 +34,16 @@ class User(db.Model, UserMixin):
             return False
         from werkzeug.security import check_password_hash
         return check_password_hash(self.password_hash, password)
+
+
+class TermsOfUse(db.Model):
+    """Termo de Uso vigente: PDF em app/static/terms/, um ativo por vez."""
+    __tablename__ = "terms_of_use"
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    upload_date = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, index=True)
+
 
 class DeParaLogistica(db.Model):
     __bind_key__ = 'localidades'

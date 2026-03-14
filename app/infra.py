@@ -38,6 +38,11 @@ NOTICIAS_PORTAL_EXTRA_COLUMNS_FASE4 = [
     ("publicado_em", "DATETIME"),
 ]
 
+# Coluna adicionada para Termo de Aceite (User)
+USER_EXTRA_COLUMNS_TERMS = [
+    ("accepted_terms_at", "DATETIME"),
+]
+
 # Colunas adicionadas na Fase 3 (Pauta - Scout/Verificador)
 PAUTAS_EXTRA_COLUMNS = [
     ("status_verificacao", "VARCHAR(30)"),
@@ -88,6 +93,28 @@ def _ensure_noticias_portal_columns_fase4(db_instance):
                 ))
                 conn.commit()
             logger.info("Coluna noticias_portal.%s adicionada (Fase 4).", col_name)
+        except Exception as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
+def _ensure_user_terms_column(db_instance):
+    """Adiciona coluna accepted_terms_at em user se não existir (retrocompatível)."""
+    from sqlalchemy import text
+    try:
+        engine = db_instance.get_engine()
+    except Exception:
+        return
+    for col_name, col_type in USER_EXTRA_COLUMNS_TERMS:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE user ADD COLUMN " + col_name + " " + col_type
+                ))
+                conn.commit()
+            logger.info("Coluna user.%s adicionada.", col_name)
         except Exception as e:
             if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
                 pass
@@ -237,6 +264,10 @@ def ensure_database_schema(db_instance):
                 _ensure_pautas_columns(db_instance)
             except Exception as col_err:
                 logger.warning("Colunas adicionais pautas: %s", col_err)
+            try:
+                _ensure_user_terms_column(db_instance)
+            except Exception as col_err:
+                logger.warning("Coluna user accepted_terms_at: %s", col_err)
             _warn_non_sqlite_migration_limits(db_instance)
             _schema_initialized = True
             logger.info("Banco inicializado: tabelas verificadas/criadas com sucesso.")
