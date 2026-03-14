@@ -17,7 +17,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 # 1. Imports do Flask e Extensões Base
-from flask import Flask, render_template, redirect, url_for, request, flash, abort, session
+from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify
 from flask_session import Session
 from flask_login import login_user, login_required, logout_user, current_user
 from app.extensions import db, login_manager
@@ -30,6 +30,9 @@ from app.infra import (
     ensure_bootstrap_admin_user,
     get_user_by_id,
     admin_required,
+    get_julia_chat_max_history,
+    get_chat_limits_for_user,
+    increment_user_chat_usage,
 )
 from app.auth_services import (
     authenticate_user,
@@ -178,13 +181,41 @@ def index():
         except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
             continue
 
+    # Consultas separadas: 5 mais recentes de cada tipo (limites parametrizados em settings)
+    limite_noticias = getattr(settings, 'noticias_limite', 5)
+    limite_artigos = getattr(settings, 'artigos_limite', 5)
     try:
-        noticias_reais = NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(10).all()
+        noticias_reais = (
+            NoticiaPortal.query.filter(NoticiaPortal.tipo == 'noticia')
+            .order_by(NoticiaPortal.data_publicacao.desc())
+            .limit(limite_noticias)
+            .all()
+        )
     except Exception as e:
-        logging.error(f"Erro ao buscar notícias para a página inicial: {e}")
+        logging.error("Erro ao buscar notícias para a página inicial: %s", e)
         noticias_reais = []
+    try:
+        artigos_reais = (
+            NoticiaPortal.query.filter(NoticiaPortal.tipo == 'artigo')
+            .order_by(NoticiaPortal.data_publicacao.desc())
+            .limit(limite_artigos)
+            .all()
+        )
+    except Exception as e:
+        logging.error("Erro ao buscar artigos para a página inicial: %s", e)
+        artigos_reais = []
 
-    return render_template('index.html', noticias=noticias_reais, indicadores=indicadores)
+    julia_chat_max_history = get_julia_chat_max_history()
+    # Limites freemium do chat para o frontend (contador e bloqueio); anônimo = sem contador
+    julia_chat_limits = get_chat_limits_for_user(current_user)
+    return render_template(
+        'index.html',
+        noticias=noticias_reais,
+        artigos=artigos_reais,
+        indicadores=indicadores,
+        julia_chat_max_history=julia_chat_max_history,
+        julia_chat_limits=julia_chat_limits,
+    )
 
 # --- Login (delegação para auth_services) ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -415,6 +446,48 @@ def fretes():
     # Mantemos o retorno original passando os índices reais para o template
     return render_template('fretes.html', indices=indices, resultado=resultado)
 
+# --- API Chat Júlia (backend modular run_julia_chat) ---
+@app.route('/api/chat_julia', methods=['POST'])
+def api_chat_julia():
+    """Endpoint que recebe mensagem e histórico; exige login; valida limite freemium, chama LLM e retorna reply + restantes."""
+    if not current_user.is_authenticated:
+        return jsonify({
+            "error": "É necessário estar logado para conversar com a Júlia.",
+            "require_login": True,
+        }), 401
+    try:
+        data = request.get_json(silent=True) or {}
+        user_message = (data.get("message") or "").strip()
+        history = data.get("history")
+        if history is None:
+            history = []
+        limits = get_chat_limits_for_user(current_user)
+        if not limits.get("pode_usar_chat", True):
+            msg = (
+                "Você atingiu o limite de interações gratuitas por hoje. "
+                "Volte amanhã ou assine um plano para continuar conversando com a Júlia."
+            )
+            return jsonify({
+                "reply": msg,
+                "limit_reached": True,
+                "chat_restantes": 0,
+                "chat_limite_dia": limits.get("limite_dia"),
+            })
+        max_history = get_julia_chat_max_history()
+        from app.run_julia_chat import chat_julia_reply
+        result = chat_julia_reply(user_message, history, max_history=max_history)
+        if not limits.get("in_trial"):
+            increment_user_chat_usage(current_user)
+        limits_after = get_chat_limits_for_user(current_user)
+        result["chat_restantes"] = limits_after.get("restantes_hoje")
+        result["chat_limite_dia"] = limits_after.get("limite_dia")
+        result["limit_reached"] = not limits_after.get("pode_usar_chat", True)
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("Erro em /api/chat_julia: %s", e)
+        return jsonify({"reply": "Ocorreu um erro ao processar sua mensagem. Tente novamente."}), 500
+
+
 # Rota para newsletter
 
 @app.route('/inscrever-newsletter', methods=['POST'])
@@ -555,6 +628,7 @@ def cron_executar_cleiton():
             "ok": status == "sucesso",
             "status": status,
             "motivo": resultado.get("motivo", ""),
+
             "mission_id": resultado.get("mission_id"),
         }, 200
     except Exception as e:

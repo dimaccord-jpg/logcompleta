@@ -83,6 +83,9 @@
   /* Ajuste nos cards de notícia */
   .card-noticia{ transition:transform .2s; }
   .card-noticia:hover{ transform:translateY(-5px); }
+
+  /* Comportamento modular: ocultar seções notícias/artigos quando o chat está em foco — alteração refatoração segura */
+  .julia-home-content.julia-chat-content-hidden { display: none !important; }
 </style>
 
 <div class="ri-page">
@@ -133,7 +136,12 @@
     </div>
   </header>
 
-  <div class="container mb-5">
+  {# Inclusão do componente de chat Júlia (modular) — alteração refatoração segura #}
+  <div class="container mb-3">
+    {% include 'chat_julia.html' %}
+  </div>
+
+  <div class="container mb-5 julia-home-content">
     <div class="card ri-card border-0 shadow-sm af-glow">
       <div class="card-header fw-bold pt-3">
         <i class="bi bi-rocket-takeoff-fill me-1" style="color: var(--af-cyan);" aria-hidden="true"></i>
@@ -151,16 +159,23 @@
     </div>
   </div>
 
-  <div class="container">
+  <div class="container julia-home-content">
     <div class="row g-4">
-<div class="col-lg-8">
-    {% include 'noticias.html' %}
-</div>
-
+      <div class="col-lg-8">
+        {% include 'noticias.html' %}
+      </div>
       <div class="col-lg-4">
-    {% include 'artigos.html' %}
-</div>
+        {% include 'artigos.html' %}
+      </div>
     </div>
   </div>
 </div>
+
+<script>
+  window.JULIA_CHAT_MAX_HISTORY = {{ julia_chat_max_history|default(10)|int }};
+  window.JULIA_CHAT_LIMITS = {{ julia_chat_limits|tojson|safe }};
+  window.JULIA_CHAT_AUTHENTICATED = {{ 'true' if current_user.is_authenticated else 'false' }};
+  window.JULIA_CHAT_LOGIN_URL = {{ url_for('login')|tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/chat_behavior.js') }}"></script>
 {% endblock %}

@@ -1,0 +1,87 @@
+{# Componente de chat Júlia (UI estilo Gemini/ChatGPT) — validação de login ao clicar em Enviar #}
+<div class="julia-chat-wrapper" id="juliaChatWrapper">
+  <div class="julia-chat-container">
+    <div class="julia-chat-header">
+      <div class="d-flex align-items-center">
+        {% if config.JULIA_AVATAR_URL %}
+        <img src="{{ config.JULIA_AVATAR_URL }}" alt="Júlia" class="julia-chat-avatar me-2" />
+        {% else %}
+        <span class="julia-chat-avatar-placeholder me-2"><i class="bi bi-robot"></i></span>
+        {% endif %}
+        <div>
+          <span class="fw-bold">Júlia</span>
+          <small class="d-block text-muted" style="font-size: 0.75rem;">Assistente de logística</small>
+        </div>
+      </div>
+    </div>
+    <div class="julia-chat-messages" id="juliaChatMessages">
+      <div class="julia-chat-welcome text-muted small py-3 px-2" id="juliaChatWelcome">
+        Faça uma pergunta sobre logística, fretes, supply chain ou indicadores (BDI, FBX). Ex.: "Como o dólar impacta o frete?"
+      </div>
+    </div>
+    <div class="julia-chat-input-area">
+      <div class="julia-chat-counter small text-muted mb-1" id="juliaChatCounter" style="display: none;"></div>
+      <form class="julia-chat-form" id="juliaChatForm" role="form">
+        <div class="input-group">
+          <input type="text" class="form-control julia-chat-input" id="juliaChatInput"
+                 placeholder="Mensagem para a Júlia..." autocomplete="off" />
+          <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
+            <i class="bi bi-send-fill"></i>
+          </button>
+        </div>
+      </form>
+      <div class="julia-chat-limit-msg small text-danger mt-1" id="juliaChatLimitMsg" style="display: none;"></div>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* CSS modular do chat Júlia — não afeta outros componentes */
+  .julia-chat-wrapper {
+    --julia-chat-bg: #f8f9fa;
+    --julia-chat-border: rgba(0,0,0,.08);
+    --julia-chat-msg-user-bg: #0d6efd;
+    --julia-chat-msg-bot-bg: #e9ecef;
+    margin-bottom: 1.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--julia-chat-border);
+    background: var(--julia-chat-bg);
+    overflow: hidden;
+    transition: flex-grow 0.25s ease, max-height 0.25s ease;
+  }
+  .julia-chat-wrapper.julia-chat-expanded {
+    flex-grow: 1;
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+  }
+  .julia-chat-container { display: flex; flex-direction: column; min-height: 200px; }
+  .julia-chat-wrapper.julia-chat-expanded .julia-chat-container { flex: 1; display: flex; flex-direction: column; }
+  .julia-chat-header {
+    padding: 0.6rem 1rem;
+    background: #fff;
+    border-bottom: 1px solid var(--julia-chat-border);
+    font-size: 0.95rem;
+  }
+  .julia-chat-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+  .julia-chat-avatar-placeholder {
+    width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+    color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem;
+  }
+  .julia-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem 1rem;
+    min-height: 120px;
+    max-height: 280px;
+  }
+  .julia-chat-wrapper.julia-chat-expanded .julia-chat-messages { max-height: none; flex: 1; }
+  .julia-chat-welcome { border-radius: 0.5rem; }
+  .julia-chat-msg { margin-bottom: 0.75rem; }
+  .julia-chat-msg-inner { max-width: 85%; padding: 0.5rem 0.75rem; border-radius: 0.75rem; white-space: pre-wrap; }
+  .julia-chat-msg-user .julia-chat-msg-inner { background: var(--julia-chat-msg-user-bg); color: #fff; margin-left: auto; }
+  .julia-chat-msg-bot .julia-chat-msg-inner { background: var(--julia-chat-msg-bot-bg); color: #212529; }
+  .julia-chat-input-area { padding: 0.75rem 1rem; border-top: 1px solid var(--julia-chat-border); background: #fff; }
+  .julia-chat-form .form-control { border-radius: 1.5rem 0 0 1.5rem; }
+  .julia-chat-form .btn { border-radius: 0 1.5rem 1.5rem 0; }
+</style>

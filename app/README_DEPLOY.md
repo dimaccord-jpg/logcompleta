@@ -3,6 +3,20 @@
 
 ## 📢 Changelog - Última Atualização (Mar 2026)
 
+- **Termo de Aceite implementado:**
+  - Checkbox obrigatório para aceite dos Termos de Uso nas telas de cadastro e complete-profile.
+  - Link dinâmico para download/visualização do PDF do termo vigente.
+  - Registro do aceite no banco de dados (coluna accepted_terms_at em user).
+  - Painel admin permite upload e versionamento do termo (tabela terms_of_use).
+  - Notificação automática por e-mail para usuários ativos após atualização do termo.
+  - Opção de encerramento de contrato e anonimização de dados no perfil do usuário.
+  - Scripts de migração para atualização suave do banco (sem perda de dados).
+  - Processo validado em dev, homolog e produção, com checklist de deploy e testes automatizados.
+
+- **Documentação e equipe informada:**
+  - Este changelog e o README_RUN.md foram atualizados.
+  - Equipe notificada sobre as mudanças e novos fluxos.
+
 - **Ciclo de atualização completo:**
     - Merge e validação de todas as alterações recentes das branches de feature/dev para homolog e produção.
     - Testes automatizados executados e validados em todos os ambientes.

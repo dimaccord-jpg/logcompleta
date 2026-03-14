@@ -44,19 +44,37 @@
     <div class="card border-0 shadow-sm mb-5 border-start border-4 border-info">
         <div class="card-body">
             <h6 class="fw-bold"><i class="bi bi-gift me-2 text-info"></i>Configuração Plano Grátis (Freemium)</h6>
-            <div class="row g-3 align-items-end">
-                <div class="col-md-4">
-                    <label class="small fw-bold text-muted">Consultas Grátis/Mês</label>
-                    <input type="number" class="form-control" value="5">
+            <p class="text-muted small mb-3">
+                Limites do chat Júlia: histórico enviado ao modelo, interações diárias por usuário e período de trial. Todos configuráveis abaixo.
+            </p>
+            <form action="{{ url_for('admin.planos_freemium_salvar') }}" method="POST">
+                <div class="row g-3 align-items-end mb-3">
+                    <div class="col-md-3">
+                        <label for="julia_chat_max_history" class="small fw-bold text-muted">Limite de histórico (mensagens)</label>
+                        <input type="number" id="julia_chat_max_history" name="julia_chat_max_history"
+                               class="form-control" min="1" max="100" value="{{ julia_chat_max_history|default(10) }}"
+                               title="Mensagens de contexto enviadas ao modelo (1–100).">
+                        <small class="text-muted">1–100</small>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="freemium_consultas_dia" class="small fw-bold text-muted">Consultas Grátis/Dia</label>
+                        <input type="number" id="freemium_consultas_dia" name="freemium_consultas_dia"
+                               class="form-control" min="1" max="100" value="{{ freemium_consultas_dia|default(5) }}"
+                               title="Máximo de interações no chat por usuário por dia (após o trial).">
+                        <small class="text-muted">Por usuário/dia</small>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="freemium_trial_dias" class="small fw-bold text-muted">Dias de Teste (Trial)</label>
+                        <input type="number" id="freemium_trial_dias" name="freemium_trial_dias"
+                               class="form-control" min="0" value="{{ freemium_trial_dias|default(7) }}"
+                               title="Dias de trial a partir do cadastro. Use 999999999 para trial ilimitado.">
+                        <small class="text-muted">999999999 = ilimitado</small>
+                    </div>
+                    <div class="col-md-3">
+                        <button type="submit" class="btn btn-info text-white w-100">Salvar configuração freemium</button>
+                    </div>
                 </div>
-                <div class="col-md-4">
-                    <label class="small fw-bold text-muted">Dias de Teste (Trial)</label>
-                    <input type="number" class="form-control" value="7">
-                </div>
-                <div class="col-md-4">
-                    <button class="btn btn-info text-white w-100">Atualizar Regras Grátis</button>
-                </div>
-            </div>
+            </form>
         </div>
     </div>
 

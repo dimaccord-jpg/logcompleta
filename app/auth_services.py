@@ -402,6 +402,7 @@ def handle_google_oauth_callback(
                 )
 
         if not user:
+            now = _utcnow_naive()
             user = User(
                 email=email,
                 full_name=name,
@@ -413,6 +414,7 @@ def handle_google_oauth_callback(
                 job_role=None,
                 oauth_provider="google",
                 oauth_sub=google_id,
+                trial_start_date=now,
             )
             db.session.add(user)
         else:
@@ -488,6 +490,7 @@ def register_user(
     if User.query.filter(func.lower(User.email) == email).first():
         return None, "Este e-mail já está cadastrado."
 
+    now = _utcnow_naive()
     new_user = User(
         email=email,
         full_name=full_name or email,
@@ -497,10 +500,11 @@ def register_user(
         subscribes_to_newsletter=subscribes_to_newsletter,
         usage_purpose=usage_purpose or None,
         job_role=job_role or None,
+        trial_start_date=now,
     )
     new_user.set_password(password)
     if accept_terms:
-        new_user.accepted_terms_at = _utcnow_naive()
+        new_user.accepted_terms_at = now
     db.session.add(new_user)
     db.session.commit()
     return new_user, None

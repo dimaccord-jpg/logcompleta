@@ -60,6 +60,11 @@ class Settings:
     oauth_insecure_transport: bool
     cron_secret: str
     ops_token: str
+    # Limites da home (notícias e artigos) — alteração refatoração segura
+    noticias_limite: int
+    artigos_limite: int
+    # Janela de memória do chat Júlia (mensagens anteriores enviadas ao LLM)
+    julia_chat_max_history: int
 
 
 def _build_settings() -> Settings:
@@ -120,6 +125,20 @@ def _build_settings() -> Settings:
     cron_secret = (os.getenv("CRON_SECRET") or "").strip()
     ops_token = (os.getenv("OPS_TOKEN") or "").strip()
 
+    # Limites de exibição na home (parametrizados; sem valores hardcoded)
+    try:
+        noticias_limite = int(os.getenv("NOTICIAS_LIMITE", "5").strip() or "5")
+    except (ValueError, TypeError):
+        noticias_limite = 5
+    try:
+        artigos_limite = int(os.getenv("ARTIGOS_LIMITE", "5").strip() or "5")
+    except (ValueError, TypeError):
+        artigos_limite = 5
+    try:
+        julia_chat_max_history = int(os.getenv("JULIA_CHAT_MAX_HISTORY", "10").strip() or "10")
+    except (ValueError, TypeError):
+        julia_chat_max_history = 10
+
     # 11) Debug: forçamos False em homolog/prod por segurança
     debug = (os.getenv("FLASK_DEBUG", "False") or "False").lower() in ("true", "1", "t")
     if app_env in ("homolog", "prod"):
@@ -151,6 +170,9 @@ def _build_settings() -> Settings:
         oauth_insecure_transport=oauth_insecure_transport,
         cron_secret=cron_secret,
         ops_token=ops_token,
+        noticias_limite=noticias_limite,
+        artigos_limite=artigos_limite,
+        julia_chat_max_history=julia_chat_max_history,
     )
 
 

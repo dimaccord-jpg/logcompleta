@@ -26,6 +26,14 @@ from app.models import (
     TermsOfUse,
 ) 
 from app.run_julia_regras import status_verificacao_permitidos
+from app.infra import (
+    get_julia_chat_max_history,
+    get_freemium_consultas_dia,
+    get_freemium_trial_dias,
+    CHAVE_JULIA_CHAT_MAX_HISTORY,
+    CHAVE_FREEMIUM_CONSULTAS_DIA,
+    CHAVE_FREEMIUM_TRIAL_DIAS,
+)
 from app.terms_services import get_terms_upload_dir, ensure_terms_dir_exists, get_active_term
 from app.auth_services import send_terms_updated_notification
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
@@ -714,8 +722,18 @@ def gestao_planos():
         "plano_ativo": "Premium",
         "indice_reajuste": 1.05
     }
+    julia_chat_max_history = get_julia_chat_max_history()
+    freemium_consultas_dia = get_freemium_consultas_dia()
+    freemium_trial_dias = get_freemium_trial_dias()
     active_term = get_active_term()
-    return render_template('planos.html', config=config_atual, active_term=active_term)
+    return render_template(
+        'planos.html',
+        config=config_atual,
+        active_term=active_term,
+        julia_chat_max_history=julia_chat_max_history,
+        freemium_consultas_dia=freemium_consultas_dia,
+        freemium_trial_dias=freemium_trial_dias,
+    )
 
 
 ALLOWED_TERMS_EXTENSION = ".pdf"
@@ -781,6 +799,76 @@ def planos_termos_upload():
         logging.exception("Erro ao fazer upload do termo de uso: %s", e)
         flash(f"Erro ao enviar termo de uso: {str(e)}", "danger")
     return redirect(url_for('admin.gestao_planos'))
+
+# --- ROTA: SALVAR CONFIGURAÇÃO FREEMIUM (limite histórico chat Júlia) ---
+JULIA_CHAT_MAX_HISTORY_MIN = 1
+JULIA_CHAT_MAX_HISTORY_MAX = 100
+
+
+FREEMIUM_CONSULTAS_DIA_MIN = 1
+FREEMIUM_CONSULTAS_DIA_MAX = 100
+FREEMIUM_TRIAL_DIAS_MIN = 0
+FREEMIUM_TRIAL_DIAS_MAX = 999999999
+
+
+@admin_bp.route('/planos/freemium/salvar', methods=['POST'])
+@login_required
+def planos_freemium_salvar():
+    """Persiste limites freemium em ConfigRegras: histórico chat, consultas/dia e dias de trial."""
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    msgs = []
+    try:
+        raw_history = request.form.get('julia_chat_max_history', '').strip()
+        if raw_history:
+            try:
+                v = max(JULIA_CHAT_MAX_HISTORY_MIN, min(JULIA_CHAT_MAX_HISTORY_MAX, int(raw_history)))
+                cfg = ConfigRegras.query.filter_by(chave=CHAVE_JULIA_CHAT_MAX_HISTORY).first()
+                if not cfg:
+                    cfg = ConfigRegras(chave=CHAVE_JULIA_CHAT_MAX_HISTORY, descricao="Limite histórico chat Júlia (freemium)")
+                    db.session.add(cfg)
+                cfg.valor_inteiro = v
+                cfg.valor_texto = None
+                msgs.append(f"histórico chat = {v}")
+            except ValueError:
+                pass
+        raw_consultas = request.form.get('freemium_consultas_dia', '').strip()
+        if raw_consultas:
+            try:
+                v = max(FREEMIUM_CONSULTAS_DIA_MIN, min(FREEMIUM_CONSULTAS_DIA_MAX, int(raw_consultas)))
+                cfg = ConfigRegras.query.filter_by(chave=CHAVE_FREEMIUM_CONSULTAS_DIA).first()
+                if not cfg:
+                    cfg = ConfigRegras(chave=CHAVE_FREEMIUM_CONSULTAS_DIA, descricao="Consultas grátis por dia (chat Júlia)")
+                    db.session.add(cfg)
+                cfg.valor_inteiro = v
+                cfg.valor_texto = None
+                msgs.append(f"consultas/dia = {v}")
+            except ValueError:
+                pass
+        raw_trial = request.form.get('freemium_trial_dias', '').strip()
+        if raw_trial:
+            try:
+                v = max(FREEMIUM_TRIAL_DIAS_MIN, min(FREEMIUM_TRIAL_DIAS_MAX, int(raw_trial)))
+                cfg = ConfigRegras.query.filter_by(chave=CHAVE_FREEMIUM_TRIAL_DIAS).first()
+                if not cfg:
+                    cfg = ConfigRegras(chave=CHAVE_FREEMIUM_TRIAL_DIAS, descricao="Dias de trial (999999999 = ilimitado)")
+                    db.session.add(cfg)
+                cfg.valor_inteiro = v
+                cfg.valor_texto = None
+                msgs.append(f"trial = {v} dias" if v < 999999999 else "trial = ilimitado")
+            except ValueError:
+                pass
+        if msgs:
+            db.session.commit()
+            flash("Configuração freemium salva: " + ", ".join(msgs), "success")
+        else:
+            flash("Nenhum valor válido enviado. Preencha ao menos um campo.", "warning")
+    except Exception as e:
+        db.session.rollback()
+        logging.exception("Erro ao salvar freemium: %s", e)
+        flash("Erro ao salvar configuração. Tente novamente.", "danger")
+    return redirect(url_for('admin.gestao_planos'))
+
 
 # --- ROTA DE APOIO: ATUALIZAR PREÇOS (O que resolve o erro 500) ---
 @admin_bp.route('/planos/atualizar', methods=['POST'])

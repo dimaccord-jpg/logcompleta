@@ -14,6 +14,11 @@ from flask_login import current_user
 from app.extensions import db
 from app.models import User
 
+# Chaves em ConfigRegras para freemium (chat Júlia)
+CHAVE_JULIA_CHAT_MAX_HISTORY = "julia_chat_max_history"
+CHAVE_FREEMIUM_CONSULTAS_DIA = "freemium_consultas_dia"
+CHAVE_FREEMIUM_TRIAL_DIAS = "freemium_trial_dias"
+
 logger = logging.getLogger(__name__)
 
 # --- Schema e bootstrap (estado por processo) ---
@@ -41,6 +46,13 @@ NOTICIAS_PORTAL_EXTRA_COLUMNS_FASE4 = [
 # Coluna adicionada para Termo de Aceite (User)
 USER_EXTRA_COLUMNS_TERMS = [
     ("accepted_terms_at", "DATETIME"),
+]
+
+# Colunas Freemium (User): contador chat e trial
+USER_EXTRA_COLUMNS_FREEMIUM = [
+    ("chat_consultas_hoje", "INTEGER DEFAULT 0"),
+    ("chat_data_ultima_consulta", "DATETIME"),
+    ("trial_start_date", "DATETIME"),
 ]
 
 # Colunas adicionadas na Fase 3 (Pauta - Scout/Verificador)
@@ -115,6 +127,28 @@ def _ensure_user_terms_column(db_instance):
                 ))
                 conn.commit()
             logger.info("Coluna user.%s adicionada.", col_name)
+        except Exception as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
+def _ensure_user_freemium_columns(db_instance):
+    """Adiciona colunas freemium em user se não existirem (chat_consultas_hoje, trial_start_date, etc.)."""
+    from sqlalchemy import text
+    try:
+        engine = db_instance.get_engine()
+    except Exception:
+        return
+    for col_name, col_type in USER_EXTRA_COLUMNS_FREEMIUM:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE user ADD COLUMN " + col_name + " " + col_type
+                ))
+                conn.commit()
+            logger.info("Coluna user.%s (freemium) adicionada.", col_name)
         except Exception as e:
             if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
                 pass
@@ -268,6 +302,10 @@ def ensure_database_schema(db_instance):
                 _ensure_user_terms_column(db_instance)
             except Exception as col_err:
                 logger.warning("Coluna user accepted_terms_at: %s", col_err)
+            try:
+                _ensure_user_freemium_columns(db_instance)
+            except Exception as col_err:
+                logger.warning("Colunas user freemium: %s", col_err)
             _warn_non_sqlite_migration_limits(db_instance)
             _schema_initialized = True
             logger.info("Banco inicializado: tabelas verificadas/criadas com sucesso.")
@@ -303,6 +341,136 @@ def get_user_by_id(user_id):
         return db.session.get(User, int(user_id))
     except (TypeError, ValueError):
         return None
+
+
+def get_julia_chat_max_history():
+    """
+    Retorna o limite de mensagens de histórico do chat Júlia (freemium).
+    Prioridade: valor persistido em ConfigRegras; fallback: settings (env).
+    Valor sempre entre 1 e 100 (evita inválidos e excede capacidade do modelo).
+    """
+    from app.models import ConfigRegras
+    from app.settings import settings
+    try:
+        r = ConfigRegras.query.filter_by(chave=CHAVE_JULIA_CHAT_MAX_HISTORY).first()
+        if r is not None and r.valor_inteiro is not None:
+            return max(1, min(100, int(r.valor_inteiro)))
+    except Exception:
+        pass
+    return max(1, getattr(settings, "julia_chat_max_history", 10))
+
+
+def get_freemium_consultas_dia():
+    """Limite diário de interações no chat (plano grátis). ConfigRegras; padrão 5."""
+    from app.models import ConfigRegras
+    try:
+        r = ConfigRegras.query.filter_by(chave=CHAVE_FREEMIUM_CONSULTAS_DIA).first()
+        if r is not None and r.valor_inteiro is not None:
+            return max(1, int(r.valor_inteiro))
+    except Exception:
+        pass
+    return 5
+
+
+def get_freemium_trial_dias():
+    """Dias de trial (ex.: 999999999 = ilimitado). ConfigRegras; padrão 7."""
+    from app.models import ConfigRegras
+    try:
+        r = ConfigRegras.query.filter_by(chave=CHAVE_FREEMIUM_TRIAL_DIAS).first()
+        if r is not None and r.valor_inteiro is not None:
+            return max(0, int(r.valor_inteiro))
+    except Exception:
+        pass
+    return 7
+
+
+def get_chat_limits_for_user(user):
+    """
+    Retorna dict para o frontend e validação: limite_dia, usadas_hoje, trial_dias_restantes,
+    pode_usar_chat, in_trial. user pode ser None (anônimo: sem contador, pode_usar_chat True).
+    """
+    from datetime import date, datetime, timezone
+    from app.models import User as UserModel
+
+    if user is None or not getattr(user, "is_authenticated", False):
+        return {
+            "limite_dia": None,
+            "usadas_hoje": 0,
+            "trial_dias_restantes": None,
+            "pode_usar_chat": True,
+            "in_trial": False,
+        }
+    limite_dia = get_freemium_consultas_dia()
+    trial_dias = get_freemium_trial_dias()
+    hoje = date.today()
+    ultima = getattr(user, "chat_data_ultima_consulta", None)
+    consultas_hoje = getattr(user, "chat_consultas_hoje", 0) or 0
+    if ultima is None:
+        usadas_hoje = 0
+    else:
+        ultima_date = ultima.date() if hasattr(ultima, "date") else (ultima if isinstance(ultima, date) else None)
+        if ultima_date != hoje:
+            usadas_hoje = 0
+        else:
+            usadas_hoje = consultas_hoje
+
+    trial_start = getattr(user, "trial_start_date", None)
+    if trial_start is None:
+        trial_dias_restantes = None
+        in_trial = False
+    else:
+        if trial_dias >= 999999999:
+            trial_dias_restantes = None
+            in_trial = True
+        else:
+            start_date = trial_start.date() if hasattr(trial_start, "date") else trial_start
+            delta = (hoje - start_date).days
+            trial_dias_restantes = max(0, trial_dias - delta)
+            in_trial = trial_dias_restantes > 0
+
+    if in_trial:
+        pode_usar_chat = True
+    else:
+        pode_usar_chat = usadas_hoje < limite_dia
+    restantes = (limite_dia - usadas_hoje) if not in_trial else None
+    return {
+        "limite_dia": limite_dia,
+        "usadas_hoje": usadas_hoje,
+        "restantes_hoje": restantes if restantes is not None else None,
+        "trial_dias_restantes": trial_dias_restantes,
+        "pode_usar_chat": pode_usar_chat,
+        "in_trial": in_trial,
+    }
+
+
+def increment_user_chat_usage(user):
+    """Incrementa contador diário do chat; reseta se for outro dia. Persiste no User."""
+    from datetime import date, datetime, timezone
+    from app.models import User as UserModel
+
+    if user is None or not getattr(user, "id", None):
+        return
+    hoje = date.today()
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    ultima = getattr(user, "chat_data_ultima_consulta", None)
+    consultas_hoje = getattr(user, "chat_consultas_hoje", 0) or 0
+    if ultima is None:
+        user.chat_consultas_hoje = 1
+        user.chat_data_ultima_consulta = now_naive
+    else:
+        ultima_date = ultima.date() if hasattr(ultima, "date") else None
+        if ultima_date != hoje:
+            user.chat_consultas_hoje = 1
+            user.chat_data_ultima_consulta = now_naive
+        else:
+            user.chat_consultas_hoje = consultas_hoje + 1
+            user.chat_data_ultima_consulta = now_naive
+    try:
+        db.session.add(user)
+        db.session.commit()
+    except Exception as e:
+        logger.exception("Falha ao incrementar chat_consultas_hoje: %s", e)
+        db.session.rollback()
 
 
 def admin_required(f):

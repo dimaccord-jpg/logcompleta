@@ -24,6 +24,11 @@ class User(db.Model, UserMixin):
     job_role = db.Column(db.String(100), nullable=True)
     oauth_provider = db.Column(db.String(50), nullable=True)
     oauth_sub = db.Column(db.String(255), nullable=True)
+    # Freemium: contador diário de interações no chat Júlia e data do último uso (reset por dia)
+    chat_consultas_hoje = db.Column(db.Integer, default=0)
+    chat_data_ultima_consulta = db.Column(db.DateTime, nullable=True)
+    # Início do período de trial (null = sem trial); usado com FREEMIUM_TRIAL_DIAS em ConfigRegras
+    trial_start_date = db.Column(db.DateTime, nullable=True)
 
     def set_password(self, password: str) -> None:
         from werkzeug.security import generate_password_hash
