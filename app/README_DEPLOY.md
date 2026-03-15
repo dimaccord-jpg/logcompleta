@@ -3,6 +3,16 @@
 
 ## 📢 Changelog - Última Atualização (Mar 2026)
 
+### [Mar 2026] - Atualização de templates, assets e área do usuário
+- Templates HTML e CSS atualizados para novo padrão visual (ver GUIA_TEMPLATES_HTML.md).
+- Ajustes em páginas: artigos, chat_julia, index, noticia_interna.
+- Scripts de migração e validação de ambiente executados.
+- Área do Usuário criada, painel ADM exclusivo, blueprint `user_bp` registrado.
+- Testes automatizados aprovados em homologação e produção.
+- Merge realizado: homolog -> producao, sem conflitos.
+- Monitoramento de logs pós-deploy sem erros críticos.
+- Checklist final executado: documentação atualizada, equipe informada.
+
 - **Termo de Aceite implementado:**
   - Checkbox obrigatório para aceite dos Termos de Uso nas telas de cadastro e complete-profile.
   - Link dinâmico para download/visualização do PDF do termo vigente.
@@ -29,9 +39,11 @@
 - Ajustes de UX na navegação e login.
 - Deploy validado em homologação e atualizado em produção.
 
+
 **Checklist final executado:**
-- Documentação e changelog atualizados.
-- Equipe informada sobre ciclo de atualização, merges e validações.
+- [x] Documentação e changelog atualizados (README_DEPLOY.md, README_RUN.md, GUIA_TEMPLATES_HTML.md)
+- [x] Equipe informada sobre ciclo de atualização, merges e validações
+- [x] Monitoramento de logs e métricas pós-deploy
 
 
 Este guia cobre a instalação do projeto em um servidor Ubuntu usando Gunicorn, Systemd e Nginx.

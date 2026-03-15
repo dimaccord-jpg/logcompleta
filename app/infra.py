@@ -490,3 +490,19 @@ def ops_token_required():
     provided = request.headers.get('X-Ops-Token', '').strip()
     if not expected or provided != expected:
         abort(403)
+
+
+# --- Executor para tarefas admin em background (Cleiton, artigo manual) ---
+_admin_executor = None
+_admin_executor_lock = threading.Lock()
+
+
+def get_admin_executor():
+    """Retorna ThreadPoolExecutor singleton para execução em background do painel admin (max 1 worker)."""
+    global _admin_executor
+    if _admin_executor is None:
+        with _admin_executor_lock:
+            if _admin_executor is None:
+                from concurrent.futures import ThreadPoolExecutor
+                _admin_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cleiton-admin")
+    return _admin_executor
