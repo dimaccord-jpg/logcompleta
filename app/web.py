@@ -446,6 +446,71 @@ def fretes():
     # Mantemos o retorno original passando os índices reais para o template
     return render_template('fretes.html', indices=indices, resultado=resultado)
 
+
+# --- Roberto Intelligence: upload e BI (módulo isolado) ---
+from app.upload_handler import (
+    processar_upload_frete_excel,
+    roberto_clear_upload_endpoint,
+)
+from app.roberto_bi import (
+    api_custo_medio,
+    api_serie_temporal,
+    api_ranking_ufs,
+    api_heatmap,
+    api_modal,
+    api_dispersao,
+)
+
+
+@app.route('/api/roberto/upload', methods=['POST'])
+@login_required
+def api_roberto_upload():
+    resp, code = processar_upload_frete_excel()
+    return resp, code
+
+
+@app.route('/api/roberto/clear_upload', methods=['POST'])
+@login_required
+def api_roberto_clear_upload():
+    return roberto_clear_upload_endpoint()
+
+
+@app.route('/api/roberto_bi/custo_medio')
+@login_required
+def api_roberto_bi_custo_medio():
+    return api_custo_medio()
+
+
+@app.route('/api/roberto_bi/serie_temporal')
+@login_required
+def api_roberto_bi_serie_temporal():
+    return api_serie_temporal()
+
+
+@app.route('/api/roberto_bi/ranking_ufs')
+@login_required
+def api_roberto_bi_ranking_ufs():
+    return api_ranking_ufs()
+
+
+@app.route('/api/roberto_bi/heatmap')
+@login_required
+def api_roberto_bi_heatmap():
+    return api_heatmap()
+
+
+@app.route('/api/roberto_bi/modal')
+@login_required
+def api_roberto_bi_modal():
+    return api_modal()
+
+
+@app.route('/api/roberto_bi/dispersao')
+@login_required
+def api_roberto_bi_dispersao():
+    return api_dispersao()
+
+
 # --- API Chat Júlia (backend modular run_julia_chat) ---
 @app.route('/api/chat_julia', methods=['POST'])
 def api_chat_julia():
@@ -576,6 +641,7 @@ def health_liveness():
 @app.route("/health/readiness")
 def health_readiness():
     """
+    
     Verifica dependências essenciais: banco default e acesso ao armazenamento de índices.
     Em caso de falha parcial, responde 503 mas não derruba o processo.
     """

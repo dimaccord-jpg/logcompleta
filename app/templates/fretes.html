@@ -125,39 +125,84 @@
                 <h6 class="text-uppercase small fw-bold text-muted mb-2">Média Bruta</h6>
                 <h2 class="fw-bold text-primary mb-0" id="txt_valor_frete">R$ {{ "%.2f"|format(resultado.media_bruta) }}</h2>
                 <span class="small text-muted fw-bold" id="txt_unidade">R$ / KG</span>
-
                 <div class="form-check form-switch d-flex justify-content-center mt-3">
                   <input class="form-check-input me-2" type="checkbox" id="switchUnidade" role="switch">
                   <label class="form-check-label extra-small fw-bold" for="switchUnidade">Ver em Tonelada</label>
                 </div>
               </div>
             </div>
-
-              <div class="col-md-4">
-                <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
-                  <h6 class="text-uppercase small fw-bold text-muted mb-2">Previsão Roberto</h6>
-                  <h2 class="fw-bold text-warning mb-0" id="txt_previsao">
-                    {{ resultado.previsao_roberto }}
-                  </h2>
-                  <span class="small text-muted" id="txt_unidade_prev">Tendência de Mercado</span>
-                </div>
+            <div class="col-md-4">
+              <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
+                <h6 class="text-uppercase small fw-bold text-muted mb-2">Tendência (Modelo)</h6>
+                <h2 class="fw-bold text-warning mb-0" id="txt_previsao">{{ resultado.previsao_roberto }}</h2>
+                <span class="small text-muted">Previsão estatística</span>
               </div>
-
+            </div>
             <div class="col-md-4">
               <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
                 <h6 class="text-uppercase small fw-bold text-muted mb-2">Assertividade do Modelo</h6>
-                <h2 class="fw-bold text-primary mb-0" id="txt_assertividade">
-                  {{ (resultado.assertividade * 100)|int }}%
-                </h2>
-                <span class="small text-muted">Índice de Confiança</span>
+                <h2 class="fw-bold text-primary mb-0" id="txt_assertividade">{{ (resultado.assertividade * 100)|int }}%</h2>
+                <span class="small text-muted">Métricas reais do modelo</span>
               </div>
             </div>
           </div>
+
+          {% if resultado.previsao_numerica and resultado.previsao_numerica.valores_rs_kg %}
+          <div class="row g-4 mt-2">
+            <div class="col-12">
+              <div class="bg-white p-3 ri-metric shadow-sm">
+                <h6 class="text-uppercase small fw-bold text-muted mb-2">Previsão numérica (próximos 6 meses) — R$/kg</h6>
+                <div class="table-responsive">
+                  <table class="table table-sm table-bordered mb-0 small">
+                    <thead><tr><th>Mês</th>{% for m in resultado.previsao_numerica.meses %}<th class="text-end">{{ m }}</th>{% endfor %}</tr></thead>
+                    <tbody>
+                      <tr><td class="fw-bold">Previsão</td>{% for v in resultado.previsao_numerica.valores_rs_kg %}<td class="text-end">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
+                      {% if resultado.intervalo_confianca %}
+                      <tr><td class="text-muted">IC inferior</td>{% for v in resultado.intervalo_confianca.inferior %}<td class="text-end text-muted">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
+                      <tr><td class="text-muted">IC superior</td>{% for v in resultado.intervalo_confianca.superior %}<td class="text-end text-muted">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
+                      {% endif %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
+          {% if resultado.metrica_erro and (resultado.metrica_erro.get('rmse') is not none or resultado.metrica_erro.get('mae') is not none) %}
+          <div class="row g-4 mt-2">
+            <div class="col-12 col-md-6">
+              <div class="bg-white p-3 ri-metric shadow-sm">
+                <h6 class="text-uppercase small fw-bold text-muted mb-2">Métricas de erro do modelo</h6>
+                <ul class="list-unstyled mb-0 small">
+                  {% if resultado.metrica_erro.get('rmse') is not none %}<li>RMSE: {{ "%.6f"|format(resultado.metrica_erro.rmse) }} R$/kg</li>{% endif %}
+                  {% if resultado.metrica_erro.get('mae') is not none %}<li>MAE: {{ "%.6f"|format(resultado.metrica_erro.mae) }} R$/kg</li>{% endif %}
+                  <li>Amostras: {{ resultado.metrica_erro.get('n_amostras', '—') }} | Meses na série: {{ resultado.metrica_erro.get('n_meses', '—') }}</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
+          {% if resultado.explicacao_llm or resultado.insights_adicionais or resultado.recado_roberto %}
+          <div class="row g-4 mt-2">
+            <div class="col-12">
+              <div class="ri-insight p-3">
+                <h6 class="small fw-bold text-muted mb-2">Explicação e análise (IA)</h6>
+                {% if resultado.explicacao_llm %}<p class="small mb-2">{{ resultado.explicacao_llm }}</p>{% endif %}
+                {% if resultado.insights_adicionais %}<p class="small mb-2"><strong>Insights:</strong> {{ resultado.insights_adicionais }}</p>{% endif %}
+                {% if resultado.recado_roberto %}<p class="small mb-0 fst-italic">— {{ resultado.recado_roberto }}</p>{% endif %}
+              </div>
+            </div>
+          </div>
+          {% endif %}
         </div>        
       </div>
     </div>
   </div>
   {% endif %}
+
+  {% include 'roberto_bi.html' %}
 </div>
 
 <script>

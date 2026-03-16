@@ -124,6 +124,31 @@
       },
       "arquivo_destino": "C:\\Users\\User\\Desktop\\LLM\\Feature\\Log Completa\\app\\indices.json",
       "data_referencia": "2026-03-15"
+    },
+    {
+      "timestamp": "2026-03-15T18:21:18.795109Z",
+      "status_global": "sucesso_parcial",
+      "mensagem": "Atualização concluída com sucesso.",
+      "indices": {
+        "dolar": {
+          "status": "ok",
+          "valor": 5.3
+        },
+        "petroleo": {
+          "status": "ok",
+          "valor": 98.71
+        },
+        "bdi": {
+          "status": "fallback",
+          "valor": "2028.00"
+        },
+        "fbx": {
+          "status": "fallback",
+          "valor": "1759.40"
+        }
+      },
+      "arquivo_destino": "C:\\Users\\User\\Desktop\\LLM\\Feature\\Log Completa\\app\\indices.json",
+      "data_referencia": "2026-03-15"
     }
   ]
 }

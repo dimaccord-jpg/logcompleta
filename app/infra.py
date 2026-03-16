@@ -343,6 +343,40 @@ def get_user_by_id(user_id):
         return None
 
 
+# --- Vínculo geográfico (Roberto Intelligence / BI) ---
+def get_id_localidade_por_chave(chave_cidade_uf: str) -> int | None:
+    """
+    Consulta o banco de localidades (bind 'localidades') e retorna o id_cidade
+    correspondente ao par cidade-uf (chave no formato 'cidade-uf', minúsculo).
+
+    Use esta função para obter IDs de localidade em qualquer módulo que precise
+    de vínculo geográfico padronizado (upload de fretes, BI, etc.).
+    Deve ser chamada dentro do contexto da aplicação Flask.
+
+    :param chave_cidade_uf: string no formato "cidade-uf" (ex: "são paulo-sp")
+    :return: id_cidade (int) ou None se não encontrado
+    """
+    from sqlalchemy import text
+    if not chave_cidade_uf or not isinstance(chave_cidade_uf, str):
+        return None
+    chave = chave_cidade_uf.strip().lower()
+    if not chave:
+        return None
+    try:
+        engine = db.engines.get("localidades")
+        if engine is None:
+            return None
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT id_cidade FROM de_para_logistica WHERE LOWER(TRIM(chave_busca)) = :c"),
+                {"c": chave},
+            ).fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+    except Exception as e:
+        logger.debug("get_id_localidade_por_chave(%r): %s", chave_cidade_uf, e)
+        return None
+
+
 def get_julia_chat_max_history():
     """
     Retorna o limite de mensagens de histórico do chat Júlia (freemium).

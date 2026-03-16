@@ -1,0 +1,364 @@
+{# Roberto Intelligence - BI de fretes: gráficos alimentados por APIs JSON #}
+<section class="roberto-bi mt-5 mb-5" id="roberto-bi-section">
+  <div class="ri-card shadow-sm mb-4">
+    <div class="card-header bg-white p-3 border-bottom">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <h5 class="mb-0 fw-bold">
+          <i class="bi bi-bar-chart-line me-2 text-primary"></i>BI e Análise Preditiva
+        </h5>
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+          <label class="btn btn-outline-primary btn-sm mb-0">
+            <i class="bi bi-upload me-1"></i>Enviar Excel
+            <input type="file" id="roberto-upload-excel" accept=".xlsx" class="d-none">
+          </label>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="roberto-clear-upload" title="Limpar dados enviados">
+            <i class="bi bi-trash me-1"></i>Limpar dados
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="card-body p-3">
+      <p class="text-muted small mb-3">
+        Faça upload de um arquivo .xlsx com as colunas: data_emissao, cidade_origem, uf_origem, cidade_destino, uf_destino, peso_real, valor_nf, valor_frete_total, modal (opcional: valor_imposto). Os dados ficam temporários e são descartados ao sair da tela.
+      </p>
+      <div id="roberto-upload-status" class="small"></div>
+      <div class="mt-3">
+        <button type="button" class="btn btn-primary btn-sm" id="roberto-toggle-bi" aria-expanded="false">
+          <i class="bi bi-bar-chart-line me-1"></i>Ver análises de BI
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="roberto-bi-charts" class="roberto-bi-charts" style="display: none;">
+  <div class="row g-4 mb-4">
+    <div class="col-12 col-lg-6">
+      <div class="ri-card shadow-sm h-100">
+        <div class="card-header bg-white py-2">
+          <h6 class="mb-0 fw-bold">Custo médio (período)</h6>
+        </div>
+        <div class="card-body">
+          <div id="roberto-custo-medio" class="small text-muted">Carregando...</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <div class="ri-card shadow-sm h-100">
+        <div class="card-header bg-white py-2">
+          <h6 class="mb-0 fw-bold">Proporção por modal</h6>
+        </div>
+        <div class="card-body position-relative" style="min-height: 220px;">
+          <canvas id="chart-modal"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ri-card shadow-sm mb-4">
+    <div class="card-header bg-white py-2">
+      <h6 class="mb-0 fw-bold">Evolução do custo médio (18 meses + previsão 6 meses)</h6>
+    </div>
+    <div class="card-body position-relative" style="min-height: 280px;">
+      <canvas id="chart-serie"></canvas>
+    </div>
+  </div>
+
+  <div class="row g-4 mb-4">
+    <div class="col-12 col-lg-6">
+      <div class="ri-card shadow-sm h-100">
+        <div class="card-header bg-white py-2">
+          <h6 class="mb-0 fw-bold">Ranking UFs por custo médio</h6>
+        </div>
+        <div class="card-body position-relative" style="min-height: 280px;">
+          <canvas id="chart-ranking-ufs"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <div class="ri-card shadow-sm h-100">
+        <div class="card-header bg-white py-2">
+          <h6 class="mb-0 fw-bold">Heatmap Brasil (tendência de custo por UF)</h6>
+        </div>
+        <div class="card-body position-relative" style="min-height: 280px;">
+          <div id="heatmap-brasil"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ri-card shadow-sm mb-4">
+    <div class="card-header bg-white py-2">
+      <h6 class="mb-0 fw-bold">Dispersão: peso (kg) x custo (R$/kg)</h6>
+    </div>
+    <div class="card-body position-relative" style="min-height: 280px;">
+      <canvas id="chart-dispersao"></canvas>
+    </div>
+  </div>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
+<script>
+(function() {
+  const BASE = "{{ request.url_root.rstrip('/') }}";
+  const API_BI = BASE + "/api/roberto_bi";
+  const API_UPLOAD = BASE + "/api/roberto/upload";
+  const API_CLEAR = BASE + "/api/roberto/clear_upload";
+
+  let chartSerie, chartRanking, chartModal, chartDispersao;
+
+  function getCookie(name) {
+    const v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
+    return v ? v[2] : null;
+  }
+
+  function fetchJson(url, options) {
+    options = options || {};
+    options.headers = options.headers || {};
+    if (!options.headers['Accept']) options.headers['Accept'] = 'application/json';
+    return fetch(url, options).then(r => {
+      if (!r.ok) throw new Error(r.statusText);
+      return r.json();
+    });
+  }
+
+  function postFormData(url, formData) {
+    const csrf = document.querySelector('input[name="csrf_token"]')?.value || getCookie('session');
+    return fetch(url, {
+      method: 'POST',
+      body: formData,
+      headers: { 'Accept': 'application/json' }
+    }).then(r => {
+      if (!r.ok) throw new Error(r.statusText);
+      return r.json();
+    });
+  }
+
+  function updateCustoMedio() {
+    const el = document.getElementById('roberto-custo-medio');
+    fetchJson(API_BI + '/custo_medio').then(data => {
+      if (data.registros === 0) {
+        el.textContent = 'Nenhum dado disponível. Envie um Excel ou use a base histórica.';
+        return;
+      }
+      const kg = data.custo_rs_kg != null ? 'R$ ' + data.custo_rs_kg.toLocaleString('pt-BR', { minimumFractionDigits: 4 }) + ' / kg' : '—';
+      const t = data.custo_rs_t != null ? 'R$ ' + data.custo_rs_t.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) + ' / t' : '—';
+      el.innerHTML = '<strong>' + kg + '</strong><br>' + t + '<br><span class="text-muted">' + data.registros + ' registro(s)</span>';
+    }).catch(() => { el.textContent = 'Erro ao carregar custo médio.'; });
+  }
+
+  function updateSerieTemporal() {
+    fetchJson(API_BI + '/serie_temporal').then(data => {
+      const ctx = document.getElementById('chart-serie');
+      if (!ctx) return;
+      if (chartSerie) chartSerie.destroy();
+      const meses = (data.meses || []).concat(data.previsao_meses || []);
+      const valores = (data.valores || []).concat(data.previsao_valores || []);
+      if (meses.length === 0) {
+        ctx.parentElement.innerHTML = '<p class="text-muted small">Sem dados para série temporal.</p>';
+        return;
+      }
+      const nReal = (data.meses || []).length;
+      const realData = valores.slice(0, nReal);
+      const prevData = (data.previsao_valores || []).slice();
+      const padPrev = realData.length ? [realData[realData.length - 1]].concat(prevData) : prevData;
+      const lineReal = realData.concat(Array(prevData.length).fill(null));
+      const linePrev = Array(realData.length).fill(null).concat(padPrev);
+      chartSerie = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: meses,
+          datasets: [
+            { label: 'Custo médio (R$/kg)', data: lineReal, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.1)', fill: true, tension: 0.2 },
+            { label: 'Previsão', data: linePrev, borderColor: '#ffc107', borderDash: [5,5], backgroundColor: 'transparent', fill: false, tension: 0.2 }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'top' } },
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: 'R$/kg' } },
+            x: { title: { display: true, text: 'Mês' } }
+          }
+        }
+      });
+      chartSerie.update();
+    }).catch(() => {
+      const ctx = document.getElementById('chart-serie');
+      if (ctx && ctx.parentElement) ctx.parentElement.innerHTML = '<p class="text-muted small">Erro ao carregar série.</p>';
+    });
+  }
+
+  function updateRankingUfs() {
+    fetchJson(API_BI + '/ranking_ufs').then(data => {
+      const ctx = document.getElementById('chart-ranking-ufs');
+      if (!ctx) return;
+      if (chartRanking) chartRanking.destroy();
+      if (!data.ufs || data.ufs.length === 0) {
+        ctx.parentElement.innerHTML = '<p class="text-muted small">Sem dados para ranking.</p>';
+        return;
+      }
+      chartRanking = new Chart(ctx, {
+        type: 'bar',
+        data: { labels: data.labels || data.ufs, datasets: [{ label: 'R$/kg', data: data.custos, backgroundColor: 'rgba(13,110,253,0.7)' }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: { legend: { display: false } },
+          scales: { x: { beginAtZero: true, title: { display: true, text: 'R$/kg' } } }
+        }
+      });
+    }).catch(() => {
+      const ctx = document.getElementById('chart-ranking-ufs');
+      if (ctx && ctx.parentElement) ctx.parentElement.innerHTML = '<p class="text-muted small">Erro ao carregar ranking.</p>';
+    });
+  }
+
+  function updateModal() {
+    fetchJson(API_BI + '/modal').then(data => {
+      const ctx = document.getElementById('chart-modal');
+      if (!ctx) return;
+      if (chartModal) chartModal.destroy();
+      if (!data.labels || data.labels.length === 0) {
+        ctx.parentElement.innerHTML = '<p class="text-muted small">Sem dados por modal.</p>';
+        return;
+      }
+      chartModal = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: data.labels,
+          datasets: [{ data: data.values, backgroundColor: ['#0d6efd','#198754','#ffc107','#dc3545','#6f42c1','#fd7e14'] }]
+        },
+        options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { position: 'right' } } }
+      });
+    }).catch(() => {
+      const ctx = document.getElementById('chart-modal');
+      if (ctx && ctx.parentElement) ctx.parentElement.innerHTML = '<p class="text-muted small">Erro ao carregar modal.</p>';
+    });
+  }
+
+  function updateHeatmap() {
+    fetchJson(API_BI + '/heatmap').then(data => {
+      const container = document.getElementById('heatmap-brasil');
+      if (!container) return;
+      if (!data.ufs || data.ufs.length === 0) {
+        container.innerHTML = '<p class="text-muted small">Sem dados para heatmap.</p>';
+        return;
+      }
+      const vals = data.valores || [];
+      const tendencia = data.tendencia_alta || [];
+      const maxV = Math.max(...vals, 1);
+      container.innerHTML = data.ufs.map((uf, i) => {
+        const pct = maxV ? Math.round((vals[i] / maxV) * 100) : 0;
+        const cor = tendencia[i] ? 'rgba(220,53,69,0.7)' : 'rgba(13,110,253,0.5)';
+        return '<span class="d-inline-block m-1 px-2 py-1 rounded small" style="background:' + cor + ';color:#fff" title="' + uf + '">' + uf + '</span>';
+      }).join('');
+    }).catch(() => {
+      const container = document.getElementById('heatmap-brasil');
+      if (container) container.innerHTML = '<p class="text-muted small">Erro ao carregar heatmap.</p>';
+    });
+  }
+
+  function updateDispersao() {
+    fetchJson(API_BI + '/dispersao').then(data => {
+      const ctx = document.getElementById('chart-dispersao');
+      if (!ctx) return;
+      if (chartDispersao) chartDispersao.destroy();
+      const pontos = data.pontos || [];
+      if (pontos.length === 0) {
+        ctx.parentElement.innerHTML = '<p class="text-muted small">Sem dados para dispersão.</p>';
+        return;
+      }
+      chartDispersao = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+          datasets: [{
+            label: 'Peso x Custo',
+            data: pontos.map(p => ({ x: p.peso, y: p.custo_kg })),
+            backgroundColor: 'rgba(13,110,253,0.5)'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: 'Peso (kg)' }, beginAtZero: true },
+            y: { title: { display: true, text: 'R$/kg' }, beginAtZero: true }
+          }
+        }
+      });
+    }).catch(() => {
+      const ctx = document.getElementById('chart-dispersao');
+      if (ctx && ctx.parentElement) ctx.parentElement.innerHTML = '<p class="text-muted small">Erro ao carregar dispersão.</p>';
+    });
+  }
+
+  function refreshAll() {
+    updateCustoMedio();
+    updateSerieTemporal();
+    updateRankingUfs();
+    updateModal();
+    updateHeatmap();
+    updateDispersao();
+  }
+
+  function showBiChartsAndLoad() {
+    const block = document.getElementById('roberto-bi-charts');
+    const btn = document.getElementById('roberto-toggle-bi');
+    if (!block || !btn) return;
+    if (block.style.display === 'none') {
+      block.style.display = '';
+      btn.innerHTML = '<i class="bi bi-bar-chart-line me-1"></i>Ocultar análises';
+      btn.setAttribute('aria-expanded', 'true');
+      refreshAll();
+    } else {
+      block.style.display = 'none';
+      btn.innerHTML = '<i class="bi bi-bar-chart-line me-1"></i>Ver análises de BI';
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  document.getElementById('roberto-toggle-bi').addEventListener('click', showBiChartsAndLoad);
+
+  document.getElementById('roberto-upload-excel').addEventListener('change', function() {
+    const file = this.files && this.files[0];
+    const statusEl = document.getElementById('roberto-upload-status');
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    statusEl.textContent = 'Enviando...';
+    postFormData(API_UPLOAD, fd).then(res => {
+      if (!res.success) {
+        statusEl.innerHTML = '<span class="text-danger">' + (res.error || 'Erro') + '</span>';
+        return;
+      }
+      var msg = '<span class="text-success">' + (res.registros_utilizados ?? res.registros) + ' registro(s) utilizados';
+      if (res.registros_recebidos != null && res.registros_descartados > 0) {
+        msg += ' (' + res.registros_recebidos + ' recebidos, ' + res.registros_descartados + ' descartados na amostragem por mês)';
+      }
+      msg += '.</span>';
+      if (res.aviso_baixa_representatividade) {
+        msg += '<br><span class="text-warning small">' + res.aviso_baixa_representatividade + '</span>';
+      }
+      statusEl.innerHTML = msg;
+      showBiChartsAndLoad();
+    }).catch(() => { statusEl.innerHTML = '<span class="text-danger">Falha no envio.</span>'; });
+    this.value = '';
+  });
+
+  document.getElementById('roberto-clear-upload').addEventListener('click', function() {
+    fetch(API_CLEAR, { method: 'POST', headers: { 'Accept': 'application/json' } }).then(() => {
+      document.getElementById('roberto-upload-status').textContent = 'Dados temporários removidos.';
+      var block = document.getElementById('roberto-bi-charts');
+      if (block && block.style.display !== 'none') refreshAll();
+    });
+  });
+
+  window.addEventListener('beforeunload', function() {
+    try { fetch(API_CLEAR, { method: 'POST', keepalive: true }); } catch (_) {}
+  });
+})();
+</script>

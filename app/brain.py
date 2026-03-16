@@ -56,7 +56,12 @@ def processar_inteligencia_frete(origem_raw, destino_raw, uf_origem, uf_destino,
         p = float(f.peso_real or 0)
         soma_v += v
         soma_p += p
-        historico_ia.append({'valor': v, 'peso': p, 'modal': f.modal})
+        historico_ia.append({
+            'valor': v,
+            'peso': p,
+            'modal': (f.modal or ''),
+            'data_emissao': f.data_emissao,
+        })
     
     logger.debug(f"Totais Rota: Valor R$ {soma_v:.2f} | Peso {soma_p:.2f} KG")
 
@@ -70,22 +75,30 @@ def processar_inteligencia_frete(origem_raw, destino_raw, uf_origem, uf_destino,
         # Ele vai ler o indices.json e pedir a análise para o Roberto
         insight = coordenar_analise_frete(historico_ia, rota_str)
         
-        # 3. Retorno completo para o fretes.html
+        # 3. Retorno completo para o fretes.html (previsão do modelo + explicação do LLM)
+        acuracia_str = insight.get('acuracia_percentual', '0').replace('%', '').strip()
+        try:
+            assertividade = float(acuracia_str) / 100
+        except (ValueError, TypeError):
+            assertividade = 0.0
+
         return {
             'rota': rota_str,
             'media_bruta': media_bruta,
             'previsao_roberto': insight.get('tendencia_macro', 'Estabilidade'),
-            
-            # CONVERSÃO IMPORTANTE: Transforma "85%" em 0.85 para o HTML multiplicar por 100
-            'assertividade': float(insight.get('acuracia_percentual', '0').replace('%', '')) / 100,
-            
+            'assertividade': assertividade,
             'amostras': len(fretes),
             'id_cidade': depara_d.id_cidade,
-                        
-            # Estrutura para os Agentes de IA/Cards extras
-            'previsao_frete': insight.get('previsao_texto'),
+            # Previsão numérica e métricas (modelo estatístico)
+            'previsao_numerica': insight.get('previsao_numerica'),
+            'intervalo_confianca': insight.get('intervalo_confianca'),
+            'metrica_erro': insight.get('metrica_erro') or {},
+            # Explicação e insights (LLM)
+            'explicacao_llm': insight.get('explicacao_llm'),
+            'insights_adicionais': insight.get('insights_adicionais'),
+            'previsao_frete': insight.get('explicacao_llm') or insight.get('previsao_texto'),
             'acuracia_ia': insight.get('acuracia_percentual'),
-            'recado_roberto': insight.get('recado_do_roberto')
+            'recado_roberto': insight.get('recado_do_roberto'),
         }, None
     
     return None, "Sem dados históricos para esta rota específica."
