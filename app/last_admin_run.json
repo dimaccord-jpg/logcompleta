@@ -1,9 +1,9 @@
 {
-"status": "sucesso",
-"motivo": "Missão despachada com sucesso e agente operacional publicou conteúdo.",
-"caminho_usado": "noticia_rapida",
-"mission_id": "33ae175c-27f7-4931-8d23-10a0489f73f6",
-"tipo_missao": "noticia",
-"origem": "Executar Cleiton",
-"timestamp": "2026-03-15T18:26:00.972539Z"
+"status": "ignorado",
+"motivo": "Nenhum item de série ou pauta manual elegível para artigo.",
+"caminho_usado": "sem_fonte_artigo",
+"mission_id": null,
+"tipo_missao": null,
+"origem": "Executar artigo agora",
+"timestamp": "2026-03-17T17:14:34.078325Z"
 }

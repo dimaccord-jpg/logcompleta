@@ -43,7 +43,10 @@ from app.auth_services import (
     handle_google_oauth_callback,
     complete_user_profile as auth_complete_user_profile,
     register_user,
+    send_email,
 )
+
+from app.news_ai import registrar_lead_newsletter
 
 # 2. Configuração de ambiente centralizada
 from app.settings import settings
@@ -408,8 +411,39 @@ def logout():
 # --- ROTAS DE INTELIGÊNCIA (CONECTADAS AO BRAIN) ---
 
 @app.route('/fretes', methods=['GET', 'POST'])
-@login_required
 def fretes():
+    # Medida provisória: enquanto construímos as funcionalidades avançadas de frete,
+    # apenas usuários administradores enxergam a tela completa. Demais perfis (ou sem login)
+    # são direcionados para a página de "estamos construindo".
+    if (not current_user.is_authenticated) or (not getattr(current_user, "is_admin", False)):
+        origem = "Consulta de Frete"
+        enviado = False
+        email_informado = ""
+        if request.method == "POST":
+            email_informado = (request.form.get("email") or "").strip()
+            if email_informado:
+                # Medida provisória: apenas envia e-mail para a equipe Agentefrete
+                # com o interesse do usuário, sem cadastro em base de dados.
+                subject = f"Interesse em {origem} - página em construção"
+                html = f"""
+                <p>Um usuário preencheu o formulário de interesse em funcionalidades em construção.</p>
+                <p><strong>E-mail informado:</strong> {email_informado}</p>
+                <p><strong>Página de origem:</strong> {origem}</p>
+                """.strip()
+                send_email(
+                    to_email="contato@agentefrete.com.br",
+                    subject=subject,
+                    html=html,
+                    text=f"E-mail informado: {email_informado}\nPágina de origem: {origem}",
+                )
+                enviado = True
+        return render_template(
+            'feature_under_construction.html',
+            origem=origem,
+            enviado=enviado,
+            email_informado=email_informado,
+        )
+
     # ALTERAÇÃO 1: Carregar os dados reais do indices.json
     try:
         with open(os.path.join(_diretorio_app, 'indices.json'), 'r', encoding='utf-8') as f:
@@ -439,6 +473,106 @@ def fretes():
 
     # Mantemos o retorno original passando os índices reais para o template
     return render_template('fretes.html', indices=indices, resultado=resultado)
+
+
+@app.route('/auditoria-frete', methods=['GET', 'POST'])
+def auditoria_frete():
+    # Medida provisória: rota ainda em construção; somente administradores
+    # verão a versão final quando estiver pronta. Demais usuários caem na
+    # página de aviso padronizada.
+    origem = "Auditoria de Frete"
+    if (not current_user.is_authenticated) or (not getattr(current_user, "is_admin", False)):
+        enviado = False
+        email_informado = ""
+        if request.method == "POST":
+            email_informado = (request.form.get("email") or "").strip()
+            if email_informado:
+                subject = f"Interesse em {origem} - página em construção"
+                html = f"""
+                <p>Um usuário preencheu o formulário de interesse em funcionalidades em construção.</p>
+                <p><strong>E-mail informado:</strong> {email_informado}</p>
+                <p><strong>Página de origem:</strong> {origem}</p>
+                """.strip()
+                send_email(
+                    to_email="contato@agentefrete.com.br",
+                    subject=subject,
+                    html=html,
+                    text=f"E-mail informado: {email_informado}\nPágina de origem: {origem}",
+                )
+                enviado = True
+        return render_template(
+            'feature_under_construction.html',
+            origem=origem,
+            enviado=enviado,
+            email_informado=email_informado,
+        )
+    return render_template('feature_under_construction.html', origem=origem)
+
+
+@app.route('/controle-estoque', methods=['GET', 'POST'])
+def controle_estoque():
+    # Medida provisória: rota ainda em construção; apenas administradores
+    # terão acesso à funcionalidade completa quando implementada.
+    origem = "Controle de Estoque"
+    if (not current_user.is_authenticated) or (not getattr(current_user, "is_admin", False)):
+        enviado = False
+        email_informado = ""
+        if request.method == "POST":
+            email_informado = (request.form.get("email") or "").strip()
+            if email_informado:
+                subject = f"Interesse em {origem} - página em construção"
+                html = f"""
+                <p>Um usuário preencheu o formulário de interesse em funcionalidades em construção.</p>
+                <p><strong>E-mail informado:</strong> {email_informado}</p>
+                <p><strong>Página de origem:</strong> {origem}</p>
+                """.strip()
+                send_email(
+                    to_email="contato@agentefrete.com.br",
+                    subject=subject,
+                    html=html,
+                    text=f"E-mail informado: {email_informado}\nPágina de origem: {origem}",
+                )
+                enviado = True
+        return render_template(
+            'feature_under_construction.html',
+            origem=origem,
+            enviado=enviado,
+            email_informado=email_informado,
+        )
+    return render_template('feature_under_construction.html', origem=origem)
+
+
+@app.route('/insights-frete', methods=['GET', 'POST'])
+def insights_frete():
+    # Medida provisória: rota ainda em construção; somente administradores
+    # devem acessar a versão completa futura.
+    origem = "Insights de Frete"
+    if (not current_user.is_authenticated) or (not getattr(current_user, "is_admin", False)):
+        enviado = False
+        email_informado = ""
+        if request.method == "POST":
+            email_informado = (request.form.get("email") or "").strip()
+            if email_informado:
+                subject = f"Interesse em {origem} - página em construção"
+                html = f"""
+                <p>Um usuário preencheu o formulário de interesse em funcionalidades em construção.</p>
+                <p><strong>E-mail informado:</strong> {email_informado}</p>
+                <p><strong>Página de origem:</strong> {origem}</p>
+                """.strip()
+                send_email(
+                    to_email="contato@agentefrete.com.br",
+                    subject=subject,
+                    html=html,
+                    text=f"E-mail informado: {email_informado}\nPágina de origem: {origem}",
+                )
+                enviado = True
+        return render_template(
+            'feature_under_construction.html',
+            origem=origem,
+            enviado=enviado,
+            email_informado=email_informado,
+        )
+    return render_template('feature_under_construction.html', origem=origem)
 
 
 # --- Roberto Intelligence: upload e BI (módulo isolado) ---

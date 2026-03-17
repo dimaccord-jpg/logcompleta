@@ -187,9 +187,20 @@
             <a href="{{ url_for('fretes') }}" class="nav-item mb-1">
                 <i class="bi bi-truck"></i>
                 <span class="menu-text">Consulta de Frete</span>
-                {% if not current_user.is_authenticated %}
-                <i class="bi bi-lock-fill ms-auto opacity-50 menu-text" style="font-size: 0.8rem;"></i>
-                {% endif %}
+            </a>
+
+            <!-- Novos menus (mobile) -->
+            <a href="{{ url_for('auditoria_frete') }}" class="nav-item mb-1">
+                <i class="bi bi-receipt-cutoff"></i>
+                <span class="menu-text">Auditoria de Frete</span>
+            </a>
+            <a href="{{ url_for('controle_estoque') }}" class="nav-item mb-1">
+                <i class="bi bi-box-seam"></i>
+                <span class="menu-text">Controle de Estoque</span>
+            </a>
+            <a href="{{ url_for('insights_frete') }}" class="nav-item mb-1">
+                <i class="bi bi-graph-up-arrow"></i>
+                <span class="menu-text">Insights de Frete</span>
             </a>
 
             <hr class="border-secondary my-3">
@@ -239,9 +250,20 @@
             <a href="{{ url_for('fretes') }}" class="nav-item">
                 <i class="bi bi-truck"></i>
                 <span class="menu-text">Consulta de Frete</span>
-                {% if not current_user.is_authenticated %}
-                <i class="bi bi-lock-fill ms-auto opacity-50 menu-text" style="font-size: 0.8rem;"></i>
-                {% endif %}
+            </a>
+
+            <!-- Novos menus (desktop/tablet) -->
+            <a href="{{ url_for('auditoria_frete') }}" class="nav-item">
+                <i class="bi bi-receipt-cutoff"></i>
+                <span class="menu-text">Auditoria de Frete</span>
+            </a>
+            <a href="{{ url_for('controle_estoque') }}" class="nav-item">
+                <i class="bi bi-box-seam"></i>
+                <span class="menu-text">Controle de Estoque</span>
+            </a>
+            <a href="{{ url_for('insights_frete') }}" class="nav-item">
+                <i class="bi bi-graph-up-arrow"></i>
+                <span class="menu-text">Insights de Frete</span>
             </a>
         </div>
 

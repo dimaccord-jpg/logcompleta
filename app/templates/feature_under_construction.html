@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container py-5">
+  <div class="row justify-content-center">
+    <div class="col-lg-6 col-md-8">
+      <!-- Medida provisória: página genérica exibida enquanto as funcionalidades
+           de consulta/auditoria/estoque/insights de frete estão em desenvolvimento. -->
+      <div class="card shadow border-0">
+        <div class="card-body p-4">
+          <div class="text-center mb-3">
+            <h1 class="h4 mb-2">Estamos construindo essa funcionalidade.</h1>
+            <p class="mb-0">
+              Cadastre-se e seja o primeiro a receber novidades!
+            </p>
+            {% if origem %}
+            <p class="text-muted small mt-2 mb-0">
+              Interesse informado: <strong>{{ origem }}</strong>
+            </p>
+            {% endif %}
+          </div>
+
+          {% if not enviado %}
+          <!-- Medida provisória: formulário simples que envia um e-mail
+               para contato@agentefrete.com.br com o interesse do usuário.
+               Não realiza qualquer cadastro em banco de dados neste passo. -->
+          <form method="post" class="mt-3">
+            <div class="input-group">
+              <input
+                type="email"
+                name="email"
+                class="form-control"
+                placeholder="Seu melhor e-mail"
+                required
+              >
+              <button type="submit" class="btn btn-primary">
+                Enviar
+              </button>
+            </div>
+          </form>
+          {% else %}
+          <div class="mt-3 text-start">
+            <p class="mb-2">
+              <strong>Tudo certo! Recebemos seu interesse.</strong>
+            </p>
+            <p class="mb-3">
+              Obrigado por querer fazer parte da nossa evolução. Enquanto trabalhamos nessa funcionalidade,
+              que tal receber insights exclusivos sobre o setor diretamente na sua caixa de entrada?
+            </p>
+            <!-- Cadastro opcional na newsletter oficial: aqui SIM o e-mail é salvo em leads.db -->
+            <form action="{{ url_for('inscrever_newsletter') }}" method="post" class="d-inline">
+              <input type="hidden" name="email" value="{{ email_informado or '' }}">
+              <button type="submit" class="btn btn-outline-primary">
+                Assinar nossa Newsletter
+              </button>
+            </form>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
