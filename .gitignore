@@ -35,3 +35,8 @@ build.sh
 .vscode/
 .DS_Store
 Thumbs.db
+app/roberto_uploads/
+app/static/generated/
+*.xlsx
+*.db
+logs_fallback/
