@@ -119,7 +119,7 @@ app.register_blueprint(user_bp)
 
 # 5. Imports que dependem do Contexto (Executados após a vinculação do DB)
 with app.app_context():
-    from app.models import User, DeParaLogistica, FreteReal, NoticiaPortal
+    from app.models import User, FreteReal, NoticiaPortal
     from app.brain import processar_inteligencia_frete
     from app.news_ai import registrar_lead_newsletter
     from app.terms_services import get_active_term
@@ -427,15 +427,9 @@ def fretes():
         uf_o = request.form.get('uf_origem')
         uf_d = request.form.get('uf_destino')
         
-        models = {
-            'DeParaLogistica': DeParaLogistica,
-            'FreteReal': FreteReal
-        }
-        
         # CHAMA O BRAIN PASSANDO AS UFs E OS ÍNDICES REAIS
-        # ALTERAÇÃO 2: Passamos 'indices' para o processamento (verifique se seu brain.py já aceita este argumento)
         resultado_calculo, erro = processar_inteligencia_frete(
-            origem, destino, uf_o, uf_d, models
+            origem, destino, uf_o, uf_d, FreteReal
         )
         
         if erro:

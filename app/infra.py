@@ -368,7 +368,7 @@ def get_id_localidade_por_chave(chave_cidade_uf: str) -> int | None:
             return None
         with engine.connect() as conn:
             row = conn.execute(
-                text("SELECT id_cidade FROM de_para_logistica WHERE LOWER(TRIM(chave_busca)) = :c"),
+                text("SELECT id_cidade FROM base_localidades WHERE LOWER(TRIM(chave_busca)) = :c"),
                 {"c": chave},
             ).fetchone()
             return int(row[0]) if row and row[0] is not None else None

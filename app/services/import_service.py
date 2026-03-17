@@ -1,6 +1,7 @@
 """
 Serviço de importação de dados e atualização de índices.
-Carga de operação (de_para_logistica), tabelas de frete e leitura/persistência de log de índices.
+Carga de operação da base oficial de localidades (base_localidades) e tabelas de frete,
+com leitura/persistência de logs de importação.
 """
 import os
 import csv
@@ -30,7 +31,7 @@ def get_log_dir() -> str:
 
 def processar_importacao_operacao(file: FileStorage) -> tuple[int, int, str | None, str | None]:
     """
-    Processa arquivo .txt/.csv de operação (de_para_logistica).
+    Processa arquivo .txt/.csv de operação (base oficial de localidades).
     Colunas esperadas: uf_nome, cidade_nome, chave_busca, id_uf, id_cidade.
     Retorna (sucessos, falhas, path_sucesso, path_erro) ou (0, 0, None, None) em erro crítico.
     path_* são caminhos dos arquivos de log gerados.
@@ -45,7 +46,12 @@ def processar_importacao_operacao(file: FileStorage) -> tuple[int, int, str | No
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         path_sucesso = os.path.join(log_dir, f"sucesso_{timestamp}.txt")
         path_erro = os.path.join(log_dir, f"erro_{timestamp}.txt")
-        conteudo = file.read().decode("utf-8-sig")
+        raw = file.read()
+        try:
+            conteudo = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            # Fallback para arquivos gerados em ambientes Windows (ANSI/Latin-1/cp1252)
+            conteudo = raw.decode("latin-1")
         stream = io.StringIO(conteudo)
         leitor = csv.DictReader(stream, delimiter=",")
         sucessos, falhas = 0, 0
@@ -61,7 +67,7 @@ def processar_importacao_operacao(file: FileStorage) -> tuple[int, int, str | No
                     continue
                 chave_proc = str(chave_origem).strip().lower()
                 query_check = text(
-                    "SELECT 1 FROM de_para_logistica WHERE chave_busca = :ch"
+                    "SELECT 1 FROM base_localidades WHERE chave_busca = :ch"
                 )
                 existe = connection.execute(
                     query_check, {"ch": chave_proc}
@@ -73,7 +79,7 @@ def processar_importacao_operacao(file: FileStorage) -> tuple[int, int, str | No
                     continue
                 try:
                     query_ins = text("""
-                        INSERT INTO de_para_logistica (uf_nome, cidade_nome, chave_busca, id_uf, id_cidade)
+                        INSERT INTO base_localidades (uf_nome, cidade_nome, chave_busca, id_uf, id_cidade)
                         VALUES (:uf, :cid, :ch, :i_uf, :i_cid)
                     """)
                     connection.execute(
@@ -113,7 +119,11 @@ def processar_importacao_tabelas(
         return 0, [], "Arquivo .txt inválido."
     try:
         file.seek(0)
-        conteudo = file.read().decode("utf-8")
+        raw = file.read()
+        try:
+            conteudo = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            conteudo = raw.decode("latin-1")
         stream = io.StringIO(conteudo)
         leitor = csv.DictReader(stream)
         sucessos = 0
@@ -129,11 +139,11 @@ def processar_importacao_tabelas(
                 chave_dest = f"{cid_dest.lower()}-{uf_dest.lower()}"
                 with engine_loc.connect() as conn:
                     res_orig = conn.execute(
-                        text("SELECT id_cidade FROM de_para_logistica WHERE chave_busca = :c"),
+                        text("SELECT id_cidade FROM base_localidades WHERE chave_busca = :c"),
                         {"c": chave_orig},
                     ).fetchone()
                     res_dest = conn.execute(
-                        text("SELECT id_cidade FROM de_para_logistica WHERE chave_busca = :c"),
+                        text("SELECT id_cidade FROM base_localidades WHERE chave_busca = :c"),
                         {"c": chave_dest},
                     ).fetchone()
                 if not res_orig or not res_dest:
