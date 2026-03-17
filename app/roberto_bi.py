@@ -94,9 +94,7 @@ def _buscar_base_cliente() -> list[dict]:
 
 
 def _enriquecer_ufs_cliente(registros_cliente: list[dict]) -> list[dict]:
-    """Preenche uf_origem/uf_destino a partir de id_cidade no banco de localidades."""
-    from app.infra import get_id_localidade_por_chave
-    # Não temos chave reversa (id -> uf) em get_id_localidade_por_chave. Precisamos consultar de_para_logistica por id_cidade.
+    """Preenche uf_origem/uf_destino a partir de id_cidade no banco de localidades oficial (base_localidades)."""
     try:
         engine = db.engines.get("localidades")
         if not engine:
@@ -105,14 +103,14 @@ def _enriquecer_ufs_cliente(registros_cliente: list[dict]) -> list[dict]:
             for r in registros_cliente:
                 if not r.get("uf_origem") and r.get("id_cidade_origem"):
                     row = conn.execute(
-                        text("SELECT uf_nome FROM de_para_logistica WHERE id_cidade = :id LIMIT 1"),
+                        text("SELECT uf_nome FROM base_localidades WHERE id_cidade = :id LIMIT 1"),
                         {"id": r["id_cidade_origem"]},
                     ).fetchone()
                     if row:
                         r["uf_origem"] = (row[0] or "").strip().upper()[:2]
                 if not r.get("uf_destino") and r.get("id_cidade_destino"):
                     row = conn.execute(
-                        text("SELECT uf_nome FROM de_para_logistica WHERE id_cidade = :id LIMIT 1"),
+                        text("SELECT uf_nome FROM base_localidades WHERE id_cidade = :id LIMIT 1"),
                         {"id": r["id_cidade_destino"]},
                     ).fetchone()
                     if row:

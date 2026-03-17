@@ -50,16 +50,6 @@ class TermsOfUse(db.Model):
     is_active = db.Column(db.Boolean, default=True, index=True)
 
 
-class DeParaLogistica(db.Model):
-    __bind_key__ = 'localidades'
-    __tablename__ = 'de_para_logistica'
-    id = db.Column(db.Integer, primary_key=True)
-    uf_nome = db.Column(db.String(50))
-    cidade_nome = db.Column(db.String(100))
-    chave_busca = db.Column(db.String(200), unique=True)
-    id_uf = db.Column(db.Integer)
-    id_cidade = db.Column(db.Integer)
-
 class FreteReal(db.Model):
     # Alterado para 'historico' para separar do banco de cidades
     __bind_key__ = 'historico' 
@@ -296,3 +286,12 @@ class RecomendacaoEstrategica(db.Model):
     prioridade = db.Column(db.Integer, default=5)
     status = db.Column(db.String(30), default='pendente', index=True)  # pendente | aplicada | descartada
     criado_em = db.Column(db.DateTime, default=utcnow_naive, index=True)
+
+class BaseLocalidades(db.Model):
+    __bind_key__ = 'localidades'
+    __tablename__ = 'base_localidades'
+    uf_nome = db.Column(db.String(100))
+    cidade_nome = db.Column(db.String(100))
+    chave_busca = db.Column(db.String(255), primary_key=True)
+    id_uf = db.Column(db.Integer)
+    id_cidade = db.Column(db.Integer)
