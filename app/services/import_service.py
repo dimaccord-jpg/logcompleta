@@ -15,6 +15,7 @@ from werkzeug.datastructures import FileStorage
 
 from app.extensions import db
 from app.models import FreteReal
+from app.services.localidades_service import buscar_localidade
 
 logger = logging.getLogger(__name__)
 
@@ -128,30 +129,12 @@ def processar_importacao_tabelas(
         leitor = csv.DictReader(stream)
         sucessos = 0
         linhas_com_erro = []
-        engine_loc = db.engines["localidades"]
         for i, linha in enumerate(leitor, start=1):
             try:
                 cid_orig = (linha.get("cidade_origem") or "").strip()
                 uf_orig = (linha.get("uf_origem") or "").strip()
                 cid_dest = (linha.get("cidade_destino") or "").strip()
                 uf_dest = (linha.get("uf_destino") or "").strip()
-                chave_orig = f"{cid_orig.lower()}-{uf_orig.lower()}"
-                chave_dest = f"{cid_dest.lower()}-{uf_dest.lower()}"
-                with engine_loc.connect() as conn:
-                    res_orig = conn.execute(
-                        text("SELECT id_cidade FROM base_localidades WHERE chave_busca = :c"),
-                        {"c": chave_orig},
-                    ).fetchone()
-                    res_dest = conn.execute(
-                        text("SELECT id_cidade FROM base_localidades WHERE chave_busca = :c"),
-                        {"c": chave_dest},
-                    ).fetchone()
-                if not res_orig or not res_dest:
-                    falha = chave_orig if not res_orig else chave_dest
-                    linhas_com_erro.append(
-                        f"Linha {i}: Localidade '{falha}' não encontrada."
-                    )
-                    continue
                 data_str = (linha.get("data_emissao") or "").strip()
                 data_obj = None
                 if data_str:
@@ -164,10 +147,28 @@ def processar_importacao_tabelas(
                             f"Linha {i}: Formato de data inválido ({data_str})."
                         )
                         continue
+
+                localidade_origem = buscar_localidade(cid_orig, uf_orig)
+                localidade_destino = buscar_localidade(cid_dest, uf_dest)
+
+                if not localidade_origem or not localidade_destino:
+                    chave_orig_display = f"{cid_orig.lower()}-{uf_orig.lower()}"
+                    chave_dest_display = f"{cid_dest.lower()}-{uf_dest.lower()}"
+                    falha = (
+                        chave_orig_display
+                        if not localidade_origem
+                        else chave_dest_display
+                    )
+                    linhas_com_erro.append(
+                        f"Linha {i}: Localidade '{falha}' não encontrada."
+                    )
+                    continue
                 novo_frete = FreteReal(
                     data_emissao=data_obj,
-                    id_cidade_origem=res_orig[0],
-                    id_cidade_destino=res_dest[0],
+                    id_cidade_origem=localidade_origem["id_cidade"],
+                    id_uf_origem=localidade_origem["id_uf"],
+                    id_cidade_destino=localidade_destino["id_cidade"],
+                    id_uf_destino=localidade_destino["id_uf"],
                     cidade_origem=cid_orig,
                     uf_origem=uf_orig,
                     cidade_destino=cid_dest,
