@@ -25,8 +25,6 @@ from app.painel_admin.admin_routes import admin_bp
 from app.ops_routes import ops_bp
 from app.user_area import user_bp
 from app.infra import (
-    resolve_sqlite_path,
-    ensure_database_schema,
     ensure_bootstrap_admin_user,
     get_user_by_id,
     admin_required,
@@ -47,6 +45,9 @@ from app.auth_services import (
 )
 
 from app.news_ai import registrar_lead_newsletter
+
+# Model used by the home route to list portal news/articles.
+from app.models import NoticiaPortal
 
 # 2. Configuração de ambiente centralizada
 from app.settings import settings
@@ -97,9 +98,6 @@ app.config['SESSION_COOKIE_SAMESITE'] = settings.session_cookie_samesite
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' if settings.oauth_insecure_transport else '0'
 
-# Configuração dos Binds (Bancos adicionais)
-app.config['SQLALCHEMY_BINDS'] = settings.sqlalchemy_binds
-
 # 4. Inicializar extensões e Blueprints
 db.init_app(app)
 login_manager.init_app(app)
@@ -128,8 +126,9 @@ with app.app_context():
     from app.terms_services import get_active_term
 
 with app.app_context():
-    ensure_database_schema(db)
-    ensure_bootstrap_admin_user(db)
+    _skip_bootstrap = (os.getenv("SKIP_APP_BOOTSTRAP") or "").strip().lower() in ("1", "true", "t", "yes", "y")
+    if not _skip_bootstrap:
+        ensure_bootstrap_admin_user(db)
 
 
 @login_manager.user_loader
@@ -224,7 +223,6 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     logging.info("=== Acessando /login (método: %s) ===", request.method)
-    ensure_database_schema(db)
     if request.method == 'POST':
         email_input = request.form.get('email')
         password = request.form.get('password')
@@ -303,7 +301,6 @@ def login_google():
 def google_callback():
     """Callback do Google OAuth"""
     logging.info("=== INICIANDO google_callback ===")
-    ensure_database_schema(db)
     state = request.args.get('state')
     session_state = session.get('oauth_state')
     session_states = session.get('oauth_states') or []

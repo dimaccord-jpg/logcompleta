@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from typing import Dict, Literal
+from typing import Literal
 
 from app import env_loader
 from app.infra import resolve_sqlite_path
@@ -42,7 +42,6 @@ class Settings:
     data_dir: str
     indices_file_path: str
     sqlalchemy_database_uri: str
-    sqlalchemy_binds: Dict[str, str]
     session_type: str
     session_cookie_secure: bool
     session_cookie_samesite: str
@@ -86,19 +85,22 @@ def _build_settings() -> Settings:
 
     # 5) Segurança e banco principal
     secret_key = os.getenv("SECRET_KEY", "chave_insegura_padrao_dev")
-    db_uri_auth = os.getenv("DB_URI_AUTH", f"sqlite:///{os.path.join(data_dir, 'auth.db')}")
-    sqlalchemy_database_uri = resolve_sqlite_path(db_uri_auth, env_loader.get_app_dir())
+    db_uri_auth_raw = (os.getenv("DB_URI_AUTH") or "").strip()
+    if app_env in ("homolog", "prod"):
+        # SQLite é proibido fora de `dev`; falhar cedo e de forma rastreável.
+        db_uri_auth_l = db_uri_auth_raw.lower()
+        if (not db_uri_auth_raw) or db_uri_auth_l.startswith("sqlite://") or not db_uri_auth_l.startswith("postgres"):
+            raise RuntimeError(
+                "DB_URI_AUTH ausente/vazio ou apontando para SQLite em homolog/prod. "
+                "Configure DB_URI_AUTH para PostgreSQL (mono-banco)."
+            )
+    else:
+        # Fallback SQLite permitido apenas em dev.
+        if not db_uri_auth_raw:
+            db_uri_auth_raw = f"sqlite:///{os.path.join(data_dir, 'auth.db')}"
 
-    # 6) Binds adicionais
-    base_dir = env_loader.get_app_dir()
-    db_binds_raw = {
-        "localidades": os.getenv("DB_URI_LOCALIDADES", f"sqlite:///{os.path.join(data_dir, 'base_localidades.db')}"),
-        "historico": os.getenv("DB_URI_HISTORICO", f"sqlite:///{os.path.join(data_dir, 'historico_frete.db')}"),
-        "leads": os.getenv("DB_URI_LEADS", f"sqlite:///{os.path.join(data_dir, 'leads.db')}"),
-        "noticias": os.getenv("DB_URI_NOTICIAS", f"sqlite:///{os.path.join(data_dir, 'noticias.db')}"),
-        "gerencial": os.getenv("DB_URI_GERENCIAL", f"sqlite:///{os.path.join(data_dir, 'gerencial.db')}"),
-    }
-    sqlalchemy_binds = {k: resolve_sqlite_path(v, base_dir) for k, v in db_binds_raw.items()}
+    db_uri_auth = db_uri_auth_raw
+    sqlalchemy_database_uri = resolve_sqlite_path(db_uri_auth, env_loader.get_app_dir())
 
     # 7) Sessão
     session_type = "filesystem"
@@ -152,7 +154,6 @@ def _build_settings() -> Settings:
         data_dir=data_dir,
         indices_file_path=indices_file_path,
         sqlalchemy_database_uri=sqlalchemy_database_uri,
-        sqlalchemy_binds=sqlalchemy_binds,
         session_type=session_type,
         session_cookie_secure=session_cookie_secure,
         session_cookie_samesite=session_cookie_samesite,

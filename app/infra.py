@@ -226,6 +226,12 @@ def resolve_sqlite_path(uri: str, base_dir: str) -> str:
 
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
 
+    if app_env in ("homolog", "prod") and uri and uri.lower().startswith("sqlite://"):
+        raise RuntimeError(
+            "SQLite proibido em homolog/prod. "
+            "DB_URI_AUTH/SQLALCHEMY_DATABASE_URI precisa apontar para PostgreSQL."
+        )
+
     if uri and uri.startswith('sqlite:///'):
         path_part = uri[len('sqlite:///'):]
         if not os.path.isabs(path_part):
