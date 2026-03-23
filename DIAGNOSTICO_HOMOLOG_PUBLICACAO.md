@@ -84,14 +84,16 @@ Para **notícias rápidas**: é necessário que o **Scout** tenha coletado itens
 
 ---
 
-## 6. Banco e dados efêmeros no Render
+## 6. Banco PostgreSQL e filesystem efêmero no Render
 
-No Render, o **filesystem do serviço é efêmero**: a cada deploy os arquivos locais são recriados. Se **DB_URI_*** e **DATA_DIR** (ou `APP_DATA_DIR` / `RENDER_DISK_PATH`) não apontarem para um **disco persistente** (Render Persistent Disk), então:
+No Render, o **filesystem do serviço web é efêmero**: a cada deploy os arquivos locais da instância são recriados. O **dado relacional** deve estar em um **PostgreSQL gerenciado** (ex.: Render Postgres ou externo), configurado em **`DATABASE_URL`** — assim o banco **não** some entre deploys.
 
-- Os SQLites (auth, noticias, gerencial, etc.) são recriados vazios a cada deploy.
-- O arquivo `last_admin_run.json` pode ser perdido após deploy (o diagnóstico na página passa a não mostrar a última execução até um novo disparo).
+O que ainda pode ser perdido sem disco persistente para arquivos:
 
-**Ação:** Em homolog, configurar **Render Persistent Disk** e definir `APP_DATA_DIR` (ou equivalente) para o caminho do disco, e usar esse mesmo diretório para os `DB_URI_*` (ex.: `sqlite:///data/noticias.db` com `data` no disco). Ver `README_DEPLOY.md` e `RENDER_CRON_HOMOLOG.md`.
+- `last_admin_run.json` e outros artefatos sob `APP_DATA_DIR` (se apontarem para o filesystem efêmero).
+- Arquivo de índices da Home se `INDICES_FILE_PATH` não estiver em volume persistente.
+
+**Ação:** Garantir `DATABASE_URL` válida para PostgreSQL; para arquivos, usar **Render Persistent Disk** (ou storage equivalente) e `APP_DATA_DIR` / `INDICES_FILE_PATH` nesse volume. Ver `README_DEPLOY.md` e `RENDER_CRON_HOMOLOG.md`.
 
 ---
 
@@ -115,14 +117,14 @@ Se **qualquer** bloqueio ocorrer no orquestrador (janela, frequência, sem fonte
 | 4 | Ler **Última execução manual**: **Status**, **Motivo**, **Caminho usado**. |
 | 5 | Usar a **tabela da seção 4** para mapear **caminho_usado** / **motivo** → causa e ação. |
 | 6 | Se o motivo indicar falha na Júlia: checar logs do Render, pautas elegíveis (artigo vs noticia), API keys, qualidade. |
-| 7 | Se o banco for efêmero: configurar disco persistente e `DB_URI_*` / `APP_DATA_DIR`. |
+| 7 | Se dados de arquivo forem efêmeros: disco persistente + `APP_DATA_DIR` / `INDICES_FILE_PATH`; conferir `DATABASE_URL` no Postgres gerenciado. |
 
 ---
 
 ## 9. Referências no projeto
 
 - **Cron em homolog:** `RENDER_CRON_HOMOLOG.md`
-- **Regras (frequência, janela):** `app/run_cleiton_agente_regras.py` e tabela `config_regras` (bind `gerencial`)
+- **Regras (frequência, janela):** `app/run_cleiton_agente_regras.py` e tabela `config_regras` (mesmo PostgreSQL que `DATABASE_URL`)
 - **Orquestrador (bloqueios):** `app/run_cleiton_agente_orquestrador.py`
 - **Dispatcher e Júlia:** `app/run_cleiton_agente_dispatcher.py`, `app/run_julia.py`, `app/run_julia_agente_pipeline.py`
 - **Rota do cron:** `app/web.py` → `/cron/executar-cleiton`

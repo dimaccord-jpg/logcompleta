@@ -64,7 +64,7 @@ sudo apt install python3-pip python3-venv nginx git -y
 
 ## 2. Estrutura de Pastas e Código
 
-O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. A camada gerencial Cleiton usa o bind `gerencial` (`DB_URI_GERENCIAL`). A configuração de ambiente (incluindo o carregamento de `.env`) é centralizada em `app/settings.py`, que usa `app/env_loader.py` internamente — defina `APP_ENV=prod` no systemd para carregar `app/.env.prod` de forma consistente.
+O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. Toda a aplicação usa **um único** PostgreSQL via `DATABASE_URL` (incluindo dados gerenciais e editoriais). A configuração de ambiente (incluindo o carregamento de `.env`) é centralizada em `app/settings.py`, que usa `app/env_loader.py` internamente — defina `APP_ENV=prod` no systemd para carregar `app/.env.prod` de forma consistente.
 ### Rotas principais
 - `/perfil`: Área do Usuário (acesso pelo avatar)
 - `/admin`: Painel ADM (acesso exclusivo para admin)
@@ -121,14 +121,8 @@ LOG_LEVEL=WARNING
 # Em servidores próprios, use um caminho fora da pasta do código.
 APP_DATA_DIR=/srv/logcompleta/data
 
-# Caminhos absolutos para persistência (opcional).
-# Se você omitir os DB_URI_*, o código usará APP_DATA_DIR/auth.db, APP_DATA_DIR/base_localidades.db etc.
-DB_URI_AUTH=sqlite:////srv/logcompleta/data/auth.db
-DB_URI_LOCALIDADES=sqlite:////srv/logcompleta/data/base_localidades.db
-DB_URI_HISTORICO=sqlite:////srv/logcompleta/data/historico_frete.db
-DB_URI_LEADS=sqlite:////srv/logcompleta/data/leads.db
-DB_URI_NOTICIAS=sqlite:////srv/logcompleta/data/noticias.db
-DB_URI_GERENCIAL=sqlite:////srv/logcompleta/data/gerencial.db
+# PostgreSQL gerenciado ou self-hosted — banco único para toda a aplicação (obrigatório).
+DATABASE_URL=postgresql+psycopg2://USUARIO:SENHA@HOST_OU_SOCKET:5432/nome_do_banco
 
 # Não defina OAUTHLIB_INSECURE_TRANSPORT em produção (ou use 0). OAuth deve usar HTTPS.
 # Login Google: use a URL pública do seu domínio (auth em app/auth_services.py)

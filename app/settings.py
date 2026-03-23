@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app import env_loader
-from app.infra import resolve_sqlite_path
 
 
 AppEnv = Literal["dev", "homolog", "prod"]
@@ -83,24 +82,17 @@ def _build_settings() -> Settings:
     # 4) Logging
     log_level = (os.getenv("LOG_LEVEL", "INFO") or "INFO").upper()
 
-    # 5) Segurança e banco principal
+    # 5) Segurança e banco principal (mono PostgreSQL; contrato canônico: DATABASE_URL)
     secret_key = os.getenv("SECRET_KEY", "chave_insegura_padrao_dev")
-    db_uri_auth_raw = (os.getenv("DB_URI_AUTH") or "").strip()
-    if app_env in ("homolog", "prod"):
-        # SQLite é proibido fora de `dev`; falhar cedo e de forma rastreável.
-        db_uri_auth_l = db_uri_auth_raw.lower()
-        if (not db_uri_auth_raw) or db_uri_auth_l.startswith("sqlite://") or not db_uri_auth_l.startswith("postgres"):
-            raise RuntimeError(
-                "DB_URI_AUTH ausente/vazio ou apontando para SQLite em homolog/prod. "
-                "Configure DB_URI_AUTH para PostgreSQL (mono-banco)."
-            )
-    else:
-        # Fallback SQLite permitido apenas em dev.
-        if not db_uri_auth_raw:
-            db_uri_auth_raw = f"sqlite:///{os.path.join(data_dir, 'auth.db')}"
+    database_url_raw = (os.getenv("DATABASE_URL") or "").strip()
+    database_url_l = database_url_raw.lower()
+    if (not database_url_raw) or database_url_l.startswith("sqlite://") or not database_url_l.startswith("postgres"):
+        raise RuntimeError(
+            "DATABASE_URL ausente ou inválida. A aplicação exige uma URI PostgreSQL em DATABASE_URL "
+            "(banco único em todos os ambientes). Outros SGBDs ou esquemas de URI não são suportados."
+        )
 
-    db_uri_auth = db_uri_auth_raw
-    sqlalchemy_database_uri = resolve_sqlite_path(db_uri_auth, env_loader.get_app_dir())
+    sqlalchemy_database_uri = database_url_raw
 
     # 7) Sessão
     session_type = "filesystem"

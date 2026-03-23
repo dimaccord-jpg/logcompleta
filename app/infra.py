@@ -3,7 +3,6 @@ Infraestrutura: configuração de banco, bootstrap de admin, segurança (decorat
 web.py usa estas funções; não contém lógica de negócio de domínio.
 """
 import os
-import shutil
 import logging
 import threading
 from functools import wraps
@@ -24,8 +23,6 @@ logger = logging.getLogger(__name__)
 # --- Schema e bootstrap (estado por processo) ---
 _schema_initialized = False
 _schema_lock = threading.Lock()
-
-OPTIONAL_BINDS = ['localidades', 'historico', 'leads', 'noticias', 'gerencial']
 
 # Colunas adicionadas na Etapa 2 (NoticiaPortal); migração suave para bases existentes
 NOTICIAS_PORTAL_EXTRA_COLUMNS = [
@@ -72,7 +69,7 @@ def _ensure_noticias_portal_columns(db_instance):
     """Adiciona colunas Etapa 2 em noticias_portal se não existirem (retrocompatível)."""
     from sqlalchemy import text
     try:
-        engine = db_instance.engines["noticias"]
+        engine = db_instance.get_engine()
     except Exception:
         return
     for col_name, col_type in NOTICIAS_PORTAL_EXTRA_COLUMNS:
@@ -94,7 +91,7 @@ def _ensure_noticias_portal_columns_fase4(db_instance):
     """Adiciona colunas Fase 4 em noticias_portal (Designer/Publisher)."""
     from sqlalchemy import text
     try:
-        engine = db_instance.engines["noticias"]
+        engine = db_instance.get_engine()
     except Exception:
         return
     for col_name, col_type in NOTICIAS_PORTAL_EXTRA_COLUMNS_FASE4:
@@ -160,7 +157,7 @@ def _ensure_pautas_columns(db_instance):
     """Adiciona colunas Fase 3 em pautas se não existirem (retrocompatível)."""
     from sqlalchemy import text
     try:
-        engine = db_instance.engines["noticias"]
+        engine = db_instance.get_engine()
     except Exception:
         return
     for col_name, col_type in PAUTAS_EXTRA_COLUMNS:
@@ -178,102 +175,9 @@ def _ensure_pautas_columns(db_instance):
                 raise
 
 
-def _warn_non_sqlite_migration_limits(db_instance):
-    """Alerta operacional: migração suave foi validada principalmente em SQLite."""
-    try:
-        eng_noticias = db_instance.engines["noticias"]
-        eng_gerencial = db_instance.engines["gerencial"]
-        dialects = {eng_noticias.dialect.name, eng_gerencial.dialect.name}
-        if any(d != "sqlite" for d in dialects):
-            logger.warning(
-                "Ambiente com SGBD não SQLite detectado (%s). "
-                "Revise migrações de colunas/tipos antes de promover para produção.",
-                ",".join(sorted(dialects)),
-            )
-    except Exception:
-        # Aviso apenas informativo; não deve bloquear bootstrap.
-        pass
-
-
-def resolve_sqlite_path(uri: str, base_dir: str) -> str:
-    """
-    Converte URIs relativas de SQLite em absolutas e garante que o diretório exista.
-
-    Em Render homolog/prod, URIs relativas são redirecionadas para diretório persistente
-    quando disponível, evitando perda de dados entre deploys.
-    """
-
-    def _prefer_persistent_sqlite_dir() -> str | None:
-        app_env_inner = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
-        if app_env_inner not in ("homolog", "prod"):
-            return None
-
-        candidates = [
-            (os.getenv("PERSISTENT_DATA_DIR") or "").strip(),
-            (os.getenv("RENDER_DISK_MOUNT_PATH") or "").strip(),
-            "/var/data",
-        ]
-        for c in candidates:
-            if not c:
-                continue
-            try:
-                os.makedirs(c, exist_ok=True)
-                return c
-            except Exception:
-                # Tenta próximo candidato; não interrompe startup.
-                continue
-        return None
-
-    app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
-
-    if app_env in ("homolog", "prod") and uri and uri.lower().startswith("sqlite://"):
-        raise RuntimeError(
-            "SQLite proibido em homolog/prod. "
-            "DB_URI_AUTH/SQLALCHEMY_DATABASE_URI precisa apontar para PostgreSQL."
-        )
-
-    if uri and uri.startswith('sqlite:///'):
-        path_part = uri[len('sqlite:///'):]
-        if not os.path.isabs(path_part):
-            preferred_dir = _prefer_persistent_sqlite_dir()
-            if preferred_dir:
-                absolute_path = os.path.join(preferred_dir, os.path.basename(path_part))
-                # Migração suave: se existia arquivo no caminho antigo do app e ainda não existe no persistente, copia.
-                old_path = os.path.join(base_dir, path_part)
-                if os.path.exists(old_path) and not os.path.exists(absolute_path):
-                    os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
-                    try:
-                        shutil.copy2(old_path, absolute_path)
-                        logger.warning(
-                            "SQLite movido para diretório persistente (%s -> %s).",
-                            old_path,
-                            absolute_path,
-                        )
-                    except Exception as copy_err:
-                        logger.warning(
-                            "Falha ao copiar SQLite para diretório persistente (%s -> %s): %s",
-                            old_path,
-                            absolute_path,
-                            copy_err,
-                        )
-            else:
-                # Em homolog/prod, não permitimos cair para base_dir (pasta da release),
-                # pois isso leva à perda de dados entre deploys em ambientes efêmeros.
-                if app_env in ("homolog", "prod"):
-                    raise RuntimeError(
-                        "Em homolog/prod, URIs SQLite relativas exigem diretório persistente "
-                        "configurado (PERSISTENT_DATA_DIR, RENDER_DISK_MOUNT_PATH ou /var/data). "
-                        "Ajuste a configuração para apontar para o disco persistente."
-                    )
-                absolute_path = os.path.join(base_dir, path_part)
-            os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
-            return 'sqlite:///' + absolute_path.replace('\\', '/')
-    return uri
-
-
 def ensure_database_schema(db_instance):
     """
-    Cria tabelas no bind padrão e nos opcionais (uma vez por processo).
+    Cria tabelas no engine padrão (mono-banco; uma vez por processo).
     db_instance: instância do SQLAlchemy (app.extensions.db).
     """
     global _schema_initialized
@@ -283,15 +187,7 @@ def ensure_database_schema(db_instance):
         if _schema_initialized:
             return
         try:
-            db_instance.create_all(bind_key=[None])
-            for optional_bind in OPTIONAL_BINDS:
-                try:
-                    db_instance.create_all(bind_key=[optional_bind])
-                except Exception as bind_error:
-                    logger.warning(
-                        "Não foi possível inicializar bind '%s': %s",
-                        optional_bind, bind_error
-                    )
+            db_instance.create_all()
             try:
                 _ensure_noticias_portal_columns(db_instance)
             except Exception as col_err:
@@ -312,7 +208,6 @@ def ensure_database_schema(db_instance):
                 _ensure_user_freemium_columns(db_instance)
             except Exception as col_err:
                 logger.warning("Colunas user freemium: %s", col_err)
-            _warn_non_sqlite_migration_limits(db_instance)
             _schema_initialized = True
             logger.info("Banco inicializado: tabelas verificadas/criadas com sucesso.")
         except Exception as e:
@@ -352,7 +247,7 @@ def get_user_by_id(user_id):
 # --- Vínculo geográfico (Roberto Intelligence / BI) ---
 def get_id_localidade_por_chave(chave_cidade_uf: str) -> int | None:
     """
-    Consulta o banco de localidades (bind 'localidades') e retorna o id_cidade
+    Consulta base_localidades no banco padrão e retorna o id_cidade
     correspondente ao par cidade-uf (chave no formato 'cidade-uf', minúsculo).
 
     Use esta função para obter IDs de localidade em qualquer módulo que precise
@@ -369,9 +264,7 @@ def get_id_localidade_por_chave(chave_cidade_uf: str) -> int | None:
     if not chave:
         return None
     try:
-        engine = db.engines.get("localidades")
-        if engine is None:
-            return None
+        engine = db.get_engine()
         with engine.connect() as conn:
             row = conn.execute(
                 text("SELECT id_cidade FROM base_localidades WHERE LOWER(TRIM(chave_busca)) = :c"),

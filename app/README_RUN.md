@@ -75,7 +75,7 @@ O sistema possui uma Área do Usuário acessível pelo avatar no rodapé da side
 **Hardening de ambiente (homolog/prod):**
 - A configuração de ambiente é centralizada em `app/settings.py`. O módulo determina `APP_ENV` em um único ponto e chama `env_loader` apenas uma vez.
 - Em ambientes gerenciados (ex.: Render, com `RENDER=true`), `APP_ENV` é obrigatório e deve estar explícito no serviço (`homolog` ou `prod`). Fora desse contexto, o default é `dev` apenas para execução local.
-- `DB_URI_*` críticos continuam devendo ser definidos no ambiente ou serão resolvidos para caminhos persistentes em diretório de dados dedicado (por padrão fora da pasta da release, via `APP_DATA_DIR` / `RENDER_DISK_PATH` / `/var/data`).
+- `DATABASE_URL` é **obrigatória** e deve apontar para PostgreSQL (banco único). Sem fallback para outro SGBD. Arquivos de dados (índices, `last_admin_run.json`, etc.) continuam exigindo diretório persistente em homolog/prod (`APP_DATA_DIR` / `RENDER_DISK_PATH` / `/var/data` quando aplicável).
 - `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta `app` (ex.: `/var/data/indices.json` ou diretório definido por `APP_DATA_DIR`/`RENDER_DISK_PATH`). A validação em `env_loader.validate_runtime_env` agora é **reativa**: em homolog/prod, um caminho inválido ou apontando para a pasta da release provoca erro de boot, evitando deploy “verde” com persistência quebrada.
 
 ## Status Atual
@@ -115,7 +115,7 @@ pre-commit run --all-files
    - Use `app/.env.example` como base, copiando para `.env.dev` e `.env.homolog` e ajustando apenas os valores.
    - A leitura desses arquivos é feita de forma centralizada por `app/settings.py`, que carrega `.env.{APP_ENV}` via `env_loader` em um único ponto antes de construir o objeto `settings`.
    - Para login com Google, defina `GOOGLE_OAUTH_REDIRECT_URI` (ex.: `http://127.0.0.1:5000/login/google/callback`) e, em dev, `OAUTHLIB_INSECURE_TRANSPORT=1`.
-   - Para a camada gerencial, configure `DB_URI_GERENCIAL` (ex.: `sqlite:///gerencial.db`) no `.env.*`; se omitido, usa `app/gerencial.db`.
+   - Camada gerencial (Cleiton) e demais domínios compartilham o **mesmo** PostgreSQL definido em `DATABASE_URL` no `.env.*`.
    - Para a Júlia, `GEMINI_MODEL_TEXT` permite definir o modelo preferencial; se indisponível, o sistema tenta fallback automático.
   - Para imagens da Júlia (insights/artigos), configure `IMAGE_PROVIDER=gemini`, `GEMINI_MODEL_IMAGE` e opcionalmente `GEMINI_MODEL_IMAGE_FALLBACK`.
   - O pipeline enriquece o prompt de imagem com contexto da pauta + título/subtítulo/resumo gerados, para manter coesão semântica entre texto e capa.
@@ -232,7 +232,7 @@ Checklist pós-deploy:
 
 ## 5. Pautas para a Júlia (Etapa 2)
 
-O pipeline da Júlia consome pautas da tabela `Pauta` (bind noticias). Há dois caminhos principais:
+O pipeline da Júlia consome pautas da tabela `Pauta` no banco único PostgreSQL. Há dois caminhos principais:
 
 - **Notícias (automático):** o Scout (`run_cleiton_agente_scout.py`), chamado pelo ciclo do Cleiton, coleta notícias de fontes configuradas via `SCOUT_SOURCES_JSON` (consulte `app/.env.example` para o formato detalhado) e insere registros em `Pauta` com `tipo='noticia'` e `status_verificacao='pendente'`. Não é necessário inserir pautas de notícia manualmente.
 - Em caso de feed inválido/inacessível, o Scout registra erro da fonte e continua para as demais (não interrompe o ciclo completo).

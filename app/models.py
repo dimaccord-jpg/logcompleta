@@ -85,7 +85,7 @@ class Pauta(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     titulo_original = db.Column(db.String(500), nullable=False)
     fonte = db.Column(db.String(200))
-    link = db.Column(db.String(500), unique=True, nullable=False, index=True)
+    link = db.Column(db.Text, unique=True, nullable=False, index=True)
     tipo = db.Column(db.String(20), default='noticia', index=True)  # noticia | artigo
     status = db.Column(db.String(30), default='pendente', index=True)  # pendente | em_processamento | publicada | falha
     mission_id = db.Column(db.String(80), nullable=True, index=True)

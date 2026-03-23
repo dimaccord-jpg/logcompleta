@@ -1,4 +1,4 @@
-"""baseline postgres
+"""baseline postgres — schema único no PostgreSQL (DATABASE_URL via app).
 
 Revision ID: bf635058e244
 Revises: 
