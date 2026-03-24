@@ -52,7 +52,6 @@ class TermsOfUse(db.Model):
 
 class FreteReal(db.Model):
     # Alterado para 'historico' para separar do banco de cidades
-    __bind_key__ = 'historico' 
     __tablename__ = 'frete_real'
     
     id = db.Column(db.Integer, primary_key=True)
@@ -72,7 +71,6 @@ class FreteReal(db.Model):
     modal = db.Column(db.String(50))
 
 class Lead(db.Model):
-    __bind_key__ = 'leads'
     __tablename__ = 'leads'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(150), unique=True, nullable=False)
@@ -80,7 +78,6 @@ class Lead(db.Model):
 
 class Pauta(db.Model):
     """Pauta para a Júlia. Scout/import preenchem; Verificador define status_verificacao. Só aprovadas vão para Julia."""
-    __bind_key__ = 'noticias'
     __tablename__ = 'pautas'
     id = db.Column(db.Integer, primary_key=True)
     titulo_original = db.Column(db.String(500), nullable=False)
@@ -102,7 +99,6 @@ class Pauta(db.Model):
 
 
 class NoticiaPortal(db.Model):
-    __bind_key__ = 'noticias'
     __tablename__ = 'noticias_portal'
     id = db.Column(db.Integer, primary_key=True)
     tipo = db.Column(db.String(20), default='noticia', index=True)
@@ -135,7 +131,6 @@ class NoticiaPortal(db.Model):
 
 class PublicacaoCanal(db.Model):
     """Registro de publicação por canal (portal, linkedin, instagram, email, ...). FK lógica para noticia_id."""
-    __bind_key__ = 'gerencial'
     __tablename__ = 'publicacao_canal'
     id = db.Column(db.Integer, primary_key=True)
     noticia_id = db.Column(db.Integer, nullable=False, index=True)
@@ -155,7 +150,6 @@ class PublicacaoCanal(db.Model):
 
 class PlanoEstrategico(db.Model):
     """Plano estratégico ativo: tema da série, objetivo, estágio atual."""
-    __bind_key__ = 'gerencial'
     __tablename__ = 'plano_estrategico'
     id = db.Column(db.Integer, primary_key=True)
     tema_serie = db.Column(db.String(255), nullable=False)
@@ -168,7 +162,6 @@ class PlanoEstrategico(db.Model):
 
 class ConfigRegras(db.Model):
     """Regras de negócio persistidas: frequência, prioridade, janela de publicação, retries."""
-    __bind_key__ = 'gerencial'
     __tablename__ = 'config_regras'
     id = db.Column(db.Integer, primary_key=True)
     chave = db.Column(db.String(80), unique=True, nullable=False, index=True)
@@ -184,7 +177,6 @@ class SerieEditorial(db.Model):
     Série editorial de artigos com tema, objetivo de lead e cadência.
     Permite planejar sequências (ex.: "5 pilares da logística") de forma configurável.
     """
-    __bind_key__ = 'gerencial'
     __tablename__ = 'serie_editorial'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -204,7 +196,6 @@ class SerieItemEditorial(db.Model):
     Item da série editorial (ex.: post 1..5 de uma série).
     Conecta planejamento (data_planejada) com a pauta/artigo efetivamente publicado.
     """
-    __bind_key__ = 'gerencial'
     __tablename__ = 'serie_editorial_item'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -226,7 +217,6 @@ class SerieItemEditorial(db.Model):
 
 class MissaoAgente(db.Model):
     """Missão disparada para agente operacional (rastreio e retries)."""
-    __bind_key__ = 'gerencial'
     __tablename__ = 'missao_agente'
     id = db.Column(db.Integer, primary_key=True)
     mission_id = db.Column(db.String(80), unique=True, nullable=False, index=True)
@@ -245,7 +235,6 @@ class MissaoAgente(db.Model):
 
 class AuditoriaGerencial(db.Model):
     """Trilha de auditoria de cada decisão do Cleiton (e eventos de purge)."""
-    __bind_key__ = 'gerencial'
     __tablename__ = 'auditoria_gerencial'
     id = db.Column(db.Integer, primary_key=True)
     tipo_decisao = db.Column(db.String(50), nullable=False, index=True)  # orquestracao, dispatch, retry, purge_dados, purge_imagens, insight
@@ -260,7 +249,6 @@ class AuditoriaGerencial(db.Model):
 
 class InsightCanal(db.Model):
     """Métricas consolidadas por notícia/canal para retroalimentar estratégia (bind gerencial)."""
-    __bind_key__ = 'gerencial'
     __tablename__ = 'insight_canal'
     id = db.Column(db.Integer, primary_key=True)
     noticia_id = db.Column(db.Integer, nullable=False, index=True)
@@ -280,7 +268,6 @@ class InsightCanal(db.Model):
 
 class RecomendacaoEstrategica(db.Model):
     """Recomendações geradas pelo Customer Insight para o Cleiton (tema, canal, horário, frequência)."""
-    __bind_key__ = 'gerencial'
     __tablename__ = 'recomendacao_estrategica'
     id = db.Column(db.Integer, primary_key=True)
     contexto_json = db.Column(db.Text)
@@ -290,7 +277,6 @@ class RecomendacaoEstrategica(db.Model):
     criado_em = db.Column(db.DateTime, default=utcnow_naive, index=True)
 
 class BaseLocalidades(db.Model):
-    __bind_key__ = 'localidades'
     __tablename__ = 'base_localidades'
     uf_nome = db.Column(db.String(100))
     cidade_nome = db.Column(db.String(100))
