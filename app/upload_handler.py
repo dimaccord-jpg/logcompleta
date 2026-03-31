@@ -1,6 +1,7 @@
 """
 Upload e gerenciamento temporário de dados de fretes para o Roberto Intelligence.
-Valida Excel, normaliza texto, vincula IDs de localidade e armazena em sessão.
+Valida Excel, normaliza texto, resolve localidades em base_localidades (id_cidade, id_uf, UF textual)
+e armazena o payload completo em sessão (sem persistir linhas em banco de negócio).
 
 Amostragem mensal: para grandes volumes, apenas uma amostra representativa por mês
 é mantida antes da previsão (roberto_modelo.py continua usando regressão linear
@@ -22,8 +23,7 @@ from uuid import uuid4
 from flask import request, session, jsonify
 from werkzeug.datastructures import FileStorage
 
-from app.brain import gerar_chave_busca
-from app.infra import get_id_localidade_por_chave
+from app.infra import get_localidade_completa_por_chave
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,12 @@ def _normalizar_texto(val: Any) -> str:
     if val is None:
         return ""
     return str(val).strip().lower()
+
+
+def _uf_para_payload(uf_nome: str | None) -> str:
+    """Alinha UF textual ao contrato do BI (2 letras maiúsculas)."""
+    s = (uf_nome or "").strip().upper()
+    return s[:2] if s else ""
 
 
 def _ler_cabecalho_normalizado(ws) -> list[str]:
@@ -223,13 +229,13 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
                 chave_origem = f"{cidade_origem}-{uf_origem}"
                 chave_destino = f"{cidade_destino}-{uf_destino}"
 
-                id_origem = get_id_localidade_por_chave(chave_origem)
-                id_destino = get_id_localidade_por_chave(chave_destino)
+                loc_origem = get_localidade_completa_por_chave(chave_origem)
+                loc_destino = get_localidade_completa_por_chave(chave_destino)
 
-                if id_origem is None:
+                if loc_origem is None or loc_origem.get("id_cidade") is None:
                     erros_linha.append(f"Linha {num_linha}: localidade de origem '{chave_origem}' não encontrada.")
                     continue
-                if id_destino is None:
+                if loc_destino is None or loc_destino.get("id_cidade") is None:
                     erros_linha.append(f"Linha {num_linha}: localidade de destino '{chave_destino}' não encontrada.")
                     continue
 
@@ -263,8 +269,12 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
 
                 linhas_processadas.append({
                     "data_emissao": data_emissao.isoformat() if hasattr(data_emissao, "isoformat") else str(data_emissao),
-                    "id_cidade_origem": id_origem,
-                    "id_cidade_destino": id_destino,
+                    "id_cidade_origem": loc_origem["id_cidade"],
+                    "id_uf_origem": loc_origem.get("id_uf"),
+                    "uf_origem": _uf_para_payload(loc_origem.get("uf_nome")),
+                    "id_cidade_destino": loc_destino["id_cidade"],
+                    "id_uf_destino": loc_destino.get("id_uf"),
+                    "uf_destino": _uf_para_payload(loc_destino.get("uf_nome")),
                     "peso_real": peso,
                     "valor_nf": valor_nf,
                     "valor_frete_total": valor_frete,
@@ -317,8 +327,8 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
 
 def get_dados_upload_cliente() -> list[dict] | None:
     """
-    Retorna os dados temporários do upload do cliente (lista de dicts com IDs de localidade).
-    Retorna None se não houver dados ou se expirados (TTL).
+    Retorna os dados temporários do upload do cliente (lista de dicts com ids de cidade/UF
+    e UF textual vindos de base_localidades). Retorna None se não houver dados ou se expirados (TTL).
     """
     if not session.get(SESSION_KEY_UPLOAD):
         return None

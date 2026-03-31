@@ -12,22 +12,21 @@ def _detect_app_env() -> AppEnv:
     """
     Determina APP_ENV em um único ponto.
 
-    Em ambientes Render (RENDER=true), APP_ENV é obrigatório.
-    Fora disso, default para dev quando ausente.
+    Obrigatório em toda execução: não há fallback silencioso para dev.
     """
     raw = (os.getenv("APP_ENV") or "").strip().lower()
-    is_render = (os.getenv("RENDER") or "").strip().lower() == "true"
 
     if not raw:
-        if is_render:
-            raise RuntimeError(
-                "APP_ENV obrigatório em ambiente gerenciado (ex.: Render). "
-                "Configure dev|homolog|prod nas variáveis de ambiente."
-            )
-        raw = "dev"
+        raise RuntimeError(
+            "APP_ENV obrigatório. Defina explicitamente antes do boot um dos valores aceitos: "
+            "dev|homolog|prod. Não existe fallback implícito para dev."
+        )
 
     if raw not in ("dev", "homolog", "prod"):
-        raise RuntimeError("APP_ENV inválido. Valores aceitos: dev|homolog|prod")
+        raise RuntimeError(
+            "APP_ENV inválido. Valores aceitos: dev|homolog|prod. "
+            "Não existe fallback implícito para dev."
+        )
 
     return raw  # type: ignore[return-value]
 

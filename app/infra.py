@@ -3,6 +3,7 @@ Infraestrutura: configuração de banco, bootstrap de admin, segurança (decorat
 web.py usa estas funções; não contém lógica de negócio de domínio.
 """
 import os
+import sys
 import logging
 import threading
 from functools import wraps
@@ -215,25 +216,53 @@ def ensure_database_schema(db_instance):
             raise
 
 
-def ensure_bootstrap_admin_user(db_instance):
+def user_is_admin(user) -> bool:
+    """True somente se is_admin for explicitamente True (None/outros valores => sem privilégio admin)."""
+    return getattr(user, "is_admin", None) is True
+
+
+def ensure_bootstrap_admin_user(db_instance, *, raise_on_failure: bool = False) -> bool:
     """
-    Promove um usuário existente a admin no startup, quando BOOTSTRAP_ADMIN_EMAIL ou MAIL_USERNAME está definido.
+    Promove um usuário **já existente** a admin quando BOOTSTRAP_ADMIN_EMAIL está definido.
+    Alvo exclusivo por configuração (sem fallback para MAIL_USERNAME). Idempotente.
+    Uso: comando `flask bootstrap-admin` ou chamada operacional explícita — nunca a partir de request HTTP público.
+    Se raise_on_failure=True, propaga exceção após log (adequado para CLI).
     """
-    admin_email = os.getenv('BOOTSTRAP_ADMIN_EMAIL') or os.getenv('MAIL_USERNAME')
+    admin_email = (os.getenv("BOOTSTRAP_ADMIN_EMAIL") or "").strip()
     if not admin_email:
-        return
+        logger.info(
+            "Bootstrap admin: BOOTSTRAP_ADMIN_EMAIL não definido; nenhuma promoção (use ADMIN_EMAILS para OAuth, "
+            "ou defina BOOTSTRAP_ADMIN_EMAIL e execute: flask --app app.web bootstrap-admin)."
+        )
+        return True
     try:
         user = User.query.filter_by(email=admin_email).first()
         if not user:
             logger.info("Bootstrap admin: usuário '%s' ainda não existe.", admin_email)
-            return
-        if user.is_admin:
-            return
+            return True
+        if user_is_admin(user):
+            return True
         user.is_admin = True
         db_instance.session.commit()
         logger.info("Bootstrap admin: usuário '%s' promovido para admin.", admin_email)
     except Exception as e:
-        logger.exception("Falha ao promover usuário admin no bootstrap: %s", e)
+        logger.exception(
+            "Bootstrap admin: falha (tipo=%s, python=%s, msg=%r). "
+            "Senha e DATABASE_URL completa não são logadas.",
+            type(e).__name__,
+            sys.executable,
+            str(e),
+        )
+        if isinstance(e, UnicodeDecodeError):
+            logger.error(
+                "Bootstrap admin: UnicodeDecodeError costuma indicar DATABASE_URL/.env com encoding incorreto "
+                "ou bytes inválidos na URI (ex.: senha salva em Latin-1). Garanta UTF-8 e evite caracteres "
+                "fora do esperado na string de conexão."
+            )
+        if raise_on_failure:
+            raise
+        return False
+    return True
 
 
 def get_user_by_id(user_id):
@@ -245,6 +274,49 @@ def get_user_by_id(user_id):
 
 
 # --- Vínculo geográfico (Roberto Intelligence / BI) ---
+def get_localidade_completa_por_chave(chave_cidade_uf: str) -> dict | None:
+    """
+    Consulta base_localidades no banco padrão pela mesma chave usada em
+    get_id_localidade_por_chave (LOWER(TRIM(chave_busca)) = chave normalizada).
+
+    :param chave_cidade_uf: string no formato "cidade-uf" (ex: "são paulo-sp")
+    :return: dict com id_cidade, id_uf, cidade_nome, uf_nome, chave_busca;
+             None se inválido ou não encontrado
+    """
+    from sqlalchemy import text
+    if not chave_cidade_uf or not isinstance(chave_cidade_uf, str):
+        return None
+    chave = chave_cidade_uf.strip().lower()
+    if not chave:
+        return None
+    try:
+        engine = db.get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT id_cidade, id_uf, cidade_nome, uf_nome, chave_busca
+                    FROM base_localidades
+                    WHERE LOWER(TRIM(chave_busca)) = :c
+                    """
+                ),
+                {"c": chave},
+            ).fetchone()
+            if not row:
+                return None
+            id_cidade, id_uf, cidade_nome, uf_nome, chave_busca = row
+            return {
+                "id_cidade": int(id_cidade) if id_cidade is not None else None,
+                "id_uf": int(id_uf) if id_uf is not None else None,
+                "cidade_nome": (cidade_nome or "").strip(),
+                "uf_nome": (uf_nome or "").strip(),
+                "chave_busca": (chave_busca or "").strip(),
+            }
+    except Exception as e:
+        logger.debug("get_localidade_completa_por_chave(%r): %s", chave_cidade_uf, e)
+        return None
+
+
 def get_id_localidade_por_chave(chave_cidade_uf: str) -> int | None:
     """
     Consulta base_localidades no banco padrão e retorna o id_cidade
@@ -257,23 +329,11 @@ def get_id_localidade_por_chave(chave_cidade_uf: str) -> int | None:
     :param chave_cidade_uf: string no formato "cidade-uf" (ex: "são paulo-sp")
     :return: id_cidade (int) ou None se não encontrado
     """
-    from sqlalchemy import text
-    if not chave_cidade_uf or not isinstance(chave_cidade_uf, str):
+    loc = get_localidade_completa_por_chave(chave_cidade_uf)
+    if not loc:
         return None
-    chave = chave_cidade_uf.strip().lower()
-    if not chave:
-        return None
-    try:
-        engine = db.get_engine()
-        with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT id_cidade FROM base_localidades WHERE LOWER(TRIM(chave_busca)) = :c"),
-                {"c": chave},
-            ).fetchone()
-            return int(row[0]) if row and row[0] is not None else None
-    except Exception as e:
-        logger.debug("get_id_localidade_por_chave(%r): %s", chave_cidade_uf, e)
-        return None
+    cid = loc.get("id_cidade")
+    return int(cid) if cid is not None else None
 
 
 def get_julia_chat_max_history():
@@ -407,10 +467,10 @@ def increment_user_chat_usage(user):
 
 
 def admin_required(f):
-    """Decorator: exige usuário autenticado e is_admin; redireciona para login caso contrário."""
+    """Decorator: exige usuário autenticado e is_admin explícito; redireciona para login caso contrário."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or not getattr(current_user, 'is_admin', False):
+        if not current_user.is_authenticated or not user_is_admin(current_user):
             flash("Acesso restrito apenas para administradores.", "danger")
             return redirect(url_for('login'))
         return f(*args, **kwargs)

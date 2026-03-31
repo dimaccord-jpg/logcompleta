@@ -9,6 +9,15 @@ _diretorio_app = os.path.dirname(os.path.abspath(__file__))
 if os.path.dirname(_diretorio_app) not in sys.path:
     sys.path.insert(0, os.path.dirname(_diretorio_app))
 
+try:
+    import psycopg2  # noqa: F401
+except ImportError as exc:
+    raise RuntimeError(
+        "Driver PostgreSQL (psycopg2) não está disponível neste interpretador Python. "
+        f"Python em execução: {sys.executable}. "
+        "Instale psycopg2-binary no ambiente correto (requirements.txt)."
+    ) from exc
+
 import json
 import logging
 from urllib.parse import urlparse
@@ -25,9 +34,9 @@ from app.painel_admin.admin_routes import admin_bp
 from app.ops_routes import ops_bp
 from app.user_area import user_bp
 from app.infra import (
-    ensure_bootstrap_admin_user,
     get_user_by_id,
     admin_required,
+    user_is_admin,
     get_julia_chat_max_history,
     get_chat_limits_for_user,
     increment_user_chat_usage,
@@ -49,8 +58,9 @@ from app.news_ai import registrar_lead_newsletter
 # Model used by the home route to list portal news/articles.
 from app.models import NoticiaPortal
 
-# 2. Configuração de ambiente centralizada
+# 2. Configuração de ambiente centralizada (após validar driver e carregar .env via settings)
 from app.settings import settings
+from app.env_loader import mask_database_url_for_log, log_database_boot_diagnostics
 
 
 
@@ -76,14 +86,27 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 _diretorio_dados = settings.data_dir
 app.config["DATA_DIR"] = settings.data_dir  # usado pelo Admin para persistir última execução manual
 
 # 3. Configurações de Segurança e Banco de Dados (OBRIGATÓRIO ANTES DO INIT_APP)
 app.config['SECRET_KEY'] = settings.secret_key
-app.config['SQLALCHEMY_DATABASE_URI'] = settings.sqlalchemy_database_uri
+_uri = (settings.sqlalchemy_database_uri or "").strip()
+if not _uri:
+    raise RuntimeError(
+        "SQLALCHEMY_DATABASE_URI não pôde ser definida: a URI do banco está vazia após carregar as configurações."
+    )
+if not isinstance(_uri, str):
+    raise RuntimeError(
+        "SQLALCHEMY_DATABASE_URI inválida: deve ser string; verifique DATABASE_URL nas variáveis de ambiente."
+    )
+log_database_boot_diagnostics(_uri, logger)
+app.config['SQLALCHEMY_DATABASE_URI'] = _uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+if settings.debug:
+    logger.debug("DATABASE_URL (debug, URI mascarada): %s", mask_database_url_for_log(_uri))
 app.config['DEBUG'] = settings.debug
 app.config['JULIA_AVATAR_URL'] = (os.getenv('JULIA_AVATAR_URL', '') or '').strip()
 
@@ -100,6 +123,11 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' if settings.oauth_insecure_trans
 
 # 4. Inicializar extensões e Blueprints
 db.init_app(app)
+# TEMP db_connect_probe: remover após diagnóstico (app/db_connect_probe.py + este bloco)
+with app.app_context():
+    from app.db_connect_probe import register_psycopg2_connect_probe
+
+    register_psycopg2_connect_probe(db.get_engine())
 login_manager.init_app(app)
 
 # Inicializar Flask-Session
@@ -124,12 +152,6 @@ with app.app_context():
     from app.brain import processar_inteligencia_frete
     from app.news_ai import registrar_lead_newsletter
     from app.terms_services import get_active_term
-
-with app.app_context():
-    _skip_bootstrap = (os.getenv("SKIP_APP_BOOTSTRAP") or "").strip().lower() in ("1", "true", "t", "yes", "y")
-    if not _skip_bootstrap:
-        ensure_bootstrap_admin_user(db)
-
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -230,7 +252,7 @@ def login():
         user, error = authenticate_user(email_input or "", password or "")
         if user:
             login_user(user)
-            if user.is_admin:
+            if user_is_admin(user):
                 return redirect(url_for('admin.admin_dashboard'))
             return redirect(url_for('index'))
         flash(error or 'Email ou senha incorretos.', 'danger')
@@ -341,7 +363,7 @@ def google_callback():
     if needs_profile:
         session['pending_profile_completion'] = True
         return redirect(url_for('complete_profile'))
-    if user.is_admin:
+    if user_is_admin(user):
         return redirect(url_for('admin.admin_dashboard'))
     return redirect(url_for('index'))
 
@@ -369,7 +391,7 @@ def complete_profile():
         if not success:
             return redirect(url_for('complete_profile'))
         session.pop('pending_profile_completion', None)
-        if user.is_admin:
+        if user_is_admin(user):
             return redirect(url_for('admin.admin_dashboard'))
         return redirect(url_for('index'))
     return render_template('complete_profile.html', active_term=get_active_term())
@@ -412,7 +434,7 @@ def fretes():
     # Medida provisória: enquanto construímos as funcionalidades avançadas de frete,
     # apenas usuários administradores enxergam a tela completa. Demais perfis (ou sem login)
     # são direcionados para a página de "estamos construindo".
-    if (not current_user.is_authenticated) or (not getattr(current_user, "is_admin", False)):
+    if (not current_user.is_authenticated) or (not user_is_admin(current_user)):
         origem = "Consulta de Frete"
         enviado = False
         email_informado = ""
@@ -478,7 +500,7 @@ def auditoria_frete():
     # verão a versão final quando estiver pronta. Demais usuários caem na
     # página de aviso padronizada.
     origem = "Auditoria de Frete"
-    if (not current_user.is_authenticated) or (not getattr(current_user, "is_admin", False)):
+    if (not current_user.is_authenticated) or (not user_is_admin(current_user)):
         enviado = False
         email_informado = ""
         if request.method == "POST":
@@ -511,7 +533,7 @@ def controle_estoque():
     # Medida provisória: rota ainda em construção; apenas administradores
     # terão acesso à funcionalidade completa quando implementada.
     origem = "Controle de Estoque"
-    if (not current_user.is_authenticated) or (not getattr(current_user, "is_admin", False)):
+    if (not current_user.is_authenticated) or (not user_is_admin(current_user)):
         enviado = False
         email_informado = ""
         if request.method == "POST":
@@ -544,7 +566,7 @@ def insights_frete():
     # Medida provisória: rota ainda em construção; somente administradores
     # devem acessar a versão completa futura.
     origem = "Insights de Frete"
-    if (not current_user.is_authenticated) or (not getattr(current_user, "is_admin", False)):
+    if (not current_user.is_authenticated) or (not user_is_admin(current_user)):
         enviado = False
         email_informado = ""
         if request.method == "POST":
@@ -578,12 +600,16 @@ from app.upload_handler import (
     roberto_clear_upload_endpoint,
 )
 from app.roberto_bi import (
+    api_bi_meta,
+    api_contexto_analitico,
     api_custo_medio,
     api_serie_temporal,
     api_ranking_ufs,
     api_heatmap,
     api_modal,
     api_dispersao,
+    api_qualidade_base,
+    api_recomendacoes,
 )
 
 
@@ -600,6 +626,12 @@ def api_roberto_clear_upload():
     return roberto_clear_upload_endpoint()
 
 
+@app.route('/api/roberto_bi/meta')
+@login_required
+def api_roberto_bi_meta():
+    return api_bi_meta()
+
+
 @app.route('/api/roberto_bi/custo_medio')
 @login_required
 def api_roberto_bi_custo_medio():
@@ -610,6 +642,12 @@ def api_roberto_bi_custo_medio():
 @login_required
 def api_roberto_bi_serie_temporal():
     return api_serie_temporal()
+
+
+@app.route('/api/roberto_bi/contexto_analitico')
+@login_required
+def api_roberto_bi_contexto_analitico():
+    return api_contexto_analitico()
 
 
 @app.route('/api/roberto_bi/ranking_ufs')
@@ -634,6 +672,18 @@ def api_roberto_bi_modal():
 @login_required
 def api_roberto_bi_dispersao():
     return api_dispersao()
+
+
+@app.route('/api/roberto_bi/qualidade_base')
+@login_required
+def api_roberto_bi_qualidade_base():
+    return api_qualidade_base()
+
+
+@app.route('/api/roberto_bi/recomendacoes')
+@login_required
+def api_roberto_bi_recomendacoes():
+    return api_recomendacoes()
 
 
 # --- API Chat Júlia (backend modular run_julia_chat) ---
@@ -825,6 +875,20 @@ def cron_executar_cleiton():
     except Exception as e:
         logging.exception("Cron executar-cleiton: %s", e)
         return {"ok": False, "error": str(e)}, 500
+
+
+# --- CLI operacional (não exposto em rotas públicas) ---
+@app.cli.command("bootstrap-admin")
+def cli_bootstrap_admin():
+    """
+    Promove o e-mail em BOOTSTRAP_ADMIN_EMAIL a admin se o usuário já existir no banco (idempotente).
+    Execução explícita: flask --app app.web bootstrap-admin
+    """
+    from app.extensions import db
+    from app.infra import ensure_bootstrap_admin_user
+
+    with app.app_context():
+        ensure_bootstrap_admin_user(db, raise_on_failure=True)
 
 
 # --- EXECUÇÃO E MANUTENÇÃO ---

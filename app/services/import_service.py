@@ -56,7 +56,7 @@ def processar_importacao_operacao(file: FileStorage) -> tuple[int, int, str | No
         stream = io.StringIO(conteudo)
         leitor = csv.DictReader(stream, delimiter=",")
         sucessos, falhas = 0, 0
-        engine = db.engines["localidades"]
+        engine = db.get_engine()
         with engine.connect() as connection:
             for linha in leitor:
                 uf_nome = linha.get("uf_nome")

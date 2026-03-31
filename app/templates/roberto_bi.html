@@ -19,7 +19,11 @@
     </div>
     <div class="card-body p-3">
       <p class="text-muted small mb-3">
-        Faça upload de um arquivo .xlsx com as colunas: data_emissao, cidade_origem, uf_origem, cidade_destino, uf_destino, peso_real, valor_nf, valor_frete_total, modal (opcional: valor_imposto). Os dados ficam temporários e são descartados ao sair da tela.
+        Nossa IA analisa o histórico de fretes para identificar padrões reais de custo e projetar tendências futuras.
+        <br><br>
+        Utilizamos um modelo matemático de tendência aplicado sobre dados tratados para reduzir distorções, garantindo previsões mais estáveis.
+        <br><br>
+        Além da previsão, você também visualiza o nível de confiabilidade e a qualidade da base utilizada.
       </p>
       <div id="roberto-upload-status" class="small"></div>
       <div class="mt-3">
@@ -31,6 +35,9 @@
   </div>
 
   <div id="roberto-bi-charts" class="roberto-bi-charts" style="display: none;">
+  <div id="roberto-bi-origem-filter" class="mb-3" style="display:none;"></div>
+  <div id="roberto-qualidade-base" class="mb-3 small" style="display: none;" aria-live="polite"></div>
+  <div id="roberto-recomendacoes-analise" class="mb-3 small" style="display: none;" aria-live="polite"></div>
   <div class="row g-4 mb-4">
     <div class="col-12 col-lg-6">
       <div class="ri-card shadow-sm h-100">
@@ -58,8 +65,11 @@
     <div class="card-header bg-white py-2">
       <h6 class="mb-0 fw-bold">Evolução do custo médio (18 meses + previsão 6 meses)</h6>
     </div>
-    <div class="card-body position-relative" style="min-height: 280px;">
-      <canvas id="chart-serie"></canvas>
+    <div class="card-body">
+      <div id="roberto-serie-qualidade" class="mb-2 small" style="display: none;" aria-live="polite"></div>
+      <div id="roberto-chart-serie-wrap" class="position-relative" style="min-height: 280px;">
+        <canvas id="chart-serie"></canvas>
+      </div>
     </div>
   </div>
 
@@ -67,7 +77,7 @@
     <div class="col-12 col-lg-6">
       <div class="ri-card shadow-sm h-100">
         <div class="card-header bg-white py-2">
-          <h6 class="mb-0 fw-bold">Ranking UFs por custo médio</h6>
+          <h6 class="mb-0 fw-bold">Ranking UFs (destino) por custo médio</h6>
         </div>
         <div class="card-body position-relative" style="min-height: 280px;">
           <canvas id="chart-ranking-ufs"></canvas>
@@ -77,7 +87,7 @@
     <div class="col-12 col-lg-6">
       <div class="ri-card shadow-sm h-100">
         <div class="card-header bg-white py-2">
-          <h6 class="mb-0 fw-bold">Heatmap Brasil (tendência de custo por UF)</h6>
+          <h6 class="mb-0 fw-bold">Mapa Brasil (UF destino — tendência prevista 6 meses)</h6>
         </div>
         <div class="card-body position-relative" style="min-height: 280px;">
           <div id="heatmap-brasil"></div>
@@ -97,16 +107,62 @@
   </div>
 </section>
 
+<style>
+  .roberto-heatmap-map-wrap { max-width: 100%; overflow: hidden; }
+  .roberto-heatmap-map-wrap svg { display: block; width: 100%; max-height: 300px; height: auto; }
+  .roberto-heatmap-map-wrap path[id] { stroke: #fff; stroke-width: 0.45; }
+  .roberto-heatmap-map-wrap path[id]:hover { filter: brightness(1.08); }
+</style>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
 <script>
 (function() {
   const BASE = "{{ request.url_root.rstrip('/') }}";
   const API_BI = BASE + "/api/roberto_bi";
+  const HEATMAP_SVG_URL = "{{ url_for('static', filename='img/brasil-ufs.svg') }}";
+  let heatmapBrasilSvgTemplate = null;
   const API_UPLOAD = BASE + "/api/roberto/upload";
   const API_CLEAR = BASE + "/api/roberto/clear_upload";
 
   let chartSerie, chartRanking, chartModal, chartDispersao;
+  let biOrigemParam = '';
+
+  function biUrl(path) {
+    const q = biOrigemParam ? ('?' + biOrigemParam) : '';
+    return API_BI + path + q;
+  }
+
+  function loadBiMeta() {
+    const box = document.getElementById('roberto-bi-origem-filter');
+    return fetchJson(API_BI + '/meta').then(m => {
+      if (!m || !m.upload_ativo || !m.multiplas_origens) {
+        biOrigemParam = '';
+        if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+        return;
+      }
+      biOrigemParam = 'origem_uf=' + encodeURIComponent(m.origem_selecionada);
+      if (box) {
+        box.style.display = '';
+        const opts = (m.origens || []).map(function(u) {
+          return '<option value="' + u + '"' + (u === m.origem_selecionada ? ' selected' : '') + '>' + u + '</option>';
+        }).join('');
+        box.innerHTML = '<div class="d-flex flex-wrap align-items-center gap-2">' +
+          '<span class="small text-muted">Origem (upload)</span>' +
+          '<select id="roberto-bi-select-origem" class="form-select form-select-sm" style="width:auto;max-width:140px;">' +
+          opts + '</select></div>';
+      }
+    }).catch(function() {
+      biOrigemParam = '';
+      if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+    });
+  }
+
+  document.getElementById('roberto-bi-section').addEventListener('change', function(e) {
+    if (e.target && e.target.id === 'roberto-bi-select-origem') {
+      biOrigemParam = 'origem_uf=' + encodeURIComponent(e.target.value);
+      refreshChartsOnly();
+    }
+  });
 
   function getCookie(name) {
     const v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
@@ -137,7 +193,7 @@
 
   function updateCustoMedio() {
     const el = document.getElementById('roberto-custo-medio');
-    fetchJson(API_BI + '/custo_medio').then(data => {
+    fetchJson(biUrl('/custo_medio')).then(data => {
       if (data.registros === 0) {
         el.textContent = 'Nenhum dado disponível. Envie um Excel ou use a base histórica.';
         return;
@@ -148,51 +204,137 @@
     }).catch(() => { el.textContent = 'Erro ao carregar custo médio.'; });
   }
 
-  function updateSerieTemporal() {
-    fetchJson(API_BI + '/serie_temporal').then(data => {
-      const ctx = document.getElementById('chart-serie');
-      if (!ctx) return;
-      if (chartSerie) chartSerie.destroy();
-      const meses = (data.meses || []).concat(data.previsao_meses || []);
-      const valores = (data.valores || []).concat(data.previsao_valores || []);
-      if (meses.length === 0) {
-        ctx.parentElement.innerHTML = '<p class="text-muted small">Sem dados para série temporal.</p>';
-        return;
-      }
-      const nReal = (data.meses || []).length;
-      const realData = valores.slice(0, nReal);
-      const prevData = (data.previsao_valores || []).slice();
-      const padPrev = realData.length ? [realData[realData.length - 1]].concat(prevData) : prevData;
-      const lineReal = realData.concat(Array(prevData.length).fill(null));
-      const linePrev = Array(realData.length).fill(null).concat(padPrev);
-      chartSerie = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: meses,
-          datasets: [
-            { label: 'Custo médio (R$/kg)', data: lineReal, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.1)', fill: true, tension: 0.2 },
-            { label: 'Previsão', data: linePrev, borderColor: '#ffc107', borderDash: [5,5], backgroundColor: 'transparent', fill: false, tension: 0.2 }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { position: 'top' } },
-          scales: {
-            y: { beginAtZero: true, title: { display: true, text: 'R$/kg' } },
-            x: { title: { display: true, text: 'Mês' } }
-          }
-        }
+  function escapeHtml(str) {
+    if (str == null) return '';
+    const d = document.createElement('div');
+    d.textContent = String(str);
+    return d.innerHTML;
+  }
+
+  function renderQualidadePrevisao(q) {
+    const qualEl = document.getElementById('roberto-serie-qualidade');
+    if (!qualEl) return;
+    if (!q || typeof q !== 'object') {
+      qualEl.style.display = 'none';
+      qualEl.innerHTML = '';
+      return;
+    }
+    qualEl.style.display = '';
+    const cls = String(q.classificacao_confiabilidade || '').toLowerCase();
+    const badgeClass = cls === 'alta' ? 'bg-success' : (cls === 'baixa' ? 'bg-warning text-dark' : 'bg-secondary');
+    const clsLabel = cls === 'alta' ? 'Alta' : (cls === 'baixa' ? 'Baixa' : 'Média');
+    var html = '<div class="border rounded p-2 bg-light">';
+    html += '<span class="fw-semibold me-2">Qualidade da previsão:</span>';
+    html += '<span class="badge ' + badgeClass + '">Confiabilidade ' + clsLabel + '</span>';
+    if (q.n_meses_observados != null) {
+      html += '<span class="text-muted ms-2">· ' + q.n_meses_observados + ' mês(es) observado(s) na série</span>';
+    }
+    if (q.coeficiente_variacao_observado != null) {
+      html += '<span class="text-muted ms-2">· Volatilidade (CV da série observada): ' +
+        Number(q.coeficiente_variacao_observado).toLocaleString('pt-BR', { maximumFractionDigits: 3 }) + '</span>';
+    } else if (q.desvio_padrao_observado != null) {
+      html += '<span class="text-muted ms-2">· Desvio padrão (série observada): ' +
+        Number(q.desvio_padrao_observado).toLocaleString('pt-BR', { maximumFractionDigits: 4 }) + '</span>';
+    }
+    var nPrev = q.n_meses_previstos != null ? q.n_meses_previstos : 6;
+    if (q.meses_previstos_com_piso_zero > 0) {
+      html += '<div class="mt-1 small text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Projeção encostou no piso zero em ' +
+        q.meses_previstos_com_piso_zero + ' de ' + nPrev + ' mês(es) futuros.</div>';
+    }
+    if (q.motivos_classificacao && q.motivos_classificacao.length) {
+      html += '<ul class="mb-0 mt-1 ps-3 small text-muted">';
+      q.motivos_classificacao.slice(0, 4).forEach(function(m) {
+        html += '<li>' + escapeHtml(m) + '</li>';
       });
-      chartSerie.update();
-    }).catch(() => {
-      const ctx = document.getElementById('chart-serie');
-      if (ctx && ctx.parentElement) ctx.parentElement.innerHTML = '<p class="text-muted small">Erro ao carregar série.</p>';
+      html += '</ul>';
+    }
+    html += '</div>';
+    qualEl.innerHTML = html;
+  }
+
+  function applySerieTemporalPayload(data) {
+    const wrap = document.getElementById('roberto-chart-serie-wrap');
+    renderQualidadePrevisao(data.qualidade_previsao);
+
+    if (!wrap) return;
+    var meses = (data.meses || []).concat(data.previsao_meses || []);
+    var valores = (data.valores || []).concat(data.previsao_valores || []);
+    if (meses.length === 0) {
+      wrap.innerHTML = '<p class="text-muted small">Sem dados para série temporal.</p>';
+      if (!data.qualidade_previsao) {
+        renderQualidadePrevisao(null);
+        var qe = document.getElementById('roberto-serie-qualidade');
+        if (qe) {
+          qe.style.display = '';
+          qe.innerHTML = '<p class="text-muted small mb-0">Sem dados suficientes para avaliação da previsão.</p>';
+        }
+      }
+      return;
+    }
+
+    if (!document.getElementById('chart-serie')) {
+      wrap.innerHTML = '<canvas id="chart-serie"></canvas>';
+    }
+    var ctx = document.getElementById('chart-serie');
+    if (!ctx) return;
+    if (chartSerie) chartSerie.destroy();
+
+    var nReal = (data.meses || []).length;
+    var realData = valores.slice(0, nReal);
+    var prevData = (data.previsao_valores || []).slice();
+    var padPrev = realData.length ? [realData[realData.length - 1]].concat(prevData) : prevData;
+    var lineReal = realData.concat(Array(prevData.length).fill(null));
+    var linePrev = Array(realData.length).fill(null).concat(padPrev);
+    chartSerie = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: meses,
+        datasets: [
+          { label: 'Custo médio (R$/kg)', data: lineReal, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.1)', fill: true, tension: 0.2 },
+          { label: 'Previsão', data: linePrev, borderColor: '#ffc107', borderDash: [5,5], backgroundColor: 'transparent', fill: false, tension: 0.2 }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' } },
+        scales: {
+          y: { beginAtZero: true, title: { display: true, text: 'R$/kg' } },
+          x: { title: { display: true, text: 'Mês' } }
+        }
+      }
+    });
+    chartSerie.update();
+  }
+
+  function updateSerieTemporal() {
+    fetchJson(biUrl('/serie_temporal')).then(applySerieTemporalPayload).catch(function() {
+      renderQualidadePrevisao(null);
+      var w = document.getElementById('roberto-chart-serie-wrap');
+      if (w) w.innerHTML = '<p class="text-muted small">Erro ao carregar série.</p>';
+    });
+  }
+
+  function updateContextoAnalitico() {
+    return fetchJson(biUrl('/contexto_analitico')).then(function(data) {
+      applySerieTemporalPayload(data.serie_temporal || {});
+      renderQualidadeBase(data.qualidade_base || null);
+      renderRecomendacoesAnalise(data.recomendacoes_analise || []);
+    }).catch(function() {
+      renderQualidadePrevisao(null);
+      renderQualidadeBase(null);
+      var el = document.getElementById('roberto-recomendacoes-analise');
+      if (el) {
+        el.style.display = '';
+        el.innerHTML = '<p class="text-muted small mb-0">Não foi possível carregar o bloco analítico.</p>';
+      }
+      var w = document.getElementById('roberto-chart-serie-wrap');
+      if (w) w.innerHTML = '<p class="text-muted small">Erro ao carregar série.</p>';
     });
   }
 
   function updateRankingUfs() {
-    fetchJson(API_BI + '/ranking_ufs').then(data => {
+    fetchJson(biUrl('/ranking_ufs')).then(data => {
       const ctx = document.getElementById('chart-ranking-ufs');
       if (!ctx) return;
       if (chartRanking) chartRanking.destroy();
@@ -218,7 +360,7 @@
   }
 
   function updateModal() {
-    fetchJson(API_BI + '/modal').then(data => {
+    fetchJson(biUrl('/modal')).then(data => {
       const ctx = document.getElementById('chart-modal');
       if (!ctx) return;
       if (chartModal) chartModal.destroy();
@@ -241,29 +383,108 @@
   }
 
   function updateHeatmap() {
-    fetchJson(API_BI + '/heatmap').then(data => {
-      const container = document.getElementById('heatmap-brasil');
+    var FILLS = {
+      muito_frio: '#0d47a1',
+      frio: '#29b6f6',
+      neutro: '#90a4ae',
+      quente: '#ff9800',
+      muito_quente: '#c62828'
+    };
+    var SEM_DADO = '#dee2e6';
+
+    function pintarEstados(svgEl, data) {
+      var ufInfo = {};
+      var ufs = data.ufs || [];
+      var niveis = data.nivel_temperatura || [];
+      var vals = data.valores || [];
+      var quals = data.qualidade_uf || [];
+      for (var i = 0; i < ufs.length; i++) {
+        ufInfo[String(ufs[i]).toUpperCase()] = {
+          nivel: niveis[i] || 'neutro',
+          v: vals[i],
+          q: i < quals.length ? quals[i] : null
+        };
+      }
+      svgEl.querySelectorAll('path[id]').forEach(function(p) {
+        var id = (p.getAttribute('id') || '').toUpperCase();
+        var info = ufInfo[id];
+        p.setAttribute('fill', info ? (FILLS[info.nivel] || FILLS.neutro) : SEM_DADO);
+        var tip = id;
+        if (info) {
+          tip += ' — ' + String(info.nivel).replace(/_/g, ' ');
+          if (info.v != null && !isNaN(info.v)) {
+            tip += ' — intensidade ' + Number(info.v).toLocaleString('pt-BR', { maximumFractionDigits: 6 });
+          }
+          if (info.q && typeof info.q === 'object') {
+            var qq = info.q;
+            var cname = String(qq.classificacao_confiabilidade || '').toLowerCase();
+            var confLabel = cname === 'alta' ? 'Alta' : (cname === 'baixa' ? 'Baixa' : 'Média');
+            tip += ' · Confiabilidade ' + confLabel;
+            if (qq.n_meses_observados != null) tip += ' · ' + qq.n_meses_observados + ' mês(es) observado(s)';
+            if (qq.coeficiente_variacao_observado != null) {
+              tip += ' · CV obs. ' + Number(qq.coeficiente_variacao_observado).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+            } else if (qq.desvio_padrao_observado != null) {
+              tip += ' · DP obs. ' + Number(qq.desvio_padrao_observado).toLocaleString('pt-BR', { maximumFractionDigits: 4 });
+            }
+            if (qq.meses_previstos_com_piso_zero > 0) {
+              tip += ' · Piso zero em ' + qq.meses_previstos_com_piso_zero + ' mês(es) previsto(s)';
+            }
+            if (qq.motivos_classificacao && qq.motivos_classificacao.length) {
+              tip += ' · ' + qq.motivos_classificacao.join(' · ');
+            }
+          }
+        } else {
+          tip += ' — sem dado nesta base';
+        }
+        p.setAttribute('title', tip);
+        p.style.cursor = 'pointer';
+      });
+    }
+
+    function legendaHtml() {
+      return '<div class="mt-2 pt-2 border-top small w-100">' +
+        '<div class="mb-1 text-muted">Tendência prevista por UF (frio → neutro → quente), relativa às UFs desta base. Passe o cursor sobre o estado para confiabilidade e detalhes (mesmos metadados do motor).</div>' +
+        '<div style="height:10px;border-radius:6px;background:linear-gradient(90deg,#0d47a1,#29b6f6,#90a4ae,#ff9800,#c62828)"></div>' +
+        '</div>';
+    }
+
+    fetchJson(biUrl('/heatmap')).then(function(data) {
+      var container = document.getElementById('heatmap-brasil');
       if (!container) return;
       if (!data.ufs || data.ufs.length === 0) {
         container.innerHTML = '<p class="text-muted small">Sem dados para heatmap.</p>';
         return;
       }
-      const vals = data.valores || [];
-      const tendencia = data.tendencia_alta || [];
-      const maxV = Math.max(...vals, 1);
-      container.innerHTML = data.ufs.map((uf, i) => {
-        const pct = maxV ? Math.round((vals[i] / maxV) * 100) : 0;
-        const cor = tendencia[i] ? 'rgba(220,53,69,0.7)' : 'rgba(13,110,253,0.5)';
-        return '<span class="d-inline-block m-1 px-2 py-1 rounded small" style="background:' + cor + ';color:#fff" title="' + uf + '">' + uf + '</span>';
-      }).join('');
-    }).catch(() => {
-      const container = document.getElementById('heatmap-brasil');
+      function aplicar(txt) {
+        container.innerHTML = '<div class="roberto-heatmap-map-wrap">' + txt + '</div>' + legendaHtml();
+        var svg = container.querySelector('svg');
+        if (svg) {
+          svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+          svg.setAttribute('role', 'img');
+          pintarEstados(svg, data);
+        }
+      }
+      if (heatmapBrasilSvgTemplate) {
+        aplicar(heatmapBrasilSvgTemplate);
+        return;
+      }
+      fetch(HEATMAP_SVG_URL, { credentials: 'same-origin' }).then(function(r) {
+        if (!r.ok) throw new Error('svg');
+        return r.text();
+      }).then(function(txt) {
+        heatmapBrasilSvgTemplate = txt;
+        aplicar(txt);
+      }).catch(function() {
+        container.innerHTML = '<p class="text-muted small">Não foi possível carregar o mapa.</p>';
+      });
+    }).catch(function() {
+      var container = document.getElementById('heatmap-brasil');
       if (container) container.innerHTML = '<p class="text-muted small">Erro ao carregar heatmap.</p>';
     });
   }
 
   function updateDispersao() {
-    fetchJson(API_BI + '/dispersao').then(data => {
+    fetchJson(biUrl('/dispersao')).then(data => {
       const ctx = document.getElementById('chart-dispersao');
       if (!ctx) return;
       if (chartDispersao) chartDispersao.destroy();
@@ -296,13 +517,116 @@
     });
   }
 
-  function refreshAll() {
+  function renderQualidadeBase(q) {
+    var el = document.getElementById('roberto-qualidade-base');
+    if (!el) return;
+    if (!q || typeof q !== 'object') {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    el.style.display = '';
+    var cls = String(q.classificacao || '').toLowerCase();
+    var badgeClass = cls === 'alta' ? 'bg-success' : (cls === 'baixa' ? 'bg-warning text-dark' : 'bg-secondary');
+    var clsLabel = cls === 'alta' ? 'Alta' : (cls === 'baixa' ? 'Baixa' : 'Média');
+    var lim = q.limiar_peso_muito_baixo_kg != null ? q.limiar_peso_muito_baixo_kg : 1;
+    var html = '<div class="border rounded p-2 bg-light">';
+    html += '<span class="fw-semibold me-2">Qualidade da base analisada</span>';
+    html += '<span class="badge ' + badgeClass + '">' + clsLabel + '</span>';
+    if (q.n_registros_validos != null) html += '<span class="text-muted ms-2">· ' + q.n_registros_validos + ' registro(s) com peso &gt; 0</span>';
+    if (q.n_meses_cobertos != null) html += '<span class="text-muted ms-2">· ' + q.n_meses_cobertos + ' mês(es) com emissão</span>';
+    if (q.min_linhas_por_mes != null && q.max_linhas_por_mes != null) {
+      html += '<span class="text-muted ms-2">· Linhas/mês: min ' + q.min_linhas_por_mes + ', máx ' + q.max_linhas_por_mes + '</span>';
+    }
+    html += '<div class="text-muted mt-1">';
+    if (q.mediana_rs_kg_embarque != null) {
+      html += 'Mediana R$/kg (por embarque): ' + Number(q.mediana_rs_kg_embarque).toLocaleString('pt-BR', { maximumFractionDigits: 4 }) + '. ';
+    }
+    if (q.percentil_95_rs_kg_embarque != null) {
+      html += 'P95 R$/kg: ' + Number(q.percentil_95_rs_kg_embarque).toLocaleString('pt-BR', { maximumFractionDigits: 4 }) + '. ';
+    }
+    if (q.pct_peso_muito_baixo != null) {
+      html += 'Peso &lt; ' + lim + ' kg: ' + Number(q.pct_peso_muito_baixo).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%. ';
+    }
+    if (q.pct_concentracao_top3_meses != null) {
+      html += 'Concentração nos 3 meses com mais linhas: ' + Number(q.pct_concentracao_top3_meses).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '% (sobre emissões com data).';
+    }
+    html += '</div>';
+    if (q.motivos_classificacao && q.motivos_classificacao.length) {
+      html += '<ul class="mb-0 mt-1 ps-3 small text-muted">';
+      q.motivos_classificacao.forEach(function(m) { html += '<li>' + escapeHtml(m) + '</li>'; });
+      html += '</ul>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  }
+
+  function updateQualidadeBase() {
+    fetchJson(biUrl('/qualidade_base')).then(function(data) {
+      renderQualidadeBase(data);
+    }).catch(function() {
+      renderQualidadeBase(null);
+      var el = document.getElementById('roberto-qualidade-base');
+      if (el) {
+        el.style.display = '';
+        el.innerHTML = '<p class="text-muted small mb-0">Não foi possível carregar a qualidade da base.</p>';
+      }
+    });
+  }
+
+  function renderRecomendacoesAnalise(items) {
+    var el = document.getElementById('roberto-recomendacoes-analise');
+    if (!el) return;
+    if (!items || !items.length) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    el.style.display = '';
+    var border = { info: 'border-primary', atencao: 'border-warning', critica: 'border-danger' };
+    var html = '<div class="border rounded p-2 bg-white"><div class="fw-semibold mb-2">Recomendações</div>';
+    items.forEach(function(it) {
+      var n = String(it.nivel || 'info').toLowerCase();
+      var bc = border[n] || 'border-secondary';
+      html += '<div class="border-start ' + bc + ' border-3 ps-2 mb-2 pb-2">';
+      html += '<span class="badge bg-secondary me-1">' + escapeHtml(String(it.tipo || '')) + '</span>';
+      html += '<span class="small text-muted">' + escapeHtml(String(it.nivel || '')) + '</span>';
+      html += '<div class="mt-1">' + escapeHtml(String(it.mensagem || '')) + '</div>';
+      if (it.motivo_tecnico) {
+        html += '<div class="small text-muted mt-1"><em>' + escapeHtml(String(it.motivo_tecnico)) + '</em></div>';
+      }
+      if (it.acao_sugerida) {
+        html += '<div class="small mt-1 text-body-secondary">' + escapeHtml(String(it.acao_sugerida)) + '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  }
+
+  function updateRecomendacoes() {
+    fetchJson(biUrl('/recomendacoes')).then(function(data) {
+      renderRecomendacoesAnalise(data.recomendacoes_analise || []);
+    }).catch(function() {
+      var el = document.getElementById('roberto-recomendacoes-analise');
+      if (el) {
+        el.style.display = '';
+        el.innerHTML = '<p class="text-muted small mb-0">Não foi possível carregar recomendações.</p>';
+      }
+    });
+  }
+
+  function refreshChartsOnly() {
     updateCustoMedio();
-    updateSerieTemporal();
+    updateContextoAnalitico();
     updateRankingUfs();
     updateModal();
     updateHeatmap();
     updateDispersao();
+  }
+
+  function refreshAll() {
+    loadBiMeta().then(function() { refreshChartsOnly(); });
   }
 
   function showBiChartsAndLoad() {

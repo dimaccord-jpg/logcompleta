@@ -1,6 +1,6 @@
-## Novidade: Área do Usuário
-O gerenciamento de perfil e acesso ao Painel ADM pode ser feito pela Área do Usuário, acessível pelo avatar no rodapé da sidebar. Admins têm atalho exclusivo para Painel ADM.
 # Diagnóstico: Artigos e notícias rápidas não publicados em homologação
+
+**Área do Usuário:** perfil e Painel ADM (atalho para admin) ficam acessíveis pelo avatar no rodapé da sidebar; ver [`app/README_RUN.md`](app/README_RUN.md).
 
 **Escopo:** Este documento cobre **ambos** os fluxos que alimentam o portal em https://homolog0514.agentefrete.com.br/:
 

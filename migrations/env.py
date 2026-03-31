@@ -22,7 +22,7 @@ _database_url_cache: str | None = None
 
 def _resolve_database_url() -> str:
     """
-    Contrato do projeto: DATABASE_URL (PostgreSQL), carregada após .env.{APP_ENV} via env_loader.
+    Contrato do projeto: DATABASE_URL (PostgreSQL), mesma validação que a app (env_loader).
     Sem Flask e sem current_app.
     """
     global _database_url_cache
@@ -37,14 +37,7 @@ def _resolve_database_url() -> str:
     from app import env_loader
 
     env_loader.load_app_env()
-
-    raw = (os.getenv("DATABASE_URL") or "").strip()
-    low = raw.lower()
-    if not raw or low.startswith("sqlite://") or not low.startswith("postgres"):
-        raise RuntimeError(
-            "Alembic exige DATABASE_URL com URI PostgreSQL (banco único). "
-            "Defina no ambiente ou em app/.env.{APP_ENV}."
-        )
+    raw = env_loader.resolve_postgresql_sqlalchemy_uri()
 
     _database_url_cache = raw
     return raw
@@ -81,7 +74,7 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
-    """Run migrations in 'online' mode (engine direto a partir de DATABASE_URL)."""
+    """Run migrations in 'online' mode (engine a partir da URI resolvida por env_loader)."""
 
     def process_revision_directives(context, revision, directives):
         opts = getattr(config, "cmd_opts", None)

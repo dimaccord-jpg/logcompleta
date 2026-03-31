@@ -23,17 +23,88 @@ def get_app_dir() -> str:
     """Retorna o diretório absoluto da pasta app."""
     return str(Path(__file__).resolve().parent)
 
+def resolve_postgresql_sqlalchemy_uri() -> str:
+    """
+    Lê DATABASE_URL (após load_app_env), valida parse SQLAlchemy e exige URI PostgreSQL.
+    """
+    from sqlalchemy.engine.url import make_url
+
+    raw = (os.getenv("DATABASE_URL") or "").strip()
+    if not raw:
+        raise RuntimeError(
+            "DATABASE_URL ausente. Defina em app/.env.{APP_ENV} ou nas variáveis de ambiente."
+        )
+    low = raw.lower()
+    if low.startswith("sqlite://") or not low.startswith("postgres"):
+        raise RuntimeError(
+            "DATABASE_URL inválida: é obrigatória uma URI PostgreSQL. SQLite e outros SGBDs não são suportados."
+        )
+    make_url(raw)
+    return raw
+
+
+def mask_database_url_for_log(url: str) -> str:
+    """
+    Mascara usuário/senha em uma URI de banco para logs (nunca use para conexão).
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    try:
+        p = urlparse(url)
+        if p.username is None and p.password is None:
+            return url
+        netloc_host = p.hostname or ""
+        port = p.port
+        host_part = f"{netloc_host}:{port}" if port else netloc_host
+        user = (p.username or "").strip()
+        if user:
+            safe_netloc = f"{user}:***@{host_part}"
+        else:
+            safe_netloc = f"***@{host_part}"
+        return urlunparse((p.scheme, safe_netloc, p.path, "", p.query, ""))
+    except Exception:
+        return "<uri indisponível para log seguro>"
+
+
+def log_database_boot_diagnostics(uri: str, logger) -> None:
+    """
+    Valida a URI com SQLAlchemy make_url sem abrir conexão.
+    Uma linha de log com URI mascarada e host/porta/database; falha de parse com traceback.
+    """
+    from sqlalchemy.engine.url import make_url
+
+    if not isinstance(uri, str):
+        logger.error("SQLALCHEMY_DATABASE_URI deve ser str; obtido: %s", type(uri).__name__)
+        return
+    try:
+        u = make_url(uri)
+    except Exception:
+        logger.exception("URI do banco: parse SQLAlchemy (make_url) falhou; conexão não foi tentada")
+        return
+    masked = mask_database_url_for_log(uri)
+    logger.info(
+        "Banco configurado (URI mascarada): %s | driver=%s host=%s port=%s database=%s",
+        masked,
+        u.drivername,
+        u.host,
+        u.port,
+        u.database,
+    )
+
+
 def load_app_env() -> bool:
     """
-    Carrega .env.{APP_ENV} do diretório app.
-    APP_ENV: dev | homolog | prod.
-    Retorna True se o arquivo foi carregado.
+    Carrega somente app/.env.{APP_ENV} (diretório do pacote app).
+    APP_ENV: dev | homolog | prod. Sem fallback para app/.env.
+    Retorna True se o arquivo foi carregado com sucesso.
     """
     from dotenv import load_dotenv
+
+    # No boot web/worker, `app/settings` já definiu APP_ENV antes de chamar isto.
+    # O default "dev" cobre chamadas diretas (ex.: scripts) sem passar por settings.
     env_name = os.getenv("APP_ENV", "dev").strip().lower() or "dev"
-    app_dir = get_app_dir()
-    dotenv_path = os.path.join(app_dir, f".env.{env_name}")
-    return load_dotenv(dotenv_path)
+    path = Path(__file__).resolve().parent / f".env.{env_name}"
+    return load_dotenv(str(path), override=False, encoding="utf-8-sig")
 
 
 

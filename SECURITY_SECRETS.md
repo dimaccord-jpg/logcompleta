@@ -9,6 +9,10 @@ Este projeto adota um padrao de prevencao de vazamento em camadas.
 3. `app/.env.dev`, `app/.env.homolog` e `app/.env.prod` devem conter apenas valores locais e nao devem ser versionados.
 4. Segredos de homolog/prod devem ser definidos no provedor (Render/Systemd/GitHub Secrets/Vault).
 
+Ordem de uso de `APP_ENV`, carregamento de `app/.env.{APP_ENV}` e PostgreSQL local vs homolog/prod: ver [`app/README_RUN.md`](app/README_RUN.md) e [`README.md`](README.md) na raiz.
+
+Antes de rodar scripts ou comandos que importam `app.settings` (web, workers, testes com app), confirme `APP_ENV` na sessão: PowerShell `echo $env:APP_ENV`, bash `echo $APP_ENV`. Linha vazia = não prossiga até exportar.
+
 ## Protecoes implementadas
 
 1. `.gitignore` bloqueia `.env` e `.env.*` (exceto `.env.example`).

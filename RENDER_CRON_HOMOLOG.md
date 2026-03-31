@@ -1,6 +1,6 @@
-## Novidade: Área do Usuário
-Admins podem acessar o Painel ADM diretamente pela Área do Usuário, disponível no rodapé da sidebar após login.
 # Cron Jobs no Render (homolog)
+
+No **Web Service** e em **cada Cron Job**, defina e **confira no painel** `Environment` a variável `APP_ENV=homolog` (no Render não há shell local; o painel substitui `echo`). Sem isso, o boot da aplicação falha — **não há fallback**. O banco homolog no provedor é PostgreSQL **16** (não confunda com o PostgreSQL 18 do dev local no Windows). Detalhes e checagem em terminal: [`app/README_RUN.md`](app/README_RUN.md).
 
 Este guia cobre dois agendamentos independentes em homolog:
 
@@ -122,7 +122,7 @@ Após mudanças de credenciais ou deploy em homolog, valide o login Google:
 
 # Parte B - coleta dos índices da Home (2x ao dia)
 
-Objetivo de negócio: manter no topo da Home os indicadores **Petróleo, BDI, FBX e Dólar** atualizados com base no último registro salvo em `app/indices.json`.
+Objetivo de negócio: manter no topo da Home os indicadores **Petróleo, BDI, FBX e Dólar** atualizados com base no último registro do histórico no arquivo apontado por `INDICES_FILE_PATH` (resolvido por `app/settings.py`; em homolog costuma ser um caminho persistente fora da release, não `app/indices.json` na raiz do código).
 
 ## 1. Pré-requisitos
 
@@ -160,7 +160,7 @@ echo "[indices] start $(date -Iseconds)"; python -m app.finance; echo "[indices]
 ## 4. Troubleshooting rápido
 
 - **Ticker vazio na Home:**
-   - Verifique se `app/indices.json` contém `historico` com ao menos um item.
+   - Verifique se o arquivo em `INDICES_FILE_PATH` contém `historico` com ao menos um item.
    - Verifique se a rota `/` está extraindo o último registro do histórico antes de renderizar o template.
 - **Job executa, mas sem atualização:**
    - Confirme conectividade externa para yfinance e fontes de scraping.
@@ -174,3 +174,9 @@ Use este checklist para encerrar a validação de ambiente:
 2. Cron de índices executa `python -m app.finance` 2x ao dia útil com `APP_ENV=homolog`.
 3. O arquivo apontado por `INDICES_FILE_PATH` mantém histórico e data de atualização recente.
 4. Home (`/`) exibe Dólar, Petróleo, BDI e FBX sem campos vazios.
+
+---
+
+## Área do Usuário (referência)
+
+Admins podem acessar o Painel ADM pela Área do Usuário (avatar no rodapé da sidebar após login). Detalhes operacionais: [`app/README_RUN.md`](app/README_RUN.md).

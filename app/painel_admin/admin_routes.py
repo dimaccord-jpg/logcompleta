@@ -23,7 +23,7 @@ import threading
 from concurrent.futures import Future
 from datetime import datetime
 
-from app.infra import get_admin_executor
+from app.infra import get_admin_executor, user_is_admin
 from app.terms_services import get_active_term
 from app.finance import atualizar_indices
 from app.run_julia_regras import status_verificacao_permitidos
@@ -57,10 +57,8 @@ _log = logging.getLogger(__name__)
 
 
 def verificar_acesso_admin():
-    """Retorna True se o usuário estiver autenticado e for administrador."""
-    return current_user.is_authenticated and getattr(
-        current_user, "is_admin", False
-    )
+    """Retorna True se o usuário estiver autenticado e is_admin for explicitamente True."""
+    return current_user.is_authenticated and user_is_admin(current_user)
 
 
 # --- Dashboard ---

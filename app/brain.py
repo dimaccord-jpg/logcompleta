@@ -38,24 +38,23 @@ def processar_inteligencia_frete(origem_raw, destino_raw, uf_origem, uf_destino,
         err = f"Localidade não encontrada: {'Origem' if id_origem is None else 'Destino'}"
         return None, err
 
-    # 2.1. Recupera nomes de cidade/UF a partir de base_localidades para compor a rota
+    # 2.1. Nomes de cidade/UF a partir de base_localidades (mesmo PostgreSQL que DATABASE_URL).
     cidade_o = cidade_d = uf_o_nome = uf_d_nome = ""
     try:
-        engine_loc = db.engines.get("localidades")
-        if engine_loc is not None:
-            with engine_loc.connect() as conn:
-                row_o = conn.execute(
-                    text("SELECT cidade_nome, uf_nome FROM base_localidades WHERE id_cidade = :id"),
-                    {"id": id_origem},
-                ).fetchone()
-                row_d = conn.execute(
-                    text("SELECT cidade_nome, uf_nome FROM base_localidades WHERE id_cidade = :id"),
-                    {"id": id_destino},
-                ).fetchone()
-                if row_o:
-                    cidade_o, uf_o_nome = (row_o[0] or ""), (row_o[1] or "")
-                if row_d:
-                    cidade_d, uf_d_nome = (row_d[0] or ""), (row_d[1] or "")
+        engine = db.get_engine()
+        with engine.connect() as conn:
+            row_o = conn.execute(
+                text("SELECT cidade_nome, uf_nome FROM base_localidades WHERE id_cidade = :id"),
+                {"id": id_origem},
+            ).fetchone()
+            row_d = conn.execute(
+                text("SELECT cidade_nome, uf_nome FROM base_localidades WHERE id_cidade = :id"),
+                {"id": id_destino},
+            ).fetchone()
+            if row_o:
+                cidade_o, uf_o_nome = (row_o[0] or ""), (row_o[1] or "")
+            if row_d:
+                cidade_d, uf_d_nome = (row_d[0] or ""), (row_d[1] or "")
     except Exception as e:
         logger.debug("Falha ao resolver nomes de localidades para a rota: %s", e)
 

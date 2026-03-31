@@ -34,7 +34,101 @@
 - Equipe informada sobre ciclo de atualização, merges e validações.
 
 
-Este projeto utiliza variáveis de ambiente para alternar entre configurações de Desenvolvimento e Homologação. A lógica de autenticação está em `app/auth_services.py`; a infraestrutura em `app/infra.py`; as rotas operacionais (diagnóstico OAuth, auditoria de usuários, promote-admin, reset de pautas e health) estão em `app/ops_routes.py` (Blueprint). O `web.py` apenas expõe as rotas e registra os blueprints.
+Este projeto utiliza variáveis de ambiente para alternar entre configurações de Desenvolvimento, Homologação e Produção. A lógica de autenticação está em `app/auth_services.py`; a infraestrutura em `app/infra.py`; as rotas operacionais (diagnóstico OAuth, auditoria de usuários, promote-admin, reset de pautas e health) estão em `app/ops_routes.py` (Blueprint). O `web.py` apenas expõe as rotas e registra os blueprints.
+
+---
+
+## Ambientes, PostgreSQL e arquivos `.env` (leitura obrigatória)
+
+### Diferença entre dev local, homolog e prod
+
+| | **dev** (local) | **homolog** | **prod** |
+|---|-------------------|-------------|----------|
+| `APP_ENV` | `dev` | `homolog` | `prod` |
+| Arquivo carregado pelo app | `app/.env.dev` | `app/.env.homolog` | `app/.env.prod` |
+| PostgreSQL (referência) | Neste projeto, o estado **validado** no Windows usou **PostgreSQL 18** como host do banco de trabalho. | **PostgreSQL 16** | **PostgreSQL 16** |
+| Persistência de dados/índices | Fallback local em `app/` permitido se não houver volume configurado. | Obrigatório volume persistente (`APP_DATA_DIR` / `RENDER_DISK_PATH` / caminho em servidor). Boot falha se só houver filesystem efêmero. | Idem homolog. |
+
+Homolog e prod **não** usam a instalação PostgreSQL da sua máquina de desenvolvimento; o que importa é sempre o destino em `DATABASE_URL` **e** que essa URI aponte para o **serviço/cluster correto**.
+
+### `APP_ENV` obrigatório e ordem de carregamento
+
+1. **`APP_ENV` deve estar definido no processo** antes de qualquer `import` que carregue `app/settings.py` (por exemplo: `$env:APP_ENV="dev"` no PowerShell, `export APP_ENV=dev` no bash, variável no systemd/Render/DigitalOcean).
+2. `app/settings.py` lê **somente** `os.environ` para decidir o ambiente. Se `APP_ENV` estiver vazio, o boot **falha** com `RuntimeError` — **não** existe fallback implícito para `dev`.
+3. **Depois** dessa validação, `app/env_loader.load_app_env()` carrega **apenas** o arquivo `app/.env.{APP_ENV}` (caminho absoluto; não depende do diretório atual do terminal). Não existe `app/.env` genérico no fluxo principal.
+4. O arquivo `.env.{APP_ENV}` pode conter uma linha `APP_ENV=...` para documentação, mas **`load_dotenv(override=False)` não sobrescreve** variáveis já definidas no ambiente. O ponto crítico continua sendo: **definir `APP_ENV` ao iniciar o Python**, não apenas dentro do arquivo.
+5. **Exceção (somente migrações):** `migrations/env.py` define `APP_ENV=dev` se estiver ausente, para permitir `alembic` sem export manual. Isso **não** se aplica ao Gunicorn, `python -m app.web` nem aos workers (`run_cleiton`, etc.).
+
+Valores aceitos: `dev`, `homolog`, `prod` (minúsculas; normalização em `app/settings.py`).
+
+### `APP_ENV` — verificação imediata (obrigatório antes de `python` / `gunicorn`)
+
+Na **mesma** janela de terminal em que você vai subir o processo:
+
+| Shell | Depois de definir a variável | Comando | Esperado |
+|-------|------------------------------|---------|----------|
+| PowerShell | `$env:APP_ENV="dev"` (ou `homolog` / `prod`) | `echo $env:APP_ENV` | Uma linha com exatamente `dev`, `homolog` ou `prod` — **nunca** vazio. |
+| Bash | `export APP_ENV=dev` | `echo $APP_ENV` | Idem. |
+
+Se o `echo` vier **vazio**, **não** execute o app: o boot falhará com `APP_ENV obrigatório` (`app/settings.py`). Em servidores com systemd, confira `Environment=` no unit (ou `systemctl show <serviço> -p Environment`). No Render, confira o painel **Environment** do serviço (não há shell; o painel é a fonte da verdade).
+
+### Papel de cada arquivo
+
+| Arquivo | Uso |
+|---------|-----|
+| `app/.env.example` | Modelo versionado, **sem segredos**. Copie para criar `.env.dev` / `.env.homolog` / `.env.prod`. **Não** é lido automaticamente como fonte única de configuração. |
+| `app/.env.dev` | Desenvolvimento local. Carregado quando `APP_ENV=dev`. |
+| `app/.env.homolog` | Homologação. Carregado quando `APP_ENV=homolog`. |
+| `app/.env.prod` | Produção. Carregado quando `APP_ENV=prod`. |
+
+Arquivos `.env.*` fora da pasta `app/` **não** entram no loader principal (`app/env_loader.py`).
+
+### PostgreSQL: instância correta ≠ nome do banco
+
+- A URI usa host, porta, usuário, senha e **nome do banco**. Ter `localhost:5432` e o nome do banco “corretos” na URL **não garante** o cluster certo: vale o processo PostgreSQL que **está escutando** essa porta (incidente validado: dois clusters na mesma porta; um vazio, outro com dados).
+- Dois serviços PostgreSQL distintos na mesma máquina não podem escutar a mesma porta ao mesmo tempo; quem estiver **ativo** em `5432` é quem recebe `localhost:5432`.
+- **Sintoma típico de instância errada:** aplicação sobe, mas listas/admin parecem **vazios**, migrações “sumiram” ou tabelas não existem — **sem** necessariamente haver perda de dados no cluster onde o banco realmente vive.
+- **Homolog/prod** usam PostgreSQL **16**. No **dev local** validado neste repositório, o banco de trabalho estava no PostgreSQL **18**; manter dois clusters (16 e 18) ambos na porta **5432** é um cenário de alto risco até que apenas um escute essa porta ou até usar portas distintas na URI (`DATABASE_URL`).
+
+### Validação segura no Windows (antes de culpar senha ou código)
+
+1. **Serviços:** `services.msc` — identifique `postgresql-x64-16` e `postgresql-x64-18` (nomes podem variar). Anote qual está **Em execução** e qual está **Parado/Manual**.
+2. **Regra operacional que evitou regressão no incidente documentado:** manter **um** cluster como serviço ativo (o que contém o banco de trabalho), o outro **parado** ou **manual** para não disputar a porta.
+3. **Porta:** confirme qual processo escuta `5432` (PowerShell como administrador: `Get-NetTCPConnection -LocalPort 5432` e correlacione com o PID/serviço).
+4. **Conexão direta:** `psql` ou cliente GUI apontando para **a mesma** host/porta/usuário/senha de `DATABASE_URL` — confira `SELECT current_database(), inet_server_addr(), version();` e se as tabelas esperadas existem (`\dt`).
+5. **Pela aplicação:** nos logs de boot, a URI é diagnosticada com host/porta/database mascarados (`app/env_loader.log_database_boot_diagnostics` em `app/web.py`). Compare com o que você validou no passo 4.
+
+### Boot da aplicação (diretório e comando)
+
+- **Diretório de trabalho:** clone na **raiz do repositório** (pasta que contém o pacote `app/` e `requirements.txt`).
+- **Windows (PowerShell), a partir da raiz:**
+  ```powershell
+  $env:APP_ENV="dev"
+  echo $env:APP_ENV
+  python app/web.py
+  ```
+  Se `echo $env:APP_ENV` não mostrar `dev`, não prossiga.
+- **Linux/macOS, a partir da raiz:**
+  ```bash
+  export APP_ENV=dev
+  echo $APP_ENV
+  python -m app.web
+  ```
+  Se `echo $APP_ENV` estiver vazio, não prossiga.
+- Rodar a partir de uma pasta que **não** seja a raiz (ou sem o pacote `app` no `PYTHONPATH`) costuma gerar `ModuleNotFoundError: No module named 'app'`. Sempre suba a partir da raiz ou defina `PYTHONPATH` para a raiz explicitamente.
+- Dependências: na raiz, `pip install -r requirements.txt` (o guia antigo referia `../requirements.txt` a partir de `app/` — equivalente: `pip install -r requirements.txt` com o shell na raiz).
+
+### Roberto Intelligence (BI de fretes): upload, localidades e sessão
+
+- **Banco:** um único PostgreSQL (`DATABASE_URL`). A tabela `base_localidades` está nesse banco; **não** há bind alternativo nem SQLite para esse fluxo.
+- **Upload (.xlsx):** `app/upload_handler.py` lê a planilha, valida colunas obrigatórias e, para cada linha, monta a chave `cidade-uf` em minúsculas (ex.: `cariacica-es`). A resolução usa `get_localidade_completa_por_chave` em `app/infra.py`, que consulta `base_localidades` com `LOWER(TRIM(chave_busca))` e retorna `id_cidade`, `id_uf`, nomes e chave.
+- **Payload na sessão (por linha):** campos financeiros/operacionais (`data_emissao`, `peso_real`, `valor_nf`, `valor_frete_total`, `modal`, opcional `valor_imposto`) mais `id_cidade_origem`, `id_uf_origem`, `uf_origem`, `id_cidade_destino`, `id_uf_destino`, `uf_destino` (UF em duas letras, alinhada a `uf_nome` da base).
+- **Efemeridade:** os dados ficam em chaves de sessão (`roberto_upload_data`); há TTL; **nenhuma** linha da planilha é gravada em tabela de negócio pelo upload. Após amostragem por mês (grandes volumes), a lista reduzida é a que entra na sessão.
+- **BI (`app/roberto_bi.py`):** com upload ativo, o dataset é só o da sessão. **Rankings e filtros por UF usam `uf_origem` / `uf_destino` do payload.** `_enriquecer_ufs_cliente` só preenche UF a partir de `id_cidade` via `base_localidades` quando a UF ainda vier vazia (fallback, p.ex. sessões antigas).
+- **Base ouro:** sem upload na sessão, o BI usa `frete_real` (persistido), com UFs já nas colunas do modelo quando presentes.
+
+---
+
 ## Novidade: Área do Usuário
 
 O sistema possui uma Área do Usuário acessível pelo avatar no rodapé da sidebar. Usuários autenticados podem acessar `/perfil` para visualizar cards de Segurança, Pagamento e Notificações. Admins veem um atalho Painel ADM.
@@ -74,7 +168,7 @@ O sistema possui uma Área do Usuário acessível pelo avatar no rodapé da side
 
 **Hardening de ambiente (homolog/prod):**
 - A configuração de ambiente é centralizada em `app/settings.py`. O módulo determina `APP_ENV` em um único ponto e chama `env_loader` apenas uma vez.
-- Em ambientes gerenciados (ex.: Render, com `RENDER=true`), `APP_ENV` é obrigatório e deve estar explícito no serviço (`homolog` ou `prod`). Fora desse contexto, o default é `dev` apenas para execução local.
+- `APP_ENV` é obrigatório em toda execução (`dev`, `homolog` ou `prod`), definido antes do boot; não há fallback silencioso para `dev`.
 - `DATABASE_URL` é **obrigatória** e deve apontar para PostgreSQL (banco único). Sem fallback para outro SGBD. Arquivos de dados (índices, `last_admin_run.json`, etc.) continuam exigindo diretório persistente em homolog/prod (`APP_DATA_DIR` / `RENDER_DISK_PATH` / `/var/data` quando aplicável).
 - `INDICES_FILE_PATH` deve apontar para storage persistente fora da pasta `app` (ex.: `/var/data/indices.json` ou diretório definido por `APP_DATA_DIR`/`RENDER_DISK_PATH`). A validação em `env_loader.validate_runtime_env` agora é **reativa**: em homolog/prod, um caminho inválido ou apontando para a pasta da release provoca erro de boot, evitando deploy “verde” com persistência quebrada.
 
@@ -105,14 +199,15 @@ pre-commit run --all-files
 
 ## Pré-requisitos
 
-1. Instale as dependências:
+1. Instale as dependências a partir da **raiz do repositório**:
    ```bash
-   pip install -r ../requirements.txt
+   pip install -r requirements.txt
    ```
+   (Se o shell estiver em `app/`, use `pip install -r ../requirements.txt` — equivalente.)
   - O `requirements.txt` já inclui `google-generativeai` para integração com Gemini (Cleiton/Júlia/Roberto).
-2. Garanta que os arquivos `.env.dev` e `.env.homolog` existam na pasta `app/`.
+2. Garanta que os arquivos `app/.env.dev` e `app/.env.homolog` (e `app/.env.prod` se for subir prod localmente) existam.
    - O arquivo `.env` simples é legado e **não deve ser usado**.
-   - Use `app/.env.example` como base, copiando para `.env.dev` e `.env.homolog` e ajustando apenas os valores.
+   - Use `app/.env.example` como base, copiando para `.env.dev` / `.env.homolog` / `.env.prod` e ajustando apenas os valores.
    - A leitura desses arquivos é feita de forma centralizada por `app/settings.py`, que carrega `.env.{APP_ENV}` via `env_loader` em um único ponto antes de construir o objeto `settings`.
    - Para login com Google, defina `GOOGLE_OAUTH_REDIRECT_URI` (ex.: `http://127.0.0.1:5000/login/google/callback`) e, em dev, `OAUTHLIB_INSECURE_TRANSPORT=1`.
    - Camada gerencial (Cleiton) e demais domínios compartilham o **mesmo** PostgreSQL definido em `DATABASE_URL` no `.env.*`.
@@ -144,15 +239,20 @@ pre-commit run --all-files
 
 *Características:* Debug ATIVO, Reload automático, Logs no console.
 
+**Diretório:** raiz do repositório (veja seção “Ambientes, PostgreSQL e arquivos `.env`” acima).
+
 **Comando (Windows PowerShell):**
 ```powershell
-$env:APP_ENV="dev"; python app/web.py
+$env:APP_ENV="dev"
+echo $env:APP_ENV
+python app/web.py
 ```
 
 **Comando (Linux/Mac):**
 ```bash
 APP_ENV=dev python -m app.web
 ```
+(Em sessão interativa, prefira `export APP_ENV=dev`, `echo $APP_ENV`, depois `python -m app.web`.)
 
 ---
 
@@ -162,12 +262,16 @@ APP_ENV=dev python -m app.web
 
 **Comando (Windows PowerShell):**
 ```powershell
-$env:APP_ENV="homolog"; python app/web.py
+$env:APP_ENV="homolog"
+echo $env:APP_ENV
+python app/web.py
 ```
 
 **Comando (Linux/Mac - Via Gunicorn - Recomendado):**
 ```bash
-APP_ENV=homolog gunicorn -w 2 -b 0.0.0.0:8000 app.web:app
+export APP_ENV=homolog
+echo $APP_ENV
+gunicorn -w 2 -b 0.0.0.0:8000 app.web:app
 ```
 
 ---
@@ -218,14 +322,11 @@ Checklist pós-deploy:
 ## 4. Executar Cleiton (orquestrador gerencial)
 
 - **Pela rota (usuário logado):** `POST /executar-cleiton` — o `web.py` delega para `run_cleiton.executar_orquestracao(app)`, que por sua vez chama o orquestrador gerencial.
-- **Script em loop:** na pasta do projeto (raiz ou `app`), com `APP_ENV` definido:
+- **Script em loop:** na **raiz** do repositório, com `APP_ENV` definido (confirme com `echo $APP_ENV` / `echo $env:APP_ENV`):
   ```bash
   APP_ENV=dev python -m app.run_cleiton
   ```
-  ou, a partir de `app/`:
-  ```bash
-  python run_cleiton.py
-  ```
+  A partir de `app/`, também é possível `python run_cleiton.py`, mas **`APP_ENV` ainda deve estar exportado** no ambiente (o script importa `app.settings`).
   O intervalo entre ciclos vem da regra persistida `frequencia_horas` (config gerencial); padrão 3h.
 
 ---
@@ -291,7 +392,24 @@ Observação: o match de domínio é exato (`valor.globo.com` é diferente de `g
 
 ---
 
-## 6. Testes (Fase 6 – suite robusta)
+## 6. Troubleshooting (conexão, banco e “vazio”)
+
+| Sintoma ou erro | O que verificar |
+|-----------------|-----------------|
+| `APP_ENV obrigatório` / `RuntimeError` em `app/settings.py` | Definir `APP_ENV` **no processo** antes de iniciar; confirmar com `echo $env:APP_ENV` (PowerShell) ou `echo $APP_ENV` (bash). Só ter `APP_ENV` dentro de `app/.env.dev` não basta para a primeira leitura. |
+| `DATABASE_URL ausente ou inválida` | PostgreSQL na URI (`postgresql+psycopg2://...`). Valor em `app/.env.{APP_ENV}` ou variável de ambiente já exportada antes do `load_dotenv` (override=False preserva env). |
+| `banco vazio` / listas sem dados / admin sem usuários | **Instância errada** na mesma porta (ver seção PostgreSQL acima). Confirmar com `psql` ou cliente a mesma URI e checar `version`, tabelas e contagem. Não assumir perda de dados no cluster correto. |
+| `relation "..." does not exist` / tabela inexistente | Migrações não aplicadas nesse cluster **ou** cluster errado. Rodar Alembic contra o mesmo `DATABASE_URL` (com `APP_ENV` coerente para carregar `app/.env.{APP_ENV}`). |
+| `password authentication failed` / senha inválida | Senha do usuário na URI diferente da do servidor PostgreSQL. **Atualizar** `DATABASE_URL` em `app/.env.dev` (ou ambiente) para coincidir com o servidor que você validou no `psql`. |
+| Dois PostgreSQL (ex.: 16 e 18) na porta 5432 | Apenas um pode escutar a porta. Parar/manualizar o serviço errado; manter ativo o cluster com o banco de trabalho; ou usar **portas diferentes** e refletir na URI. |
+| Porta em uso / `could not bind` | Outro processo na 5432 (outro PostgreSQL ou app). Identificar com `Get-NetTCPConnection` (Windows) / `ss -lntp` (Linux). |
+| `ModuleNotFoundError: No module named 'app'` | Subir a partir da **raiz** do repo ou `PYTHONPATH` apontando para a raiz; `python -m app.web` exige layout `.../projeto/app/`. |
+| `UnicodeDecodeError` no bootstrap (ver `app/infra.py`) | Encoding da URI/senha no `.env` (UTF-8; evitar bytes inválidos). Pode **mascarar** falha de autenticação — corrigir encoding e revalidar credenciais. |
+| Dúvida: credencial vs instância errada | Se `psql` com a mesma URI conecta e vê dados, a credencial está ok; se a app “vê vazio”, confira **host/porta** (processo na porta) e se o arquivo `.env` carregado é o do `APP_ENV` atual. |
+
+---
+
+## 7. Testes (Fase 6 – suite robusta)
 
 - **Sprint 4 (meta diaria e fallback):** `python -m unittest app.tests.test_fase4_meta_diaria -v`
 - **Sprint 5 (estado de serie):** `python -m unittest app.tests.test_fase5_estado_serie -v`
@@ -303,16 +421,16 @@ Execute a partir da raiz do projeto com `PYTHONPATH` apontando para a raiz e `AP
 
 ---
 
-## 7. Homolog – validação do bypass e do cron
+## 8. Homolog – validação do bypass e do cron
 
 Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tanto pelo botão de bypass quanto pelo agendamento automático.
 
 - **Pré-requisitos em homolog**
-  - Serviço web subindo com `APP_ENV=homolog` (via variável de ambiente ou arquivo `.env.homolog` carregado por `env_loader.py`).
+  - `APP_ENV=homolog` definido no **ambiente do processo** (Render/systemd); o arquivo `app/.env.homolog` complementa variáveis, mas não substitui a necessidade de `APP_ENV` no serviço (ver seção “Ambientes, PostgreSQL e arquivos `.env`” acima).
   - Variável `CRON_SECRET` definida no ambiente homolog (veja `app/.env.example` e `RENDER_CRON_HOMOLOG.md`).
   - `SCOUT_ENABLED=true` e `SCOUT_SOURCES_JSON` configurado com JSON **válido em uma linha** e pelo menos uma fonte funcional.
 
-- **7.1 – Validar botão “Executar agora (bypass)” no painel admin**
+- **8.1 – Validar botão “Executar agora (bypass)” no painel admin**
   1. Acesse `/login`, entre com um usuário admin.
   2. Vá em `Admin` → `Agentes - Júlia`.
   3. Clique em **Executar agora (bypass de frequencia)**.
@@ -327,7 +445,7 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
 
   Observação importante: o Scout pode reativar pautas em `status="falha"` quando o mesmo link reaparece e ainda não existe publicação em `noticias_portal`. Isso evita ficar preso em ciclos com muitas duplicatas históricas.
 
-- **7.2 – Validar rota de cron `/cron/executar-cleiton`**
+- **8.2 – Validar rota de cron `/cron/executar-cleiton`**
   1. Sem segredo (apenas para teste rápido de deploy):
      ```bash
      curl -i "https://SEU_DOMINIO_HOMOLOG/cron/executar-cleiton"
@@ -342,7 +460,7 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
      - Se `status` for `"ignorado"`, verifique frequência/janela (`run_cleiton_agente_regras.py` e painel `Agentes - Júlia`).
       - Se o mesmo `mission_id` se repetir em execuções consecutivas, há indício de cache na borda (Cloudflare). Configure regra para **bypass de cache** no path `/cron/*`.
 
-- **7.3 – Validar execução automática (Cron/worker)**
+- **8.3 – Validar execução automática (Cron/worker)**
   - Configure o Cron Job conforme `RENDER_CRON_HOMOLOG.md` (ou o worker `python -m app.run_cleiton` com `APP_ENV=homolog`).
   - Após o horário agendado:
     - Em `Admin` → `Agentes - Júlia`, confira:
@@ -364,15 +482,15 @@ Esta seção resume como validar o fluxo completo da Júlia em **homolog**, tant
 
   ---
 
-  ## 8. Homolog – índices do ticker da Home (2x ao dia)
+## 9. Homolog – índices do ticker da Home (2x ao dia)
 
-  Objetivo: manter a faixa da Home (`/`) atualizada com **Petróleo, BDI, FBX e Dólar** sem depender do carregamento da página.
+Objetivo: manter a faixa da Home (`/`) atualizada com **Petróleo, BDI, FBX e Dólar** sem depender do carregamento da página.
 
-  - **Fonte da coleta:** `python -m app.finance`
-  - **Arquivo persistido:** `app/indices.json`
-  - **Leitura na web:** `GET /` (rota `index` em `app/web.py`)
+- **Fonte da coleta:** `python -m app.finance`
+- **Arquivo persistido:** em **homolog/prod**, o caminho vem de `INDICES_FILE_PATH` / `APP_DATA_DIR` (ver `app/settings.py`). Em **dev**, se não houver `INDICES_FILE_PATH`, costuma cair em arquivo sob o diretório de dados resolvido (frequentemente `app/indices.json`).
+- **Leitura na web:** `GET /` (rota `index` em `app/web.py`)
 
-### 8.1 Agendamento recomendado (homolog/prod)
+### 9.1 Agendamento recomendado (homolog/prod)
 
 Crie um job dedicado para índices com duas execuções diárias (abertura do mercado e após 14h).
 
@@ -388,7 +506,7 @@ APP_ENV=homolog python -m app.finance
 
 Neste fluxo, `app/finance.py` utilizará `app/settings.py` para resolver o caminho persistente dos índices de forma consistente com o serviço web.
 
-### 8.2 Validação rápida pós-agendamento
+### 9.2 Validação rápida pós-agendamento
 
 1. Execute uma coleta manual no mesmo ambiente:
    ```bash

@@ -1,1 +1,5 @@
-Single-database configuration for Flask.
+Configuração single-database para Flask usando PostgreSQL.
+
+Este projeto utiliza um único banco de dados PostgreSQL para todas as tabelas e domínios (editorial, gerencial, usuários, etc.).
+Não há múltiplos bancos nem uso de SQLite.
+As migrações devem ser aplicadas sempre sobre o banco definido por `DATABASE_URL` nas variáveis de ambiente.

@@ -3,15 +3,18 @@
 
 ## 📢 Changelog - Última Atualização (Mar 2026)
 
-### [Mar 2026] - Atualização de templates, assets e área do usuário
-- Templates HTML e CSS atualizados para novo padrão visual (ver GUIA_TEMPLATES_HTML.md).
-- Ajustes em páginas: artigos, chat_julia, index, noticia_interna.
-- Scripts de migração e validação de ambiente executados.
-- Área do Usuário criada, painel ADM exclusivo, blueprint `user_bp` registrado.
-- Testes automatizados aprovados em homologação e produção.
-- Merge realizado: homolog -> producao, sem conflitos.
-- Monitoramento de logs pós-deploy sem erros críticos.
-- Checklist final executado: documentação atualizada, equipe informada.
+### [Mar 2026] - Atualização de arquitetura e documentação
+Templates HTML e CSS atualizados para novo padrão visual (ver GUIA_TEMPLATES_HTML.md).
+Arquitetura de dados: **um único PostgreSQL** por ambiente (`DATABASE_URL`). Não há SQLite nem segundo banco para dados de aplicação; `base_localidades` e `frete_real` estão no mesmo servidor.
+O BI do Roberto resolve localidades via `base_localidades` e `get_localidade_completa_por_chave` (`app/infra.py`); o upload de planilha permanece **efêmero** (sessão Flask), sem persistir linhas da planilha.
+Configuração centralizada em `app/settings.py` e carregamento de variáveis via `app/env_loader.py`.
+Persistência obrigatória: banco e arquivos de dados (índices, last_admin_run.json, etc.) devem estar em diretórios persistentes fora da pasta do código em homologação e produção.
+Scripts de migração e validação de ambiente executados.
+Área do Usuário criada, painel ADM exclusivo, blueprint `user_bp` registrado.
+Testes automatizados aprovados em homologação e produção.
+Merge realizado: homolog -> producao, sem conflitos.
+Monitoramento de logs pós-deploy sem erros críticos.
+Checklist final executado: documentação atualizada, equipe informada.
 
 - **Termo de Aceite implementado:**
   - Checkbox obrigatório para aceite dos Termos de Uso nas telas de cadastro e complete-profile.
@@ -48,6 +51,12 @@
 
 Este guia cobre a instalação do projeto em um servidor Ubuntu usando Gunicorn, Systemd e Nginx.
 
+**PostgreSQL:** em homologação e produção o projeto opera com **PostgreSQL 16** (instância gerenciada ou servidor dedicado). Isso é **independente** do que você usa no dev local (vide [`README_RUN.md`](README_RUN.md) — no Windows pode haver PostgreSQL 18 para desenvolvimento; não confunda cluster local com o banco de homolog/prod).
+
+**`APP_ENV` e `.env`:** defina `APP_ENV=prod` no ambiente do serviço (systemd, etc.). O arquivo `app/.env.prod` é carregado por `app/env_loader.py` **depois** que `APP_ENV` já foi validado em `app/settings.py` — não substitui a variável no processo.
+
+**Verificação:** no unit do systemd, confira `Environment="APP_ENV=prod"` (ou `systemctl show logcompleta -p Environment` — ajuste o nome do serviço). Em SSH, antes de um comando manual (`python -m app.finance`), use `echo $APP_ENV` e confirme `prod`. Não há fallback no boot da aplicação.
+
 ## 1. Preparação do Servidor
 ## Novidade: Área do Usuário
 
@@ -64,7 +73,7 @@ sudo apt install python3-pip python3-venv nginx git -y
 
 ## 2. Estrutura de Pastas e Código
 
-O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. Toda a aplicação usa **um único** PostgreSQL via `DATABASE_URL` (incluindo dados gerenciais e editoriais). A configuração de ambiente (incluindo o carregamento de `.env`) é centralizada em `app/settings.py`, que usa `app/env_loader.py` internamente — defina `APP_ENV=prod` no systemd para carregar `app/.env.prod` de forma consistente.
+O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. Toda a aplicação usa **um único** banco PostgreSQL via `DATABASE_URL` (incluindo dados gerenciais, editoriais, usuários, `base_localidades`, `frete_real`, etc.). Não há segundo banco para localidades. O upload de planilha do BI do Roberto é **efêmero** (sessão); não grava linhas da planilha em tabela de negócio. A configuração de ambiente (incluindo o carregamento de `.env`) é centralizada em `app/settings.py`, que usa `app/env_loader.py` internamente — defina `APP_ENV=prod` no systemd para carregar `app/.env.prod` de forma consistente.
 ### Rotas principais
 - `/perfil`: Área do Usuário (acesso pelo avatar)
 - `/admin`: Painel ADM (acesso exclusivo para admin)
@@ -230,7 +239,8 @@ After=network.target
 [Service]
 User=root
 Group=www-data
-WorkingDirectory=/srv/logcompleta/code/app
+# Raiz do repositório (pasta que CONTÉM o pacote app/), para o Python resolver `app.web:app`.
+WorkingDirectory=/srv/logcompleta/code
 Environment="PATH=/srv/logcompleta/code/venv/bin"
 Environment="APP_ENV=prod"
 ExecStart=/srv/logcompleta/code/venv/bin/gunicorn --config /srv/logcompleta/code/gunicorn_config.py --workers 3 --bind 127.0.0.1:5000 app.web:app

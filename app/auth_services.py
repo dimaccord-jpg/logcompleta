@@ -13,6 +13,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import func
 
 from app.extensions import db
+from app.infra import user_is_admin
 from app.models import User
 
 logger = logging.getLogger(__name__)
@@ -155,14 +156,13 @@ def _select_canonical_user(candidates: list[User], google_id: str | None) -> Use
 
 
 def _get_admin_emails():
-    """Retorna conjunto de e-mails com privilégio admin (env)."""
+    """
+    Lista explícita de e-mails que podem receber flag admin no login OAuth (ADMIN_EMAILS).
+    Não usa MAIL_USERNAME (remetente de e-mail) nem BOOTSTRAP_ADMIN_EMAIL — este último é só para
+    promoção via CLI (`flask bootstrap-admin`), evitando privilégio por efeito colateral no tráfego público.
+    """
     raw = os.getenv("ADMIN_EMAILS", "")
-    candidates = [e.strip().lower() for e in raw.split(",") if e.strip()]
-    for key in ("BOOTSTRAP_ADMIN_EMAIL", "MAIL_USERNAME"):
-        val = (os.getenv(key) or "").strip().lower()
-        if val:
-            candidates.append(val)
-    return set(candidates)
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
 def _password_reset_email_body(full_name: str, reset_url: str) -> str:
@@ -426,7 +426,7 @@ def handle_google_oauth_callback(
             elif user.oauth_provider == "google" and google_id and user.oauth_sub != google_id:
                 # Mantem vinculo Google consistente para evitar fallback por e-mail em logins futuros.
                 user.oauth_sub = google_id
-            if email in admin_emails and not user.is_admin:
+            if email in admin_emails and not user_is_admin(user):
                 user.is_admin = True
 
         user.last_login_at = _utcnow_naive()
