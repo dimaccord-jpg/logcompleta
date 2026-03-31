@@ -3,6 +3,8 @@
 
 ## 📢 Changelog - Última Atualização (Mar 2026)
 
+- **Roberto Intelligence (upload / localidades):** documentação alinhada ao código: upload resolve `base_localidades` com **uma consulta em lote** (`WHERE chave_busca IN (...)`), **mapa em memória** no loop e **sem** consulta por linha; `get_localidade_completa_por_chave` documentada com **igualdade direta** em `chave_busca`. Removidas referências obsoletas a `LOWER(TRIM(chave_busca))` no fluxo de upload.
+
 - **Termo de Aceite implementado:**
   - Checkbox obrigatório para aceite dos Termos de Uso nas telas de cadastro e complete-profile.
   - Link dinâmico para download/visualização do PDF do termo vigente.
@@ -121,7 +123,21 @@ Arquivos `.env.*` fora da pasta `app/` **não** entram no loader principal (`app
 ### Roberto Intelligence (BI de fretes): upload, localidades e sessão
 
 - **Banco:** um único PostgreSQL (`DATABASE_URL`). A tabela `base_localidades` está nesse banco; **não** há bind alternativo nem SQLite para esse fluxo.
-- **Upload (.xlsx):** `app/upload_handler.py` lê a planilha, valida colunas obrigatórias e, para cada linha, monta a chave `cidade-uf` em minúsculas (ex.: `cariacica-es`). A resolução usa `get_localidade_completa_por_chave` em `app/infra.py`, que consulta `base_localidades` com `LOWER(TRIM(chave_busca))` e retorna `id_cidade`, `id_uf`, nomes e chave.
+
+#### Upload (.xlsx) — fluxo atual
+
+- **Arquivo:** `app/upload_handler.py` (rota `POST /api/roberto/upload` em `app/web.py`). Valida colunas obrigatórias, lê o `.xlsx` em modo `read_only` e **materializa as linhas em uma lista** (o openpyxl só permite iterar a aba uma vez nesse modo; a lista permite pré-coleta + processamento sem reabrir o arquivo).
+- **Chaves de localidade:** para montar `cidade-uf` em minúsculas (ex.: `cariacica-es`), o código usa `strip` + `lower` nas células, como antes. **Cada linha da planilha continua sendo um serviço distinto** — não há deduplicação de linhas no resultado; apenas um **conjunto de chaves únicas** (origem/destino) é montado para consultar o banco **uma vez**.
+- **Consulta em lote:** `carregar_localidades_por_chaves` em `app/infra.py` executa **uma** query: `SELECT ... FROM base_localidades WHERE chave_busca IN (...)` (lista com parâmetro `expanding` no SQLAlchemy). O resultado vira um **mapa em memória** (`chave →` dados de localidade). No loop por linha **não há** `engine.connect()` nem SELECT por linha para resolver cidade/UF — só leitura do mapa.
+- **Motivação:** o desenho anterior (consulta(s) por linha) gerava **N+1**, custo alto de round-trip e, com o predicado antigo na coluna, tendência a **Seq Scan**; em planilhas grandes isso contribuía para **timeout de worker**. O lote com **igualdade direta** em `chave_busca` usa o índice/PK e reduz drasticamente o número de idas ao banco durante o upload.
+- **Lookup fora do upload:** `get_localidade_completa_por_chave` em `app/infra.py` (usada por outros módulos, ex. `get_id_localidade_por_chave`) consulta com `WHERE chave_busca = :c` e parâmetro já normalizado — **sem** `LOWER`/`TRIM` na expressão da coluna na SQL.
+
+#### Dados em `base_localidades`
+
+- **`chave_busca`:** persistida **normalizada** (minúsculas, sem espaços nas bordas), alinhada ao contrato `cidade-uf`. A aplicação continua normalizando a **entrada** com `strip()` e `lower()` antes de comparar.
+
+#### Sessão, payload e BI
+
 - **Payload na sessão (por linha):** campos financeiros/operacionais (`data_emissao`, `peso_real`, `valor_nf`, `valor_frete_total`, `modal`, opcional `valor_imposto`) mais `id_cidade_origem`, `id_uf_origem`, `uf_origem`, `id_cidade_destino`, `id_uf_destino`, `uf_destino` (UF em duas letras, alinhada a `uf_nome` da base).
 - **Efemeridade:** os dados ficam em chaves de sessão (`roberto_upload_data`); há TTL; **nenhuma** linha da planilha é gravada em tabela de negócio pelo upload. Após amostragem por mês (grandes volumes), a lista reduzida é a que entra na sessão.
 - **BI (`app/roberto_bi.py`):** com upload ativo, o dataset é só o da sessão. **Rankings e filtros por UF usam `uf_origem` / `uf_destino` do payload.** `_enriquecer_ufs_cliente` só preenche UF a partir de `id_cidade` via `base_localidades` quando a UF ainda vier vazia (fallback, p.ex. sessões antigas).

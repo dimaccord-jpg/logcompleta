@@ -23,7 +23,7 @@ from uuid import uuid4
 from flask import request, session, jsonify
 from werkzeug.datastructures import FileStorage
 
-from app.infra import get_localidade_completa_por_chave
+from app.infra import carregar_localidades_por_chaves
 
 logger = logging.getLogger(__name__)
 
@@ -211,11 +211,30 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
     idx_imposto = colunas.index(COLUNA_OPCIONAL_IMPOSTO) if COLUNA_OPCIONAL_IMPOSTO in colunas else None
     indices = {c: colunas.index(c) for c in colunas if c in COLUNAS_OBRIGATORIAS or c == COLUNA_OPCIONAL_IMPOSTO}
 
+    # read_only: o worksheet só pode ser iterado uma vez; materializamos as linhas para duas passagens.
+    linhas_planilha = list(enumerate(ws.iter_rows(min_row=2, values_only=True), start=2))
+
+    chaves_unicas: set[str] = set()
+    for _, row in linhas_planilha:
+        if not any(v is not None and str(v).strip() for v in row):
+            continue
+        try:
+            cidade_origem = _normalizar_texto(row[indices["cidade_origem"]])
+            uf_origem = _normalizar_texto(row[indices["uf_origem"]])
+            cidade_destino = _normalizar_texto(row[indices["cidade_destino"]])
+            uf_destino = _normalizar_texto(row[indices["uf_destino"]])
+            chaves_unicas.add(f"{cidade_origem}-{uf_origem}")
+            chaves_unicas.add(f"{cidade_destino}-{uf_destino}")
+        except (IndexError, KeyError, TypeError):
+            continue
+
+    loc_map = carregar_localidades_por_chaves(chaves_unicas)
+
     linhas_processadas = []
     erros_linha = []
 
     try:
-        for num_linha, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        for num_linha, row in linhas_planilha:
             if not any(v is not None and str(v).strip() for v in row):
                 continue
             try:
@@ -229,8 +248,8 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
                 chave_origem = f"{cidade_origem}-{uf_origem}"
                 chave_destino = f"{cidade_destino}-{uf_destino}"
 
-                loc_origem = get_localidade_completa_por_chave(chave_origem)
-                loc_destino = get_localidade_completa_por_chave(chave_destino)
+                loc_origem = loc_map.get(chave_origem)
+                loc_destino = loc_map.get(chave_destino)
 
                 if loc_origem is None or loc_origem.get("id_cidade") is None:
                     erros_linha.append(f"Linha {num_linha}: localidade de origem '{chave_origem}' não encontrada.")

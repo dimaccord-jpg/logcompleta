@@ -6,7 +6,7 @@
 ### [Mar 2026] - Atualização de arquitetura e documentação
 Templates HTML e CSS atualizados para novo padrão visual (ver GUIA_TEMPLATES_HTML.md).
 Arquitetura de dados: **um único PostgreSQL** por ambiente (`DATABASE_URL`). Não há SQLite nem segundo banco para dados de aplicação; `base_localidades` e `frete_real` estão no mesmo servidor.
-O BI do Roberto resolve localidades via `base_localidades` e `get_localidade_completa_por_chave` (`app/infra.py`); o upload de planilha permanece **efêmero** (sessão Flask), sem persistir linhas da planilha.
+O BI do Roberto usa `base_localidades`: o **upload** de planilha resolve localidades em **uma consulta em lote** (`carregar_localidades_por_chaves` em `app/infra.py`, `WHERE chave_busca IN (...)`), com **mapa em memória** no processamento (sem consulta por linha ao banco para resolver cidade/UF); outros fluxos podem usar `get_localidade_completa_por_chave` (igualdade direta em `chave_busca`). O upload permanece **efêmero** (sessão Flask), sem persistir linhas da planilha.
 Configuração centralizada em `app/settings.py` e carregamento de variáveis via `app/env_loader.py`.
 Persistência obrigatória: banco e arquivos de dados (índices, last_admin_run.json, etc.) devem estar em diretórios persistentes fora da pasta do código em homologação e produção.
 Scripts de migração e validação de ambiente executados.
@@ -73,7 +73,7 @@ sudo apt install python3-pip python3-venv nginx git -y
 
 ## 2. Estrutura de Pastas e Código
 
-O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. Toda a aplicação usa **um único** banco PostgreSQL via `DATABASE_URL` (incluindo dados gerenciais, editoriais, usuários, `base_localidades`, `frete_real`, etc.). Não há segundo banco para localidades. O upload de planilha do BI do Roberto é **efêmero** (sessão); não grava linhas da planilha em tabela de negócio. A configuração de ambiente (incluindo o carregamento de `.env`) é centralizada em `app/settings.py`, que usa `app/env_loader.py` internamente — defina `APP_ENV=prod` no systemd para carregar `app/.env.prod` de forma consistente.
+O app usa `app/infra.py` para banco e segurança; `app/ops_routes.py` (Blueprint) para `/health`, `/oauth-diagnostics`, `/ops/user-audit`, `/ops/promote-admin` e `/ops/reset-pautas`. Configure `OPS_TOKEN` para as rotas de diagnóstico e operação. Toda a aplicação usa **um único** banco PostgreSQL via `DATABASE_URL` (incluindo dados gerenciais, editoriais, usuários, `base_localidades`, `frete_real`, etc.). Não há segundo banco para localidades. O upload de planilha do BI do Roberto é **efêmero** (sessão); não grava linhas da planilha em tabela de negócio; a resolução de localidades no upload é **em lote** (mapa em memória após uma query `IN`, ver `app/upload_handler.py` e `carregar_localidades_por_chaves` em `app/infra.py`). A configuração de ambiente (incluindo o carregamento de `.env`) é centralizada em `app/settings.py`, que usa `app/env_loader.py` internamente — defina `APP_ENV=prod` no systemd para carregar `app/.env.prod` de forma consistente.
 ### Rotas principais
 - `/perfil`: Área do Usuário (acesso pelo avatar)
 - `/admin`: Painel ADM (acesso exclusivo para admin)

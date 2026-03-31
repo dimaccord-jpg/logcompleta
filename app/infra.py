@@ -274,10 +274,70 @@ def get_user_by_id(user_id):
 
 
 # --- Vínculo geográfico (Roberto Intelligence / BI) ---
+def _localidade_row_to_dict(row) -> dict:
+    """Converte uma linha de SELECT em base_localidades para o dict padrão de localidade."""
+    id_cidade, id_uf, cidade_nome, uf_nome, chave_busca = row
+    return {
+        "id_cidade": int(id_cidade) if id_cidade is not None else None,
+        "id_uf": int(id_uf) if id_uf is not None else None,
+        "cidade_nome": (cidade_nome or "").strip(),
+        "uf_nome": (uf_nome or "").strip(),
+        "chave_busca": (chave_busca or "").strip(),
+    }
+
+
+def carregar_localidades_por_chaves(chaves: set[str] | list[str]) -> dict[str, dict]:
+    """
+    Carrega várias localidades em uma única consulta (WHERE chave_busca IN (...)),
+    usando o índice/PK em chave_busca. Entrada deve seguir a mesma normalização
+    do upload (strip + lower).
+
+    :param chaves: conjunto ou lista de chaves no formato "cidade-uf"
+    :return: mapa chave normalizada -> dict (mesmo formato de get_localidade_completa_por_chave)
+    """
+    from sqlalchemy import bindparam, text
+
+    norm: set[str] = set()
+    for c in chaves:
+        if not c or not isinstance(c, str):
+            continue
+        k = c.strip().lower()
+        if k:
+            norm.add(k)
+    if not norm:
+        return {}
+
+    keys_list = list(norm)
+    stmt = text(
+        """
+        SELECT id_cidade, id_uf, cidade_nome, uf_nome, chave_busca
+        FROM base_localidades
+        WHERE chave_busca IN :keys
+        """
+    ).bindparams(bindparam("keys", expanding=True))
+
+    try:
+        engine = db.get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(stmt, {"keys": keys_list}).fetchall()
+    except Exception as e:
+        logger.debug("carregar_localidades_por_chaves: %s", e)
+        return {}
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        d = _localidade_row_to_dict(row)
+        kb = (d.get("chave_busca") or "").strip().lower()
+        if kb:
+            out[kb] = d
+    return out
+
+
 def get_localidade_completa_por_chave(chave_cidade_uf: str) -> dict | None:
     """
-    Consulta base_localidades no banco padrão pela mesma chave usada em
-    get_id_localidade_por_chave (LOWER(TRIM(chave_busca)) = chave normalizada).
+    Consulta base_localidades no banco padrão por chave_busca (igualdade direta).
+    O parâmetro deve estar no formato "cidade-uf" com normalização strip + lower,
+    alinhada aos dados persistidos em chave_busca.
 
     :param chave_cidade_uf: string no formato "cidade-uf" (ex: "são paulo-sp")
     :return: dict com id_cidade, id_uf, cidade_nome, uf_nome, chave_busca;
@@ -297,21 +357,14 @@ def get_localidade_completa_por_chave(chave_cidade_uf: str) -> dict | None:
                     """
                     SELECT id_cidade, id_uf, cidade_nome, uf_nome, chave_busca
                     FROM base_localidades
-                    WHERE LOWER(TRIM(chave_busca)) = :c
+                    WHERE chave_busca = :c
                     """
                 ),
                 {"c": chave},
             ).fetchone()
             if not row:
                 return None
-            id_cidade, id_uf, cidade_nome, uf_nome, chave_busca = row
-            return {
-                "id_cidade": int(id_cidade) if id_cidade is not None else None,
-                "id_uf": int(id_uf) if id_uf is not None else None,
-                "cidade_nome": (cidade_nome or "").strip(),
-                "uf_nome": (uf_nome or "").strip(),
-                "chave_busca": (chave_busca or "").strip(),
-            }
+            return _localidade_row_to_dict(row)
     except Exception as e:
         logger.debug("get_localidade_completa_por_chave(%r): %s", chave_cidade_uf, e)
         return None
