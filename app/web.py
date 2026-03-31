@@ -123,11 +123,7 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' if settings.oauth_insecure_trans
 
 # 4. Inicializar extensões e Blueprints
 db.init_app(app)
-# TEMP db_connect_probe: remover após diagnóstico (app/db_connect_probe.py + este bloco)
-with app.app_context():
-    from app.db_connect_probe import register_psycopg2_connect_probe
 
-    register_psycopg2_connect_probe(db.get_engine())
 login_manager.init_app(app)
 
 # Inicializar Flask-Session
