@@ -1,0 +1,79 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <h4 class="mb-3">Cleiton — Custo operacional (MVP)</h4>
+    <p class="text-muted small mb-4">
+        Parâmetros para estimativa de custo de <strong>runtime</strong> (ex.: Render) e referência simples de <strong>Google</strong> (tokens).
+        O custo do processamento analítico do Roberto no dashboard usa apenas o bloco <strong>Render</strong> abaixo.
+    </p>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h6 class="text-muted text-uppercase small mb-3">Custo por segundo (derivado)</h6>
+            {% if cost_per_second is not none %}
+            <p class="mb-0">
+                <code>custo_por_segundo</code> =
+                (runtime_monthly_cost × allocation_percent × overhead_factor) / month_seconds
+            </p>
+            <p class="fs-4 fw-bold text-primary mt-2 mb-0">
+                R$ {{ '%.8f'|format(cost_per_second) }} / s
+            </p>
+            {% else %}
+            <p class="text-warning mb-0">Defina <strong>custo mensal do runtime</strong> para calcular o custo por segundo.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <form method="post" action="{{ url_for('admin.agentes_cleito') }}" class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h6 class="mb-3">Bloco A — Render (runtime)</h6>
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <label class="form-label">Custo mensal do runtime (R$)</label>
+                    <input type="text" name="runtime_monthly_cost" class="form-control"
+                           value="{{ cfg.runtime_monthly_cost if cfg.runtime_monthly_cost is not none else '' }}"
+                           placeholder="ex.: 450.00" inputmode="decimal">
+                    <small class="text-muted">Valor da fatura ou alocação mensal do serviço.</small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">month_seconds</label>
+                    <input type="number" name="month_seconds" class="form-control" min="1"
+                           value="{{ cfg.month_seconds or 2592000 }}">
+                    <small class="text-muted">Padrão: 2.592.000 (30 dias).</small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">allocation_percent (1.0 = 100%)</label>
+                    <input type="text" name="allocation_percent" class="form-control"
+                           value="{{ cfg.allocation_percent if cfg.allocation_percent is not none else 1.0 }}"
+                           placeholder="1.0">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">overhead_factor</label>
+                    <input type="text" name="overhead_factor" class="form-control"
+                           value="{{ cfg.overhead_factor if cfg.overhead_factor is not none else 1.0 }}"
+                           placeholder="1.0">
+                </div>
+            </div>
+
+            <h6 class="mb-3">Bloco C — Google (referência simples)</h6>
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label class="form-label">Custo por milhão de tokens (referência)</label>
+                    <input type="text" name="cost_per_million_tokens" class="form-control"
+                           value="{{ cfg.cost_per_million_tokens if cfg.cost_per_million_tokens is not none else '' }}"
+                           placeholder="opcional">
+                    <small class="text-muted">Apenas cadastro; não entra no cálculo do upload Roberto.</small>
+                </div>
+            </div>
+
+            {% if cfg.updated_at %}
+            <p class="small text-muted mb-3">Última atualização: {{ cfg.updated_at.strftime('%d/%m/%Y %H:%M') }}</p>
+            {% endif %}
+
+            <button type="submit" class="btn btn-primary">Salvar</button>
+            <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-secondary ms-2">Dashboard</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

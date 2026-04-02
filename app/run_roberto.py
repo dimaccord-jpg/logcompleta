@@ -7,6 +7,7 @@ import json
 import logging
 from google import genai
 
+from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.settings import settings  # noqa: F401
 from app.roberto_modelo import prever as modelo_prever
 
@@ -115,9 +116,13 @@ Responda obrigatoriamente neste formato JSON puro:
         last_error = None
         for model_name in self.model_candidates:
             try:
-                response = self.client.models.generate_content(
+                response = cleiton_governed_generate_content(
+                    self.client,
                     model=model_name,
                     contents=full_prompt,
+                    agent="roberto",
+                    flow_type="roberto_frete",
+                    api_key_label="GEMINI_API_KEY_ROBERTO",
                 )
                 content = (response.text or "").replace("```json", "").replace("```", "").strip()
                 inicio = content.find("{")

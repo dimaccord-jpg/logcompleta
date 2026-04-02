@@ -1,7 +1,7 @@
 """
 Rotas do painel administrativo.
-Apenas definição de rotas, autenticação, autorização e renderização de templates.
-Toda lógica de negócio está em app.services e app.tasks.
+Apenas definicao de rotas, autenticacao, autorizacao e renderizacao de templates.
+Toda logica de negocio esta em app.services e app.tasks.
 """
 from flask import (
     Blueprint,
@@ -12,6 +12,7 @@ from flask import (
     request,
     current_app,
     send_file,
+    jsonify,
 )
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
@@ -21,7 +22,7 @@ import io
 import logging
 import threading
 from concurrent.futures import Future
-from datetime import datetime
+from datetime import datetime, date
 
 from app.infra import get_admin_executor, user_is_admin
 from app.terms_services import get_active_term
@@ -49,7 +50,7 @@ admin_bp = Blueprint(
     url_prefix="/admin",
 )
 
-# Estado para execução async (Cleiton / artigo manual)
+# Estado para execucao async (Cleiton / artigo manual)
 _CLEITON_FUTURE: Future | None = None
 _ARTIGO_MANUAL_FUTURE: Future | None = None
 _CLEITON_LOCK = threading.Lock()
@@ -78,12 +79,34 @@ def admin_dashboard():
     recomendacoes_recentes = agent_service.obter_recomendacoes_recentes(
         limite=15
     )
+    from app.services.ia_metrics_service import get_ia_dashboard_payload
+
+    _today = date.today()
+    ia_metrics = get_ia_dashboard_payload(_today.year, _today.month)
     return render_template(
         "dashboard.html",
         status=status_sistema,
         kpis_insight=kpis_insight,
         recomendacoes_recentes=recomendacoes_recentes,
+        ia_metrics=ia_metrics,
     )
+
+
+# --- Metricas de IA (fase 1: tokens + custo GCP) ---
+@admin_bp.route("/api/ia-metrics")
+@login_required
+def admin_api_ia_metrics():
+    """JSON: totais de tokens no mes, por API key, custo do snapshot e custo/token."""
+    if not verificar_acesso_admin():
+        return jsonify({"error": "forbidden"}), 403
+    y = request.args.get("year", type=int)
+    mo = request.args.get("month", type=int)
+    if not y or not mo:
+        today = date.today()
+        y, mo = today.year, today.month
+    from app.services.ia_metrics_service import get_ia_dashboard_payload
+
+    return jsonify(get_ia_dashboard_payload(y, mo))
 
 
 # --- Agentes ---
@@ -151,6 +174,58 @@ def agentes_roberto():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
     return render_template("agentes_roberto.html")
+
+
+@admin_bp.route("/agentes/cleito", methods=["GET", "POST"])
+@login_required
+def agentes_cleito():
+    """Parametros de custo operacional (Render + referencia Google)  MVP."""
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services.cleiton_cost_service import (
+        compute_cost_per_second,
+        get_or_create_config,
+        save_config,
+    )
+
+    if request.method == "POST":
+        try:
+            r_raw = (request.form.get("runtime_monthly_cost") or "").strip()
+            runtime = float(r_raw.replace(",", ".")) if r_raw else None
+
+            ms_raw = (request.form.get("month_seconds") or "").strip()
+            month_seconds = int(ms_raw) if ms_raw else 2592000
+
+            ap_raw = (request.form.get("allocation_percent") or "").strip()
+            allocation = float(ap_raw.replace(",", ".")) if ap_raw else 1.0
+
+            oh_raw = (request.form.get("overhead_factor") or "").strip()
+            overhead = float(oh_raw.replace(",", ".")) if oh_raw else 1.0
+
+            g_raw = (request.form.get("cost_per_million_tokens") or "").strip()
+            google_ref = float(g_raw.replace(",", ".")) if g_raw else None
+
+            if month_seconds < 1:
+                raise ValueError("month_seconds deve ser >= 1.")
+            save_config(
+                runtime_monthly_cost=runtime,
+                month_seconds=month_seconds,
+                allocation_percent=allocation,
+                overhead_factor=overhead,
+                cost_per_million_tokens=google_ref,
+            )
+            flash("Parametros de custo salvos.", "success")
+        except (ValueError, TypeError) as e:
+            flash(f"Valores invalidos: {e}", "danger")
+        return redirect(url_for("admin.agentes_cleito"))
+
+    cfg = get_or_create_config()
+    cps = compute_cost_per_second(cfg)
+    return render_template(
+        "agentes_cleito.html",
+        cfg=cfg,
+        cost_per_second=cps,
+    )
 
 
 @admin_bp.route("/agentes/julia/executar-cleiton", methods=["POST"])
@@ -436,7 +511,7 @@ def atualizar_precos():
     return redirect(url_for("admin.gestao_planos"))
 
 
-# --- Importação ---
+# --- Importacao ---
 @admin_bp.route("/importacao")
 @login_required
 def importacao_dados():
