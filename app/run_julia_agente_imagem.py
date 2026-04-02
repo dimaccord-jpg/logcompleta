@@ -14,7 +14,23 @@ import hashlib
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
+from app.run_cleiton_gemini_governance import (
+    cleiton_governed_generate_content,
+    cleiton_governed_generate_images,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def _api_key_label_imagem() -> str:
+    if os.getenv("GEMINI_API_KEY_2"):
+        return "GEMINI_API_KEY_2"
+    if os.getenv("GEMINI_API_KEY_1"):
+        return "GEMINI_API_KEY_1"
+    if os.getenv("GEMINI_API_KEY"):
+        return "GEMINI_API_KEY"
+    return "unknown"
+
 
 # URL opcional de fallback configurada por ambiente.
 # Se ausente, usamos placeholder contextual para manter aderência ao conteúdo.
@@ -135,14 +151,27 @@ def _gerar_via_gemini_imagen(prompt_imagem: str, key: str) -> str | None:
             model = _get_model_image()
             config = getattr(types, "GenerateImagesConfig", None)
             kwargs = {"model": model, "prompt": prompt_imagem or "global supply chain operations"}
+            label = _api_key_label_imagem()
             try:
                 if config:
                     kwargs["config"] = config(number_of_images=1)
-                response = client.models.generate_images(**kwargs)
+                response = cleiton_governed_generate_images(
+                    client,
+                    agent="julia",
+                    flow_type="julia_imagem_imagen",
+                    api_key_label=label,
+                    **kwargs,
+                )
             except TypeError:
                 # Compatibilidade com versões de SDK que não aceitam config no formato esperado.
                 kwargs.pop("config", None)
-                response = client.models.generate_images(**kwargs)
+                response = cleiton_governed_generate_images(
+                    client,
+                    agent="julia",
+                    flow_type="julia_imagem_imagen",
+                    api_key_label=label,
+                    **kwargs,
+                )
             if response and getattr(response, "generated_images", None):
                 img = response.generated_images[0]
                 if getattr(img, "url", None):
@@ -181,7 +210,14 @@ def _gerar_via_gemini_multimodal(prompt_imagem: str, key: str) -> str | None:
                 "high detail, cinematic lighting, logistics/supply chain context: "
                 f"{prompt_imagem or 'global supply chain operations'}"
             )
-            response = client.models.generate_content(model=model, contents=prompt_final)
+            response = cleiton_governed_generate_content(
+                client,
+                model=model,
+                contents=prompt_final,
+                agent="julia",
+                flow_type="julia_imagem_multimodal",
+                api_key_label=_api_key_label_imagem(),
+            )
             raw_bytes = _extrair_bytes_response_multimodal(response)
             if raw_bytes:
                 return _salvar_imagem_local(raw_bytes)

@@ -283,3 +283,72 @@ class BaseLocalidades(db.Model):
     chave_busca = db.Column(db.String(255), primary_key=True)
     id_uf = db.Column(db.Integer)
     id_cidade = db.Column(db.Integer)
+
+
+# --- Fase 1: medicao gerencial de IA (Cleiton governanca + snapshot de custo GCP) ---
+
+
+class IaConsumoEvento(db.Model):
+    """Uma tentativa real de chamada ao SDK Gemini (evento append-only)."""
+    __tablename__ = "ia_consumo_evento"
+
+    id = db.Column(db.Integer, primary_key=True)
+    occurred_at = db.Column(db.DateTime, nullable=False, index=True, default=utcnow_naive)
+    provider = db.Column(db.String(40), nullable=False, index=True)
+    operation = db.Column(db.String(40), nullable=False, index=True)
+    model = db.Column(db.String(255), nullable=False, default="")
+    agent = db.Column(db.String(80), nullable=False, index=True)
+    flow_type = db.Column(db.String(80), nullable=False, index=True)
+    api_key_label = db.Column(db.String(80), nullable=False, index=True)
+    status = db.Column(db.String(40), nullable=False, index=True)
+    input_tokens = db.Column(db.Integer, nullable=True)
+    output_tokens = db.Column(db.Integer, nullable=True)
+    total_tokens = db.Column(db.Integer, nullable=True)
+    error_summary = db.Column(db.Text, nullable=True)
+
+
+class IaBillingCostSnapshot(db.Model):
+    """Snapshot de custo real (BigQuery billing export), para dashboard sem consultar BQ a cada request."""
+    __tablename__ = "ia_billing_cost_snapshot"
+
+    id = db.Column(db.Integer, primary_key=True)
+    snapshot_at = db.Column(db.DateTime, nullable=False, index=True, default=utcnow_naive)
+    reference_date = db.Column(db.Date, nullable=False, index=True)
+    month_competence = db.Column(db.String(7), nullable=False, index=True)
+    cost_total_month_to_date = db.Column(db.Numeric(18, 6), nullable=False)
+    currency = db.Column(db.String(12), nullable=False, default="USD")
+    source = db.Column(db.String(80), nullable=False, default="bigquery_billing_export")
+
+
+# --- Fase 1.1: processamento analitico (nao-LLM), governanca Cleiton ---
+
+
+class CleitonCostConfig(db.Model):
+    """
+    Parametros minimos de custo operacional (MVP): Render runtime + referencia Google.
+    Registro singleton (id=1) para custo estimado de processamento analitico.
+    """
+    __tablename__ = "cleiton_cost_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    runtime_monthly_cost = db.Column(db.Float, nullable=True)
+    month_seconds = db.Column(db.Integer, nullable=False, default=2592000)
+    allocation_percent = db.Column(db.Float, nullable=False, default=1.0)
+    overhead_factor = db.Column(db.Float, nullable=False, default=1.0)
+    cost_per_million_tokens = db.Column(db.Float, nullable=True)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive)
+
+
+class ProcessingEvent(db.Model):
+    """Evento de processamento local (ex.: upload Excel + preparacao de sessao para BI)."""
+    __tablename__ = "processing_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    occurred_at = db.Column(db.DateTime, nullable=False, index=True, default=utcnow_naive)
+    agent = db.Column(db.String(80), nullable=False, index=True)
+    flow_type = db.Column(db.String(80), nullable=False, index=True)
+    processing_type = db.Column(db.String(40), nullable=False, index=True)
+    rows_processed = db.Column(db.Integer, nullable=False, default=0)
+    processing_time_ms = db.Column(db.Integer, nullable=False, default=0)
+    status = db.Column(db.String(40), nullable=False, index=True)
+    error_summary = db.Column(db.Text, nullable=True)

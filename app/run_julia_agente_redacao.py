@@ -9,8 +9,23 @@ import re
 from google import genai
 from google.genai import types as genai_types
 from app.prompts import PERSONA, GERAR_NOTICIA_CURTA, GERAR_ARTIGO_COMPLETO
+from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 
 logger = logging.getLogger(__name__)
+
+
+def _api_key_label_for_tipo(tipo: str) -> str:
+    if (tipo or "").lower() == "artigo":
+        if os.getenv("GEMINI_API_KEY_2"):
+            return "GEMINI_API_KEY_2"
+        if os.getenv("GEMINI_API_KEY"):
+            return "GEMINI_API_KEY"
+    else:
+        if os.getenv("GEMINI_API_KEY_1"):
+            return "GEMINI_API_KEY_1"
+        if os.getenv("GEMINI_API_KEY"):
+            return "GEMINI_API_KEY"
+    return "unknown"
 
 # Modelos textuais em ordem de fallback
 def _get_model_text_candidates() -> list[str]:
@@ -100,9 +115,18 @@ def gerar_artigo_completo(titulo_original: str, fonte: str, link: str) -> dict |
 
 def _chamar_modelo(client, prompt: str, tipo: str) -> dict | None:
     last_error = None
+    flow = "julia_redacao_artigo" if (tipo or "").lower() == "artigo" else "julia_redacao_noticia"
+    label = _api_key_label_for_tipo(tipo)
     for model in _get_model_text_candidates():
         try:
-            response = client.models.generate_content(model=model, contents=prompt)
+            response = cleiton_governed_generate_content(
+                client,
+                model=model,
+                contents=prompt,
+                agent="julia",
+                flow_type=flow,
+                api_key_label=label,
+            )
             txt = (response.text or "").strip()
             inicio = txt.find("{")
             fim = txt.rfind("}") + 1

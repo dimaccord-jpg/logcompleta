@@ -15,6 +15,7 @@ filesystem e mantém o isolamento da funcionalidade do Roberto.
 """
 import logging
 import os
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
@@ -175,10 +176,32 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
     if not ok:
         return jsonify({"success": False, "error": msg}), 400
 
+    t0 = time.perf_counter()
+    emitted = False
+
+    def _emit_upload_proc(status: str, rows: int, err: str | None = None) -> None:
+        nonlocal emitted
+        if emitted:
+            return
+        emitted = True
+        ms = int((time.perf_counter() - t0) * 1000)
+        from app.run_cleiton_processing_governance import cleiton_register_processing_event
+
+        cleiton_register_processing_event(
+            agent="roberto",
+            flow_type="upload_bi",
+            processing_type="non_llm",
+            rows_processed=rows,
+            processing_time_ms=ms,
+            status=status,
+            error_summary=err,
+        )
+
     try:
         import openpyxl
     except ImportError:
         logger.exception("openpyxl não instalado")
+        _emit_upload_proc("failure", 0, "openpyxl não instalado")
         return jsonify({"success": False, "error": "Serviço de planilhas indisponível."}), 500
 
     # Salva o arquivo em diretório próprio de uploads do Roberto, separado do diretório
@@ -192,20 +215,24 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
         arquivo.save(caminho_arquivo)
     except Exception as e:
         logger.exception("Falha ao salvar arquivo de upload em %s: %s", caminho_arquivo, e)
+        _emit_upload_proc("failure", 0, "Falha ao salvar arquivo de upload.")
         return jsonify({"success": False, "error": "Falha ao salvar arquivo de upload."}), 500
 
     try:
         wb = openpyxl.load_workbook(caminho_arquivo, read_only=True, data_only=True)
         ws = wb.active
         if ws is None:
+            _emit_upload_proc("failure", 0, "Planilha vazia.")
             return jsonify({"success": False, "error": "Planilha vazia."}), 400
     except Exception as e:
         logger.debug("Erro ao abrir Excel em %s: %s", caminho_arquivo, e)
+        _emit_upload_proc("failure", 0, "Arquivo Excel inválido ou corrompido.")
         return jsonify({"success": False, "error": "Arquivo Excel inválido ou corrompido."}), 400
 
     colunas = _ler_cabecalho_normalizado(ws)
     ok, msg = _validar_colunas(colunas)
     if not ok:
+        _emit_upload_proc("failure", 0, msg)
         return jsonify({"success": False, "error": msg}), 400
 
     idx_imposto = colunas.index(COLUNA_OPCIONAL_IMPOSTO) if COLUNA_OPCIONAL_IMPOSTO in colunas else None
@@ -311,6 +338,11 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
             logger.debug("Falha ao remover arquivo temporário %s", caminho_arquivo)
 
     if not linhas_processadas:
+        _emit_upload_proc(
+            "failure",
+            0,
+            "Nenhuma linha válida após processamento.",
+        )
         return jsonify({
             "success": False,
             "error": "Nenhuma linha válida após processamento.",
@@ -332,6 +364,7 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
             + ", ".join(stats_amostra["meses_baixa_representatividade"])
         )
 
+    _emit_upload_proc("success", len(linhas_reduzidas))
     return jsonify({
         "success": True,
         "registros": len(linhas_reduzidas),

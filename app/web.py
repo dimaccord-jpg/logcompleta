@@ -873,6 +873,38 @@ def cron_executar_cleiton():
         return {"ok": False, "error": str(e)}, 500
 
 
+@app.route("/cron/billing-snapshot", methods=["GET", "POST"])
+def cron_billing_snapshot():
+    """
+    Coleta custo month-to-date no BigQuery (export billing) e grava snapshot interno.
+    Agendar ~4x/dia (ex.: Render Cron). Protegida por CRON_SECRET.
+    """
+    secret = request.headers.get("X-Cron-Secret") or request.args.get("secret")
+    expected = settings.cron_secret
+    if not expected or secret != expected:
+        return {"ok": False, "error": "unauthorized"}, 403
+    try:
+        from app.services.billing_bigquery_service import collect_and_persist_billing_snapshot
+
+        with app.app_context():
+            snap = collect_and_persist_billing_snapshot()
+        if snap is None:
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "Snapshot nao gerado (BigQuery nao configurado ou consulta falhou).",
+            }, 200
+        return {
+            "ok": True,
+            "month_competence": snap.month_competence,
+            "cost_total_month_to_date": str(snap.cost_total_month_to_date),
+            "currency": snap.currency,
+        }, 200
+    except Exception as e:
+        logging.exception("Cron billing-snapshot: %s", e)
+        return {"ok": False, "error": str(e)}, 500
+
+
 # --- CLI operacional (não exposto em rotas públicas) ---
 @app.cli.command("bootstrap-admin")
 def cli_bootstrap_admin():
