@@ -29,6 +29,131 @@
         {{ status.mensagem_sistema }}
     </div>
 
+    {# Fase 1: Consumo de IA - dados reais (Cleiton / governanca) #}
+    {% set ia = ia_metrics or {} %}
+    <h5 class="mt-4 mb-3">Consumo de IA (Cleiton)</h5>
+    <p class="text-muted small mb-3">
+        Competencia: <strong>{{ ia.get('month_competence', '-') }}</strong>
+        {% if ia.get('cost_snapshot_at') %}
+        - Snapshot de custo: {{ ia.get('cost_snapshot_at', '')[:19]|replace('T', ' ') }} UTC
+        {% endif %}
+    </p>
+    <div class="row g-3 mb-2">
+        <div class="col-md-4">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Total de Tokens no mes</small>
+                <h3 class="text-primary mb-0">{{ '{:,}'.format((ia.get('total_tokens_month') or 0)|int) }}</h3>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Custo Total no mes</small>
+                <h3 class="text-success mb-0">
+                    {% if ia.get('cost_total_month') is not none %}
+                    {{ ia.get('currency', 'USD') }} {{ '%.2f'|format(ia.get('cost_total_month')) }}
+                    {% else %}
+                    <span class="text-muted fs-5">-</span>
+                    {% endif %}
+                </h3>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Custo por Token</small>
+                <h3 class="text-dark mb-0">
+                    {% if ia.get('cost_per_token') is not none %}
+                    {{ ia.get('currency', 'USD') }} {{ '%.8f'|format(ia.get('cost_per_token')) }}
+                    {% else %}
+                    <span class="text-muted fs-5">-</span>
+                    {% endif %}
+                </h3>
+            </div>
+        </div>
+    </div>
+    <div class="card border-0 shadow-sm p-3 mb-4">
+        <small class="text-muted fw-bold d-block mb-2">Tokens por API_KEY</small>
+        {% set by_key = ia.get('tokens_by_api_key') or {} %}
+        {% if by_key %}
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>API_KEY (rotulo)</th>
+                        <th class="text-end">Tokens</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for label, qty in by_key|dictsort %}
+                    <tr>
+                        <td><code class="small">{{ label }}</code></td>
+                        <td class="text-end">{{ '{:,}'.format(qty|int) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0 small">Nenhum token com metrica registrado neste mes (ou ainda sem eventos).</p>
+        {% endif %}
+    </div>
+
+    {# Fase 1.1: processamento analitico (upload Excel / BI - nao-LLM) #}
+    {% set proc = ia_metrics or {} %}
+    <h5 class="mt-4 mb-3">Processamento Analitico (Roberto)</h5>
+    <p class="text-muted small mb-3">
+        Competencia: <strong>{{ proc.get('month_competence', '-') }}</strong>
+        - Upload Excel -> sessao para BI (sem tokens de IA)
+        {% if proc.get('last_processing_at') %}
+        - Ultima execucao: {{ proc.get('last_processing_at', '')[:19]|replace('T', ' ') }} UTC
+        {% if proc.get('last_processing_status') %}
+        (<span class="text-muted">{{ proc.get('last_processing_status') }}</span>)
+        {% endif %}
+        {% endif %}
+    </p>
+    <div class="row g-3 mb-4">
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Total de Execucoes (mes)</small>
+                <h3 class="text-primary mb-0">{{ (proc.get('total_processing_events_month') or 0)|int }}</h3>
+            </div>
+        </div>
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Total de Linhas Processadas</small>
+                <h3 class="text-success mb-0">{{ '{:,}'.format((proc.get('total_rows_processed_month') or 0)|int) }}</h3>
+            </div>
+        </div>
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Tempo Medio de Processamento (ms)</small>
+                <h3 class="text-dark mb-0">
+                    {% if proc.get('avg_processing_time_ms') is not none %}
+                    {{ '%.1f'|format(proc.get('avg_processing_time_ms')) }}
+                    {% else %}
+                    <span class="text-muted fs-5">-</span>
+                    {% endif %}
+                </h3>
+            </div>
+        </div>
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Custo Estimado (mes) <span class="fw-normal">- processamento</span></small>
+                {% if not proc.get('processing_cost_configured') %}
+                <p class="text-muted small mb-0 mt-2">Configuracao de custo nao definida.</p>
+                <p class="small mb-0"><a href="{{ url_for('admin.agentes_cleito') }}">Definir em Cleito</a></p>
+                {% else %}
+                <h3 class="text-success mb-0">
+                    R$ {{ '%.2f'|format(proc.get('total_processing_estimated_cost_month') or 0) }}
+                </h3>
+                <small class="text-muted">Estimativa (runtime Render), nao inclui tokens de IA.</small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% if (proc.get('total_processing_events_month') or 0)|int == 0 %}
+    <p class="text-muted small mb-4">Nenhum processamento registrado neste mes.</p>
+    {% endif %}
+
     {# Fase 6: Painel estratégico – KPIs de Insight #}
     {% set kpis = kpis_insight or {} %}
     <h5 class="mt-4 mb-3">Insight Estratégico (Customer Insight)</h5>

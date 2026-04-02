@@ -7,8 +7,17 @@ import logging
 import os
 
 from app.prompts import JULIA_CHAT_SYSTEM_PROMPT
+from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 
 logger = logging.getLogger(__name__)
+
+
+def _api_key_label_chat() -> str:
+    if os.getenv("GEMINI_API_KEY_1"):
+        return "GEMINI_API_KEY_1"
+    if os.getenv("GEMINI_API_KEY"):
+        return "GEMINI_API_KEY"
+    return "unknown"
 
 # Modelos em ordem de fallback (compatível com run_julia_agente_redacao)
 def _get_chat_model_candidates():
@@ -85,7 +94,14 @@ def chat_julia_reply(user_message: str, history: list, max_history: int = 10) ->
     last_error = None
     for model in _get_chat_model_candidates():
         try:
-            response = client.models.generate_content(model=model, contents=contents)
+            response = cleiton_governed_generate_content(
+                client,
+                model=model,
+                contents=contents,
+                agent="julia",
+                flow_type="julia_chat",
+                api_key_label=_api_key_label_chat(),
+            )
             text = (response.text or "").strip()
             if text:
                 return {"reply": text}
