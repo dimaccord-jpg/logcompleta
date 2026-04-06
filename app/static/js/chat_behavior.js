@@ -1,6 +1,5 @@
 /**
- * Comportamento do chat Júlia: foco/envio, contador freemium (X de N interações restantes),
- * bloqueio ao atingir limite e atualização a partir da resposta do backend.
+ * Comportamento do chat Júlia: foco/envio e atualização de estado de bloqueio.
  */
 (function () {
   'use strict';
@@ -18,27 +17,27 @@
     : null;
   var isAuthenticated = (typeof window.JULIA_CHAT_AUTHENTICATED !== 'undefined' && window.JULIA_CHAT_AUTHENTICATED === true);
 
-  function updateCounterUI(restantes, limiteDia, limitReached) {
-    var counterEl = byId('juliaChatCounter');
+  function isBlockedAuthorization(authz) {
+    if (!authz) return false;
+    return authz.permitido === false || authz.modo_operacao === 'blocked';
+  }
+
+  function getBlockedMessage(authz) {
+    if (!authz) return null;
+    return authz.mensagem_usuario || null;
+  }
+
+  function updateLimitUI(limitReached, message) {
     var limitMsgEl = byId('juliaChatLimitMsg');
     var sendBtn = byId('juliaChatSend');
     var input = byId('juliaChatInput');
-    if (!counterEl || !limitMsgEl || !sendBtn) return;
-    if (chatLimits && limiteDia != null && restantes != null && !chatLimits.in_trial) {
-      counterEl.style.display = 'block';
-      counterEl.textContent = restantes + ' de ' + limiteDia + ' interações diárias restantes. A Júlia é uma IA e pode cometer erros.';
-      if (limitReached || restantes <= 0) {
-        limitMsgEl.style.display = 'block';
-        limitMsgEl.textContent = 'Limite diário atingido. Volte amanhã ou assine um plano para continuar.';
-        sendBtn.disabled = true;
-        if (input) input.disabled = true;
-      } else {
-        limitMsgEl.style.display = 'none';
-        sendBtn.disabled = false;
-        if (input) input.disabled = false;
-      }
+    if (!limitMsgEl || !sendBtn) return;
+    if (limitReached) {
+      limitMsgEl.style.display = 'block';
+      limitMsgEl.textContent = message || 'O chat está temporariamente indisponível para este usuário.';
+      sendBtn.disabled = true;
+      if (input) input.disabled = true;
     } else {
-      counterEl.style.display = 'none';
       limitMsgEl.style.display = 'none';
       sendBtn.disabled = false;
       if (input) input.disabled = false;
@@ -99,7 +98,10 @@
       window.location.href = loginUrl;
       return;
     }
-    if (chatLimits && !chatLimits.pode_usar_chat) return;
+    if (isBlockedAuthorization(chatLimits)) {
+      updateLimitUI(true, getBlockedMessage(chatLimits) || 'Você não pode usar o chat neste momento.');
+      return;
+    }
 
     input.value = '';
     appendMessage('user', text, messagesEl);
@@ -139,19 +141,18 @@
           return;
         }
         appendMessage('bot', data.reply || 'Sem resposta.', messagesEl);
-        if (data.limit_reached !== undefined || data.chat_restantes !== undefined) {
-          var rest = data.chat_restantes;
-          var lim = data.chat_limite_dia;
-          if (rest !== undefined && lim !== undefined) {
-            chatLimits = chatLimits || {};
-            chatLimits.restantes_hoje = rest;
-            chatLimits.limite_dia = lim;
-            chatLimits.pode_usar_chat = !data.limit_reached;
+        if (data.authorization) {
+          chatLimits = data.authorization;
+        }
+        if (data.limit_reached !== undefined) {
+          chatLimits = chatLimits || {};
+          chatLimits.permitido = !data.limit_reached;
+          if (data.limit_reached) {
+            chatLimits.modo_operacao = 'blocked';
           }
-          updateCounterUI(
-            data.chat_restantes != null ? data.chat_restantes : (chatLimits && chatLimits.restantes_hoje),
-            data.chat_limite_dia != null ? data.chat_limite_dia : (chatLimits && chatLimits.limite_dia),
-            !!data.limit_reached
+          updateLimitUI(
+            !!data.limit_reached,
+            getBlockedMessage(chatLimits) || data.reply
           );
         }
       })
@@ -167,13 +168,10 @@
     var wrapper = byId('juliaChatWrapper');
     if (!input || !form || !wrapper) return;
 
-    if (chatLimits && chatLimits.limite_dia != null && !chatLimits.in_trial) {
-      updateCounterUI(
-        chatLimits.restantes_hoje != null ? chatLimits.restantes_hoje : chatLimits.limite_dia,
-        chatLimits.limite_dia,
-        !chatLimits.pode_usar_chat
-      );
-    }
+    updateLimitUI(
+      isBlockedAuthorization(chatLimits),
+      getBlockedMessage(chatLimits)
+    );
 
     input.addEventListener('focus', function () { setChatActive(true); });
     input.addEventListener('blur', function () {

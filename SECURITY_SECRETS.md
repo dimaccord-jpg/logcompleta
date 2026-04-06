@@ -2,17 +2,17 @@
 
 ## Regras obrigatórias
 
-1. Nunca versionar segredos reais.
-2. Manter placeholders apenas em `app/.env.example`.
-3. Não versionar `app/.env.dev`, `app/.env.homolog` e `app/.env.prod`.
-4. Definir segredos de homolog/prod no provedor (Render/systemd/secrets manager).
+1. Nunca versionar segredos reais no Git.
+2. Manter placeholders somente em `app/.env.example`.
+3. Não versionar `app/.env.dev`, `app/.env.homolog`, `app/.env.prod`.
+4. Configurar segredos de homolog/prod no provedor (Render/secret manager), não em arquivos versionados.
 
 ## Operação segura na preparação de homolog (Fase 2)
 
-- O status de publicação está em `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
-- O deploy de homolog ainda não está concluído; tratar credenciais como ambiente em transição controlada.
-- Não executar workaround de migration com segredo embutido em comando versionado.
-- Se houver ajuste de runtime para viabilizar migrations, aplicar somente via variáveis/segredos do provedor.
+- Status oficial da homologação: `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
+- Homolog ainda não está concluída; tratar o ambiente como transição controlada.
+- Não registrar workaround de migration com senha/token embutido em comando salvo no repositório.
+- Qualquer ajuste para habilitar migrations deve ser aplicado via variáveis secretas do provedor.
 
 ## Proteções já adotadas
 
@@ -20,33 +20,25 @@
 2. `pre-commit` com gitleaks para bloqueio local.
 3. CI com varredura de segredos em PR/push.
 
-## Setup mínimo local
+## Variáveis sensíveis da fase
 
-```bash
-pip install pre-commit
-pre-commit install
-pre-commit run --all-files
-```
+- `DATABASE_URL`
+- `SECRET_KEY`
+- `CRON_SECRET`
+- credenciais BigQuery (`GCP_BILLING_EXPORT_TABLE` e chave associada)
+- segredos OAuth/e-mail (`GOOGLE_CLIENT_SECRET`, `RESEND_API_KEY`, etc.)
 
-## Scan manual (PowerShell)
+## Verificação rápida local
 
-```powershell
-./scripts/security/scan-secrets.ps1
-./scripts/security/scan-secrets.ps1 -HistoryOnly
-./scripts/security/scan-secrets.ps1 -DirOnly
-```
+- `pre-commit run --all-files`
+- `./scripts/security/scan-secrets.ps1`
 
-## Credenciais de billing (BigQuery)
+## Pontos críticos de segurança para homolog
 
-Para `/cron/billing-snapshot`, usar credencial com leitura na tabela definida em `GCP_BILLING_EXPORT_TABLE`.
-
-- Não versionar JSON de service account.
-- Preferir segredo do provedor ou arquivo montado em volume.
-
-## Rotação e resposta a incidente
-
-- Ferramentas: `scripts/security/rotate_secrets.py` e `scripts/security/rotate-secrets.ps1`.
-- Em incidente: revogar credencial, atualizar no provedor, reiniciar serviço, rodar scans e registrar ocorrência.
+- Não expor `CRON_SECRET` em scripts públicos ou documentação de comando com valor real.
+- Não versionar JSON de service account (BigQuery).
+- Não reutilizar credenciais de produção em homolog.
+- Em suspeita de vazamento: rotacionar segredo, atualizar no provedor, reiniciar serviço e reexecutar scan.
 
 Referências:
 

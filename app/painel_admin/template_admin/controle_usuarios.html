@@ -1,0 +1,137 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <h4 class="mb-3">Controle de Usuários</h4>
+    <p class="text-muted mb-4">
+        Convide usuários existentes para administrador e solicite revogação com confirmação por link seguro.
+    </p>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="fw-bold mb-3">
+                        <i class="bi bi-person-plus-fill me-2 text-success"></i>Convidar ADM
+                    </h6>
+                    <form method="post" action="{{ url_for('admin.controle_usuarios_convidar_adm') }}">
+                        <div class="mb-3">
+                            <label for="email_convite_admin" class="form-label small fw-bold">E-mail do usuário</label>
+                            <input
+                                type="email"
+                                id="email_convite_admin"
+                                name="email_convite_admin"
+                                class="form-control"
+                                placeholder="usuario@dominio.com"
+                                required
+                            >
+                        </div>
+                        <button type="submit" class="btn btn-success">
+                            Convidar ADM
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="fw-bold mb-3">
+                        <i class="bi bi-person-dash-fill me-2 text-danger"></i>Revogar ADM
+                    </h6>
+                    <form method="post" action="{{ url_for('admin.controle_usuarios_revogar_adm') }}">
+                        <div class="mb-3">
+                            <label for="email_revogar_admin" class="form-label small fw-bold">E-mail do usuário alvo</label>
+                            <input
+                                type="email"
+                                id="email_revogar_admin"
+                                name="email_revogar_admin"
+                                class="form-control"
+                                placeholder="usuario@dominio.com"
+                                required
+                            >
+                        </div>
+                        <button type="submit" class="btn btn-danger">
+                            Revogar ADM
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h6 class="fw-bold mb-3">
+                        <i class="bi bi-award-fill me-2 text-primary"></i>Atribuir plano
+                    </h6>
+                    <form method="post" action="{{ url_for('admin.controle_usuarios_atribuir_plano') }}" id="formAtribuirPlano">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-4">
+                                <label for="email_plano_usuario" class="form-label small fw-bold">E-mail do usuário</label>
+                                <input
+                                    type="email"
+                                    id="email_plano_usuario"
+                                    name="email_plano_usuario"
+                                    class="form-control"
+                                    placeholder="usuario@dominio.com"
+                                    required
+                                >
+                            </div>
+                            <div class="col-md-4">
+                                <label for="plano_usuario" class="form-label small fw-bold">Plano</label>
+                                <select id="plano_usuario" name="plano_usuario" class="form-select" required>
+                                    <option value="free">Free</option>
+                                    <option value="starter">Starter</option>
+                                    <option value="pro">Pro</option>
+                                    <option value="multiuser">Multiuser</option>
+                                    <option value="avulso">Avulso</option>
+                                    <option value="uso_adm">Uso ADM</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2" id="campoQtdFranquias" style="display: none;">
+                                <label for="multiuser_qtd_franquias" class="form-label small fw-bold">Qtd. franquias</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    id="multiuser_qtd_franquias"
+                                    name="multiuser_qtd_franquias"
+                                    class="form-control"
+                                    placeholder="Ex.: 3"
+                                >
+                            </div>
+                            <div class="col-md-2">
+                                <button type="submit" class="btn btn-primary w-100">
+                                    Atribuir plano
+                                </button>
+                            </div>
+                        </div>
+                        <small class="text-muted d-block mt-3">
+                            Regra: usuários nascem em Free; mudanças por esta tela são tratadas como upgrade/alteração de conta.
+                        </small>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    var planoEl = document.getElementById("plano_usuario");
+    var qtdWrap = document.getElementById("campoQtdFranquias");
+    var qtdInput = document.getElementById("multiuser_qtd_franquias");
+    if (!planoEl || !qtdWrap || !qtdInput) return;
+    function syncMultiuserField() {
+        var isMultiuser = planoEl.value === "multiuser";
+        qtdWrap.style.display = isMultiuser ? "block" : "none";
+        qtdInput.required = isMultiuser;
+        if (!isMultiuser) qtdInput.value = "";
+    }
+    planoEl.addEventListener("change", syncMultiuserField);
+    syncMultiuserField();
+});
+</script>
+{% endblock %}

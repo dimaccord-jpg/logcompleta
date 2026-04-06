@@ -1,38 +1,34 @@
 # Log Completa
 
-Aplicação Flask com módulos Júlia (editorial), Cleiton (governança), Roberto (BI de fretes) e painel admin.
+Aplicação Flask com módulos Júlia (editorial), Cleiton (governança operacional) e Roberto (upload/BI), com painel admin para operação.
 
-## Fase 2 em homologação — estado real
+## Fase 2 (entrega atual) — visão executiva
 
-- A branch de feature foi organizada em commits separados.
-- O merge local para a branch de homolog foi concluído sem conflito.
-- O pacote técnico da Fase 2 foi integrado no código local.
-- A publicação final de homolog ainda está bloqueada por estratégia de migration no Render.
-- Não considerar a homologação como concluída até validar migrations no ambiente alvo.
+Escopo técnico consolidado no pacote final:
 
-## O que entrou nesta entrega
+- Identidade de execução no upload (`execution_id`) e apropriação idempotente no billing por chave de idempotência.
+- Governança operacional por franquia (status `active/degraded/expired/blocked`) aplicada sobre eventos técnicos.
+- Motor de conversão de consumo em créditos (tokens, linhas e milissegundos) com reconciliação e validação administrativa.
+- Modelo Conta/Franquia/Usuário com suporte a multiuser, códigos por franquia e atribuição administrativa de plano.
+- Rotas/telas admin para validar operação real em homolog (dashboard, agentes, controle de usuários, planos).
+- Cadeia de migrations da Fase 2 + testes automatizados de classificação, motor, idempotência e autorização operacional.
 
-- `execution_id` como identidade da execução no upload do Roberto.
-- Billing idempotente por `execution_id`.
-- Motor de governança/franquia/billing.
-- Migrations da Fase 2.
-- Testes automatizados relacionados.
+## Estado real da homologação
 
-## Bloqueio atual para publicação final em homolog
+- Merge local para homolog concluído.
+- Publicação final de homolog **ainda pendente**.
+- Bloqueio operacional confirmado no Render:
+  - `alembic` ausente no `PATH`.
+  - `python -m alembic current` falhou com `No module named alembic`.
+  - `requirements.txt` atual não expõe Alembic.
 
-No Render (shell aberto com sucesso), os comandos de migração falharam:
+Não tratar homologação como concluída até a estratégia de migration ser resolvida e validada no ambiente.
 
-- `python -m alembic current` retornou `No module named alembic`.
-- `alembic` não está disponível no `PATH`.
-- `requirements.txt` atual não expõe Alembic nesse ambiente.
+## Onde consultar cada assunto
 
-Sem resolver esse ponto, não há confirmação segura de aplicação de schema da Fase 2 em homolog.
-
-## Fonte de verdade e mapa de documentos
-
-- Estado de homolog/publicação (go/no-go): `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md` (documento principal).
-- Operação de deploy (procedimento): `app/README_DEPLOY.md`.
-- Execução local e validações de runtime: `app/README_RUN.md`.
-- Cron de homolog no Render: `RENDER_CRON_HOMOLOG.md`.
-- Política de segredos: `SECURITY_SECRETS.md`.
-- Operação de migrations e checklist de schema: `migrations/README`.
+- Fonte principal de status/go-no-go: `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
+- Runbook de deploy/homolog: `app/README_DEPLOY.md`.
+- Execução local e validação operacional: `app/README_RUN.md`.
+- Cron em Render (homolog): `RENDER_CRON_HOMOLOG.md`.
+- Migrations e cadeia Fase 2: `migrations/README`.
+- Segurança/segredos: `SECURITY_SECRETS.md`.

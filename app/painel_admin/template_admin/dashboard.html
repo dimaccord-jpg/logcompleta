@@ -2,31 +2,62 @@
 
 {% block admin_content %}
 <div class="container-fluid">
-    <h4 class="mb-4">Painel de Controle</h4>
-    <div class="row g-3">
+    <h4 class="mb-3">Painel de Controle</h4>
+    <form method="get" action="{{ url_for('admin.admin_dashboard') }}" class="card border-0 shadow-sm p-3 mb-4">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label small text-muted mb-0">Plano (User.categoria)</label>
+                <select name="categoria" class="form-select form-select-sm">
+                    <option value="">Todos</option>
+                    {% for cat in filtros_categorias %}
+                    <option value="{{ cat }}" {% if filtro_categoria == cat %}selected{% endif %}>{{ cat }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small text-muted mb-0">Status da franquia</label>
+                <select name="franquia_status" class="form-select form-select-sm">
+                    <option value="">Todos</option>
+                    {% for st in filtros_franquia_status %}
+                    <option value="{{ st }}" {% if filtro_franquia_status == st %}selected{% endif %}>{{ st }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small text-muted mb-0">Usuários cancelados</label>
+                <select name="cancelado" class="form-select form-select-sm">
+                    <option value="ativos" {% if filtro_cancelado == 'ativos' %}selected{% endif %}>Excluir cancelados (anonimizados)</option>
+                    <option value="todos" {% if filtro_cancelado == 'todos' %}selected{% endif %}>Todos</option>
+                    <option value="somente_cancelados" {% if filtro_cancelado == 'somente_cancelados' %}selected{% endif %}>Somente cancelados</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-primary btn-sm">Aplicar filtros</button>
+                <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-secondary btn-sm ms-1">Limpar</a>
+            </div>
+        </div>
+        <p class="text-muted small mb-0 mt-2">Cancelados: email no padrão <code>encerrado%@anon.local</code> (encerramento de contrato).</p>
+    </form>
+    {% set dm = dash_metrics or {} %}
+    <div class="row g-3 mb-4">
         <div class="col-md-4">
             <div class="card border-0 shadow-sm p-3">
-                <small class="text-muted fw-bold">📡 STATUS API</small>
-                <h3 class="{{ 'text-success' if status.api_indices == 'Online' else 'text-danger' }} mb-0">
-                    {{ status.api_indices }}
-                </h3>
+                <small class="text-muted fw-bold">Usuários (filtro aplicado)</small>
+                <h3 class="text-primary mb-0">{{ '{:,}'.format((dm.get('total_usuarios') or 0)|int) }}</h3>
             </div>
         </div>
         <div class="col-md-4">
             <div class="card border-0 shadow-sm p-3">
-                <small class="text-muted fw-bold">🗄️ DATABASE</small>
-                <h3 class="text-primary mb-0">{{ status.db_localidades }}</h3>
+                <small class="text-muted fw-bold">Usuários com plano pago (categoria ≠ free)</small>
+                <h3 class="text-success mb-0">{{ '{:,}'.format((dm.get('total_usuarios_pagantes') or 0)|int) }}</h3>
             </div>
         </div>
         <div class="col-md-4">
             <div class="card border-0 shadow-sm p-3">
-                <small class="text-muted fw-bold">🛠️ SISTEMA</small>
-                <h3 class="text-dark mb-0">{{ status.status_geral }}</h3>
+                <small class="text-muted fw-bold">Leads cadastrados (total)</small>
+                <h3 class="text-dark mb-0">{{ '{:,}'.format((dm.get('total_leads') or 0)|int) }}</h3>
             </div>
         </div>
-    </div>
-    <div class="alert alert-info mt-4">
-        {{ status.mensagem_sistema }}
     </div>
 
     {# Fase 1: Consumo de IA - dados reais (Cleiton / governanca) #}
@@ -140,7 +171,7 @@
                 <small class="text-muted fw-bold">Custo Estimado (mes) <span class="fw-normal">- processamento</span></small>
                 {% if not proc.get('processing_cost_configured') %}
                 <p class="text-muted small mb-0 mt-2">Configuracao de custo nao definida.</p>
-                <p class="small mb-0"><a href="{{ url_for('admin.agentes_cleito') }}">Definir em Cleito</a></p>
+                <p class="small mb-0"><a href="{{ url_for('admin.agentes_cleiton') }}">Definir em Cleiton</a></p>
                 {% else %}
                 <h3 class="text-success mb-0">
                     R$ {{ '%.2f'|format(proc.get('total_processing_estimated_cost_month') or 0) }}

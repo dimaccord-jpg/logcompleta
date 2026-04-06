@@ -110,6 +110,33 @@
                 </div>
             </form>
             <hr class="my-3">
+            <h6 class="mb-3">Limite de histórico (mensagens)</h6>
+            <p class="text-muted mb-3">
+                Define quantas mensagens anteriores são enviadas como contexto no chat da Júlia (não altera a lógica de leitura do chat).
+            </p>
+            <form method="post" action="{{ url_for('admin.agentes_julia_configurar_historico') }}" class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label for="julia_chat_max_history" class="form-label">Mensagens de histórico</label>
+                    <input
+                        id="julia_chat_max_history"
+                        name="julia_chat_max_history"
+                        type="number"
+                        min="1"
+                        max="100"
+                        step="1"
+                        class="form-control"
+                        value="{{ julia_chat_max_history|default(10) }}"
+                        required
+                    >
+                    <small class="text-muted d-block mt-2">Faixa permitida: 1 a 100.</small>
+                </div>
+                <div class="col-md-8">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save me-1"></i> Salvar limite de histórico
+                    </button>
+                </div>
+            </form>
+            <hr class="my-3">
             <h6 class="mb-2">Próxima notícia automática (homolog/prod)</h6>
             <ul class="mb-0 text-muted small">
                 <li><strong>Frequência atual:</strong> {{ frequencia_horas|default(3) }}h entre ciclos.</li>

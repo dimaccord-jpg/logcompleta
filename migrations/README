@@ -1,19 +1,30 @@
 # Migrations (Alembic)
 
-Este arquivo concentra o estado e a operação de migrations.
+Este documento concentra cadeia e operação de migrations da Fase 2.
 
-## 1) Estado atual da Fase 2 em homolog
+## 1) Estado atual em homolog
 
-- O pacote de migrations da Fase 2 está no repositório.
-- A execução em homolog está pendente.
-- Bloqueio atual no Render:
-  - `python -m alembic current` falhou com `No module named alembic`.
-  - `alembic` não está disponível no ambiente.
-  - `requirements.txt` atual não expõe Alembic.
+- Cadeia de migrations da Fase 2 está versionada no repositório.
+- Execução em homolog ainda pendente de validação final.
+- Bloqueio observado no Render:
+  - `alembic` ausente no `PATH`
+  - `python -m alembic current` -> `No module named alembic`
+  - `requirements.txt` atual sem Alembic
 
-Sem resolver esse ponto, não fechar homolog como concluída.
+Sem resolver esse ponto, homolog não deve ser marcada como publicada.
 
-## 2) Aplicar migrations
+## 2) Cadeia de revisões da Fase 2
+
+1. `g4h5i6j7k8l9` — identidade de negócio em `ia_consumo_evento` e `processing_events`.
+2. `h1i2j3k4l5m6` — criação de `conta`/`franquia`, vínculo em `user`, backfill e estrutura interna.
+3. `i2j3k4l5m6n7` — régua de créditos em `cleiton_cost_config`.
+4. `j3k4l5m6n7o8` — franquia operacional (`limite_total`, `consumo_acumulado`, ciclo, status).
+5. `k4l5m6n7o8p9` — `bloqueio_manual` em franquia.
+6. `l5m6n7o8p9q0` — remoção de campos legados de chat freemium diário.
+7. `m6n7o8p9q0r1` — `multiuser_franquia_codigo`.
+8. `n7o8p9q0r1s2` — `cleiton_billing_apropriacao` (idempotência billing upload Roberto).
+
+## 3) Execução padrão
 
 Na raiz do repositório:
 
@@ -21,27 +32,33 @@ Na raiz do repositório:
 alembic -c migrations/alembic.ini upgrade head
 ```
 
-Validação pós-execução:
+Verificação:
 
 ```bash
 alembic -c migrations/alembic.ini current
 ```
 
-## 3) Premissas
+## 4) Premissas para executar com segurança
 
 - `DATABASE_URL` deve apontar para o banco alvo correto.
-- `APP_ENV` deve estar coerente com o ambiente (`dev`, `homolog`, `prod`).
-- Aplicar migrations antes de validar funcionalidades que dependem de schema novo.
+- `APP_ENV` deve estar coerente com o ambiente.
+- Backup/snapshot recomendado antes de aplicar em homolog/prod.
+- Não validar fluxo Fase 2 sem banco migrado até `head`.
 
-## 4) Ordem segura para homolog
+## 5) Ordem segura para homolog
 
-1. Publicar código da branch homolog.
-2. Garantir estratégia de execução de Alembic no ambiente.
-3. Executar `upgrade head`.
-4. Confirmar `current` no banco alvo.
-5. Rodar smoke tests de homolog.
+1. Resolver estratégia de disponibilidade do Alembic no runtime.
+2. Executar `upgrade head`.
+3. Confirmar `current`.
+4. Executar validações operacionais (health, cron, dashboard/admin, upload/chat).
+
+## 6) Sensibilidades de regressão
+
+- Quebrar `h1i2j3k4l5m6` impacta toda identidade conta/franquia/usuário.
+- Pular revisões de franquia operacional (`j`/`k`) invalida autorização e status de operação.
+- Sem `n7o8p9q0r1s2`, billing idempotente de upload Roberto fica incompleto.
 
 Referências:
 
-- Status geral da homologação: `../DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
-- Deploy operacional: `../app/README_DEPLOY.md`.
+- Status/go-no-go: `../DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
+- Runbook de deploy: `../app/README_DEPLOY.md`.

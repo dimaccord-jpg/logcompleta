@@ -16,18 +16,26 @@ def run_atualizar_indices_background(app) -> None:
     """
     try:
         from app.finance import atualizar_indices
-        resultado = atualizar_indices() or {}
-        persistir_execucao_indices_admin(resultado, app)
+        from app.consumo_identidade import ensure_consumo_identidade_no_app_context
+
+        with app.app_context():
+            ensure_consumo_identidade_no_app_context()
+            resultado = atualizar_indices() or {}
+            persistir_execucao_indices_admin(resultado, app)
         logger.info(
             "Atualização de índices (background) concluída: status_global=%s",
             resultado.get("status_global"),
         )
     except Exception as e:
         logger.exception("Falha ao atualizar índices em background: %s", e)
-        persistir_execucao_indices_admin(
-            {
-                "status_global": "falha",
-                "mensagem": str(e),
-            },
-            app,
-        )
+        from app.consumo_identidade import ensure_consumo_identidade_no_app_context
+
+        with app.app_context():
+            ensure_consumo_identidade_no_app_context()
+            persistir_execucao_indices_admin(
+                {
+                    "status_global": "falha",
+                    "mensagem": str(e),
+                },
+                app,
+            )
