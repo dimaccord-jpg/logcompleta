@@ -1,116 +1,54 @@
-# Politica Anti-Vazamento de Segredos
+# Política de Segredos e Segurança Operacional
 
-Este projeto adota um padrao de prevencao de vazamento em camadas.
+## Regras obrigatórias
 
-## Regras obrigatorias
+1. Nunca versionar segredos reais.
+2. Manter placeholders apenas em `app/.env.example`.
+3. Não versionar `app/.env.dev`, `app/.env.homolog` e `app/.env.prod`.
+4. Definir segredos de homolog/prod no provedor (Render/systemd/secrets manager).
 
-1. Nunca commitar segredos reais.
-2. Manter somente placeholders em `app/.env.example`.
-3. `app/.env.dev`, `app/.env.homolog` e `app/.env.prod` devem conter apenas valores locais e nao devem ser versionados.
-4. Segredos de homolog/prod devem ser definidos no provedor (Render/Systemd/GitHub Secrets/Vault).
+## Operação segura na preparação de homolog (Fase 2)
 
-Ordem de uso de `APP_ENV`, carregamento de `app/.env.{APP_ENV}` e PostgreSQL local vs homolog/prod: ver [`app/README_RUN.md`](app/README_RUN.md) e [`README.md`](README.md) na raiz.
+- O status de publicação está em `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
+- O deploy de homolog ainda não está concluído; tratar credenciais como ambiente em transição controlada.
+- Não executar workaround de migration com segredo embutido em comando versionado.
+- Se houver ajuste de runtime para viabilizar migrations, aplicar somente via variáveis/segredos do provedor.
 
-Antes de rodar scripts ou comandos que importam `app.settings` (web, workers, testes com app), confirme `APP_ENV` na sessão: PowerShell `echo $env:APP_ENV`, bash `echo $APP_ENV`. Linha vazia = não prossiga até exportar.
-
-## Protecoes implementadas
+## Proteções já adotadas
 
 1. `.gitignore` bloqueia `.env` e `.env.*` (exceto `.env.example`).
-2. `pre-commit` com hook do `gitleaks` bloqueia commit local com segredo detectado.
-3. GitHub Actions roda scan em pull requests e pushes para branches principais.
-4. No CI, o scan do diretório atual é bloqueante (previne novos vazamentos);
-	o scan de histórico completo é informativo para auditoria de legado.
+2. `pre-commit` com gitleaks para bloqueio local.
+3. CI com varredura de segredos em PR/push.
 
-## Setup local (obrigatorio)
-
-1. Instale pre-commit:
+## Setup mínimo local
 
 ```bash
 pip install pre-commit
-```
-
-2. Ative os hooks no repositório:
-
-```bash
 pre-commit install
-```
-
-3. Rode scan manual antes de abrir PR:
-
-```bash
 pre-commit run --all-files
 ```
 
-## Scan manual com gitleaks
-
-No Windows PowerShell:
+## Scan manual (PowerShell)
 
 ```powershell
 ./scripts/security/scan-secrets.ps1
-```
-
-Somente historico:
-
-```powershell
 ./scripts/security/scan-secrets.ps1 -HistoryOnly
-```
-
-Somente diretorio local:
-
-```powershell
 ./scripts/security/scan-secrets.ps1 -DirOnly
 ```
 
-## Rotacao automatizada
+## Credenciais de billing (BigQuery)
 
-1. Script Python: `scripts/security/rotate_secrets.py`
-2. Wrapper PowerShell: `scripts/security/rotate-secrets.ps1`
-3. Guia detalhado: `scripts/security/ROTATION_AUTOMATION.md`
-4. Sync de env em deploy Render: `scripts/security/render_sync_env.ps1`
-5. Smoke test pos-rotacao: `scripts/security/post_rotation_check.ps1`
+Para `/cron/billing-snapshot`, usar credencial com leitura na tabela definida em `GCP_BILLING_EXPORT_TABLE`.
 
-Protecao anti-apagao em Render:
+- Não versionar JSON de service account.
+- Preferir segredo do provedor ou arquivo montado em volume.
 
-1. `render_sync_env.ps1` nao executa update real sem `-UnsafeReplaceAll`.
-2. Exige dupla confirmacao (`-ConfirmServiceId` e `-ConfirmPhrase`).
-3. Gera backup automatico do ambiente remoto antes de qualquer replace.
+## Rotação e resposta a incidente
 
-Exemplo rapido (preview):
+- Ferramentas: `scripts/security/rotate_secrets.py` e `scripts/security/rotate-secrets.ps1`.
+- Em incidente: revogar credencial, atualizar no provedor, reiniciar serviço, rodar scans e registrar ocorrência.
 
-```powershell
-./scripts/security/rotate-secrets.ps1 -DryRun
-```
+Referências:
 
-Exemplo rapido (somente segredos internos):
-
-```powershell
-./scripts/security/rotate-secrets.ps1 -AutoOnly
-```
-
-Se precisar inserir chaves ausentes no arquivo alvo, adicione `-InsertMissing`.
-
-Exemplo completo com segredos externos ja renovados no provedor:
-
-> OBS: `MAIL_PASSWORD` era usado na configuração SMTP/Gmail legada e não é mais utilizado pelo app.
-> A rotação de segredos de e-mail agora deve focar em `RESEND_API_KEY`.
-
-## Novidade: Área do Usuário
-O acesso à Área do Usuário e Painel ADM depende de autenticação segura. Segredos de admin e usuário nunca devem ser versionados. O `RESEND_API_KEY` é usado para recuperação de senha e deve ser rotacionado conforme política.
-
-```powershell
-./scripts/security/rotate-secrets.ps1 \
-	-SetValues "GOOGLE_OAUTH_CLIENT_ID=NOVO_ID" \
-	-SetValues "GOOGLE_OAUTH_CLIENT_SECRET=NOVO_SECRET" \
-	-SetValues "GEMINI_API_KEY=NOVA_KEY" \
-	-SetValues "GEMINI_API_KEY_1=NOVA_KEY_1" \
-	-SetValues "GEMINI_API_KEY_2=NOVA_KEY_2" \
-	-SetValues "GEMINI_API_KEY_ROBERTO=NOVA_KEY_ROBERTO"
-```
-
-## Resposta a incidente
-
-1. Revogar e recriar a credencial imediatamente no provedor.
-2. Atualizar o segredo no ambiente alvo.
-3. Reiniciar o servico.
-4. Rodar scan local e no CI.
-5. Registrar a ocorrencia e ajustar allowlist apenas para placeholders legitimos.
+- Deploy: `app/README_DEPLOY.md`.
+- Execução/runtime: `app/README_RUN.md`.

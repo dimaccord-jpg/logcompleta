@@ -1,5 +1,47 @@
-Configuração single-database para Flask usando PostgreSQL.
+# Migrations (Alembic)
 
-Este projeto utiliza um único banco de dados PostgreSQL para todas as tabelas e domínios (editorial, gerencial, usuários, etc.).
-Não há múltiplos bancos nem uso de SQLite.
-As migrações devem ser aplicadas sempre sobre o banco definido por `DATABASE_URL` nas variáveis de ambiente.
+Este arquivo concentra o estado e a operação de migrations.
+
+## 1) Estado atual da Fase 2 em homolog
+
+- O pacote de migrations da Fase 2 está no repositório.
+- A execução em homolog está pendente.
+- Bloqueio atual no Render:
+  - `python -m alembic current` falhou com `No module named alembic`.
+  - `alembic` não está disponível no ambiente.
+  - `requirements.txt` atual não expõe Alembic.
+
+Sem resolver esse ponto, não fechar homolog como concluída.
+
+## 2) Aplicar migrations
+
+Na raiz do repositório:
+
+```bash
+alembic -c migrations/alembic.ini upgrade head
+```
+
+Validação pós-execução:
+
+```bash
+alembic -c migrations/alembic.ini current
+```
+
+## 3) Premissas
+
+- `DATABASE_URL` deve apontar para o banco alvo correto.
+- `APP_ENV` deve estar coerente com o ambiente (`dev`, `homolog`, `prod`).
+- Aplicar migrations antes de validar funcionalidades que dependem de schema novo.
+
+## 4) Ordem segura para homolog
+
+1. Publicar código da branch homolog.
+2. Garantir estratégia de execução de Alembic no ambiente.
+3. Executar `upgrade head`.
+4. Confirmar `current` no banco alvo.
+5. Rodar smoke tests de homolog.
+
+Referências:
+
+- Status geral da homologação: `../DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
+- Deploy operacional: `../app/README_DEPLOY.md`.
