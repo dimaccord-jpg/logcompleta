@@ -1,5 +1,5 @@
 """
-Parâmetros de custo operacional Cleiton (MVP) e custo estimado de processamento Roberto.
+Parâmetros operacionais Cleiton (custos + régua de créditos em CleitonCostConfig) e custo estimado de processamento Roberto.
 Não persiste custo por evento — calcula na leitura com parâmetros atuais.
 """
 from __future__ import annotations
@@ -101,6 +101,9 @@ def save_config(
     allocation_percent: float,
     overhead_factor: float,
     cost_per_million_tokens: float | None,
+    credit_tokens_per_credit: float | None = None,
+    credit_lines_per_credit: float | None = None,
+    credit_ms_per_credit: float | None = None,
 ) -> CleitonCostConfig:
     row = get_or_create_config()
     row.runtime_monthly_cost = runtime_monthly_cost
@@ -108,6 +111,9 @@ def save_config(
     row.allocation_percent = float(allocation_percent)
     row.overhead_factor = float(overhead_factor)
     row.cost_per_million_tokens = cost_per_million_tokens
+    row.credit_tokens_per_credit = credit_tokens_per_credit
+    row.credit_lines_per_credit = credit_lines_per_credit
+    row.credit_ms_per_credit = credit_ms_per_credit
     row.updated_at = utcnow_naive()
     db.session.add(row)
     db.session.commit()

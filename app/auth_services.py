@@ -403,6 +403,9 @@ def handle_google_oauth_callback(
 
         if not user:
             now = _utcnow_naive()
+            from app.services.conta_franquia_service import criar_conta_franquia_para_cadastro
+
+            conta, franquia = criar_conta_franquia_para_cadastro(email, name)
             user = User(
                 email=email,
                 full_name=name,
@@ -415,6 +418,8 @@ def handle_google_oauth_callback(
                 oauth_provider="google",
                 oauth_sub=google_id,
                 trial_start_date=now,
+                conta_id=conta.id,
+                franquia_id=franquia.id,
             )
             db.session.add(user)
         else:
@@ -491,6 +496,9 @@ def register_user(
         return None, "Este e-mail já está cadastrado."
 
     now = _utcnow_naive()
+    from app.services.conta_franquia_service import criar_conta_franquia_para_cadastro
+
+    conta, franquia = criar_conta_franquia_para_cadastro(email, full_name or email)
     new_user = User(
         email=email,
         full_name=full_name or email,
@@ -501,6 +509,8 @@ def register_user(
         usage_purpose=usage_purpose or None,
         job_role=job_role or None,
         trial_start_date=now,
+        conta_id=conta.id,
+        franquia_id=franquia.id,
     )
     new_user.set_password(password)
     if accept_terms:

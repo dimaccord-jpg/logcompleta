@@ -9,6 +9,7 @@ from typing import Any
 
 from flask import has_app_context
 
+from app.consumo_identidade import resolve_identidade_para_persistencia
 from app.extensions import db
 from app.models import IaConsumoEvento, utcnow_naive
 
@@ -71,6 +72,7 @@ def _persist_event(
         logger.debug("Governança Gemini: sem app context; evento não persistido (%s %s).", operation, flow_type)
         return
     try:
+        ident = resolve_identidade_para_persistencia()
         row = IaConsumoEvento(
             occurred_at=utcnow_naive(),
             provider=PROVIDER_GEMINI,
@@ -84,9 +86,30 @@ def _persist_event(
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             error_summary=_truncate_err(error_summary, 2000),
+            conta_id=ident.get("conta_id"),
+            franquia_id=ident.get("franquia_id"),
+            usuario_id=ident.get("usuario_id"),
+            tipo_origem=(ident.get("tipo_origem") or "")[:80] or None,
+            origem_sistema=ident.get("origem_sistema"),
         )
         db.session.add(row)
         db.session.commit()
+        try:
+            from app.services.cleiton_franquia_operacional_service import (
+                aplicar_motor_apos_ia_consumo_evento,
+            )
+
+            aplicar_motor_apos_ia_consumo_evento(row.id)
+        except Exception as ex:
+            logger.warning(
+                "Governança Gemini: motor operacional Cleiton após evento IA falhou (id=%s): %s",
+                getattr(row, "id", None),
+                ex,
+            )
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
     except Exception as e:
         logger.warning("Governança Gemini: falha ao persistir evento (%s): %s", flow_type, e)
         try:
