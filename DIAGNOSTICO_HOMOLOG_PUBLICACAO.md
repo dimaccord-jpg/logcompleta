@@ -1,131 +1,101 @@
-# Diagnóstico: Artigos e notícias rápidas não publicados em homologação
+# Diagnóstico de Homologação e Publicação — Fase 2
 
-**Área do Usuário:** perfil e Painel ADM (atalho para admin) ficam acessíveis pelo avatar no rodapé da sidebar; ver [`app/README_RUN.md`](app/README_RUN.md).
+Este é o documento principal de verdade para publicação em homolog da Fase 2.
 
-**Escopo:** Este documento cobre **ambos** os fluxos que alimentam o portal em https://homolog0514.agentefrete.com.br/:
+## 1) Estado atual confirmado
 
-- **Artigos da Júlia** (conteúdo estratégico de longo formato)
-- **Notícias rápidas / insights** (conteúdo automático a partir do Scout + Verificador)
+- Branch de feature criada, commits organizados e merge local em homolog concluído.
+- Pacote final da Fase 2 está integrado no código local.
+- Publicação final em homolog ainda **não concluída**.
+- Nenhuma conclusão de homolog deve ser registrada antes de validar migrations no ambiente alvo.
 
-Quando **nem artigos nem notícias rápidas** aparecem no site — inclusive ao usar os botões de bypass no Admin — o problema pode ser **um bloqueio comum** (janela, frequência, sem pauta, falha na Júlia) ou **ambiente** (execução em segundo plano escondendo o erro; banco efêmero no Render).
+## 2) Escopo final realmente incluído
 
----
+### 2.1 Upload Roberto + identidade de execução + billing
 
-## 1. Por que o relatório anterior não era conclusivo
+- Upload usa `execution_id` (`X-Execution-ID` / form / fallback UUID) em `app/upload_handler.py`.
+- Upload registra processamento (`processing_events`) com identidade de negócio.
+- Apropriação de billing do upload é idempotente por `idempotency_key=roberto-upload:{execution_id}` em `app/services/cleiton_upload_billing_service.py`.
+- Tabela de idempotência: `cleiton_billing_apropriacao`.
 
-Em **homolog** (e prod), os botões **"Executar Cleiton"** e **"Executar artigo agora"** rodam em **segundo plano** para evitar timeout do worker. A resposta HTTP é imediata: *"Execução iniciada em segundo plano"*. O **resultado real** (status, motivo, caminho_usado) só ia para os **logs** do Render; na tela do Admin não aparecia o motivo da falha. Assim, não dava para concluir **qual** bloqueio estava ocorrendo.
+### 2.2 Governança operacional Cleiton (franquia)
 
-Além disso:
+- Conversão de consumo técnico para créditos por régua em `cleiton_cost_config`:
+  - tokens por crédito
+  - linhas por crédito
+  - ms por crédito
+- Motor aplica abatimento em `franquia.consumo_acumulado` e recalcula status (`active`, `degraded`, `expired`, `blocked`) em `app/services/cleiton_franquia_operacional_service.py`.
+- Regras de autorização operacional antes da execução do chat/upload: `app/services/cleiton_operacao_autorizacao_service.py`.
+- Reconciliação leitura vs soma histórica de eventos: `app/services/cleiton_franquia_reconciliacao_service.py`.
 
-- O botão **"Executar Cleiton"** (que dispara tanto notícia quanto artigo, conforme decisão do orquestrador) **respeitava a janela de publicação**. Fora do horário 6–22 (hora do servidor, em geral UTC), o ciclo era ignorado com *"Fora da janela de publicação"* mesmo em disparo manual.
-- Sem ver o resultado na interface, era impossível distinguir entre: fora da janela, sem pauta elegível, falha na Júlia (API, qualidade, etc.) ou exceção não tratada.
+### 2.3 Modelo de conta/franquia/plano/multiuser
 
----
+- Estrutura de negócio com `Conta`, `Franquia`, vínculo obrigatório em `User` (`conta_id`, `franquia_id`) e franquia interna de sistema.
+- Resolução de plano operacional por categoria (`free`, `starter`, `pro`, `multiuser`, `avulso`, `interna`) em `app/services/cleiton_plano_resolver.py`.
+- Atribuição administrativa de plano com suporte multiuser e geração de código por franquia em `app/services/user_plan_control_service.py`.
 
-## 2. O que foi feito para tornar o diagnóstico conclusivo
+### 2.4 Operação de tela/admin incluída para homolog real
 
-1. **Bypass da janela em ambos os botões manuais**  
-   - **"Executar Cleiton"** (com "Executar agora (bypass de frequência)"): passa a usar `ignorar_janela_publicacao=True` quando há bypass de frequência.  
-   - **"Executar artigo agora (bypass diário)"**: já usava bypass de janela; mantido.  
-   Assim, em homolog você pode disparar **artigo e notícia** manualmente a **qualquer hora**, sem bloqueio por janela.
+- Rotas admin para:
+  - dashboard com métricas/filtros
+  - agentes (Júlia/Cleiton)
+  - controle de usuários (convite/revogação admin e atribuição de plano)
+  - planos/SaaS
+  - validação de franquia (`/api/cleiton-franquia/<id>/validacao`)
+- Templates relevantes: `agentes_julia.html`, `agentes_cleiton.html`, `dashboard.html`, `controle_usuarios.html`, `planos.html`, `admin_confirmacao_acao.html`.
+- `agentes_cleito.html` não faz parte do pacote atual (arquivo ausente); template ativo é `agentes_cleiton.html`.
 
-2. **Persistência e exibição do último resultado manual**  
-   - Após cada execução (sync ou em background), o resultado é gravado em `{DATA_DIR}/last_admin_run.json`.  
-   - Na página **Admin → Agentes - Júlia**, a seção **"Última execução manual (Admin)"** mostra:  
-     **Origem**, **Status**, **Motivo**, **Caminho usado**, **mission_id**, **timestamp**.  
-   - Em homolog: clique no botão, aguarde alguns segundos, **atualize a página** e leia o **Motivo** e **Caminho usado** para obter o **erro exato**.
+### 2.5 Migrations e testes incluídos
 
-Com isso, o diagnóstico deixa de ser uma lista de “causas prováveis” e passa a ser: **execute, atualize a página e leia o motivo/caminho** para identificar a causa real.
+- Cadeia Fase 2 de `g4h5i6j7k8l9` até `n7o8p9q0r1s2` (identidade, conta/franquia, régua, status operacional, bloqueio manual, cleanup freemium legado, multiuser, billing idempotente).
+- Testes principais incluídos:
+  - `tests/test_cleiton_classificacao_status.py`
+  - `tests/test_cleiton_motor_reconciliacao.py`
+  - `tests/test_cleiton_upload_billing_service.py`
+  - `tests/test_franquia_operacao_autorizacao_service.py`
 
----
+## 3) Bloqueio operacional atual (Render)
 
-## 3. Como obter o erro exato no ambiente de homologação
+No ambiente Render, foi observado:
 
-1. Acesse o Admin em homolog e vá em **Agentes - Júlia**.
-2. Clique em **"Executar Cleiton"** com **"Executar agora (bypass de frequência)"** **ou** em **"Executar artigo agora (bypass diário)"**.
-3. Aguarde **cerca de 30–60 segundos** (tempo típico do ciclo + Júlia).
-4. **Atualize a página** (F5).
-5. Na seção **"Última execução manual (Admin)"**, leia:
-   - **Status:** `sucesso` | `ignorado` | `falha`
-   - **Motivo:** texto explicando o que aconteceu.
-   - **Caminho usado:** indica em que ponto o fluxo parou (veja a tabela abaixo).
+- `alembic` ausente no `PATH`.
+- `python -m alembic current` com erro `No module named alembic`.
+- `requirements.txt` atual sem Alembic.
 
-O **Motivo** e o **Caminho usado** são a **resposta conclusiva** sobre o motivo de artigos/notícias não estarem sendo publicados.
+Implicação direta: o pacote de migrations da Fase 2 não está garantido no runtime atual de homolog.  
+Sem resolver isso, não há go/no-go para publicação final.
 
----
+## 4) O que NÃO deve ser tratado como concluído
 
-## 4. Tabela de diagnóstico: Caminho usado → Causa e ação
+- Migrations aplicadas em homolog (não confirmado).
+- Schema em `head` no banco de homolog (não confirmado).
+- Homolog publicada com sucesso (não confirmado).
 
-| **caminho_usado** / **motivo** | **Causa** | **Ação** |
-|--------------------------------|-----------|----------|
-| `fora_janela_publicacao` | Ciclo não roda fora do horário configurado (ex.: 6–22 UTC). | Em **disparo manual** isso não deve mais ocorrer (bypass ativo). Se ainda aparecer, conferir se o deploy com o bypass da janela está ativo. Para o **cron**, ajustar janela em `config_regras` ou TZ do servidor. |
-| `ignorado_frequencia` | Última execução foi há menos de N horas (N = `frequencia_horas` em `config_regras`). | Aumentar intervalo do cron ou reduzir `frequencia_horas` em homolog (ex.: 1). |
-| `sem_fonte_artigo` / "Nenhum item de série ou pauta manual elegível para artigo" | Para **artigo**: não há pauta com `tipo='artigo'`, `status='pendente'` e `status_verificacao` em `aprovado`/`revisar`. | Inserir pautas de artigo e aprovar no Verificador; ou conferir se `JULIA_STATUS_VERIFICACAO_PERMITIDOS=aprovado,revisar` em homolog. |
-| `noticia_rapida` + status `falha` ou "Despacho para agente operacional falhou" | Orquestrador despachou **notícia**, mas a **Júlia** não publicou (sem pauta elegível, falha na redação, imagem, qualidade ou publicação). | Ver seção 5 (Júlia). Para notícia, é preciso ter pauta `tipo='noticia'` aprovada; o Scout enche a tabela e o Verificador aprova. |
-| `pauta_manual` ou `artigo` + status `falha` | Missão de **artigo** foi despachada, mas a Júlia falhou (pauta não encontrada, pipeline quebrou). | Ver seção 5 (Júlia) e logs do Render. |
-| `excecao` / motivo com stack trace | Erro não tratado (ex.: banco, import, API). | Ver logs completos no Render; corrigir exceção (env, DB, API key, etc.). |
+## 5) Dependências críticas e risco de regressão
 
----
+- Não separar indevidamente `upload_handler` de `cleiton_upload_billing_service` e do motor de governança; isso quebra rastreabilidade e idempotência.
+- Não alterar autorização operacional sem considerar `cleiton_operacao_autorizacao_service` usado por chat Júlia e upload Roberto.
+- Não mudar categoria/plano sem manter coerência entre `user_plan_control_service`, `cleiton_plano_resolver` e estado da `franquia`.
+- Não promover validação de homolog sem backend + telas admin alinhados; os testes reais dependem das rotas/templates de operação.
+- Migrations da Fase 2 são parte obrigatória da entrega, não pós-ajuste opcional.
 
-## 5. Falha dentro da Júlia (artigo e notícia)
+## 6) Go/No-Go para homolog (objetivo)
 
-Tanto **artigo** quanto **notícia rápida** passam pelo **mesmo pipeline** da Júlia:
+### No-Go (estado atual)
 
-1. **obter_pauta_validada(tipo_missao)** — pauta `pendente` com `status_verificacao` permitido (`aprovado` ou `revisar` em homolog).  
-   - Se não houver: **Motivo** no dispatch será algo como "Júlia não publicou conteúdo (falha de geração ou sem pauta válida)". **Caminho** no ciclo pode ser sucesso, mas `dispatch_ok` fica False.
-2. **Redação** (Gemini) — falha ou timeout → pauta vai para `falha`.
-3. **Imagem** — falha ou fallback → segue com fallback; em caso de erro crítico, pipeline pode falhar.
-4. **Qualidade** — conteúdo reprovado → pauta vai para `falha`.
-5. **Publicação** (NoticiaPortal + publisher) — erro de DB ou de marcação de publicado.
+- Bloqueio de migration no Render ainda aberto.
 
-Para **notícias rápidas**: é necessário que o **Scout** tenha coletado itens e o **Verificador** tenha aprovado ao menos uma pauta com `tipo='noticia'`. Se não houver nenhuma pauta `noticia` elegível, a Júlia retorna False e o ciclo aparece como falha de despacho.
+### Go (somente quando todos os itens forem verdadeiros)
 
-**Como verificar:** Logs do Web Service no Render no momento do disparo; tabela `pautas` (status, status_verificacao, tipo); tabela `noticias_portal` (se algum registro foi criado).
+1. Estratégia de migration definida para o runtime de homolog.
+2. `upgrade head` executado no banco alvo sem erro.
+3. Verificação de `current` coerente com o head esperado.
+4. Health checks, rotas cron protegidas e telas admin validadas após deploy.
 
----
+## 7) Referências
 
-## 6. Banco PostgreSQL e filesystem efêmero no Render
-
-No Render, o **filesystem do serviço web é efêmero**: a cada deploy os arquivos locais da instância são recriados. O **dado relacional** deve estar em um **PostgreSQL gerenciado** (ex.: Render Postgres ou externo), configurado em **`DATABASE_URL`** — assim o banco **não** some entre deploys.
-
-O que ainda pode ser perdido sem disco persistente para arquivos:
-
-- `last_admin_run.json` e outros artefatos sob `APP_DATA_DIR` (se apontarem para o filesystem efêmero).
-- Arquivo de índices da Home se `INDICES_FILE_PATH` não estiver em volume persistente.
-
-**Ação:** Garantir `DATABASE_URL` válida para PostgreSQL; para arquivos, usar **Render Persistent Disk** (ou storage equivalente) e `APP_DATA_DIR` / `INDICES_FILE_PATH` nesse volume. Ver `README_DEPLOY.md` e `RENDER_CRON_HOMOLOG.md`.
-
----
-
-## 7. Fluxo único: artigo e notícia
-
-- **Gatilho:** Cron (`/cron/executar-cleiton`) ou botões no Admin (**Executar Cleiton** ou **Executar artigo agora**).
-- **Orquestrador (Cleiton):** Verifica frequência e janela (com bypass nos botões manuais); decide **tipo de missão** (artigo ou notícia). Para artigo, exige pauta/série elegível; para notícia, segue com caminho `noticia_rapida`. Roda Scout + Verificador (que alimentam pautas de notícia). Monta payload e **despacha para a Júlia**.
-- **Júlia:** Obtém pauta validada para o tipo (artigo ou noticia), gera conteúdo, imagem, qualidade, publica em `noticias_portal` e marca `publicado_em`.
-
-Se **qualquer** bloqueio ocorrer no orquestrador (janela, frequência, sem fonte para artigo), **nenhum** conteúdo é publicado. Se o despacho ocorrer mas a Júlia falhar (sem pauta, redação, qualidade, etc.), o ciclo retorna falha e o **Motivo** na **Última execução manual** deve indicar isso.
-
----
-
-## 8. Checklist conclusivo (homolog)
-
-| Passo | Ação |
-|-------|------|
-| 1 | Fazer deploy com as alterações (bypass de janela nos dois botões + persistência de última execução). |
-| 2 | No Admin → Agentes - Júlia, clicar em **"Executar agora (bypass de frequência)"** ou **"Executar artigo agora (bypass diário)"**. |
-| 3 | Aguardar ~30–60 s e **atualizar a página**. |
-| 4 | Ler **Última execução manual**: **Status**, **Motivo**, **Caminho usado**. |
-| 5 | Usar a **tabela da seção 4** para mapear **caminho_usado** / **motivo** → causa e ação. |
-| 6 | Se o motivo indicar falha na Júlia: checar logs do Render, pautas elegíveis (artigo vs noticia), API keys, qualidade. |
-| 7 | Se dados de arquivo forem efêmeros: disco persistente + `APP_DATA_DIR` / `INDICES_FILE_PATH`; conferir `DATABASE_URL` no Postgres gerenciado. |
-
----
-
-## 9. Referências no projeto
-
-- **Cron em homolog:** `RENDER_CRON_HOMOLOG.md`
-- **Regras (frequência, janela):** `app/run_cleiton_agente_regras.py` e tabela `config_regras` (mesmo PostgreSQL que `DATABASE_URL`)
-- **Orquestrador (bloqueios):** `app/run_cleiton_agente_orquestrador.py`
-- **Dispatcher e Júlia:** `app/run_cleiton_agente_dispatcher.py`, `app/run_julia.py`, `app/run_julia_agente_pipeline.py`
-- **Rota do cron:** `app/web.py` → `/cron/executar-cleiton`
-- **Status de verificação permitidos (Júlia):** `app/run_julia_regras.py` e env `JULIA_STATUS_VERIFICACAO_PERMITIDOS`
+- Deploy/runbook: `app/README_DEPLOY.md`.
+- Migrations e cadeia de revisões: `migrations/README`.
+- Render cron em homolog: `RENDER_CRON_HOMOLOG.md`.
+- Execução local e troubleshooting: `app/README_RUN.md`.
+- Segurança/segredos: `SECURITY_SECRETS.md`.

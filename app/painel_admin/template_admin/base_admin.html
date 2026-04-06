@@ -39,12 +39,17 @@
                     </a>
                 </li>
                 <li>
+                    <a href="{{ url_for('admin.controle_usuarios') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.controle_usuarios', 'admin.controle_usuarios_convidar_adm', 'admin.controle_usuarios_revogar_adm', 'admin.controle_usuarios_atribuir_plano'] }}">
+                        <i class="bi bi-people me-2"></i> Controle de Usuários
+                    </a>
+                </li>
+                <li>
                     <a href="{{ url_for('admin.pautas_admin') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.pautas_admin', 'admin.pautas_salvar'] }}">
                         <i class="bi bi-journal-text me-2"></i> Pautas
                     </a>
                 </li>
                 <li>
-                    <a href="{{ url_for('admin.agentes_home') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.agentes_home', 'admin.agentes_julia', 'admin.agentes_roberto', 'admin.agentes_cleito'] }}">
+                    <a href="{{ url_for('admin.agentes_home') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.agentes_home', 'admin.agentes_julia', 'admin.agentes_roberto', 'admin.agentes_cleiton'] }}">
                         <i class="bi bi-diagram-3 me-2"></i> Agentes
                     </a>
                     <ul class="nav flex-column ms-4 mt-1">
@@ -59,8 +64,8 @@
                             </a>
                         </li>
                         <li>
-                            <a href="{{ url_for('admin.agentes_cleito') }}" class="nav-link py-1 {{ 'active' if request.endpoint == 'admin.agentes_cleito' }}">
-                                <i class="bi bi-sliders me-2"></i> Cleito (custo)
+                            <a href="{{ url_for('admin.agentes_cleiton') }}" class="nav-link py-1 {{ 'active' if request.endpoint == 'admin.agentes_cleiton' }}">
+                                <i class="bi bi-sliders me-2"></i> Cleiton (operacional)
                             </a>
                         </li>
                     </ul>

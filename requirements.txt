@@ -15,3 +15,4 @@ google-cloud-bigquery>=3.25.0
 yfinance
 beautifulsoup4
 openpyxl
+pytest>=8.0.0

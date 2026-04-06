@@ -24,7 +24,12 @@ import threading
 from concurrent.futures import Future
 from datetime import datetime, date
 
-from app.infra import get_admin_executor, user_is_admin
+from app.infra import (
+    get_admin_executor,
+    user_is_admin,
+    get_julia_chat_max_history,
+)
+from app.consumo_identidade import capture_consumo_identidade_for_background
 from app.terms_services import get_active_term
 from app.finance import atualizar_indices
 from app.run_julia_regras import status_verificacao_permitidos
@@ -36,6 +41,8 @@ from app.services import import_service
 from app.services import plano_service
 from app.services import termo_service
 from app.services import auditoria_service
+from app.services import user_admin_control_service
+from app.services import user_plan_control_service
 
 from app.tasks import agent_tasks
 from app.tasks import import_tasks
@@ -69,12 +76,21 @@ def verificar_acesso_admin():
 def admin_dashboard():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
-    status_sistema = {
-        "api_indices": "Online",
-        "db_localidades": "Conectado",
-        "status_geral": "Operacional",
-        "mensagem_sistema": "Painel Cleiton Log Ativo",
-    }
+    from app.services.admin_dashboard_service import (
+        get_dashboard_metrics,
+        list_categorias_distintas,
+        list_franquia_status_distintos,
+    )
+
+    categoria_f = (request.args.get("categoria") or "").strip() or None
+    franquia_status_f = (request.args.get("franquia_status") or "").strip() or None
+    cancelado_f = (request.args.get("cancelado") or "ativos").strip().lower()
+
+    dash_metrics = get_dashboard_metrics(
+        categoria=categoria_f,
+        franquia_status=franquia_status_f,
+        cancelado=cancelado_f,
+    )
     kpis_insight = agent_service.obter_kpis_insight()
     recomendacoes_recentes = agent_service.obter_recomendacoes_recentes(
         limite=15
@@ -85,7 +101,12 @@ def admin_dashboard():
     ia_metrics = get_ia_dashboard_payload(_today.year, _today.month)
     return render_template(
         "dashboard.html",
-        status=status_sistema,
+        dash_metrics=dash_metrics,
+        filtros_categorias=list_categorias_distintas(),
+        filtros_franquia_status=list_franquia_status_distintos(),
+        filtro_categoria=categoria_f or "",
+        filtro_franquia_status=franquia_status_f or "",
+        filtro_cancelado=cancelado_f,
         kpis_insight=kpis_insight,
         recomendacoes_recentes=recomendacoes_recentes,
         ia_metrics=ia_metrics,
@@ -107,6 +128,46 @@ def admin_api_ia_metrics():
     from app.services.ia_metrics_service import get_ia_dashboard_payload
 
     return jsonify(get_ia_dashboard_payload(y, mo))
+
+
+@admin_bp.route(
+    "/api/cleiton-franquia/<int:franquia_id>/validacao",
+    methods=["GET", "POST"],
+)
+@login_required
+def admin_api_cleiton_franquia_validacao(franquia_id):
+    """
+    JSON: leitura operacional Cleiton, reconciliação consumo vs eventos e pendências.
+    GET: somente consulta. POST: opcional `aplicar_correcao` (query ou JSON) para alinhar consumo persistido.
+    Query: sincronizar_ciclo=1, aplicar_correcao=1 (POST).
+    """
+    if not verificar_acesso_admin():
+        return jsonify({"error": "forbidden"}), 403
+    sinc = request.args.get("sincronizar_ciclo", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    aplicar = False
+    if request.method == "POST":
+        aplicar = request.args.get("aplicar_correcao", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if request.is_json and request.json:
+            aplicar = aplicar or bool(request.json.get("aplicar_correcao"))
+    from app.services.cleiton_franquia_validacao_admin_service import (
+        obter_pacote_validacao_franquia_cleiton,
+    )
+
+    return jsonify(
+        obter_pacote_validacao_franquia_cleiton(
+            franquia_id,
+            sincronizar_ciclo_leitura=sinc,
+            aplicar_correcao=aplicar,
+        )
+    )
 
 
 # --- Agentes ---
@@ -134,6 +195,7 @@ def agentes_julia():
     return render_template(
         "agentes_julia.html",
         frequencia_horas=frequencia_horas,
+        julia_chat_max_history=get_julia_chat_max_history(),
         ultima_execucao=ultima_execucao,
         proxima_prevista=proxima_prevista,
         janela_inicio=janela_inicio,
@@ -168,6 +230,28 @@ def agentes_julia_configurar_frequencia():
     return redirect(url_for("admin.agentes_julia"))
 
 
+@admin_bp.route("/agentes/julia/historico", methods=["POST"])
+@login_required
+def agentes_julia_configurar_historico():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    raw_history = (request.form.get("julia_chat_max_history") or "").strip()
+    try:
+        novo_valor = plano_service.salvar_julia_chat_max_history(
+            raw_history or None
+        )
+        if novo_valor is None:
+            flash(
+                "Informe um limite de histórico válido (1 a 100).",
+                "warning",
+            )
+        else:
+            flash(f"Limite de histórico da Júlia atualizado para {novo_valor}.", "success")
+    except Exception:
+        flash("Erro ao salvar limite de histórico. Tente novamente.", "danger")
+    return redirect(url_for("admin.agentes_julia"))
+
+
 @admin_bp.route("/agentes/roberto")
 @login_required
 def agentes_roberto():
@@ -176,10 +260,10 @@ def agentes_roberto():
     return render_template("agentes_roberto.html")
 
 
-@admin_bp.route("/agentes/cleito", methods=["GET", "POST"])
+@admin_bp.route("/agentes/cleiton", methods=["GET", "POST"])
 @login_required
-def agentes_cleito():
-    """Parametros de custo operacional (Render + referencia Google)  MVP."""
+def agentes_cleiton():
+    """Parâmetros operacionais Cleiton: custo (runtime/Google) e régua de conversão de créditos."""
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
     from app.services.cleiton_cost_service import (
@@ -205,6 +289,15 @@ def agentes_cleito():
             g_raw = (request.form.get("cost_per_million_tokens") or "").strip()
             google_ref = float(g_raw.replace(",", ".")) if g_raw else None
 
+            ct_raw = (request.form.get("credit_tokens_per_credit") or "").strip()
+            credit_tokens = float(ct_raw.replace(",", ".")) if ct_raw else None
+
+            cl_raw = (request.form.get("credit_lines_per_credit") or "").strip()
+            credit_lines = float(cl_raw.replace(",", ".")) if cl_raw else None
+
+            cms_raw = (request.form.get("credit_ms_per_credit") or "").strip()
+            credit_ms = float(cms_raw.replace(",", ".")) if cms_raw else None
+
             if month_seconds < 1:
                 raise ValueError("month_seconds deve ser >= 1.")
             save_config(
@@ -213,16 +306,19 @@ def agentes_cleito():
                 allocation_percent=allocation,
                 overhead_factor=overhead,
                 cost_per_million_tokens=google_ref,
+                credit_tokens_per_credit=credit_tokens,
+                credit_lines_per_credit=credit_lines,
+                credit_ms_per_credit=credit_ms,
             )
-            flash("Parametros de custo salvos.", "success")
+            flash("Parâmetros operacionais salvos.", "success")
         except (ValueError, TypeError) as e:
             flash(f"Valores invalidos: {e}", "danger")
-        return redirect(url_for("admin.agentes_cleito"))
+        return redirect(url_for("admin.agentes_cleiton"))
 
     cfg = get_or_create_config()
     cps = compute_cost_per_second(cfg)
     return render_template(
-        "agentes_cleito.html",
+        "agentes_cleiton.html",
         cfg=cfg,
         cost_per_second=cps,
     )
@@ -249,10 +345,12 @@ def agentes_julia_executar_cleiton():
                 )
                 return redirect(url_for("admin.agentes_julia"))
             app_obj = current_app._get_current_object()
+            _ident = capture_consumo_identidade_for_background()
             _CLEITON_FUTURE = executor.submit(
                 agent_tasks.run_cleiton_background,
                 app_obj,
                 bypass_frequencia,
+                _ident,
             )
         flash(
             "Execução do Cleiton iniciada em segundo plano. Acompanhe os logs para status final.",
@@ -300,9 +398,11 @@ def agentes_julia_executar_artigo_manual():
                 )
                 return redirect(url_for("admin.agentes_julia"))
             app_obj = current_app._get_current_object()
+            _ident_art = capture_consumo_identidade_for_background()
             _ARTIGO_MANUAL_FUTURE = executor.submit(
                 agent_tasks.run_artigo_manual_background,
                 app_obj,
+                _ident_art,
             )
         flash(
             "Execução manual de artigo iniciada em segundo plano. Acompanhe os logs para status final.",
@@ -433,11 +533,142 @@ def gestao_planos():
     return render_template(
         "planos.html",
         config=config_atual,
+        planos_saas=config_atual["planos_saas"],
         active_term=active_term,
-        julia_chat_max_history=config_atual["julia_chat_max_history"],
-        freemium_consultas_dia=config_atual["freemium_consultas_dia"],
         freemium_trial_dias=config_atual["freemium_trial_dias"],
     )
+
+
+@admin_bp.route("/controle-usuarios", methods=["GET"])
+@login_required
+def controle_usuarios():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    return render_template("controle_usuarios.html")
+
+
+@admin_bp.route("/controle-usuarios/convidar-adm", methods=["POST"])
+@login_required
+def controle_usuarios_convidar_adm():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    email = (request.form.get("email_convite_admin") or "").strip().lower()
+    user = user_admin_control_service.buscar_usuario_por_email(email)
+    if not user:
+        flash("Usuário não encontrado para o e-mail informado.", "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    if user.is_admin:
+        flash("Este usuário já é administrador.", "info")
+        return redirect(url_for("admin.controle_usuarios"))
+    token = user_admin_control_service.gerar_token_admin_action(
+        secret_key=current_app.config["SECRET_KEY"],
+        action=user_admin_control_service.ADMIN_ACTION_PROMOTE,
+        target_user_id=user.id,
+        requested_by_user_id=current_user.id,
+    )
+    confirm_url = url_for(
+        "admin_promocao_confirmar",
+        token=token,
+        _external=True,
+    )
+    try:
+        user_admin_control_service.enviar_email_convite_admin(
+            target_user=user,
+            confirm_url=confirm_url,
+        )
+        flash(
+            f"Convite de administrador enviado para {user.email}.",
+            "success",
+        )
+    except Exception as e:
+        _log.exception("Erro ao enviar convite de admin para %s: %s", user.email, e)
+        flash("Não foi possível enviar o convite de administrador.", "danger")
+    return redirect(url_for("admin.controle_usuarios"))
+
+
+@admin_bp.route("/controle-usuarios/revogar-adm", methods=["POST"])
+@login_required
+def controle_usuarios_revogar_adm():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    email = (request.form.get("email_revogar_admin") or "").strip().lower()
+    user = user_admin_control_service.buscar_usuario_por_email(email)
+    if not user:
+        flash("Usuário não encontrado para o e-mail informado.", "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    if not user.is_admin:
+        flash("Este usuário já não é administrador.", "info")
+        return redirect(url_for("admin.controle_usuarios"))
+    if current_user.id == user.id:
+        flash("Não é permitido solicitar auto-revogação de administrador.", "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    if user_admin_control_service.total_admins_ativos() <= 1:
+        flash("Não é permitido revogar o último administrador ativo.", "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    token = user_admin_control_service.gerar_token_admin_action(
+        secret_key=current_app.config["SECRET_KEY"],
+        action=user_admin_control_service.ADMIN_ACTION_REVOKE,
+        target_user_id=user.id,
+        requested_by_user_id=current_user.id,
+    )
+    confirm_url = url_for(
+        "admin_revogacao_confirmar",
+        token=token,
+        _external=True,
+    )
+    try:
+        user_admin_control_service.enviar_email_revogacao_admin(
+            target_user=user,
+            confirm_url=confirm_url,
+        )
+        flash(
+            "Solicitação de revogação enviada para diogo@agentefrete.com.br.",
+            "success",
+        )
+    except Exception as e:
+        _log.exception(
+            "Erro ao enviar e-mail de revogação de admin para aprovação: %s",
+            e,
+        )
+        flash("Não foi possível enviar o e-mail de confirmação de revogação.", "danger")
+    return redirect(url_for("admin.controle_usuarios"))
+
+
+@admin_bp.route("/controle-usuarios/atribuir-plano", methods=["POST"])
+@login_required
+def controle_usuarios_atribuir_plano():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    email = (request.form.get("email_plano_usuario") or "").strip()
+    plano = (request.form.get("plano_usuario") or "").strip()
+    qtd_franquias = (
+        request.form.get("multiuser_qtd_franquias") or ""
+    ).strip()
+    try:
+        resultado = user_plan_control_service.atribuir_plano_para_usuario(
+            email=email,
+            plano_raw=plano,
+            quantidade_franquias_raw=qtd_franquias or None,
+            admin_user_id=current_user.id,
+        )
+        msg = (
+            f"Plano de {resultado.user_email} alterado de "
+            f"{resultado.plano_anterior or 'free'} para {resultado.plano_novo}."
+        )
+        if resultado.plano_novo == user_plan_control_service.PLANO_MULTIUSER:
+            if resultado.franquias_multiuser_criadas > 0:
+                msg += (
+                    f" Franquias criadas: {resultado.franquias_multiuser_criadas}."
+                )
+            if resultado.codigos_gerados:
+                msg += " Códigos gerados: " + ", ".join(resultado.codigos_gerados) + "."
+        flash(msg, "success")
+    except ValueError as e:
+        flash(str(e), "warning")
+    except Exception as e:
+        _log.exception("Erro ao atribuir plano para usuário %s: %s", email, e)
+        flash("Não foi possível atribuir o plano solicitado.", "danger")
+    return redirect(url_for("admin.controle_usuarios"))
 
 
 @admin_bp.route("/planos/termos/upload", methods=["POST"])
@@ -471,43 +702,49 @@ def planos_termos_upload():
     return redirect(url_for("admin.gestao_planos"))
 
 
-@admin_bp.route("/planos/freemium/salvar", methods=["POST"])
+@admin_bp.route("/planos/saas/salvar", methods=["POST"])
 @login_required
-def planos_freemium_salvar():
+def planos_saas_salvar():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
-    raw_history = request.form.get("julia_chat_max_history", "").strip()
-    raw_consultas = request.form.get("freemium_consultas_dia", "").strip()
-    raw_trial = request.form.get("freemium_trial_dias", "").strip()
+    plano_codigo = (request.form.get("plano_codigo") or "").strip()
+    valor_plano = (request.form.get("valor_plano") or "").strip()
+    franquia_limite_total = (request.form.get("franquia_limite_total") or "").strip()
+    freemium_trial_dias = (request.form.get("freemium_trial_dias") or "").strip()
     try:
-        msgs = plano_service.salvar_limite_freemium(
-            julia_chat_max_history_raw=raw_history or None,
-            freemium_consultas_dia_raw=raw_consultas or None,
-            freemium_trial_dias_raw=raw_trial or None,
+        resultado = plano_service.atualizar_parametros_plano_admin(
+            plano_codigo=plano_codigo,
+            valor_plano_raw=valor_plano,
+            franquia_limite_total_raw=franquia_limite_total,
         )
-        if msgs:
-            flash("Configuração freemium salva: " + ", ".join(msgs), "success")
-        else:
-            flash(
-                "Nenhum valor válido enviado. Preencha ao menos um campo.",
-                "warning",
+        trial_salvo = None
+        if plano_codigo.lower() == "free" and freemium_trial_dias:
+            trial_salvo = plano_service.salvar_freemium_trial_dias(
+                freemium_trial_dias
             )
+        flash(
+            (
+                f"Plano {resultado['plano_nome']} salvo com valor R$ {resultado['valor_plano']} "
+                f"e franquia "
+                f"{resultado['franquia_limite_total']} créditos. "
+                + (
+                    (
+                        "Trial atualizado para ilimitado. "
+                        if trial_salvo is not None and trial_salvo >= 999999999
+                        else f"Trial atualizado para {trial_salvo} dias. "
+                    )
+                    if trial_salvo is not None
+                    else ""
+                )
+                + f"Franquias atualizadas: {resultado['franquias_atualizadas']}/{resultado['franquias_total']}."
+            ),
+            "success",
+        )
+    except ValueError as e:
+        flash(str(e), "warning")
     except Exception as e:
-        flash("Erro ao salvar configuração. Tente novamente.", "danger")
-    return redirect(url_for("admin.gestao_planos"))
-
-
-@admin_bp.route("/planos/atualizar", methods=["POST"])
-@login_required
-def atualizar_precos():
-    if not verificar_acesso_admin():
-        return "Acesso Negado", 403
-    plano = request.form.get("plano_tipo")
-    valor = request.form.get("valor")
-    flash(
-        f"Simulação: Plano {plano} seria atualizado para R$ {valor}.",
-        "info",
-    )
+        _log.exception("Erro ao atualizar parâmetros do plano via admin: %s", e)
+        flash("Erro ao salvar parâmetros do plano. Tente novamente.", "danger")
     return redirect(url_for("admin.gestao_planos"))
 
 
