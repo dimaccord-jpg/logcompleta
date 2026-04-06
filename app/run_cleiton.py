@@ -19,6 +19,7 @@ from app.finance import LEGACY_INDICES_FILE
 from app.settings import settings
 
 from datetime import datetime
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ def executar_orquestracao(
     tipo_missao_forcado: str | None = None,
     ignorar_trava_artigo_hoje: bool = False,
     ignorar_janela_publicacao: bool = False,
+    consumo_identidade: Optional[dict] = None,
 ):
     """
     Fachada: delega ao orquestrador gerencial (regras, auditoria, dispatch).
@@ -96,6 +98,7 @@ def executar_orquestracao(
         tipo_missao_forcado=tipo_missao_forcado,
         ignorar_trava_artigo_hoje=ignorar_trava_artigo_hoje,
         ignorar_janela_publicacao=ignorar_janela_publicacao,
+        consumo_identidade=consumo_identidade,
     )
     return resultado
 

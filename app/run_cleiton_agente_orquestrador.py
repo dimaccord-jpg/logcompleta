@@ -6,7 +6,7 @@ registra auditoria e dispara jobs para agentes especializados. Nunca escreve con
 import logging
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 from app.extensions import db
 from app.models import (
     PlanoEstrategico,
@@ -214,6 +214,7 @@ def executar_ciclo_gerencial(
     tipo_missao_forcado: str | None = None,
     ignorar_trava_artigo_hoje: bool = False,
     ignorar_janela_publicacao: bool = False,
+    consumo_identidade: Optional[dict] = None,
 ) -> dict[str, Any]:
     """
     Ciclo principal do Cleiton (gerencial):
@@ -228,6 +229,9 @@ def executar_ciclo_gerencial(
     """
     logger.info("Cleiton orquestrador: iniciando ciclo gerencial.")
     with app_flask.app_context():
+        from app.consumo_identidade import ensure_consumo_identidade_no_app_context
+
+        ensure_consumo_identidade_no_app_context(explicit_override=consumo_identidade)
         bootstrap_regras()
         bootstrap_plano_se_necessario()
         plano = obter_plano_ativo()

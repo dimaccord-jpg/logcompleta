@@ -38,8 +38,9 @@ from app.infra import (
     admin_required,
     user_is_admin,
     get_julia_chat_max_history,
-    get_chat_limits_for_user,
-    increment_user_chat_usage,
+)
+from app.services.cleiton_operacao_autorizacao_service import (
+    avaliar_autorizacao_operacao_por_franquia,
 )
 from app.auth_services import (
     authenticate_user,
@@ -54,6 +55,7 @@ from app.auth_services import (
 )
 
 from app.news_ai import registrar_lead_newsletter
+from app.services import user_admin_control_service
 
 # Model used by the home route to list portal news/articles.
 from app.models import NoticiaPortal
@@ -142,6 +144,15 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(ops_bp)
 app.register_blueprint(user_bp)
 
+
+@app.before_request
+def _consumo_identidade_before_request():
+    """Fase 2 etapa 1: injeta g.identidade em todo request HTTP (exceto static)."""
+    from app.consumo_identidade import apply_consumo_identidade_before_request
+
+    apply_consumo_identidade_before_request()
+
+
 # 5. Imports que dependem do Contexto (Executados após a vinculação do DB)
 with app.app_context():
     from app.models import User, FreteReal, NoticiaPortal
@@ -226,8 +237,8 @@ def index():
         artigos_reais = []
 
     julia_chat_max_history = get_julia_chat_max_history()
-    # Limites freemium do chat para o frontend (contador e bloqueio); anônimo = sem contador
-    julia_chat_limits = get_chat_limits_for_user(current_user)
+    # Estado operacional do chat (fonte única: autorização operacional por franquia).
+    julia_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
     return render_template(
         'index.html',
         noticias=noticias_reais,
@@ -290,6 +301,69 @@ def reset_password(token):
         flash(err_msg, 'danger' if redirect_view == 'login' else 'warning')
         return redirect(url_for(redirect_view))
     return render_template('reset_password.html', token=token)
+
+
+@app.route('/admin/confirmar-promocao-admin/<token>', methods=['GET', 'POST'])
+def admin_promocao_confirmar(token):
+    data, err = user_admin_control_service.validar_token_admin_action(
+        secret_key=app.config['SECRET_KEY'],
+        token=token,
+        expected_action=user_admin_control_service.ADMIN_ACTION_PROMOTE,
+    )
+    if data is None:
+        flash(err or "Link de confirmação inválido.", "warning")
+        return redirect(url_for('login'))
+
+    target_user = db.session.get(User, int(data.get("target_user_id")))
+    if target_user is None:
+        flash("Usuário alvo não encontrado.", "warning")
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        ok, msg = user_admin_control_service.aplicar_promocao_admin(target_user.id)
+        flash(msg, 'success' if ok else 'warning')
+        return redirect(url_for('login'))
+
+    return render_template(
+        'admin_confirmacao_acao.html',
+        action_title='Confirmar convite de administrador',
+        action_message='Você foi convidado para se tornar administrador do site Agente Frete.',
+        target_email=target_user.email,
+        confirm_button_label='Confirmar promoção para administrador',
+        cancel_url=url_for('login'),
+    )
+
+
+@app.route('/admin/confirmar-revogacao-admin/<token>', methods=['GET', 'POST'])
+def admin_revogacao_confirmar(token):
+    data, err = user_admin_control_service.validar_token_admin_action(
+        secret_key=app.config['SECRET_KEY'],
+        token=token,
+        expected_action=user_admin_control_service.ADMIN_ACTION_REVOKE,
+    )
+    if data is None:
+        flash(err or "Link de confirmação inválido.", "warning")
+        return redirect(url_for('login'))
+
+    target_user = db.session.get(User, int(data.get("target_user_id")))
+    if target_user is None:
+        flash("Usuário alvo não encontrado.", "warning")
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        ok, msg = user_admin_control_service.aplicar_revogacao_admin(target_user.id)
+        flash(msg, 'success' if ok else 'warning')
+        return redirect(url_for('login'))
+
+    return render_template(
+        'admin_confirmacao_acao.html',
+        action_title='Confirmar revogação de administrador',
+        action_message='Confirme a revogação do privilégio de administrador do usuário abaixo.',
+        target_email=target_user.email,
+        confirm_button_label='Confirmar revogação de administrador',
+        cancel_url=url_for('login'),
+    )
+
 
 # --- OAuth Google (delegação para auth_services) ---
 @app.route('/login/google')
@@ -612,6 +686,17 @@ from app.roberto_bi import (
 @app.route('/api/roberto/upload', methods=['POST'])
 @login_required
 def api_roberto_upload():
+    authz = avaliar_autorizacao_operacao_por_franquia(current_user)
+    if not authz.get("permitido", True):
+        msg = authz.get("mensagem_usuario") or "Upload indisponível para este usuário no momento."
+        return jsonify(
+            {
+                "success": False,
+                "error": msg,
+                "authorization": authz,
+                "limit_reached": True,
+            }
+        ), 403
     resp, code = processar_upload_frete_excel()
     return resp, code
 
@@ -685,7 +770,7 @@ def api_roberto_bi_recomendacoes():
 # --- API Chat Júlia (backend modular run_julia_chat) ---
 @app.route('/api/chat_julia', methods=['POST'])
 def api_chat_julia():
-    """Endpoint que recebe mensagem e histórico; exige login; valida limite freemium, chama LLM e retorna reply + restantes."""
+    """Endpoint que recebe mensagem e histórico; exige login e valida operação por franquia."""
     if not current_user.is_authenticated:
         return jsonify({
             "error": "É necessário estar logado para conversar com a Júlia.",
@@ -697,27 +782,19 @@ def api_chat_julia():
         history = data.get("history")
         if history is None:
             history = []
-        limits = get_chat_limits_for_user(current_user)
-        if not limits.get("pode_usar_chat", True):
-            msg = (
-                "Você atingiu o limite de interações gratuitas por hoje. "
-                "Volte amanhã ou assine um plano para continuar conversando com a Júlia."
-            )
+        authz = avaliar_autorizacao_operacao_por_franquia(current_user)
+        if not authz.get("permitido", True):
+            msg = authz.get("mensagem_usuario") or "Operação indisponível para este usuário no momento."
             return jsonify({
                 "reply": msg,
                 "limit_reached": True,
-                "chat_restantes": 0,
-                "chat_limite_dia": limits.get("limite_dia"),
+                "authorization": authz,
             })
         max_history = get_julia_chat_max_history()
         from app.run_julia_chat import chat_julia_reply
         result = chat_julia_reply(user_message, history, max_history=max_history)
-        if not limits.get("in_trial"):
-            increment_user_chat_usage(current_user)
-        limits_after = get_chat_limits_for_user(current_user)
-        result["chat_restantes"] = limits_after.get("restantes_hoje")
-        result["chat_limite_dia"] = limits_after.get("limite_dia")
-        result["limit_reached"] = not limits_after.get("pode_usar_chat", True)
+        result["authorization"] = authz
+        result["limit_reached"] = not authz.get("permitido", True)
         return jsonify(result)
     except Exception as e:
         logging.exception("Erro em /api/chat_julia: %s", e)
@@ -885,8 +962,10 @@ def cron_billing_snapshot():
         return {"ok": False, "error": "unauthorized"}, 403
     try:
         from app.services.billing_bigquery_service import collect_and_persist_billing_snapshot
+        from app.consumo_identidade import ensure_consumo_identidade_no_app_context
 
         with app.app_context():
+            ensure_consumo_identidade_no_app_context()
             snap = collect_and_persist_billing_snapshot()
         if snap is None:
             return {
