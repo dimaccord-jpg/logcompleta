@@ -16,3 +16,5 @@ yfinance
 beautifulsoup4
 openpyxl
 pytest>=8.0.0
+
+alembic
