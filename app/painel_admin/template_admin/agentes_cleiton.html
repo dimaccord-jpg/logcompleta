@@ -2,10 +2,11 @@
 
 {% block admin_content %}
 <div class="container-fluid">
-    <h4 class="mb-3">Cleiton — Custo operacional (MVP)</h4>
+    <h4 class="mb-3">Cleiton — Parâmetros operacionais</h4>
     <p class="text-muted small mb-4">
-        Parâmetros para estimativa de custo de <strong>runtime</strong> (ex.: Render) e referência simples de <strong>Google</strong> (tokens).
-        O custo do processamento analítico do Roberto no dashboard usa apenas o bloco <strong>Render</strong> abaixo.
+        Custo de <strong>runtime</strong> (ex.: Render), referência <strong>Google</strong> (tokens) e
+        <strong>régua de conversão de créditos</strong> (quanto 1 crédito compra em tokens de IA, linhas processadas e milissegundos).
+        O custo estimado do processamento Roberto no dashboard usa o bloco Render abaixo.
     </p>
 
     <div class="card border-0 shadow-sm mb-4">
@@ -25,7 +26,7 @@
         </div>
     </div>
 
-    <form method="post" action="{{ url_for('admin.agentes_cleito') }}" class="card border-0 shadow-sm">
+    <form method="post" action="{{ url_for('admin.agentes_cleiton') }}" class="card border-0 shadow-sm">
         <div class="card-body">
             <h6 class="mb-3">Bloco A — Render (runtime)</h6>
             <div class="row g-3 mb-4">
@@ -57,13 +58,36 @@
             </div>
 
             <h6 class="mb-3">Bloco C — Google (referência simples)</h6>
-            <div class="row g-3 mb-3">
+            <div class="row g-3 mb-4">
                 <div class="col-md-6">
                     <label class="form-label">Custo por milhão de tokens (referência)</label>
                     <input type="text" name="cost_per_million_tokens" class="form-control"
                            value="{{ cfg.cost_per_million_tokens if cfg.cost_per_million_tokens is not none else '' }}"
                            placeholder="opcional">
                     <small class="text-muted">Apenas cadastro; não entra no cálculo do upload Roberto.</small>
+                </div>
+            </div>
+
+            <h6 class="mb-3">Bloco D — Régua de conversão de créditos</h6>
+            <p class="small text-muted mb-3">Quanto <strong>1 crédito</strong> compra de cada recurso (deixe em branco se ainda não definido).</p>
+            <div class="row g-3 mb-3">
+                <div class="col-md-4">
+                    <label class="form-label">Tokens de IA por 1 crédito</label>
+                    <input type="text" name="credit_tokens_per_credit" class="form-control"
+                           value="{{ cfg.credit_tokens_per_credit if cfg.credit_tokens_per_credit is not none else '' }}"
+                           placeholder="ex.: 1000" inputmode="decimal">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Linhas processadas por 1 crédito</label>
+                    <input type="text" name="credit_lines_per_credit" class="form-control"
+                           value="{{ cfg.credit_lines_per_credit if cfg.credit_lines_per_credit is not none else '' }}"
+                           placeholder="ex.: 500" inputmode="decimal">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Milissegundos processados por 1 crédito</label>
+                    <input type="text" name="credit_ms_per_credit" class="form-control"
+                           value="{{ cfg.credit_ms_per_credit if cfg.credit_ms_per_credit is not none else '' }}"
+                           placeholder="ex.: 60000" inputmode="decimal">
                 </div>
             </div>
 

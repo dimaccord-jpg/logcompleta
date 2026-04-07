@@ -277,6 +277,38 @@
                             <span class="d-block small fw-semibold">
                                 {{ current_user.full_name or current_user.email }}
                             </span>
+                            <small class="d-block text-muted mt-1">
+                                {% set plano_raw = (current_user.categoria or 'free')|lower|trim %}
+                                {% if plano_raw == 'free' %}
+                                    {% set plano_label = 'Free' %}
+                                {% elif plano_raw == 'starter' %}
+                                    {% set plano_label = 'Starter' %}
+                                {% elif plano_raw == 'pro' %}
+                                    {% set plano_label = 'Pro' %}
+                                {% elif plano_raw == 'multiuser' %}
+                                    {% set plano_label = 'Multiuser' %}
+                                {% elif plano_raw == 'avulso' %}
+                                    {% set plano_label = 'Avulso' %}
+                                {% else %}
+                                    {% set plano_label = plano_raw|capitalize %}
+                                {% endif %}
+                                Plano: {{ plano_label }}
+                            </small>
+                            {% if current_user.franquia %}
+                                {% if current_user.franquia.limite_total is none %}
+                                    <small class="d-block text-muted">Saldo: Ilimitado</small>
+                                {% else %}
+                                    {% set limite_total = current_user.franquia.limite_total or 0 %}
+                                    {% set consumo_acumulado = current_user.franquia.consumo_acumulado or 0 %}
+                                    {% set saldo_bruto = limite_total - consumo_acumulado %}
+                                    {% set saldo_creditos = saldo_bruto if saldo_bruto > 0 else 0 %}
+                                    <small class="d-block {% if saldo_creditos <= 0 %}text-danger{% else %}text-muted{% endif %}">
+                                        Créditos: {{ "%.2f"|format(saldo_creditos|float) }} / {{ "%.2f"|format(limite_total|float) }}
+                                    </small>
+                                {% endif %}
+                            {% else %}
+                                <small class="d-block text-muted">Sem franquia</small>
+                            {% endif %}
                         </div>
                     </a>
                 </div>

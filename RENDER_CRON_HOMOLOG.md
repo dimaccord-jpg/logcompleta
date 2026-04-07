@@ -1,182 +1,61 @@
-# Cron Jobs no Render (homolog)
+# Render em Homolog — Cron e bloqueio de migration
 
-No **Web Service** e em **cada Cron Job**, defina e **confira no painel** `Environment` a variável `APP_ENV=homolog` (no Render não há shell local; o painel substitui `echo`). Sem isso, o boot da aplicação falha — **não há fallback**. O banco homolog no provedor é PostgreSQL **16** (não confunda com o PostgreSQL 18 do dev local no Windows). Detalhes e checagem em terminal: [`app/README_RUN.md`](app/README_RUN.md).
+Este guia cobre apenas o que é específico de Render + cron na homologação da Fase 2.
 
-Este guia cobre dois agendamentos independentes em homolog:
+## 1) Estado real
 
-1. **Ciclo Cleiton** (`/cron/executar-cleiton`) para pipeline editorial.
-2. **Coleta de índices da Home** (`python -m app.finance`) para manter Petróleo, BDI, FBX e Dólar atualizados no ticker da `/`.
+- O deploy final de homolog está em preparação controlada.
+- Cron pode ser validado, mas a publicação final depende de migrations.
+- Documento principal de status/go-no-go: `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
 
----
+## 2) Bloqueio atual de migration (Render)
 
-# Parte A - ciclo Cleiton a cada 1h
+Evidência registrada no shell Render:
 
-Para que a **próxima notícia seja publicada automaticamente** em homolog na frequência configurada (ex.: 1h), use o **Cron Job** do Render chamando a rota `/cron/executar-cleiton`.
+- `alembic` não disponível no `PATH`.
+- `python -m alembic current` falhou com `No module named alembic`.
+- `requirements.txt` atual não inclui Alembic.
 
-> Observação pós-hotfix: no painel admin, o botão **Executar agora** (`/admin/agentes/julia/executar-cleiton`) roda em segundo plano por padrão em `APP_ENV=homolog|prod` para evitar timeout de worker na requisição HTTP.
+Conclusão: validação completa de cron em homolog só é confiável após alinhar estratégia de migration/schema.
 
-## 1. Variável de ambiente no serviço web (homolog)
+## 3) Pré-requisitos de cron em homolog
 
-No Render → seu **Web Service** (backend) → **Environment**:
+- `APP_ENV=homolog`.
+- `CRON_SECRET` igual entre serviço e agendador.
+- `DATABASE_URL` apontando para o banco correto de homolog.
+- Persistência (`APP_DATA_DIR`/`INDICES_FILE_PATH`) configurada para índices da Home.
 
-1. Adicione:
-   - **Key:** `CRON_SECRET`
-   - **Value:** um segredo forte (ex.: gere com `openssl rand -hex 32`).
+## 4) Rotas/jobs de cron relevantes
 
-2. Salve (o Render pode redeployar automaticamente).
+### 4.1 Cleiton operacional
 
-3. Recomendado (estabilidade):
-   - `GUNICORN_TIMEOUT_SECONDS=120`
-   - `GUNICORN_GRACEFUL_TIMEOUT_SECONDS=30`
-   - `GUNICORN_KEEPALIVE_SECONDS=5`
-   - `GEMINI_HTTP_TIMEOUT_MS=20000`
-   - `GEMINI_IMAGE_HTTP_TIMEOUT_MS=20000`
-   - `IMAGE_RETRY_ATTEMPTS=3`
-   - `IMAGE_RETRY_BACKOFF_MS=800`
-   - `IMAGE_STOCK_FALLBACK_ENABLED=true`
-   - `IMAGE_ALLOW_REMOTE_FALLBACK=false`
+- Endpoint: `/cron/executar-cleiton`.
+- Proteção: header `X-Cron-Secret` (ou query `secret`).
+- Esperado:
+  - sem segredo: `403`
+  - com segredo válido: `200` com JSON de status.
 
-4. Recomendado (coerencia visual das capas em homolog):
-   - `IMAGE_PROVIDER=gemini`
-   - `GEMINI_MODEL_IMAGE=imagen-3.0-generate-002`
-   - `IMAGEM_FALLBACK_URL` vazio para priorizar fallback contextual local.
-   - Em indisponibilidade da IA e sem stock disponivel, o sistema usa o asset
-     versionado `/static/img/fallback-capa-v1.svg`.
+### 4.2 Billing snapshot
 
-## 2. Criar o Cron Job no Render
+- Endpoint: `/cron/billing-snapshot`.
+- Também protegido por `CRON_SECRET`.
+- Atualiza snapshot de custo para painel admin quando integração BigQuery estiver configurada.
 
-1. No **Dashboard** do Render, mesmo projeto do backend.
-2. **Add New** → **Cron Job**.
-3. Configuração:
-   - **Name:** `cleiton-ciclo-homolog` (ou outro nome).
-   - **Schedule:** `0 * * * *` (a cada hora em ponto; para a cada 30 min: `30 * * * *`).
-   - **Command:** não usado para “hit URL”; deixe em branco ou um placeholder.
-   - **Service:** selecione o **Web Service** do backend (ex.: `logcompleta-homolog`).
+### 4.3 Índices financeiros da Home
 
-4. Em **Advanced** (ou na documentação do Render para Cron Jobs):
-   - O Render Cron Job pode ser configurado para fazer um **HTTP request** ao seu serviço. Se a sua UI tiver “URL to hit” ou “Notify URL”:
-     - **URL:** `https://homolog0514.agentefrete.com.br/cron/executar-cleiton`
-     - **Secret:** o mesmo valor de `CRON_SECRET` (alguns Crons permitem header; senão use query: `?secret=SEU_CRON_SECRET`).
+- Execução via comando: `python -m app.finance` com `APP_ENV=homolog`.
+- Resultado esperado: atualização de `indices.json` no path configurado de persistência.
 
-Se o Render **não** oferecer “URL to hit” no Cron Job, use a opção abaixo.
+## 5) Sensibilidades para regressão
 
----
+- Não mudar `CRON_SECRET` somente em um lado (serviço ou agendador), senão rotas ficam 403 permanentemente.
+- Não validar cron ignorando migration pendente: endpoints podem responder, mas comportamento de dados pode ficar inconsistente com schema.
+- Não separar teste de cron da validação de dashboard/admin, pois os resultados operacionais são consumidos nesses painéis.
 
-## Alternativa A: Cron Job com `curl` (recomendado)
+## 6) Checklist objetivo
 
-O Cron Job do Render executa um **comando** em um schedule. Use `curl` para chamar a rota:
-
-1. **Schedule:** `0 * * * *` (a cada hora em ponto; para 1h está de acordo com o quadro).
-2. **Command:**
-   ```bash
-   curl -s -X POST -H "X-Cron-Secret: $CRON_SECRET" -H "Cache-Control: no-cache, no-store, must-revalidate" -H "Pragma: no-cache" "https://homolog0514.agentefrete.com.br/cron/executar-cleiton?ts=$(date +%s)"
-   ```
-   Ou, se o Cron não tiver acesso a variáveis de ambiente, use o segredo na URL (não compartilhe essa URL):
-   ```bash
-   curl -s "https://homolog0514.agentefrete.com.br/cron/executar-cleiton?secret=SEU_CRON_SECRET"
-   ```
-3. No **Environment** do Cron Job, adicione `CRON_SECRET` com o **mesmo valor** definido no Web Service (para o comando com `$CRON_SECRET`).
-
----
-
-## Alternativa B: Serviço Background Worker (script em loop)
-
-Se preferir um worker em vez de Cron:
-
-1. **Add New** → **Background Worker**.
-2. **Build Command:** igual ao do Web Service (ex.: `pip install -r requirements.txt`).
-3. **Start Command:** `python -m app.run_cleiton`
-4. **Environment:** copie as variáveis do Web Service (incluindo `APP_ENV=homolog`, `CRON_SECRET` não é necessário para o worker).
-5. O script `run_cleiton.py` entra em loop e executa a cada `frequencia_horas` (ex.: 1h), respeitando a janela de publicação.
-
----
-
-## 3. Validar
-
-- Primeiro, confirme que **a rota existe** no ambiente homolog chamando **sem segredo** (deve responder 403, nunca 404):
-  ```bash
-  curl -i "https://homolog0514.agentefrete.com.br/cron/executar-cleiton"
-  ```
-  - Se o status for **403**, a rota está publicada e protegida corretamente (falta apenas o segredo).
-  - Se o status for **404**, o deploy/roteamento está apontando para um serviço/versão **sem a rota** `"/cron/executar-cleiton"` (ajuste o serviço/branch ou o domínio no Cloudflare/Render antes de seguir).
-
-- Após criar o Cron (ou worker), espere o horário da próxima execução (ou force uma chamada manual **com** segredo):
-  ```bash
-  curl -H "X-Cron-Secret: SEU_CRON_SECRET" "https://homolog0514.agentefrete.com.br/cron/executar-cleiton"
-  ```
-- Resposta esperada (200): `{"ok": true ou false, "status": "sucesso"|"ignorado"|"falha", "motivo": "...", "mission_id": "..."}`.
-- Em **Admin** → **Agentes - Júlia**, a seção “Próxima notícia automática” deve mostrar a **última execução** atualizada após o cron rodar.
-- Se o `mission_id` repetir em execuções seguidas, há cache na borda. No Cloudflare, crie uma **Cache Rule** para `path contains /cron/` com `Bypass cache` e execute `Purge Everything`.
-
-## 4. Validar OAuth em homolog (pós-hotfix)
-
-Após mudanças de credenciais ou deploy em homolog, valide o login Google:
-
-1. `GET /health/liveness` deve responder `status=ok`.
-2. `GET /oauth-diagnostics` com `X-Ops-Token` deve responder 200.
-3. Em janela anônima, iniciar login Google e concluir callback.
-4. Não deve aparecer a mensagem de falha de validação de segurança.
-5. Confirmar redirecionamento para dashboard ou completar perfil.
-
----
-
-# Parte B - coleta dos índices da Home (2x ao dia)
-
-Objetivo de negócio: manter no topo da Home os indicadores **Petróleo, BDI, FBX e Dólar** atualizados com base no último registro do histórico no arquivo apontado por `INDICES_FILE_PATH` (resolvido por `app/settings.py`; em homolog costuma ser um caminho persistente fora da release, não `app/indices.json` na raiz do código).
-
-## 1. Pré-requisitos
-
-1. O projeto deve instalar dependências de runtime (`requirements.txt`).
-2. O Cron Job deve executar no mesmo código/ambiente do backend homolog.
-3. Não há segredo de rota para este job, pois a coleta roda por comando Python (sem endpoint HTTP).
-4. Configure `INDICES_FILE_PATH` no Web Service para storage persistente (ex.: `/var/data/indices.json`); esse caminho será resolvido de forma centralizada por `app/settings.py` para o serviço web e para o job de coleta.
-
-## 2. Criar Cron Job para índices
-
-1. No Render: **Add New** → **Cron Job**.
-2. Configure:
-    - **Name:** `indices-home-homolog`.
-    - **Schedule:** duas execuções por dia útil (exemplo):
-       - `0 9 * * 1-5` (abertura)
-       - `10 14 * * 1-5` (após 14h)
-   - **Command:**
-   ```bash
-   APP_ENV=homolog python -m app.finance
-   ```
-
-Observação: se quiser rastrear execução no log com timestamp, use:
-
-```bash
-echo "[indices] start $(date -Iseconds)"; python -m app.finance; echo "[indices] end $(date -Iseconds)"
-```
-
-## 3. Validar
-
-1. Execute o job manualmente uma vez no painel do Render.
-2. Confirme nos logs mensagens de sucesso da rotina de coleta.
-3. Verifique o arquivo apontado por `INDICES_FILE_PATH` atualizado com `ultima_atualizacao` e `historico`.
-4. Abra a Home (`/`) e confirme ticker sem campos vazios.
-
-## 4. Troubleshooting rápido
-
-- **Ticker vazio na Home:**
-   - Verifique se o arquivo em `INDICES_FILE_PATH` contém `historico` com ao menos um item.
-   - Verifique se a rota `/` está extraindo o último registro do histórico antes de renderizar o template.
-- **Job executa, mas sem atualização:**
-   - Confirme conectividade externa para yfinance e fontes de scraping.
-   - Revise possíveis bloqueios temporários das páginas de BDI/FBX.
-
-## 5. Checklist final de homolog
-
-Use este checklist para encerrar a validação de ambiente:
-
-1. Cron do Cleiton executa e retorna 200 na rota protegida.
-2. Cron de índices executa `python -m app.finance` 2x ao dia útil com `APP_ENV=homolog`.
-3. O arquivo apontado por `INDICES_FILE_PATH` mantém histórico e data de atualização recente.
-4. Home (`/`) exibe Dólar, Petróleo, BDI e FBX sem campos vazios.
-
----
-
-## Área do Usuário (referência)
-
-Admins podem acessar o Painel ADM pela Área do Usuário (avatar no rodapé da sidebar após login). Detalhes operacionais: [`app/README_RUN.md`](app/README_RUN.md).
+1. Confirmar variáveis (`APP_ENV`, `CRON_SECRET`, `DATABASE_URL`, paths de persistência).
+2. Confirmar resolução do bloqueio Alembic e execução de migrations.
+3. Validar `/cron/executar-cleiton` (403 sem segredo / 200 com segredo).
+4. Validar `/cron/billing-snapshot`.
+5. Validar `python -m app.finance` e reflexo da atualização na Home/admin.

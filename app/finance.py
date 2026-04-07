@@ -243,4 +243,9 @@ def atualizar_indices():
     }
 
 if __name__ == "__main__":
-    atualizar_indices()
+    from app.web import app
+    from app.consumo_identidade import ensure_consumo_identidade_no_app_context
+
+    with app.app_context():
+        ensure_consumo_identidade_no_app_context()
+        atualizar_indices()

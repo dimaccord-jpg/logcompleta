@@ -8,6 +8,55 @@ def utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+class Conta(db.Model):
+    """
+    Raiz contratual/comercial. Uma conta agrega uma ou mais franquias (unidades operacionais).
+    """
+
+    __tablename__ = "conta"
+
+    SLUG_SISTEMA = "sistema-interno"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    status = db.Column(db.String(30), nullable=False, default="ativa", index=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+
+    STATUS_ATIVA = "ativa"
+
+
+class Franquia(db.Model):
+    """
+    Unidade operacional de consumo; pertence a uma Conta.
+    Fase 2: estado operacional persistido (governança Cleiton) + status de ciclo/limites.
+    """
+
+    __tablename__ = "franquia"
+    __table_args__ = (db.UniqueConstraint("conta_id", "slug", name="uq_franquia_conta_slug"),)
+
+    SLUG_SISTEMA_OPERACIONAL = "operacional-interno"
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    nome = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(80), nullable=False, index=True)
+    status = db.Column(db.String(30), nullable=False, default="active", index=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    limite_total = db.Column(db.Numeric(18, 6), nullable=True)
+    consumo_acumulado = db.Column(db.Numeric(18, 6), nullable=False, default=0)
+    inicio_ciclo = db.Column(db.DateTime, nullable=True)
+    fim_ciclo = db.Column(db.DateTime, nullable=True)
+    bloqueio_manual = db.Column(db.Boolean, nullable=False, default=False)
+
+    conta = db.relationship("Conta", backref=db.backref("franquias", lazy="dynamic"))
+
+    STATUS_ACTIVE = "active"
+    STATUS_DEGRADED = "degraded"
+    STATUS_EXPIRED = "expired"
+    STATUS_BLOCKED = "blocked"
+
+
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(150), unique=True, nullable=False)
@@ -24,11 +73,13 @@ class User(db.Model, UserMixin):
     job_role = db.Column(db.String(100), nullable=True)
     oauth_provider = db.Column(db.String(50), nullable=True)
     oauth_sub = db.Column(db.String(255), nullable=True)
-    # Freemium: contador diário de interações no chat Júlia e data do último uso (reset por dia)
-    chat_consultas_hoje = db.Column(db.Integer, default=0)
-    chat_data_ultima_consulta = db.Column(db.DateTime, nullable=True)
     # Início do período de trial (null = sem trial); usado com FREEMIUM_TRIAL_DIAS em ConfigRegras
     trial_start_date = db.Column(db.DateTime, nullable=True)
+    # Fase 2 etapa 2: vínculo de negócio (conta / franquia operacional padrão do operador)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=False, index=True)
+    conta = db.relationship("Conta", foreign_keys=[conta_id], backref=db.backref("usuarios", lazy="dynamic"))
+    franquia = db.relationship("Franquia", foreign_keys=[franquia_id], backref=db.backref("usuarios_operadores", lazy="dynamic"))
 
     def set_password(self, password: str) -> None:
         from werkzeug.security import generate_password_hash
@@ -39,6 +90,24 @@ class User(db.Model, UserMixin):
             return False
         from werkzeug.security import check_password_hash
         return check_password_hash(self.password_hash, password)
+
+
+class MultiuserFranquiaCodigo(db.Model):
+    """Código de acesso de franquia para operação Multiuser (persistência simples por franquia)."""
+
+    __tablename__ = "multiuser_franquia_codigo"
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=False, index=True)
+    codigo = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+    criado_por_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+    criado_em = db.Column(db.DateTime, default=utcnow_naive, nullable=False, index=True)
+
+    conta = db.relationship("Conta", backref=db.backref("codigos_multiuser", lazy="dynamic"))
+    franquia = db.relationship("Franquia", backref=db.backref("codigos_acesso_multiuser", lazy="dynamic"))
+    criado_por = db.relationship("User", foreign_keys=[criado_por_user_id], backref=db.backref("codigos_multiuser_criados", lazy="dynamic"))
 
 
 class TermsOfUse(db.Model):
@@ -305,6 +374,12 @@ class IaConsumoEvento(db.Model):
     output_tokens = db.Column(db.Integer, nullable=True)
     total_tokens = db.Column(db.Integer, nullable=True)
     error_summary = db.Column(db.Text, nullable=True)
+    # Fase 2 etapa 1: rastreio identitario (nullable para linhas historicas pre-migracao)
+    conta_id = db.Column(db.Integer, nullable=True, index=True)
+    franquia_id = db.Column(db.Integer, nullable=True, index=True)
+    usuario_id = db.Column(db.Integer, nullable=True, index=True)
+    tipo_origem = db.Column(db.String(80), nullable=True, index=True)
+    origem_sistema = db.Column(db.Boolean, nullable=True, index=True)
 
 
 class IaBillingCostSnapshot(db.Model):
@@ -325,8 +400,8 @@ class IaBillingCostSnapshot(db.Model):
 
 class CleitonCostConfig(db.Model):
     """
-    Parametros minimos de custo operacional (MVP): Render runtime + referencia Google.
-    Registro singleton (id=1) para custo estimado de processamento analitico.
+    Parametros operacionais Cleiton (singleton id=1): custo runtime/referencia Google e
+    régua de conversão de créditos (tokens IA, linhas e ms processados por crédito).
     """
     __tablename__ = "cleiton_cost_config"
 
@@ -337,6 +412,10 @@ class CleitonCostConfig(db.Model):
     overhead_factor = db.Column(db.Float, nullable=False, default=1.0)
     cost_per_million_tokens = db.Column(db.Float, nullable=True)
     updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive)
+    # Régua de conversão: quanto 1 crédito compra de cada recurso (parametrização operacional).
+    credit_tokens_per_credit = db.Column(db.Float, nullable=True)
+    credit_lines_per_credit = db.Column(db.Float, nullable=True)
+    credit_ms_per_credit = db.Column(db.Float, nullable=True)
 
 
 class ProcessingEvent(db.Model):
@@ -352,3 +431,38 @@ class ProcessingEvent(db.Model):
     processing_time_ms = db.Column(db.Integer, nullable=False, default=0)
     status = db.Column(db.String(40), nullable=False, index=True)
     error_summary = db.Column(db.Text, nullable=True)
+    # Fase 2 etapa 1: rastreio identitario (nullable para linhas historicas pre-migracao)
+    conta_id = db.Column(db.Integer, nullable=True, index=True)
+    franquia_id = db.Column(db.Integer, nullable=True, index=True)
+    usuario_id = db.Column(db.Integer, nullable=True, index=True)
+    tipo_origem = db.Column(db.String(80), nullable=True, index=True)
+    origem_sistema = db.Column(db.Boolean, nullable=True, index=True)
+
+
+class CleitonBillingApropriacao(db.Model):
+    """
+    Apropriação idempotente de billing operacional (ex.: upload Roberto).
+    Evita dupla cobrança para a mesma chave de idempotência.
+    """
+
+    __tablename__ = "cleiton_billing_apropriacao"
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, nullable=False, index=True, default=utcnow_naive)
+    idempotency_key = db.Column(db.String(160), nullable=False, unique=True, index=True)
+
+    agent = db.Column(db.String(80), nullable=False, index=True)
+    flow_type = db.Column(db.String(80), nullable=False, index=True)
+    status = db.Column(db.String(40), nullable=False, index=True)
+    error_summary = db.Column(db.Text, nullable=True)
+
+    rows_processed = db.Column(db.Integer, nullable=False, default=0)
+    processing_time_ms = db.Column(db.Integer, nullable=False, default=0)
+    processing_event_id = db.Column(db.Integer, nullable=True, index=True)
+
+    creditos_apropriados = db.Column(db.Numeric(18, 6), nullable=True)
+    motivo = db.Column(db.String(80), nullable=True, index=True)
+
+    conta_id = db.Column(db.Integer, nullable=True, index=True)
+    franquia_id = db.Column(db.Integer, nullable=True, index=True)
+    usuario_id = db.Column(db.Integer, nullable=True, index=True)

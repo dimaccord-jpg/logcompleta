@@ -99,6 +99,21 @@ def _validar_colunas(colunas: list[str]) -> tuple[bool, str]:
     return True, ""
 
 
+def _resolve_execution_id() -> str:
+    """
+    Resolve identidade da execução:
+    - Header: X-Execution-ID
+    - Form: execution_id
+    - Fallback: UUID da própria request (compatível com clientes antigos)
+    """
+    execution_id = (request.headers.get("X-Execution-ID") or "").strip()
+    if not execution_id:
+        execution_id = (request.form.get("execution_id") or "").strip()
+    if not execution_id:
+        execution_id = str(uuid4())
+    return execution_id[:120]
+
+
 def _chave_mes(reg: dict) -> str:
     """Extrai chave ano-mês (YYYY-MM) do campo data_emissao do registro."""
     d = reg.get("data_emissao") or ""
@@ -172,6 +187,7 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
     :return: (resposta JSON, código HTTP)
     """
     arquivo = request.files.get("file") or request.files.get("arquivo")
+    execution_id = _resolve_execution_id()
     ok, msg = _validar_arquivo_excel(arquivo)
     if not ok:
         return jsonify({"success": False, "error": msg}), 400
@@ -195,6 +211,7 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
             processing_time_ms=ms,
             status=status,
             error_summary=err,
+            execution_id=execution_id,
         )
 
     try:
@@ -364,7 +381,24 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
             + ", ".join(stats_amostra["meses_baixa_representatividade"])
         )
 
-    _emit_upload_proc("success", len(linhas_reduzidas))
+    try:
+        from app.services.cleiton_upload_billing_service import apropriar_billing_upload_roberto
+
+        rows_processed = len(linhas_processadas)
+        processing_time_ms = int((time.perf_counter() - t0) * 1000)
+        idempotency_key = f"roberto-upload:{execution_id}"
+
+        apropriar_billing_upload_roberto(
+            idempotency_key=idempotency_key,
+            rows_processed=rows_processed,
+            processing_time_ms=processing_time_ms,
+            status="success",
+            execution_id=execution_id,
+        )
+    except Exception:
+        logger.exception("Falha ao apropriar billing do upload Roberto.")
+        _emit_upload_proc("success", len(linhas_processadas))
+
     return jsonify({
         "success": True,
         "registros": len(linhas_reduzidas),
