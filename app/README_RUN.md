@@ -43,6 +43,11 @@ python -m app.web
    - `/admin/planos`
 7. validar endpoint admin de franquia:
    - `/admin/api/cleiton-franquia/<franquia_id>/validacao`
+8. validar onboarding e governança do plano Free:
+   - novo cadastro local nasce com `franquia.limite_total` numérico;
+   - novo cadastro Google nasce com `franquia.limite_total` numérico;
+   - novo usuário `free` não aparece como ilimitado por ausência de limite;
+   - a checagem deve ser feita na `Franquia`, não em `User.creditos`.
 
 ## Comandos Úteis
 
@@ -60,6 +65,7 @@ python -m app.web
 - `No module named alembic`: ambiente sem Alembic; revisar estratégia de migrations do projeto.
 - `relation does not exist`: schema desalinhado; revisar `../migrations/README`.
 - chat/upload bloqueado: verificar status operacional da franquia.
+- cadastro novo Free falhando: verificar se a referência administrativa do plano Free está configurada em `/admin/planos`.
 - links úteis ausentes no chat: pode ser resultado de filtro de relevância ou falha segura da busca web.
 
 ## Referência Principal

@@ -39,6 +39,62 @@ Estas regras não devem ser violadas em ajustes futuros:
 - não criar fluxo paralelo para o chat da Júlia;
 - não separar artificialmente frontend, autorização e governança, porque o comportamento real depende do conjunto.
 
+## Governança de Créditos e Planos
+
+Este bloco consolida a regra oficial atual de créditos, franquia e onboarding.  
+Mudanças futuras nesse domínio devem ser refletidas primeiro aqui.
+
+### Fonte de verdade operacional
+
+- o consumo real do sistema é governado por `Franquia`;
+- os campos operacionais oficiais são `Franquia.limite_total`, `Franquia.consumo_acumulado` e `Franquia.status`;
+- a identidade de consumo continua baseada em `conta_id`, `franquia_id` e `usuario_id`;
+- bloqueio, degradação e autorização operacional são decididos a partir da franquia vinculada ao usuário.
+
+### Campo legado
+
+- `User.creditos` é legado;
+- ele não governa saldo, abatimento, bloqueio ou autorização operacional;
+- ele não deve ser usado como fonte de verdade para consumo, UI de saldo, relatório operacional ou regra nova;
+- a remoção de `creditos=10` do onboarding faz parte da correção definitiva do bug do plano Free.
+
+### Regra oficial do plano Free
+
+- todo novo usuário comercial `free` deve nascer com `Franquia.limite_total` numérico;
+- esse limite não deve ser hardcoded no código;
+- a fonte canônica da referência do plano é `plano_service.obter_limite_referencia_plano_admin(...)`;
+- se a referência administrativa do plano Free não estiver configurada, o onboarding deve falhar explicitamente;
+- o sistema não deve mais criar usuário `free` com franquia aberta por omissão.
+
+### Semântica de ilimitado
+
+- `Franquia.limite_total = None` não é comportamento permitido para novo usuário comercial;
+- uso ilimitado é exceção legítima apenas para a estrutura interna/sistema;
+- a estrutura interna reservada continua sendo:
+  - `Conta.SLUG_SISTEMA = "sistema-interno"`
+  - `Franquia.SLUG_SISTEMA_OPERACIONAL = "operacional-interno"`
+- qualquer fluxo novo que crie franquia comercial deve sair com limite explícito.
+
+### Regra de onboarding após a correção
+
+- cadastro local e cadastro Google criam `Conta` + `Franquia`;
+- antes de persistir o usuário `free`, o onboarding lê o limite administrativo vigente do plano Free;
+- a franquia do novo usuário nasce já com `limite_total` preenchido;
+- novos usuários `free` não devem mais aparecer como `Ilimitado` por erro estrutural;
+- mudança do limite do plano Free no admin afeta novos cadastros futuros sem hardcode no código.
+
+### Observabilidade e validação
+
+- a leitura operacional da franquia continua sendo a base para UI e decisão de uso;
+- o endpoint admin de inspeção operacional continua sendo `/admin/api/cleiton-franquia/<franquia_id>/validacao`;
+- em incidente de saldo, bloqueio ou limite, revisar primeiro a `Franquia`, não o `User`;
+- em incidente de onboarding Free, validar nesta ordem:
+  - configuração administrativa do plano Free;
+  - `franquia_id` do usuário criado;
+  - `Franquia.limite_total`;
+  - `Franquia.status`;
+  - leitura operacional no endpoint admin.
+
 ## Chat da Júlia
 
 Arquivos centrais:

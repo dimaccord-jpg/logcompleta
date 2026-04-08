@@ -64,6 +64,7 @@ class User(db.Model, UserMixin):
     full_name = db.Column(db.String(150), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
     categoria = db.Column(db.String(50), default='free')
+    # Campo legado: não participa da governança operacional (controle real em Franquia).
     creditos = db.Column(db.Integer, default=10)
     created_at = db.Column(db.DateTime, default=utcnow_naive)
     last_login_at = db.Column(db.DateTime, nullable=True)
