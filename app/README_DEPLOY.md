@@ -42,13 +42,19 @@ Este documento complementa o `README.md` principal com a sequência segura de de
 - chat Júlia respeita autorização por franquia;
 - chat Júlia mantém markdown seguro, sugestões e busca web contextual;
 - páginas `/noticia/<id>` exibem botão `Voltar Para Home`;
-- upload Roberto continua operacional.
+- upload Roberto continua operacional;
+- o plano Free está configurado no admin com franquia de referência válida;
+- novo cadastro `free` nasce com `Franquia.limite_total` numérico;
+- novo cadastro `free` não exibe saldo ilimitado por erro estrutural;
+- conferência de saldo e bloqueio operacional é feita na `Franquia`, não em `User.creditos`.
 
 ## Riscos de Regressão
 
 - publicar sem migrations válidas;
 - alterar governança operacional sem revisar chat/upload;
 - publicar frontend sem backend correspondente ou vice-versa;
+- publicar sem configurar a referência administrativa do plano Free;
+- reintroduzir uso funcional de `User.creditos` como se fosse fonte de verdade operacional;
 - tratar homolog como concluída sem validar schema e fluxos reais.
 
 ## Referência Principal

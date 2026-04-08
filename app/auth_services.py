@@ -15,6 +15,7 @@ from sqlalchemy import func
 from app.extensions import db
 from app.infra import user_is_admin
 from app.models import User
+from app.services import plano_service
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,16 @@ def _normalize_email(email: str) -> str:
 def _is_profile_complete(user: User) -> bool:
     """Perfil completo exige os dois campos obrigatorios preenchidos."""
     return bool((user.job_role or "").strip()) and bool((user.usage_purpose or "").strip())
+
+
+def _get_free_franquia_limite_onboarding():
+    """
+    Onboarding comercial deve nascer com franquia limitada conforme referência administrativa.
+    """
+    return plano_service.obter_limite_referencia_plano_admin(
+        "free",
+        exigir_configurado=True,
+    )
 
 
 def _select_canonical_user(candidates: list[User], google_id: str | None) -> User:
@@ -406,12 +417,13 @@ def handle_google_oauth_callback(
             from app.services.conta_franquia_service import criar_conta_franquia_para_cadastro
 
             conta, franquia = criar_conta_franquia_para_cadastro(email, name)
+            franquia.limite_total = _get_free_franquia_limite_onboarding()
+            db.session.add(franquia)
             user = User(
                 email=email,
                 full_name=name,
                 is_admin=email in admin_emails,
                 categoria="free",
-                creditos=10,
                 subscribes_to_newsletter=False,
                 usage_purpose=None,
                 job_role=None,
@@ -445,6 +457,9 @@ def handle_google_oauth_callback(
     except requests.RequestException as e:
         logger.exception("Erro de rede no callback OAuth: %s", e)
         return None, f"Erro no login com Google: {e}", False
+    except ValueError as e:
+        logger.warning("Configuração inválida no onboarding Google: %s", e)
+        return None, str(e), False
     except Exception as e:
         logger.exception("Erro no google_callback: %s", e)
         return None, f"Erro no login com Google: {str(e)}", False
@@ -498,13 +513,20 @@ def register_user(
     now = _utcnow_naive()
     from app.services.conta_franquia_service import criar_conta_franquia_para_cadastro
 
+    try:
+        limite_free = _get_free_franquia_limite_onboarding()
+    except ValueError as e:
+        logger.warning("Cadastro local bloqueado por configuração de plano Free: %s", e)
+        return None, str(e)
+
     conta, franquia = criar_conta_franquia_para_cadastro(email, full_name or email)
+    franquia.limite_total = limite_free
+    db.session.add(franquia)
     new_user = User(
         email=email,
         full_name=full_name or email,
         is_admin=False,
         categoria="free",
-        creditos=10,
         subscribes_to_newsletter=subscribes_to_newsletter,
         usage_purpose=usage_purpose or None,
         job_role=job_role or None,

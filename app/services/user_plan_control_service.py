@@ -80,27 +80,11 @@ def _get_user_by_email(email: str | None) -> User:
     return user
 
 
-def _to_decimal_or_none(v) -> Decimal | None:
-    if v is None:
-        return None
-    if isinstance(v, Decimal):
-        return v
-    return Decimal(str(v))
-
-
 def _get_limite_referencia_plano(plano_codigo: str) -> Decimal | None:
-    planos = {
-        p["codigo"]: p for p in plano_service.listar_planos_saas_admin()
-    }
-    if plano_codigo not in planos:
-        raise ValueError(f"Plano '{plano_codigo}' não encontrado na configuração administrativa.")
-    limite = planos[plano_codigo].get("franquia_referencia")
-    limite_d = _to_decimal_or_none(limite)
-    if plano_codigo in (PLANO_STARTER, PLANO_PRO, PLANO_MULTIUSER, PLANO_AVULSO) and limite_d is None:
-        raise ValueError(
-            f"Franquia de referência do plano {plano_codigo} não está configurada em /admin/planos."
-        )
-    return limite_d
+    return plano_service.obter_limite_referencia_plano_admin(
+        plano_codigo,
+        exigir_configurado=True,
+    )
 
 
 def _ensure_commercial_structure(user: User) -> tuple[Conta, Franquia]:

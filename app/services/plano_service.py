@@ -84,6 +84,83 @@ def _config_desc_valor_plano(plano_nome: str) -> str:
     return f"Valor administrativo do plano {plano_nome} (R$)"
 
 
+def obter_limite_referencia_plano_admin(
+    plano_codigo: str,
+    *,
+    exigir_configurado: bool = True,
+) -> Decimal | None:
+    """
+    Porta canônica para leitura do limite de franquia de referência de um plano comercial.
+    Fonte: ConfigRegras (chave plano_franquia_ref_admin_<codigo>) -> Franquia.limite_total.
+    """
+    codigo = (plano_codigo or "").strip().lower()
+    plano = _PLANOS_POR_CODIGO.get(codigo)
+    if not plano:
+        raise ValueError(f"Plano '{plano_codigo}' não encontrado na configuração administrativa.")
+
+    cfg_ref_key = _config_key_franquia_ref(codigo)
+    cfg_ref = ConfigRegras.query.filter_by(chave=cfg_ref_key).first()
+    ref_id = cfg_ref.valor_inteiro if cfg_ref else None
+    if not ref_id:
+        if exigir_configurado:
+            raise ValueError(
+                f"Franquia de referência do plano {codigo} não está configurada em /admin/planos."
+            )
+        return None
+
+    franquia_ref = db.session.get(Franquia, int(ref_id))
+    if franquia_ref is None:
+        raise ValueError(
+            f"Franquia de referência do plano {codigo} não encontrada (id={ref_id})."
+        )
+
+    limite = _to_decimal(franquia_ref.limite_total)
+    if exigir_configurado and limite is None:
+        raise ValueError(
+            f"Limite da franquia de referência do plano {codigo} está vazio em /admin/planos."
+        )
+    return limite
+
+
+def corrigir_franquias_free_sem_limite() -> dict:
+    """
+    Correção pontual para legado: preenche limite_total nulo em franquias de usuários free
+    (exceto estrutura interna/sistema), usando a referência administrativa vigente do plano free.
+    """
+    from app.services.conta_franquia_service import get_sistema_interno_ids
+
+    limite_free = obter_limite_referencia_plano_admin("free", exigir_configurado=True)
+    sistema_conta_id, sistema_franquia_id = get_sistema_interno_ids()
+
+    franquias = (
+        db.session.query(Franquia)
+        .join(User, User.franquia_id == Franquia.id)
+        .filter(db.func.lower(User.categoria) == "free")
+        .filter(Franquia.limite_total.is_(None))
+        .distinct(Franquia.id)
+        .all()
+    )
+    atualizadas = 0
+    for fr in franquias:
+        if (
+            (sistema_conta_id is not None and fr.conta_id == int(sistema_conta_id))
+            or (sistema_franquia_id is not None and fr.id == int(sistema_franquia_id))
+        ):
+            continue
+        fr.limite_total = limite_free
+        db.session.add(fr)
+        atualizadas += 1
+
+    if atualizadas:
+        db.session.commit()
+
+    return {
+        "limite_aplicado": limite_free,
+        "franquias_free_sem_limite_encontradas": len(franquias),
+        "franquias_free_atualizadas": atualizadas,
+    }
+
+
 def listar_planos_saas_admin() -> list[dict]:
     """
     Retorna payload da seção Gestão de Planos & SaaS com foco em Franquia operacional.
@@ -195,7 +272,7 @@ def atualizar_parametros_plano_admin(
 
     atualizadas = 0
     try:
-        if codigo != "free" and franquia_ref is None:
+        if franquia_ref is None:
             conta_sistema = Conta.query.filter_by(slug=Conta.SLUG_SISTEMA).first()
             if not conta_sistema:
                 raise ValueError(
