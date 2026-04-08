@@ -57,15 +57,86 @@
     }
   }
 
-  function appendMessage(role, text, container) {
+  function escapeHtml(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderJuliaMarkdown(text) {
+    function inlineFormat(raw) {
+      var safe = escapeHtml(raw || '');
+      safe = safe.replace(/\[([^\]\n]{1,120})\]\((https?:\/\/[^\s)]+)\)/g, function (_, label, url) {
+        return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+      });
+      safe = safe.replace(/\*\*([^*\n][^*\n]*?)\*\*/g, '<strong>$1</strong>');
+      safe = safe.replace(/(^|[\s(])\*([^*\n][^*\n]*?)\*(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>');
+      return safe;
+    }
+
+    var lines = String(text || '').split(/\r?\n/);
+    var htmlParts = [];
+    var listItems = [];
+    var i;
+    for (i = 0; i < lines.length; i++) {
+      var line = lines[i] || '';
+      var listMatch = line.match(/^\s*\*\s+(.+)$/);
+      if (listMatch) {
+        listItems.push('<li>' + inlineFormat(listMatch[1]) + '</li>');
+        continue;
+      }
+      if (listItems.length) {
+        htmlParts.push('<ul>' + listItems.join('') + '</ul>');
+        listItems = [];
+      }
+      if (!line.trim()) {
+        htmlParts.push('<br>');
+      } else {
+        htmlParts.push(inlineFormat(line));
+      }
+    }
+    if (listItems.length) {
+      htmlParts.push('<ul>' + listItems.join('') + '</ul>');
+    }
+    return htmlParts.join('<br>');
+  }
+
+  function appendSuggestions(container, suggestions) {
+    if (!Array.isArray(suggestions) || !suggestions.length) return;
+    var wrap = document.createElement('div');
+    wrap.className = 'julia-chat-suggestions';
+    suggestions.slice(0, 3).forEach(function (s) {
+      if (!s) return;
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'julia-chat-suggestion-btn';
+      btn.setAttribute('data-julia-suggestion', String(s));
+      btn.textContent = String(s);
+      wrap.appendChild(btn);
+    });
+    if (wrap.childNodes.length) container.appendChild(wrap);
+  }
+
+  function appendMessage(role, text, container, options) {
+    options = options || {};
     var welcome = byId('juliaChatWelcome');
     if (welcome) welcome.style.display = 'none';
     var msg = document.createElement('div');
     msg.className = 'julia-chat-msg julia-chat-msg-' + (role === 'user' ? 'user' : 'bot');
     var inner = document.createElement('div');
     inner.className = 'julia-chat-msg-inner';
-    inner.textContent = text;
+    if (role === 'user') {
+      inner.textContent = text;
+    } else {
+      inner.innerHTML = renderJuliaMarkdown(text);
+    }
     msg.appendChild(inner);
+    if (role !== 'user') {
+      appendSuggestions(msg, options.suggestions);
+    }
     container.appendChild(msg);
     container.scrollTop = container.scrollHeight;
   }
@@ -85,13 +156,14 @@
     }
   }
 
-  function sendMessage() {
+  function sendMessage(forcedText, options) {
+    options = options || {};
     var input = byId('juliaChatInput');
     var form = byId('juliaChatForm');
     var messagesEl = byId('juliaChatMessages');
     if (!input || !form || !messagesEl) return;
 
-    var text = (input.value || '').trim();
+    var text = (typeof forcedText === 'string' ? forcedText : (input.value || '')).trim();
     if (!text) return;
     if (!isAuthenticated) {
       var loginUrl = (typeof window.JULIA_CHAT_LOGIN_URL !== 'undefined' && window.JULIA_CHAT_LOGIN_URL) ? window.JULIA_CHAT_LOGIN_URL : '/login';
@@ -125,10 +197,15 @@
 
     setLoading(messagesEl, true);
 
+    var transportText = text;
+    if (options.source === 'suggestion_chip') {
+      transportText = '[[JULIA_SUGGESTION::source=suggestion_chip;mode=execute_direct]] ' + text;
+    }
+
     fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, history: history })
+      body: JSON.stringify({ message: transportText, history: history })
     })
       .then(function (r) {
         return r.json().then(function (data) { return { status: r.status, data: data }; });
@@ -140,7 +217,7 @@
           appendMessage('bot', data.error || 'É necessário estar logado para conversar com a Júlia.', messagesEl);
           return;
         }
-        appendMessage('bot', data.reply || 'Sem resposta.', messagesEl);
+        appendMessage('bot', data.reply || 'Sem resposta.', messagesEl, { suggestions: data.suggestions || [] });
         if (data.authorization) {
           chatLimits = data.authorization;
         }
@@ -177,11 +254,28 @@
     input.addEventListener('blur', function () {
       if (!input.value.trim()) setChatActive(false);
     });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
 
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       sendMessage();
     });
+    var messagesEl = byId('juliaChatMessages');
+    if (messagesEl) {
+      messagesEl.addEventListener('click', function (e) {
+        var target = e.target;
+        if (!target || !target.matches('.julia-chat-suggestion-btn')) return;
+        var suggestion = target.getAttribute('data-julia-suggestion') || '';
+        if (!suggestion.trim()) return;
+        input.value = suggestion;
+        sendMessage(undefined, { source: 'suggestion_chip' });
+      });
+    }
   }
 
   if (document.readyState === 'loading') {
