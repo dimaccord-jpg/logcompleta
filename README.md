@@ -27,7 +27,36 @@ Escopo atual confirmado:
   - execução direta de sugestões clicadas com contexto adicional;
   - busca web contextual restrita ao chat;
   - filtro de relevância para links úteis;
+  - mensagem de bloqueio operacional com suporte visual a link markdown de upgrade;
 - detalhe de notícia/artigo com botão visual de retorno para home alinhado à paleta do site.
+- mensageria operacional centralizada do domínio Cleiton para status de franquia;
+- CTA de upgrade parametrizado por ambiente via `PLANOS_UPGRADE_URL`;
+- jornada de contratação de plano iniciada pelo card `Pagamento` em `/perfil`.
+
+## Experiência Atual de Telas (Fretes e Perfil)
+
+Este bloco documenta o comportamento vigente apenas no frontend dessas telas.  
+Não houve mudança de regra de governança, autorização operacional por franquia, consumo, billing técnico ou cálculo do motor.
+
+### Tela `/fretes`
+
+- a rota `/fretes` está acessível para qualquer usuário autenticado e também para perfis não-admin no frontend atual;
+- a consulta por rota (`UF + Cidade`, baseada em `frete_real`) está visível apenas para administradores;
+- para usuário comum, a experiência é focada no módulo de upload/BI (camada visual);
+- no usuário comum, foram ocultados visualmente os blocos:
+  - `Qualidade da base analisada`;
+  - `Recomendações`;
+  - `Custo médio (período)`;
+- no usuário comum, o layout dos gráficos foi reorganizado:
+  - `Proporção por modal` ocupa o espaço onde ficava o mapa;
+  - `Mapa Brasil (UF destino — tendência prevista 6 meses)` foi movido para o final da página com área maior, mantendo proporção visual.
+
+### Tela `/perfil`
+
+- o card `Pagamento` foi transformado em bloco clicável;
+- o clique redireciona para a nova rota `/contrate-um-plano`;
+- a página `Contrate um Plano` existe com conteúdo provisório:
+  - `Estamos construindo essa funcionalidade.`
 
 ## Regras Críticas do Sistema
 
@@ -95,6 +124,17 @@ Mudanças futuras nesse domínio devem ser refletidas primeiro aqui.
   - `Franquia.status`;
 - leitura operacional no endpoint admin.
 
+### Mensageria operacional e CTA de upgrade (sprint atual)
+
+- o texto de bloqueio/degradação/expiração operacional passou a ser montado por `app/services/cleiton_mensageria_operacao_service.py`;
+- `avaliar_autorizacao_operacao_por_franquia` continua dono da decisão de autorização e agora delega apenas a montagem textual da mensagem ao serviço de mensageria;
+- para `degraded`, `blocked` e `expired`, a UI recebe CTA com nome amigável do plano e link de upgrade;
+- o nome exibível do plano é resolvido por `plano_service.obter_nome_exibivel_plano(...)`;
+- a URL do CTA é configurável por ambiente:
+  - variável: `PLANOS_UPGRADE_URL`;
+  - configuração carregada em `settings.planos_upgrade_url`;
+  - disponibilizada no Flask por `app.config['PLANOS_UPGRADE_URL']`.
+
 ## Chat da Júlia
 
 Arquivos centrais:
@@ -118,6 +158,9 @@ Comportamento esperado hoje:
 - mensagens do usuário continuam em texto puro;
 - sugestões clicáveis podem disparar execução direta da intenção sugerida;
 - links úteis só devem ser exibidos quando houver aderência clara ao tema da consulta;
+- mensagem de apresentação visual atual:
+  - `Faça uma pergunta sobre logística, fretes, supply chain ou indicadores. Ex.: "Como o dólar impacta o frete?"`
+- mensagem de limite/bloqueio no frontend aceita markdown básico para exibir link de upgrade com clique;
 - se a busca web falhar ou não houver resultado confiável, a resposta continua sem quebrar e sem bloco de links.
 
 Limites e bordas:
@@ -163,7 +206,19 @@ Validação mínima recomendada:
 4. validar pergunta técnica com e sem links úteis;
 5. validar upload Roberto;
 6. validar telas admin;
-7. validar uma página `/noticia/<id>`.
+7. validar uma página `/noticia/<id>`;
+8. validar `/fretes` em dois perfis:
+  - admin: consulta `UF + Cidade` e bloco completo;
+  - usuário comum: apenas fluxo visual de upload/BI com blocos analíticos ocultos;
+9. validar `/perfil`:
+  - card `Pagamento` clicável;
+  - redirecionamento para `/contrate-um-plano`;
+  - mensagem de página em construção;
+10. validar mensagens operacionais da franquia para status `degraded`, `blocked` e `expired`:
+  - presença do nome amigável do plano;
+  - presença do link markdown de upgrade;
+11. validar variável `PLANOS_UPGRADE_URL` por ambiente (dev/homolog/prod);
+12. rodar `tests/test_franquia_operacao_autorizacao_service.py` para cobertura da mensageria operacional.
 
 ## Homologação e Deploy
 

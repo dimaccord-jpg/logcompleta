@@ -6,6 +6,7 @@ A visão principal do projeto, do chat da Júlia e das regras críticas fica no 
 ## Objetivo
 
 Fornecer um checklist curto de execução local e validação funcional básica.
+As regras de produto, governança e comportamento oficial permanecem centralizadas no `README.md` da raiz.
 
 ## Pré-requisitos
 
@@ -33,21 +34,35 @@ python -m app.web
    - markdown básico renderiza sem vazamento de `*`;
    - sugestão clicável executa a intenção;
    - links úteis só aparecem quando fizerem sentido;
+   - mensagem inicial exibida: `Faça uma pergunta sobre logística, fretes, supply chain ou indicadores. Ex.: "Como o dólar impacta o frete?"`;
+   - ao bloquear por franquia, a mensagem visual de limite renderiza link markdown clicável de upgrade;
 4. validar upload Roberto;
 5. validar páginas `/noticia/<id>` com botão `Voltar Para Home`;
-6. validar telas admin:
+6. validar experiência da tela `/fretes` por perfil:
+   - admin: consulta por `UF + Cidade` disponível e painel completo;
+   - usuário comum: foco visual em upload/BI, sem blocos de qualidade da base, recomendações e custo médio;
+   - no usuário comum, `Proporção por modal` no slot lateral e mapa no fim da página;
+   - mensagens de erro de upload aceitam links markdown vindos do backend;
+7. validar tela `/perfil`:
+   - card `Pagamento` clicável;
+   - redireciona para `/contrate-um-plano`;
+   - página exibe `Estamos construindo essa funcionalidade.`;
+8. validar telas admin:
    - `/admin/dashboard`
    - `/admin/agentes/julia`
    - `/admin/agentes/cleiton`
    - `/admin/controle-usuarios`
    - `/admin/planos`
-7. validar endpoint admin de franquia:
+9. validar endpoint admin de franquia:
    - `/admin/api/cleiton-franquia/<franquia_id>/validacao`
-8. validar onboarding e governança do plano Free:
+10. validar onboarding e governança do plano Free:
    - novo cadastro local nasce com `franquia.limite_total` numérico;
    - novo cadastro Google nasce com `franquia.limite_total` numérico;
    - novo usuário `free` não aparece como ilimitado por ausência de limite;
-   - a checagem deve ser feita na `Franquia`, não em `User.creditos`.
+   - a checagem deve ser feita na `Franquia`, não em `User.creditos`;
+11. validar mensageria operacional Cleiton:
+   - status `degraded`, `blocked` e `expired` retornam CTA com nome amigável do plano;
+   - URL do CTA respeita `PLANOS_UPGRADE_URL`.
 
 ## Comandos Úteis
 
@@ -67,6 +82,7 @@ python -m app.web
 - chat/upload bloqueado: verificar status operacional da franquia.
 - cadastro novo Free falhando: verificar se a referência administrativa do plano Free está configurada em `/admin/planos`.
 - links úteis ausentes no chat: pode ser resultado de filtro de relevância ou falha segura da busca web.
+- CTA de upgrade incorreto: verificar `PLANOS_UPGRADE_URL` no ambiente e em `app.config`.
 
 ## Referência Principal
 

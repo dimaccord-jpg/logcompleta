@@ -28,6 +28,12 @@ def perfil():
     return render_template("user_area.html")
 
 
+@user_bp.route("/contrate-um-plano")
+@login_required
+def contrate_plano():
+    return render_template("contrate_plano.html")
+
+
 @user_bp.route("/perfil/encerrar-contrato", methods=["POST"])
 @login_required
 def encerrar_contrato_route():

@@ -1,4 +1,5 @@
 {# Roberto Intelligence - BI de fretes: gráficos alimentados por APIs JSON #}
+{% set pode_ver_blocos_analiticos_avancados = current_user.is_authenticated and (current_user.is_admin is true) %}
 <section class="roberto-bi mt-5 mb-5" id="roberto-bi-section">
   <div class="ri-card shadow-sm mb-4">
     <div class="card-header bg-white p-3 border-bottom">
@@ -36,8 +37,11 @@
 
   <div id="roberto-bi-charts" class="roberto-bi-charts" style="display: none;">
   <div id="roberto-bi-origem-filter" class="mb-3" style="display:none;"></div>
+  {% if pode_ver_blocos_analiticos_avancados %}
   <div id="roberto-qualidade-base" class="mb-3 small" style="display: none;" aria-live="polite"></div>
   <div id="roberto-recomendacoes-analise" class="mb-3 small" style="display: none;" aria-live="polite"></div>
+  {% endif %}
+  {% if pode_ver_blocos_analiticos_avancados %}
   <div class="row g-4 mb-4">
     <div class="col-12 col-lg-6">
       <div class="ri-card shadow-sm h-100">
@@ -60,6 +64,7 @@
       </div>
     </div>
   </div>
+  {% endif %}
 
   <div class="ri-card shadow-sm mb-4">
     <div class="card-header bg-white py-2">
@@ -87,10 +92,18 @@
     <div class="col-12 col-lg-6">
       <div class="ri-card shadow-sm h-100">
         <div class="card-header bg-white py-2">
+          {% if pode_ver_blocos_analiticos_avancados %}
           <h6 class="mb-0 fw-bold">Mapa Brasil (UF destino — tendência prevista 6 meses)</h6>
+          {% else %}
+          <h6 class="mb-0 fw-bold">Proporção por modal</h6>
+          {% endif %}
         </div>
         <div class="card-body position-relative" style="min-height: 280px;">
+          {% if pode_ver_blocos_analiticos_avancados %}
           <div id="heatmap-brasil"></div>
+          {% else %}
+          <canvas id="chart-modal"></canvas>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -104,12 +117,24 @@
       <canvas id="chart-dispersao"></canvas>
     </div>
   </div>
+
+  {% if not pode_ver_blocos_analiticos_avancados %}
+  <div class="ri-card shadow-sm mb-4 roberto-map-final">
+    <div class="card-header bg-white py-2">
+      <h6 class="mb-0 fw-bold">Mapa Brasil (UF destino — tendência prevista 6 meses)</h6>
+    </div>
+    <div class="card-body position-relative" style="min-height: 340px;">
+      <div id="heatmap-brasil"></div>
+    </div>
+  </div>
+  {% endif %}
   </div>
 </section>
 
 <style>
   .roberto-heatmap-map-wrap { max-width: 100%; overflow: hidden; }
   .roberto-heatmap-map-wrap svg { display: block; width: 100%; max-height: 300px; height: auto; }
+  .roberto-map-final .roberto-heatmap-map-wrap svg { max-height: 340px; }
   .roberto-heatmap-map-wrap path[id] { stroke: #fff; stroke-width: 0.45; }
   .roberto-heatmap-map-wrap path[id]:hover { filter: brightness(1.08); }
 </style>
@@ -185,14 +210,24 @@
       method: 'POST',
       body: formData,
       headers: { 'Accept': 'application/json' }
-    }).then(r => {
-      if (!r.ok) throw new Error(r.statusText);
+    }).then(async r => {
+      if (!r.ok) {
+        let backendError = '';
+        try {
+          const body = await r.json();
+          if (body && typeof body.error === 'string' && body.error.trim()) {
+            backendError = body.error.trim();
+          }
+        } catch (_) {}
+        throw new Error(backendError || r.statusText || 'Falha no envio.');
+      }
       return r.json();
     });
   }
 
   function updateCustoMedio() {
     const el = document.getElementById('roberto-custo-medio');
+    if (!el) return;
     fetchJson(biUrl('/custo_medio')).then(data => {
       if (data.registros === 0) {
         el.textContent = 'Nenhum dado disponível. Envie um Excel ou use a base histórica.';
@@ -209,6 +244,15 @@
     const d = document.createElement('div');
     d.textContent = String(str);
     return d.innerHTML;
+  }
+
+  function renderInlineMessage(str) {
+    return escapeHtml(str || '').replace(
+      /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/g,
+      function(_, label, url) {
+        return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+      }
+    );
   }
 
   function renderQualidadePrevisao(q) {
@@ -669,7 +713,10 @@
       }
       statusEl.innerHTML = msg;
       showBiChartsAndLoad();
-    }).catch(() => { statusEl.innerHTML = '<span class="text-danger">Falha no envio.</span>'; });
+    }).catch((err) => {
+      const msg = (err && typeof err.message === 'string' && err.message.trim()) ? err.message : 'Falha no envio.';
+      statusEl.innerHTML = '<span class="text-danger">' + renderInlineMessage(msg) + '</span>';
+    });
     this.value = '';
   });
 

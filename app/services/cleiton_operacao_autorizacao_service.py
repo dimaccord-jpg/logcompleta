@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from app.models import Franquia
+from app.services.cleiton_mensageria_operacao_service import montar_mensagem_operacao
 from app.services.cleiton_franquia_leitura_service import (
     ler_franquia_operacional_cleiton,
 )
@@ -30,18 +31,6 @@ class DecisaoOperacaoFranquia:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def _mensagem_usuario_por_status(status_franquia: str, motivo: str) -> str | None:
-    if status_franquia == Franquia.STATUS_BLOCKED:
-        if motivo == "bloqueio_manual":
-            return "Sua franquia está temporariamente bloqueada por ação administrativa."
-        return "Sua franquia está bloqueada para operação no momento."
-    if status_franquia == Franquia.STATUS_EXPIRED:
-        return "A vigência operacional da sua franquia expirou."
-    if status_franquia == Franquia.STATUS_DEGRADED:
-        return "Sua franquia está em modo degradado."
-    return None
 
 
 def _sugerir_upgrade(status_franquia: str, motivo: str) -> bool:
@@ -130,8 +119,13 @@ def avaliar_autorizacao_operacao_por_franquia(
     motivo = leitura.motivo_status or "status_indefinido"
     modo_operacao = _mapear_modo_operacao(status_franquia)
     permitido = _is_permitido(modo_operacao)
-    mensagem_usuario = _mensagem_usuario_por_status(status_franquia, motivo)
     sugerir_upgrade = _sugerir_upgrade(status_franquia, motivo)
+    mensagem_usuario = montar_mensagem_operacao(
+        status_franquia=status_franquia,
+        motivo=motivo,
+        plano_resolvido=leitura.plano_resolvido,
+        sugerir_upgrade=sugerir_upgrade,
+    )
 
     decisao = DecisaoOperacaoFranquia(
         permitido=permitido,

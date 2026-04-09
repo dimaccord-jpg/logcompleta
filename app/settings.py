@@ -62,6 +62,8 @@ class Settings:
     artigos_limite: int
     # Janela de memória do chat Júlia (mensagens anteriores enviadas ao LLM)
     julia_chat_max_history: int
+    # URL da página comercial de planos (CTA operacional)
+    planos_upgrade_url: str
 
 
 def _build_settings() -> Settings:
@@ -131,6 +133,10 @@ def _build_settings() -> Settings:
         julia_chat_max_history = int(os.getenv("JULIA_CHAT_MAX_HISTORY", "10").strip() or "10")
     except (ValueError, TypeError):
         julia_chat_max_history = 10
+    planos_upgrade_url = (
+        os.getenv("PLANOS_UPGRADE_URL", "http://127.0.0.1:5000/contrate-um-plano").strip()
+        or "http://127.0.0.1:5000/contrate-um-plano"
+    )
 
     # 11) Debug: forçamos False em homolog/prod por segurança
     debug = (os.getenv("FLASK_DEBUG", "False") or "False").lower() in ("true", "1", "t")
@@ -165,6 +171,7 @@ def _build_settings() -> Settings:
         noticias_limite=noticias_limite,
         artigos_limite=artigos_limite,
         julia_chat_max_history=julia_chat_max_history,
+        planos_upgrade_url=planos_upgrade_url,
     )
 
 

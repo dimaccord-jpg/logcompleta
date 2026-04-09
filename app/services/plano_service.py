@@ -84,6 +84,19 @@ def _config_desc_valor_plano(plano_nome: str) -> str:
     return f"Valor administrativo do plano {plano_nome} (R$)"
 
 
+def obter_nome_exibivel_plano(plano_codigo: str | None) -> str:
+    """
+    Nome amigável canônico para exibição de plano em mensagens de produto.
+    """
+    codigo = (plano_codigo or "").strip().lower()
+    plano = _PLANOS_POR_CODIGO.get(codigo)
+    if plano:
+        return plano["nome"]
+    if codigo:
+        return codigo.capitalize()
+    return "atual"
+
+
 def obter_limite_referencia_plano_admin(
     plano_codigo: str,
     *,

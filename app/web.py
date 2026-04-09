@@ -118,6 +118,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = settings.session_lifetime_seconds
 app.config['SESSION_COOKIE_SECURE'] = settings.session_cookie_secure
 app.config['SESSION_COOKIE_HTTPONLY'] = settings.session_cookie_httponly
 app.config['SESSION_COOKIE_SAMESITE'] = settings.session_cookie_samesite
+app.config['PLANOS_UPGRADE_URL'] = settings.planos_upgrade_url
 
 # Configuração para OAuth em HTTPS com auto-redirecionamento
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.
@@ -501,38 +502,6 @@ def logout():
 
 @app.route('/fretes', methods=['GET', 'POST'])
 def fretes():
-    # Medida provisória: enquanto construímos as funcionalidades avançadas de frete,
-    # apenas usuários administradores enxergam a tela completa. Demais perfis (ou sem login)
-    # são direcionados para a página de "estamos construindo".
-    if (not current_user.is_authenticated) or (not user_is_admin(current_user)):
-        origem = "Consulta de Frete"
-        enviado = False
-        email_informado = ""
-        if request.method == "POST":
-            email_informado = (request.form.get("email") or "").strip()
-            if email_informado:
-                # Medida provisória: apenas envia e-mail para a equipe Agentefrete
-                # com o interesse do usuário, sem cadastro em base de dados.
-                subject = f"Interesse em {origem} - página em construção"
-                html = f"""
-                <p>Um usuário preencheu o formulário de interesse em funcionalidades em construção.</p>
-                <p><strong>E-mail informado:</strong> {email_informado}</p>
-                <p><strong>Página de origem:</strong> {origem}</p>
-                """.strip()
-                send_email(
-                    to_email="contato@agentefrete.com.br",
-                    subject=subject,
-                    html=html,
-                    text=f"E-mail informado: {email_informado}\nPágina de origem: {origem}",
-                )
-                enviado = True
-        return render_template(
-            'feature_under_construction.html',
-            origem=origem,
-            enviado=enviado,
-            email_informado=email_informado,
-        )
-
     # ALTERAÇÃO 1: Carregar os dados reais do indices.json
     try:
         with open(os.path.join(_diretorio_app, 'indices.json'), 'r', encoding='utf-8') as f:

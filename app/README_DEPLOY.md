@@ -17,6 +17,8 @@ Este documento complementa o `README.md` principal com a sequência segura de de
 - upload Roberto com billing técnico;
 - painel admin;
 - pipeline editorial e chat da Júlia;
+- mensageria operacional com CTA de upgrade por franquia;
+- rota `/contrate-um-plano` e card `Pagamento` clicável em `/perfil`;
 - migrations da cadeia ativa;
 - testes mínimos da Fase 2.
 
@@ -33,6 +35,8 @@ Este documento complementa o `README.md` principal com a sequência segura de de
    - chat da Júlia
    - upload Roberto
    - detalhe de notícia/artigo
+   - `/fretes` para admin e usuário comum
+   - `/perfil` com redirecionamento para `/contrate-um-plano`
 
 ## Checklist Pós-Deploy
 
@@ -41,8 +45,16 @@ Este documento complementa o `README.md` principal com a sequência segura de de
 - `/cron/executar-cleiton` protegido corretamente;
 - chat Júlia respeita autorização por franquia;
 - chat Júlia mantém markdown seguro, sugestões e busca web contextual;
+- chat Júlia exibe mensagem inicial atualizada sem `(BDI, FBX)` no texto de boas-vindas;
+- chat Júlia renderiza link markdown em mensagens de bloqueio/limite;
 - páginas `/noticia/<id>` exibem botão `Voltar Para Home`;
 - upload Roberto continua operacional;
+- upload Roberto exibe mensagem de erro de upload com links markdown clicáveis quando enviados pelo backend;
+- `/fretes` mantém:
+  - consulta por rota para admin;
+  - experiência visual de upload/BI para usuário comum;
+- `/perfil` mantém card `Pagamento` clicável para `/contrate-um-plano`;
+- `PLANOS_UPGRADE_URL` está configurado no ambiente alvo e refletido em runtime;
 - o plano Free está configurado no admin com franquia de referência válida;
 - novo cadastro `free` nasce com `Franquia.limite_total` numérico;
 - novo cadastro `free` não exibe saldo ilimitado por erro estrutural;
@@ -55,6 +67,8 @@ Este documento complementa o `README.md` principal com a sequência segura de de
 - publicar frontend sem backend correspondente ou vice-versa;
 - publicar sem configurar a referência administrativa do plano Free;
 - reintroduzir uso funcional de `User.creditos` como se fosse fonte de verdade operacional;
+- publicar sem `PLANOS_UPGRADE_URL` consistente entre ambientes;
+- quebrar a renderização segura de markdown ao alterar mensagens operacionais no frontend;
 - tratar homolog como concluída sem validar schema e fluxos reais.
 
 ## Referência Principal

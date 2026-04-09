@@ -28,9 +28,36 @@ Estado atual esperado:
 - campo de entrada em `textarea`;
 - `Shift+Enter` para quebra de linha e `Enter` para envio, controlados no JS;
 - não exibe dica visual de teclado;
+- mensagem de boas-vindas exibida:
+  - `Faça uma pergunta sobre logística, fretes, supply chain ou indicadores. Ex.: "Como o dólar impacta o frete?"`
 - suporta sugestões clicáveis;
 - renderização visual preparada para markdown básico seguro da Júlia;
 - mensagens do usuário continuam simples e puras.
+
+### `fretes.html` + `roberto_bi.html`
+
+Estado visual por perfil:
+
+- admin autenticado:
+  - vê formulário de consulta por rota (`UF + Cidade`);
+  - vê o módulo BI completo;
+- usuário comum autenticado:
+  - não vê o formulário de consulta por rota;
+  - experiência foca no upload/BI;
+  - blocos `Qualidade da base analisada`, `Recomendações` e `Custo médio (período)` ficam ocultos;
+  - `Proporção por modal` ocupa o slot lateral;
+  - `Mapa Brasil` aparece no final em card dedicado e maior.
+
+Comportamento visual complementar:
+
+- mensagens de erro de upload aceitam links markdown simples vindos do backend;
+- links exibidos devem abrir em nova aba com `rel="noopener noreferrer"`.
+
+### `user_area.html` + `contrate_plano.html`
+
+- card `Pagamento` em `/perfil` é clicável;
+- redireciona para `/contrate-um-plano`;
+- template `contrate_plano.html` mostra estado provisório de funcionalidade em construção.
 
 ### `noticia_interna.html`
 

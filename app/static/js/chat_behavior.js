@@ -34,11 +34,14 @@
     if (!limitMsgEl || !sendBtn) return;
     if (limitReached) {
       limitMsgEl.style.display = 'block';
-      limitMsgEl.textContent = message || 'O chat está temporariamente indisponível para este usuário.';
+      limitMsgEl.innerHTML = renderJuliaMarkdown(
+        message || 'O chat está temporariamente indisponível para este usuário.'
+      );
       sendBtn.disabled = true;
       if (input) input.disabled = true;
     } else {
       limitMsgEl.style.display = 'none';
+      limitMsgEl.innerHTML = '';
       sendBtn.disabled = false;
       if (input) input.disabled = false;
     }

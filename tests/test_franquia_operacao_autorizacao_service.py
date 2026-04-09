@@ -11,7 +11,7 @@ def _user(*, authenticated=True, franquia_id=10):
     )
 
 
-def _leitura(status: str, motivo: str = "operacional_ok"):
+def _leitura(status: str, motivo: str = "operacional_ok", plano_resolvido: str = "starter"):
     return SimpleNamespace(
         franquia_id=10,
         limite_total=None,
@@ -20,7 +20,7 @@ def _leitura(status: str, motivo: str = "operacional_ok"):
         inicio_ciclo=None,
         fim_ciclo=None,
         status=status,
-        plano_resolvido="starter",
+        plano_resolvido=plano_resolvido,
         motivo_status=motivo,
         pendencias=(),
     )
@@ -48,6 +48,11 @@ def test_degraded_permite_operacao_degradada(monkeypatch):
     assert out["permitido"] is True
     assert out["modo_operacao"] == "degraded"
     assert out["sugerir_upgrade"] is True
+    assert out["mensagem_usuario"] == (
+        "Você atingiu o limite de uso do plano Starter. Não pare agora! "
+        "Faça o upgrade e continue criando sem interrupções: "
+        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+    )
 
 
 def test_blocked_bloqueia_antes_da_operacao(monkeypatch):
@@ -59,7 +64,11 @@ def test_blocked_bloqueia_antes_da_operacao(monkeypatch):
     out = svc.avaliar_autorizacao_operacao_por_franquia(_user())
     assert out["permitido"] is False
     assert out["modo_operacao"] == "blocked"
-    assert out["mensagem_usuario"] is not None
+    assert out["mensagem_usuario"] == (
+        "Você atingiu o limite de uso do plano Starter. Não pare agora! "
+        "Faça o upgrade e continue criando sem interrupções: "
+        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+    )
 
 
 def test_expired_bloqueia_antes_da_operacao(monkeypatch):
@@ -72,6 +81,11 @@ def test_expired_bloqueia_antes_da_operacao(monkeypatch):
     assert out["permitido"] is False
     assert out["modo_operacao"] == "blocked"
     assert out["status_franquia"] == Franquia.STATUS_EXPIRED
+    assert out["mensagem_usuario"] == (
+        "Você atingiu o limite de uso do plano Starter. Não pare agora! "
+        "Faça o upgrade e continue criando sem interrupções: "
+        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+    )
 
 
 def test_sem_franquia_trata_sem_erro_500():
@@ -92,3 +106,26 @@ def test_bloqueio_manual_nao_sugere_upgrade(monkeypatch):
     out = svc.avaliar_autorizacao_operacao_por_franquia(_user())
     assert out["permitido"] is False
     assert out["sugerir_upgrade"] is False
+    assert out["mensagem_usuario"] == (
+        "Você atingiu o limite de uso do plano Starter. Não pare agora! "
+        "Faça o upgrade e continue criando sem interrupções: "
+        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+    )
+
+
+def test_avulso_recebe_cta_padrao_mvp(monkeypatch):
+    monkeypatch.setattr(
+        svc,
+        "ler_franquia_operacional_cleiton",
+        lambda _fid, sincronizar_ciclo=True: _leitura(
+            Franquia.STATUS_BLOCKED,
+            plano_resolvido="avulso",
+        ),
+    )
+    out = svc.avaliar_autorizacao_operacao_por_franquia(_user())
+    assert out["permitido"] is False
+    assert out["mensagem_usuario"] == (
+        "Você atingiu o limite de uso do plano Avulso. Não pare agora! "
+        "Faça o upgrade e continue criando sem interrupções: "
+        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+    )
