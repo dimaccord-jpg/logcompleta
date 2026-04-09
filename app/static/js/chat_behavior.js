@@ -72,7 +72,7 @@
   function renderJuliaMarkdown(text) {
     function inlineFormat(raw) {
       var safe = escapeHtml(raw || '');
-      safe = safe.replace(/\[([^\]\n]{1,120})\]\((https?:\/\/[^\s)]+)\)/g, function (_, label, url) {
+      safe = safe.replace(/\[([^\]\n]{1,120})\]\(((?:https?:\/\/|\/)[^\s)]+)\)/g, function (_, label, url) {
         return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
       });
       safe = safe.replace(/\*\*([^*\n][^*\n]*?)\*\*/g, '<strong>$1</strong>');

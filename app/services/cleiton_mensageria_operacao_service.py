@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 
-from flask import current_app
+from flask import current_app, url_for
 
 from app.models import Franquia
 from app.services.plano_service import obter_nome_exibivel_plano
@@ -58,14 +58,17 @@ def _mensagem_legado(*, status_franquia: str, motivo: str) -> str | None:
 
 
 def _obter_url_upgrade_planos() -> str:
-    default = (
-        os.getenv("PLANOS_UPGRADE_URL", "http://127.0.0.1:5000/contrate-um-plano").strip()
-        or "http://127.0.0.1:5000/contrate-um-plano"
-    )
+    default = "/contrate-um-plano"
     try:
         valor_cfg = current_app.config.get("PLANOS_UPGRADE_URL")
     except RuntimeError:
         valor_cfg = None
     if isinstance(valor_cfg, str) and valor_cfg.strip():
         return valor_cfg.strip()
-    return default
+    raw_env = (os.getenv("PLANOS_UPGRADE_URL") or "").strip()
+    if raw_env:
+        return raw_env
+    try:
+        return url_for("user.contrate_plano", _external=True)
+    except Exception:
+        return default

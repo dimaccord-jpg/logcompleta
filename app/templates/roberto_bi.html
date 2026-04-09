@@ -248,7 +248,7 @@
 
   function renderInlineMessage(str) {
     return escapeHtml(str || '').replace(
-      /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/g,
+      /\[([^\]\n]{1,200})\]\(((?:https?:\/\/|\/)[^\s)]+)\)/g,
       function(_, label, url) {
         return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
       }

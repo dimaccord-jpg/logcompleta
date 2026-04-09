@@ -133,10 +133,7 @@ def _build_settings() -> Settings:
         julia_chat_max_history = int(os.getenv("JULIA_CHAT_MAX_HISTORY", "10").strip() or "10")
     except (ValueError, TypeError):
         julia_chat_max_history = 10
-    planos_upgrade_url = (
-        os.getenv("PLANOS_UPGRADE_URL", "http://127.0.0.1:5000/contrate-um-plano").strip()
-        or "http://127.0.0.1:5000/contrate-um-plano"
-    )
+    planos_upgrade_url = (os.getenv("PLANOS_UPGRADE_URL") or "").strip()
 
     # 11) Debug: forçamos False em homolog/prod por segurança
     debug = (os.getenv("FLASK_DEBUG", "False") or "False").lower() in ("true", "1", "t")

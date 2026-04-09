@@ -51,7 +51,7 @@ def test_degraded_permite_operacao_degradada(monkeypatch):
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
         "Faça o upgrade e continue criando sem interrupções: "
-        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+        "[/contrate-um-plano](/contrate-um-plano)"
     )
 
 
@@ -67,7 +67,7 @@ def test_blocked_bloqueia_antes_da_operacao(monkeypatch):
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
         "Faça o upgrade e continue criando sem interrupções: "
-        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+        "[/contrate-um-plano](/contrate-um-plano)"
     )
 
 
@@ -84,7 +84,7 @@ def test_expired_bloqueia_antes_da_operacao(monkeypatch):
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
         "Faça o upgrade e continue criando sem interrupções: "
-        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+        "[/contrate-um-plano](/contrate-um-plano)"
     )
 
 
@@ -109,7 +109,7 @@ def test_bloqueio_manual_nao_sugere_upgrade(monkeypatch):
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
         "Faça o upgrade e continue criando sem interrupções: "
-        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+        "[/contrate-um-plano](/contrate-um-plano)"
     )
 
 
@@ -127,5 +127,5 @@ def test_avulso_recebe_cta_padrao_mvp(monkeypatch):
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Avulso. Não pare agora! "
         "Faça o upgrade e continue criando sem interrupções: "
-        "[http://127.0.0.1:5000/contrate-um-plano](http://127.0.0.1:5000/contrate-um-plano)"
+        "[/contrate-um-plano](/contrate-um-plano)"
     )
