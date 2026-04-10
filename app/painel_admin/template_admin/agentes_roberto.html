@@ -2,14 +2,82 @@
 
 {% block admin_content %}
 <div class="container-fluid">
-    <h4 class="mb-3">Agentes - Roberto</h4>
-    <div class="card border-0 shadow-sm">
+    <h4 class="mb-3">Roberto — Controles operacionais</h4>
+    <p class="text-muted small mb-4">
+        Ajuste manual dos limites de upload e leitura analítica do Roberto, mantendo o fluxo oficial de governança.
+    </p>
+    <form method="post" action="{{ url_for('admin.agentes_roberto') }}" class="card border-0 shadow-sm">
         <div class="card-body">
-            <p class="text-muted mb-0">
-                Área reservada para as rotinas do Roberto.
-                Nesta semana este módulo ficará em preparação, sem ações operacionais.
-            </p>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">upload_total_max</label>
+                    <input type="number" min="100" step="1" name="upload_total_max" class="form-control"
+                           value="{{ cfg.upload_total_max }}">
+                    <small class="text-muted">Máximo total de linhas do upload utilizadas no BI.</small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">upload_ttl_minutes</label>
+                    <input type="number" min="5" step="1" name="upload_ttl_minutes" class="form-control"
+                           value="{{ cfg.upload_ttl_minutes }}">
+                    <small class="text-muted">Tempo de retenção dos dados temporários de upload.</small>
+                </div>
+
+                <div class="col-md-6">
+                    <label class="form-label">previsao_meses</label>
+                    <input type="number" min="3" step="1" name="previsao_meses" class="form-control"
+                           value="{{ cfg.previsao_meses }}">
+                    <small class="text-muted">Quantidade de meses históricos considerados no BI/previsão.</small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">min_linhas_mes_modelo</label>
+                    <input type="number" min="1" step="1" name="min_linhas_mes_modelo" class="form-control"
+                           value="{{ cfg.min_linhas_mes_modelo }}">
+                    <small class="text-muted">Mínimo por mês para avaliação de qualidade do modelo.</small>
+                </div>
+
+                <div class="col-md-6">
+                    <label class="form-label">min_linhas_uf_heatmap_ranking</label>
+                    <input type="number" min="1" step="1" name="min_linhas_uf_heatmap_ranking" class="form-control"
+                           value="{{ cfg.min_linhas_uf_heatmap_ranking }}">
+                    <small class="text-muted">Mínimo por UF para participação em heatmap/ranking.</small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">max_pontos_dispersao</label>
+                    <input type="number" min="50" step="1" name="max_pontos_dispersao" class="form-control"
+                           value="{{ cfg.max_pontos_dispersao }}">
+                    <small class="text-muted">Limite de pontos exibidos no gráfico de dispersão.</small>
+                </div>
+
+                <div class="col-md-6">
+                    <label class="form-label">max_linhas_mes_modelo</label>
+                    <input type="number" min="20" step="1" name="max_linhas_mes_modelo" class="form-control"
+                           value="{{ cfg.max_linhas_mes_modelo }}">
+                    <small class="text-muted">
+                        Controle em calibração. Valor inicial provisório sujeito a calibração.
+                    </small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">max_linhas_uf_heatmap</label>
+                    <input type="number" min="20" step="1" name="max_linhas_uf_heatmap" class="form-control"
+                           value="{{ cfg.max_linhas_uf_heatmap }}">
+                    <small class="text-muted">
+                        Limite de linhas por UF no heatmap. Valor inicial provisório sujeito a calibração.
+                    </small>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">max_linhas_uf_ranking</label>
+                    <input type="number" min="20" step="1" name="max_linhas_uf_ranking" class="form-control"
+                           value="{{ cfg.max_linhas_uf_ranking }}">
+                    <small class="text-muted">
+                        Limite de linhas por UF no ranking. Valor inicial provisório sujeito a calibração.
+                    </small>
+                </div>
+            </div>
+            <div class="mt-4">
+                <button type="submit" class="btn btn-primary">Salvar</button>
+                <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-secondary ms-2">Dashboard</a>
+            </div>
         </div>
-    </div>
+    </form>
 </div>
 {% endblock %}

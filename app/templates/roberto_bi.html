@@ -68,7 +68,7 @@
 
   <div class="ri-card shadow-sm mb-4">
     <div class="card-header bg-white py-2">
-      <h6 class="mb-0 fw-bold">Evolução do custo médio (18 meses + previsão 6 meses)</h6>
+      <h6 class="mb-0 fw-bold">Evolução do custo médio e previsão</h6>
     </div>
     <div class="card-body">
       <div id="roberto-serie-qualidade" class="mb-2 small" style="display: none;" aria-live="polite"></div>
@@ -705,7 +705,7 @@
       }
       var msg = '<span class="text-success">' + (res.registros_utilizados ?? res.registros) + ' registro(s) utilizados';
       if (res.registros_recebidos != null && res.registros_descartados > 0) {
-        msg += ' (' + res.registros_recebidos + ' recebidos, ' + res.registros_descartados + ' descartados na amostragem por mês)';
+        msg += ' (' + res.registros_recebidos + ' recebidos, ' + res.registros_descartados + ' descartados por limite operacional)';
       }
       msg += '.</span>';
       if (res.aviso_baixa_representatividade) {

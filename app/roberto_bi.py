@@ -17,13 +17,13 @@ from app.roberto_custo import calcular_custo_robusto_rs_kg
 from app.roberto_modelo import prever as roberto_prever
 from app.roberto_qualidade_base import calcular_qualidade_base
 from app.roberto_recomendacoes import gerar_recomendacoes_analise
+from app.services.roberto_config_service import get_roberto_config
 from app.upload_handler import get_dados_upload_cliente
 
 logger = logging.getLogger(__name__)
 
 PESO_BASE_OURO = 1.0
 PESO_BASE_CLIENTE = 0.6
-MESES_SERIE = 18
 # Score = média de deltas de previsão (R$/kg por passo). Valores com |score| abaixo disso = neutro.
 HEATMAP_NEUTRO_EPS = 1e-5
 
@@ -271,6 +271,7 @@ def _montar_contexto_bi_roberto() -> dict:
     qualidade da base, série e recomendações derivadas dos mesmos objetos.
     Não mistura origens (upload vs base ouro) — só consolida o fluxo sobre _get_bi_dataset().
     """
+    cfg = get_roberto_config()
     unidos = _get_bi_dataset()
     qualidade_base = calcular_qualidade_base(unidos)
     resultado = None
@@ -282,7 +283,7 @@ def _montar_contexto_bi_roberto() -> dict:
 
     if unidos:
         historico = _historico_roberto_por_linhas(unidos)
-        historico = _filtrar_historico_ultimos_meses(historico, MESES_SERIE)
+        historico = _filtrar_historico_ultimos_meses(historico, cfg.previsao_meses)
         resultado = roberto_prever(historico, None)
         meses_ord = list(resultado.get("serie_historica_meses") or [])
         valores = [float(v) for v in (resultado.get("serie_historica_valores") or [])]
@@ -353,9 +354,14 @@ def ranking_ufs() -> dict:
         uf = (r.get("uf_destino") or "").strip().upper()[:2]
         if uf:
             por_uf[uf].append(r)
+    cfg = get_roberto_config()
+    por_uf = _filtrar_grupos_por_min_linhas(por_uf, cfg.min_linhas_uf_heatmap_ranking)
+    if not por_uf:
+        return {"ufs": [], "custos": [], "labels": []}
 
     ranking = []
     for uf, rows in por_uf.items():
+        rows = _limitar_rows_por_data(rows, cfg.max_linhas_uf_ranking)
         custo = calcular_custo_robusto_rs_kg(rows)
         ranking.append((uf, custo if custo is not None else 0.0))
     ranking.sort(key=lambda t: t[1], reverse=True)
@@ -402,6 +408,29 @@ def _filtrar_historico_ultimos_meses(historico: list[dict], max_meses: int) -> l
         if d and d.strftime("%Y-%m") in permitidos:
             filtrado.append(r)
     return filtrado
+
+
+def _limitar_rows_por_data(rows: list[dict], max_linhas: int) -> list[dict]:
+    if max_linhas <= 0 or len(rows) <= max_linhas:
+        return rows
+
+    def _ord(r: dict) -> str:
+        d = r.get("data_emissao")
+        if d is None:
+            return ""
+        if hasattr(d, "isoformat"):
+            return d.isoformat()[:10]
+        return str(d).strip()[:10]
+
+    return sorted(rows, key=_ord, reverse=True)[:max_linhas]
+
+
+def _filtrar_grupos_por_min_linhas(
+    grouped_rows: dict[str, list[dict]],
+    min_linhas: int,
+) -> dict[str, list[dict]]:
+    min_rows = max(1, int(min_linhas))
+    return {k: v for k, v in grouped_rows.items() if len(v) >= min_rows}
 
 
 def _score_medio_variacoes_previsao(valores_rs_kg: list[float]) -> float | None:
@@ -479,11 +508,22 @@ def heatmap_brasil() -> dict:
         uf = (r.get("uf_destino") or "").strip().upper()[:2]
         if uf:
             por_uf[uf].append(r)
+    cfg = get_roberto_config()
+    por_uf = _filtrar_grupos_por_min_linhas(por_uf, cfg.min_linhas_uf_heatmap_ranking)
+    if not por_uf:
+        return {
+            "ufs": [],
+            "valores": [],
+            "nivel_temperatura": [],
+            "tendencia_alta": [],
+            "qualidade_uf": [],
+        }
 
     itens: list[dict] = []
     for uf, rows in por_uf.items():
+        rows = _limitar_rows_por_data(rows, cfg.max_linhas_uf_heatmap)
         historico = _historico_roberto_por_linhas(rows)
-        historico = _filtrar_historico_ultimos_meses(historico, MESES_SERIE)
+        historico = _filtrar_historico_ultimos_meses(historico, cfg.previsao_meses)
         if not historico:
             itens.append({"uf": uf, "score": None, "valor_vis": 0.0, "qualidade": None})
             continue
@@ -568,10 +608,10 @@ def dispersao_volume_custo() -> dict:
         if peso > 0:
             custo_kg = valor / peso
             pontos.append({"peso": round(peso, 2), "custo_kg": round(custo_kg, 4), "valor_frete": round(valor, 2)})
-    # Limitar pontos para não sobrecarregar o gráfico
-    if len(pontos) > 500:
+    cfg = get_roberto_config()
+    if len(pontos) > cfg.max_pontos_dispersao:
         random.shuffle(pontos)
-        pontos = pontos[:500]
+        pontos = pontos[:cfg.max_pontos_dispersao]
     return {"pontos": pontos}
 
 

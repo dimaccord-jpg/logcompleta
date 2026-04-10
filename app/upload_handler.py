@@ -1,23 +1,12 @@
 """
 Upload e gerenciamento temporário de dados de fretes para o Roberto Intelligence.
 Valida Excel, normaliza texto, resolve localidades em base_localidades (id_cidade, id_uf, UF textual)
-e armazena o payload completo em sessão (sem persistir linhas em banco de negócio).
-
-Amostragem mensal: para grandes volumes, apenas uma amostra representativa por mês
-é mantida antes da previsão (roberto_modelo.py continua usando regressão linear
-sobre a série temporal agregada por mês). Isso reduz uso de memória e tempo de
-processamento sem prejudicar a qualidade da série mensal.
-
-Uploads: os arquivos Excel recebidos são salvos em um diretório dedicado
-(`roberto_uploads`) dentro do pacote `app`, separado do diretório usado
-pelo Flask-Session. Isso evita qualquer conflito com a pasta de sessão
-filesystem e mantém o isolamento da funcionalidade do Roberto.
+e salva os dados em persistência temporária dedicada (referência leve em sessão).
 """
 import logging
 import os
 import time
-from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -25,6 +14,13 @@ from flask import request, session, jsonify
 from werkzeug.datastructures import FileStorage
 
 from app.infra import carregar_localidades_por_chaves
+from app.roberto_upload_store import (
+    clear_upload_data as clear_upload_data_store,
+    maybe_cleanup_expired_uploads,
+    read_upload_data,
+    save_upload_data,
+)
+from app.services.roberto_config_service import get_roberto_config
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +28,6 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "roberto_uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# Amostragem por mês (antes de salvar na sessão):
-# - Máximo de registros mantidos por mês; o restante é descartado para otimizar volume.
-AMOSTRA_MAX_POR_MES = 20
-# - Abaixo deste valor, consideramos baixa representatividade e informamos o usuário.
-AMOSTRA_MIN_RECOMENDADO_POR_MES = 10
 
 # Colunas obrigatórias no Excel (nomes exatos após normalização do cabeçalho)
 COLUNAS_OBRIGATORIAS = {
@@ -53,10 +43,8 @@ COLUNAS_OBRIGATORIAS = {
 }
 COLUNA_OPCIONAL_IMPOSTO = "valor_imposto"
 
-# Chave de sessão e TTL para descarte automático (minutos)
-SESSION_KEY_UPLOAD = "roberto_upload_data"
-SESSION_KEY_UPLOAD_AT = "roberto_upload_at"
-UPLOAD_TTL_MINUTOS = 30
+# Chave de sessão com referência ao payload temporário dedicado.
+SESSION_KEY_UPLOAD_REF = "roberto_upload_ref"
 
 
 def _normalizar_texto(val: Any) -> str:
@@ -114,69 +102,89 @@ def _resolve_execution_id() -> str:
     return execution_id[:120]
 
 
-def _chave_mes(reg: dict) -> str:
-    """Extrai chave ano-mês (YYYY-MM) do campo data_emissao do registro."""
-    d = reg.get("data_emissao") or ""
-    if hasattr(d, "strftime"):
-        return d.strftime("%Y-%m")
-    s = str(d).strip()[:10]
-    if len(s) >= 7:
-        return s[:7]
-    return ""
+def _sort_key_recente(reg: dict[str, Any]) -> str:
+    val = reg.get("data_emissao")
+    if val is None:
+        return ""
+    if hasattr(val, "isoformat"):
+        return val.isoformat()[:10]
+    return str(val).strip()[:10]
 
 
-def _reduzir_amostra_por_mes(
+def _chave_mes_data(reg: dict[str, Any]) -> str:
+    val = reg.get("data_emissao")
+    if val is None:
+        return "sem_data"
+    if hasattr(val, "strftime"):
+        return val.strftime("%Y-%m")
+    s = str(val).strip()[:10]
+    return s[:7] if len(s) >= 7 else "sem_data"
+
+
+def _selecionar_meses_representativos(meses_ordenados: list[str], limite_meses: int) -> list[str]:
+    if limite_meses >= len(meses_ordenados):
+        return list(meses_ordenados)
+    if limite_meses <= 1:
+        # Melhor esforço para preservar representatividade temporal:
+        # quando só cabe 1 mês, prioriza o mais recente.
+        return [meses_ordenados[-1]]
+
+    total = len(meses_ordenados)
+    escolhidos_idx: set[int] = set()
+    for i in range(limite_meses):
+        idx = round(i * (total - 1) / (limite_meses - 1))
+        escolhidos_idx.add(idx)
+    return [meses_ordenados[i] for i in sorted(escolhidos_idx)]
+
+
+def _aplicar_limite_upload_total(
     linhas: list[dict],
-) -> tuple[list[dict], dict[str, Any]]:
+    upload_total_max: int,
+) -> tuple[list[dict], dict[str, int]]:
     """
-    Agrupa fretes válidos por mês e mantém no máximo AMOSTRA_MAX_POR_MES por mês,
-    preferindo os mais recentes (por data_emissao). Reduz volume para grandes
-    uploads sem perder representatividade da série mensal usada pela regressão linear.
-
-    :param linhas: lista de registros com data_emissao (str ISO ou date).
-    :return: (lista reduzida, estatísticas para o usuário).
+    Limita o volume total de linhas do upload para manter segurança operacional.
+    Estratégia: preserva representatividade temporal por mês e respeita teto global.
     """
-    por_mes: dict[str, list[dict]] = defaultdict(list)
-    for r in linhas:
-        chave = _chave_mes(r)
-        if chave:
-            por_mes[chave].append(r)
+    limite = max(1, int(upload_total_max))
+    if len(linhas) <= limite:
+        return linhas, {
+            "registros_recebidos": len(linhas),
+            "registros_utilizados": len(linhas),
+            "registros_descartados": 0,
+        }
 
-    resultado = []
-    utilizados_por_mes: dict[str, int] = {}
-    descartados_por_mes: dict[str, int] = {}
-    meses_baixa_representatividade: list[str] = []
+    por_mes: dict[str, list[dict]] = {}
+    for row in linhas:
+        chave_mes = _chave_mes_data(row)
+        por_mes.setdefault(chave_mes, []).append(row)
+    meses = sorted(por_mes.keys())
+    meses_ativos = _selecionar_meses_representativos(meses, min(limite, len(meses)))
 
-    for mes in sorted(por_mes.keys()):
-        registros = por_mes[mes]
-        # Ordenar por data_emissao (mais recentes primeiro) para preferir os mais recentes
-        def _data_ord(x):
-            v = x.get("data_emissao")
-            if hasattr(v, "strftime"):
-                return v.isoformat() if hasattr(v, "isoformat") else str(v)
-            return str(v)[:10] if v else "0000-00-00"
+    # Dentro de cada mês, mantém ordem por recência para estabilidade operacional.
+    for mes in meses_ativos:
+        por_mes[mes] = sorted(por_mes[mes], key=_sort_key_recente, reverse=True)
 
-        registros.sort(key=_data_ord, reverse=True)
-        total_mes = len(registros)
-        manter = registros[:AMOSTRA_MAX_POR_MES]
-        descartar = total_mes - len(manter)
-        resultado.extend(manter)
-        utilizados_por_mes[mes] = len(manter)
-        descartados_por_mes[mes] = descartar
-        if len(manter) < AMOSTRA_MIN_RECOMENDADO_POR_MES:
-            meses_baixa_representatividade.append(mes)
+    usadas: list[dict] = []
+    idx_por_mes: dict[str, int] = {mes: 0 for mes in meses_ativos}
+    while len(usadas) < limite:
+        adicionou = False
+        for mes in meses_ativos:
+            idx = idx_por_mes[mes]
+            rows_mes = por_mes[mes]
+            if idx < len(rows_mes):
+                usadas.append(rows_mes[idx])
+                idx_por_mes[mes] = idx + 1
+                adicionou = True
+                if len(usadas) >= limite:
+                    break
+        if not adicionou:
+            break
 
-    stats = {
+    return usadas, {
         "registros_recebidos": len(linhas),
-        "registros_utilizados": len(resultado),
-        "registros_descartados": len(linhas) - len(resultado),
-        "por_mes": {
-            mes: {"utilizados": utilizados_por_mes[mes], "descartados": descartados_por_mes[mes]}
-            for mes in sorted(por_mes.keys())
-        },
-        "meses_baixa_representatividade": meses_baixa_representatividade,
+        "registros_utilizados": len(usadas),
+        "registros_descartados": len(linhas) - len(usadas),
     }
-    return resultado, stats
 
 
 def processar_upload_frete_excel() -> tuple[dict, int]:
@@ -188,6 +196,7 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
     """
     arquivo = request.files.get("file") or request.files.get("arquivo")
     execution_id = _resolve_execution_id()
+    cfg = get_roberto_config()
     ok, msg = _validar_arquivo_excel(arquivo)
     if not ok:
         return jsonify({"success": False, "error": msg}), 400
@@ -366,20 +375,17 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
             "detalhes": erros_linha[:20],
         }), 400
 
-    # Amostragem por mês: mantém no máximo AMOSTRA_MAX_POR_MES por mês (mais recentes)
-    # para otimizar grandes volumes sem alterar a modelagem (regressão linear em roberto_modelo).
-    linhas_reduzidas, stats_amostra = _reduzir_amostra_por_mes(linhas_processadas)
-
-    session[SESSION_KEY_UPLOAD] = linhas_reduzidas
-    session[SESSION_KEY_UPLOAD_AT] = datetime.utcnow().isoformat()
+    linhas_utilizadas, stats_upload = _aplicar_limite_upload_total(
+        linhas_processadas,
+        cfg.upload_total_max,
+    )
+    maybe_cleanup_expired_uploads(cfg.upload_ttl_minutes)
+    upload_id_anterior = session.get(SESSION_KEY_UPLOAD_REF)
+    if isinstance(upload_id_anterior, str) and upload_id_anterior.strip():
+        clear_upload_data_store(upload_id_anterior.strip())
+    upload_ref = save_upload_data(linhas_utilizadas)
+    session[SESSION_KEY_UPLOAD_REF] = upload_ref
     session.modified = True
-
-    aviso_baixa = None
-    if stats_amostra.get("meses_baixa_representatividade"):
-        aviso_baixa = (
-            f"Meses com menos de {AMOSTRA_MIN_RECOMENDADO_POR_MES} fretes (baixa representatividade): "
-            + ", ".join(stats_amostra["meses_baixa_representatividade"])
-        )
 
     try:
         from app.services.cleiton_upload_billing_service import apropriar_billing_upload_roberto
@@ -401,12 +407,11 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
 
     return jsonify({
         "success": True,
-        "registros": len(linhas_reduzidas),
-        "registros_recebidos": stats_amostra["registros_recebidos"],
-        "registros_utilizados": stats_amostra["registros_utilizados"],
-        "registros_descartados": stats_amostra["registros_descartados"],
-        "amostragem_por_mes": stats_amostra["por_mes"],
-        "aviso_baixa_representatividade": aviso_baixa,
+        "registros": len(linhas_utilizadas),
+        "registros_recebidos": stats_upload["registros_recebidos"],
+        "registros_utilizados": stats_upload["registros_utilizados"],
+        "registros_descartados": stats_upload["registros_descartados"],
+        "upload_total_max": cfg.upload_total_max,
         "avisos": erros_linha[:15] if erros_linha else None,
     }), 200
 
@@ -416,26 +421,22 @@ def get_dados_upload_cliente() -> list[dict] | None:
     Retorna os dados temporários do upload do cliente (lista de dicts com ids de cidade/UF
     e UF textual vindos de base_localidades). Retorna None se não houver dados ou se expirados (TTL).
     """
-    if not session.get(SESSION_KEY_UPLOAD):
+    upload_ref = session.get(SESSION_KEY_UPLOAD_REF)
+    if not isinstance(upload_ref, str) or not upload_ref.strip():
         return None
-    at_str = session.get(SESSION_KEY_UPLOAD_AT)
-    if at_str:
-        try:
-            at = datetime.fromisoformat(at_str.replace("Z", "+00:00"))
-            if at.tzinfo:
-                at = (at.replace(tzinfo=None) - at.utcoffset()) if at.utcoffset() else at.replace(tzinfo=None)
-            if datetime.utcnow() - at > timedelta(minutes=UPLOAD_TTL_MINUTOS):
-                clear_upload_data()
-                return None
-        except Exception:
-            pass
-    return session.get(SESSION_KEY_UPLOAD)
+    cfg = get_roberto_config()
+    dados = read_upload_data(upload_ref.strip(), cfg.upload_ttl_minutes)
+    if dados is None:
+        clear_upload_data()
+    return dados
 
 
 def clear_upload_data() -> None:
-    """Remove dados temporários de upload da sessão (descarte seguro)."""
-    for key in (SESSION_KEY_UPLOAD, SESSION_KEY_UPLOAD_AT):
-        session.pop(key, None)
+    """Remove referência de sessão e payload temporário dedicado do upload."""
+    upload_ref = session.get(SESSION_KEY_UPLOAD_REF)
+    if isinstance(upload_ref, str) and upload_ref.strip():
+        clear_upload_data_store(upload_ref.strip())
+    session.pop(SESSION_KEY_UPLOAD_REF, None)
     session.modified = True
 
 

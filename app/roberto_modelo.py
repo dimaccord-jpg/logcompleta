@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.roberto_custo import calcular_custo_robusto_rs_kg
+from app.services.roberto_config_service import get_roberto_config
 
 logger = logging.getLogger(__name__)
 
@@ -148,14 +149,15 @@ def _classificar_confiabilidade_previsao(
     media_observada: float,
     meses_com_piso_zero: int,
     min_linhas_em_um_mes: int,
+    min_linhas_mes_modelo: int,
 ) -> tuple[str, list[str], dict[str, Any]]:
     """
     Classificação explícita alta | media | baixa.
 
     Regras (ordem de severidade; motivos listam o que piorou o nível):
-    - baixa: n_meses < 5; ou min_linhas_em_um_mes < 2; ou meses_com_piso_zero >= 4;
+    - baixa: n_meses < 5; ou min_linhas_em_um_mes < min_linhas_mes_modelo; ou meses_com_piso_zero >= 4;
              ou CV > 0,55 quando definido; ou (rmse / max(media,1e-9)) > 0,45
-    - alta: n_meses >= 12 e min_linhas >= 5 e meses_com_piso_zero <= 1
+    - alta: n_meses >= 12 e min_linhas >= min_linhas_mes_modelo e meses_com_piso_zero <= 1
             e CV definido e CV <= 0,28 e razão_rmse <= 0,22
     - media: demais casos com previsão válida
     """
@@ -166,8 +168,11 @@ def _classificar_confiabilidade_previsao(
     # Baixa: qualquer condição forte
     if n_meses < 5:
         motivos.append("Menos de 5 meses com custo agregado (histórico curto).")
-    if min_linhas_em_um_mes < 2:
-        motivos.append("Algum mês tem menos de 2 registros (base mensal muito esparsa).")
+    if min_linhas_em_um_mes < min_linhas_mes_modelo:
+        motivos.append(
+            f"Algum mês tem menos de {min_linhas_mes_modelo} registros "
+            "(base mensal muito esparsa para o modelo)."
+        )
     if meses_com_piso_zero >= 4:
         motivos.append("Piso zero aplicado na maioria dos meses previstos (projeção instável ou tendência negativa).")
     if cv_observado is not None and cv_observado > 0.55:
@@ -181,7 +186,7 @@ def _classificar_confiabilidade_previsao(
     # Alta: todas as condições simultâneas
     if (
         n_meses >= 12
-        and min_linhas_em_um_mes >= 5
+        and min_linhas_em_um_mes >= min_linhas_mes_modelo
         and meses_com_piso_zero <= 1
         and cv_observado is not None
         and cv_observado <= 0.28
@@ -200,8 +205,10 @@ def _classificar_confiabilidade_previsao(
     motivos_media: list[str] = []
     if n_meses < 12:
         motivos_media.append("Menos de 12 meses de histórico.")
-    if min_linhas_em_um_mes < 5:
-        motivos_media.append("Algum mês com menos de 5 registros.")
+    if min_linhas_em_um_mes < min_linhas_mes_modelo:
+        motivos_media.append(
+            f"Algum mês com menos de {min_linhas_mes_modelo} registros."
+        )
     if meses_com_piso_zero > 1:
         motivos_media.append("Piso zero em mais de um mês previsto.")
     if cv_observado is not None and cv_observado > 0.28:
@@ -219,6 +226,32 @@ def _valor_previsao_rs_kg_final(valor_modelo: float) -> float:
     Aplica-se somente à projeção futura (não à série histórica observada).
     """
     return max(0.0, float(valor_modelo))
+
+
+def _limitar_historico_por_mes(
+    historico: list[dict],
+    max_linhas_mes: int,
+) -> list[dict]:
+    limite = max(1, int(max_linhas_mes))
+    por_mes: dict[str, list[dict]] = defaultdict(list)
+    for r in historico:
+        data = _parse_data(r.get("data_emissao"))
+        if data is None:
+            continue
+        por_mes[data.strftime("%Y-%m")].append(r)
+    if not por_mes:
+        return historico
+
+    out: list[dict] = []
+    for mes in sorted(por_mes.keys()):
+        rows = por_mes[mes]
+        rows_ordenadas = sorted(
+            rows,
+            key=lambda x: (_parse_data(x.get("data_emissao")) or datetime.min),
+            reverse=True,
+        )
+        out.extend(rows_ordenadas[:limite])
+    return out
 
 
 def prever(
@@ -239,6 +272,8 @@ def prever(
 
     Regressão e projeção usam série mensal suavizada (EMA); serie_historica_* permanece observada.
     """
+    cfg = get_roberto_config()
+    historico = _limitar_historico_por_mes(historico, cfg.max_linhas_mes_modelo)
     serie = _agregar_por_mes(historico)
     meses_serie = [s[0] for s in serie]
     valores_serie = [s[1] for s in serie]
@@ -327,6 +362,7 @@ def prever(
         media_observada=media_obs,
         meses_com_piso_zero=meses_com_piso_zero,
         min_linhas_em_um_mes=min_linhas_mes,
+        min_linhas_mes_modelo=cfg.min_linhas_mes_modelo,
     )
 
     return {

@@ -252,12 +252,43 @@ def agentes_julia_configurar_historico():
     return redirect(url_for("admin.agentes_julia"))
 
 
-@admin_bp.route("/agentes/roberto")
+@admin_bp.route("/agentes/roberto", methods=["GET", "POST"])
 @login_required
 def agentes_roberto():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
-    return render_template("agentes_roberto.html")
+    from app.services import roberto_config_service
+
+    if request.method == "POST":
+        campos = {
+            "upload_total_max": (request.form.get("upload_total_max") or "").strip(),
+            "previsao_meses": (request.form.get("previsao_meses") or "").strip(),
+            "min_linhas_mes_modelo": (request.form.get("min_linhas_mes_modelo") or "").strip(),
+            "min_linhas_uf_heatmap_ranking": (
+                request.form.get("min_linhas_uf_heatmap_ranking") or ""
+            ).strip(),
+            "max_pontos_dispersao": (request.form.get("max_pontos_dispersao") or "").strip(),
+            "max_linhas_mes_modelo": (request.form.get("max_linhas_mes_modelo") or "").strip(),
+            "max_linhas_uf_heatmap": (request.form.get("max_linhas_uf_heatmap") or "").strip(),
+            "max_linhas_uf_ranking": (request.form.get("max_linhas_uf_ranking") or "").strip(),
+            "upload_ttl_minutes": (request.form.get("upload_ttl_minutes") or "").strip(),
+        }
+        try:
+            roberto_config_service.salvar_roberto_config(campos)
+            flash("Parâmetros do Roberto salvos com sucesso.", "success")
+        except ValueError as e:
+            flash(str(e), "warning")
+        except Exception as e:
+            _log.exception("Erro ao salvar parâmetros do Roberto: %s", e)
+            flash("Não foi possível salvar os parâmetros do Roberto.", "danger")
+        return redirect(url_for("admin.agentes_roberto"))
+
+    cfg = roberto_config_service.get_roberto_config()
+    return render_template(
+        "agentes_roberto.html",
+        cfg=cfg,
+        defaults=roberto_config_service.DEFAULTS,
+    )
 
 
 @admin_bp.route("/agentes/cleiton", methods=["GET", "POST"])
