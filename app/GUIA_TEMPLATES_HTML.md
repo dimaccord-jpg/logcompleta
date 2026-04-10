@@ -53,6 +53,21 @@ Comportamento visual complementar:
 - mensagens de erro de upload aceitam links markdown simples vindos do backend;
 - links exibidos devem abrir em nova aba com `rel="noopener noreferrer"`.
 
+### `chat_roberto_fretes.html`
+
+Componente oficial do chat do Roberto na tela `/fretes`.
+
+Estado visual atual esperado:
+
+- balao flutuante proprio, separado visualmente da Julia;
+- mensagem inicial orientativa antes do upload:
+  - `Realize o upload do arquivo para que possamos analisa-lo juntos.`
+- mensagens do Roberto exibem acao discreta de `Copiar`;
+- feedback visual curto apos copia:
+  - `Copiado`
+- a copia deve atuar apenas sobre o texto ja renderizado da resposta;
+- acoes visuais deste componente nao devem introduzir chamada extra de rede nem telemetria paralela.
+
 ### `user_area.html` + `contrate_plano.html`
 
 - card `Pagamento` em `/perfil` é clicável;

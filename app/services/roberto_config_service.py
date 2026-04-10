@@ -32,6 +32,7 @@ DEFAULTS: dict[str, int] = {
     # Valor inicial provisório sujeito a calibração.
     "max_linhas_uf_ranking": 300,
     "upload_ttl_minutes": 30,
+    "chat_max_history": 10,
 }
 
 DESCRICOES: dict[str, str] = {
@@ -44,6 +45,7 @@ DESCRICOES: dict[str, str] = {
     "max_linhas_uf_heatmap": "Máximo de linhas por UF para heatmap/ranking (provisório).",
     "max_linhas_uf_ranking": "Máximo de linhas por UF para ranking (provisório).",
     "upload_ttl_minutes": "Tempo de expiração dos dados temporários do upload.",
+    "chat_max_history": "Janela de histórico (mensagens) usada no chat do Roberto.",
 }
 
 
@@ -58,6 +60,7 @@ class RobertoConfig:
     max_linhas_uf_heatmap: int
     max_linhas_uf_ranking: int
     upload_ttl_minutes: int
+    chat_max_history: int
 
 
 def _cfg_key(nome: str) -> str:
@@ -86,6 +89,8 @@ def _bounds(nome: str, valor: int) -> int:
         return min(max(20, valor), 10000)
     if nome == "upload_ttl_minutes":
         return min(max(5, valor), 240)
+    if nome == "chat_max_history":
+        return min(max(1, valor), 100)
     return valor
 
 

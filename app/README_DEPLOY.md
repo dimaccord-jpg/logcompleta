@@ -28,3 +28,4 @@ Use o `README.md` da raiz como fonte principal do cenario atual.
 ## Referencia Principal
 
 Qualquer mudanca funcional relevante deve ser refletida primeiro no `README.md` da raiz.
+Mudancas de experiencia visual aprovadas tambem devem constar primeiro la, para evitar divergencia entre deploy e documentacao.

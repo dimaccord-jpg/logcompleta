@@ -1,0 +1,286 @@
+{% set roberto_avatar = config.get('ROBERTO_AVATAR_URL') or url_for('static', filename='img/roberto-avatar.png') %}
+<div class="roberto-chat-fab" id="robertoChatFab" aria-live="polite">
+  <button type="button" class="roberto-chat-fab-btn" id="robertoChatToggle" aria-label="Abrir chat do Roberto">
+    <i class="bi bi-briefcase-fill"></i>
+    <span>Roberto</span>
+  </button>
+  <div
+    class="roberto-chat-proactive"
+    id="robertoChatProactive"
+    style="display: none; --roberto-avatar-url: url('{{ roberto_avatar }}');"
+  ></div>
+</div>
+
+<section class="roberto-chat-panel" id="robertoChatPanel" style="display: none;">
+  <header class="roberto-chat-header">
+    <div class="roberto-chat-title-wrap">
+      <div class="roberto-chat-dot"></div>
+      <div>
+        <div class="roberto-chat-title">Roberto, Analista Virtual de AgenteFrete</div>
+        <small>Antenção: O Roberto é uma IA e pode cometer erros.</small>
+      </div>
+    </div>
+    <button type="button" class="btn btn-sm btn-outline-secondary" id="robertoChatClose" aria-label="Fechar chat">
+      <i class="bi bi-x-lg"></i>
+    </button>
+  </header>
+  <div class="roberto-chat-messages" id="robertoChatMessages">
+    <div class="roberto-chat-welcome" id="robertoChatWelcome">
+      Realize o upload do arquivo para que possamos analisá-lo juntos.
+    </div>
+  </div>
+  <div class="roberto-chat-input-area">
+    <form id="robertoChatForm">
+      <div class="input-group">
+        <textarea id="robertoChatInput" class="form-control" rows="2" placeholder="Pergunte ao Roberto sobre os dados desta tela..."></textarea>
+        <button type="submit" class="btn btn-primary" id="robertoChatSend" aria-label="Enviar">
+          <i class="bi bi-send-fill"></i>
+        </button>
+      </div>
+    </form>
+    <div class="small text-danger mt-1" id="robertoChatLimitMsg" style="display: none;"></div>
+  </div>
+</section>
+
+<style>
+  .roberto-chat-fab,
+  .roberto-chat-panel {
+    --roberto-bg: var(--af-bg-card, #111119);
+    --roberto-bg-muted: var(--af-bg-muted, #1E1E2E);
+    --roberto-border: var(--af-cyan, #00BFFF);
+    --roberto-border-soft: rgba(0, 191, 255, 0.28);
+    --roberto-text: var(--af-text-primary, #F0F0F5);
+    --roberto-text-soft: var(--af-text-secondary, #8A8AA3);
+    --roberto-cyan-glow: var(--af-cyan-glow, rgba(0, 191, 255, 0.2));
+    --roberto-cyan-glow-strong: var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.34));
+  }
+  .roberto-chat-fab {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 1050;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  .roberto-chat-fab-btn {
+    border: 0;
+    border-radius: 999px;
+    padding: 10px 14px;
+    background: var(--roberto-bg);
+    color: var(--roberto-text);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 10px 24px var(--roberto-cyan-glow);
+    font-weight: 600;
+    display: none;
+  }
+  .roberto-chat-proactive {
+    max-width: 300px;
+    min-height: 106px;
+    position: relative;
+    isolation: isolate;
+    background: linear-gradient(155deg, rgba(17, 17, 25, 0.98) 0%, rgba(24, 24, 38, 0.98) 52%, rgba(14, 14, 24, 0.98) 100%);
+    border: 1px solid var(--roberto-border);
+    border-radius: 18px;
+    box-shadow: 0 18px 36px rgba(5, 8, 18, 0.55), 0 0 0 1px var(--roberto-border-soft) inset;
+    padding: 16px 14px 44px 66px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--roberto-text);
+    cursor: pointer;
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .roberto-chat-proactive:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 22px 44px rgba(5, 8, 18, 0.62), 0 0 0 1px rgba(0, 191, 255, 0.5) inset;
+  }
+  .roberto-chat-proactive::before {
+    content: "";
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background-image: var(--roberto-avatar-url);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-color: var(--roberto-bg-muted);
+    border: 1px solid rgba(0, 191, 255, 0.45);
+    box-shadow: 0 0 0 3px rgba(0, 191, 255, 0.16);
+  }
+  .roberto-chat-proactive::after {
+    content: "INICIAR AN\00C1LISE";
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    height: 30px;
+    background: linear-gradient(90deg, var(--roberto-border) 0%, var(--af-cyan-bright, #00D4FF) 100%);
+    color: #ffffff;
+    font-size: 0.74rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    opacity: 0.95;
+    box-shadow: 0 8px 16px var(--roberto-cyan-glow-strong), inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+  }
+  .roberto-chat-panel {
+    position: fixed;
+    right: 18px;
+    bottom: 80px;
+    width: min(390px, calc(100vw - 20px));
+    max-height: calc(100vh - 120px);
+    background: var(--roberto-bg);
+    border: 1px solid var(--roberto-border);
+    border-radius: 14px;
+    box-shadow: 0 0 20px var(--roberto-cyan-glow), 0 16px 34px rgba(6, 9, 20, 0.65);
+    z-index: 1051;
+    display: flex;
+    flex-direction: column;
+  }
+  .roberto-chat-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(0, 191, 255, 0.2);
+    background: var(--roberto-bg);
+    border-radius: 14px 14px 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .roberto-chat-title-wrap { display: flex; align-items: center; gap: 10px; }
+  .roberto-chat-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--roberto-border);
+    box-shadow: 0 0 0 5px rgba(0, 191, 255, 0.16);
+  }
+  .roberto-chat-title { font-weight: 700; color: var(--roberto-text); }
+  .roberto-chat-header small { color: var(--roberto-text-soft); }
+  .roberto-chat-messages {
+    padding: 12px;
+    overflow-y: auto;
+    min-height: 140px;
+    max-height: calc(100vh - 280px);
+    background: var(--roberto-bg);
+  }
+  .roberto-chat-welcome {
+    background: rgba(0, 191, 255, 0.12);
+    border: 1px solid rgba(0, 191, 255, 0.34);
+    color: var(--roberto-text);
+    border-radius: 10px;
+    padding: 10px;
+    font-size: 0.85rem;
+  }
+  .roberto-chat-msg { margin-bottom: 8px; }
+  .roberto-chat-msg-inner {
+    border-radius: 10px;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    max-width: 88%;
+    font-size: 0.9rem;
+  }
+  .roberto-chat-msg-user .roberto-chat-msg-inner {
+    margin-left: auto;
+    background: rgba(0, 191, 255, 0.25);
+    border: 1px solid rgba(0, 191, 255, 0.3);
+    color: var(--roberto-text);
+  }
+  .roberto-chat-msg-bot .roberto-chat-msg-inner {
+    background: var(--roberto-bg-muted);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--roberto-text);
+  }
+  .roberto-chat-actions {
+    margin-top: 4px;
+    max-width: 88%;
+    display: flex;
+    justify-content: flex-start;
+  }
+  .roberto-chat-copy-btn {
+    border: 1px solid rgba(0, 191, 255, 0.35);
+    background: rgba(0, 191, 255, 0.12);
+    color: var(--roberto-text);
+    border-radius: 999px;
+    font-size: 0.71rem;
+    line-height: 1;
+    padding: 4px 8px;
+    min-height: 28px;
+  }
+  .roberto-chat-copy-btn.is-copied {
+    border-color: rgba(0, 191, 255, 0.6);
+    color: #ffffff;
+    background: rgba(0, 191, 255, 0.28);
+  }
+  .roberto-chat-suggestions {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 90%;
+  }
+  .roberto-chat-suggestion-btn {
+    border: 1px solid rgba(0, 191, 255, 0.35);
+    background: rgba(0, 191, 255, 0.12);
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 0.74rem;
+    color: var(--roberto-text);
+  }
+  .roberto-chat-input-area {
+    border-top: 1px solid rgba(0, 191, 255, 0.2);
+    padding: 10px;
+    background: var(--roberto-bg);
+    border-radius: 0 0 14px 14px;
+  }
+  #robertoChatInput.form-control {
+    border-radius: 1.5rem 0 0 1.5rem;
+    background: var(--roberto-bg-muted);
+    border: 1px solid var(--roberto-border);
+    color: var(--roberto-text);
+    box-shadow: 0 0 12px var(--roberto-cyan-glow);
+    min-height: 44px;
+  }
+  #robertoChatInput.form-control::placeholder {
+    color: var(--roberto-text-soft);
+  }
+  #robertoChatInput.form-control:focus {
+    border-color: var(--af-cyan-bright, #00D4FF);
+    box-shadow: 0 0 16px var(--roberto-cyan-glow-strong);
+    color: var(--roberto-text);
+    background: var(--roberto-bg-muted);
+  }
+  #robertoChatSend.btn {
+    border-radius: 0 1.5rem 1.5rem 0;
+    background: var(--roberto-border);
+    border: 1px solid var(--roberto-border);
+    color: #ffffff;
+    box-shadow: 0 0 12px var(--roberto-cyan-glow);
+  }
+  #robertoChatSend.btn:hover,
+  #robertoChatSend.btn:focus {
+    background: var(--af-cyan-bright, #00D4FF);
+    border-color: var(--af-cyan-bright, #00D4FF);
+    color: #ffffff;
+  }
+  #robertoChatClose.btn {
+    border-color: rgba(0, 191, 255, 0.45);
+    color: var(--roberto-text-soft);
+    background: transparent;
+  }
+  #robertoChatClose.btn:hover,
+  #robertoChatClose.btn:focus {
+    border-color: rgba(0, 191, 255, 0.75);
+    color: var(--roberto-text);
+    background: rgba(0, 191, 255, 0.12);
+  }
+</style>

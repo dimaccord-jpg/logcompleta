@@ -25,6 +25,7 @@ def test_roberto_config_defaults_and_save(app):
         assert cfg.max_linhas_mes_modelo == DEFAULTS["max_linhas_mes_modelo"]
         assert cfg.max_linhas_uf_heatmap == DEFAULTS["max_linhas_uf_heatmap"]
         assert cfg.max_linhas_uf_ranking == DEFAULTS["max_linhas_uf_ranking"]
+        assert cfg.chat_max_history == DEFAULTS["chat_max_history"]
 
         salvar_roberto_config(
             {
@@ -37,6 +38,7 @@ def test_roberto_config_defaults_and_save(app):
                 "max_linhas_uf_heatmap": "550",
                 "max_linhas_uf_ranking": "650",
                 "upload_ttl_minutes": "45",
+                "chat_max_history": "22",
             }
         )
         cfg2 = get_roberto_config()
@@ -49,6 +51,7 @@ def test_roberto_config_defaults_and_save(app):
         assert cfg2.max_linhas_uf_heatmap == 550
         assert cfg2.max_linhas_uf_ranking == 650
         assert cfg2.upload_ttl_minutes == 45
+        assert cfg2.chat_max_history == 22
 
 
 def test_upload_total_cap_preserva_representatividade_temporal():

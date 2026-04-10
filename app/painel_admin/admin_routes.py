@@ -272,6 +272,7 @@ def agentes_roberto():
             "max_linhas_uf_heatmap": (request.form.get("max_linhas_uf_heatmap") or "").strip(),
             "max_linhas_uf_ranking": (request.form.get("max_linhas_uf_ranking") or "").strip(),
             "upload_ttl_minutes": (request.form.get("upload_ttl_minutes") or "").strip(),
+            "chat_max_history": (request.form.get("chat_max_history") or "").strip(),
         }
         try:
             roberto_config_service.salvar_roberto_config(campos)

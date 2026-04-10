@@ -21,6 +21,12 @@
                            value="{{ cfg.upload_ttl_minutes }}">
                     <small class="text-muted">Tempo de retenção dos dados temporários de upload.</small>
                 </div>
+                <div class="col-md-6">
+                    <label class="form-label">chat_max_history</label>
+                    <input type="number" min="1" max="100" step="1" name="chat_max_history" class="form-control"
+                           value="{{ cfg.chat_max_history }}">
+                    <small class="text-muted">Janela de histórico enviada no Chat Roberto (mensagens anteriores).</small>
+                </div>
 
                 <div class="col-md-6">
                     <label class="form-label">previsao_meses</label>

@@ -33,3 +33,4 @@ python -m app.web
 
 Nao replique regras funcionais aqui.
 Atualize primeiro o `README.md` da raiz e mantenha este arquivo como lembrete operacional.
+Isso inclui mudancas recentes de experiencia visual quando elas afetarem o comportamento percebido do produto.

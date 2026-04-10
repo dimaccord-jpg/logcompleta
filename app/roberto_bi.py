@@ -273,6 +273,13 @@ def _montar_contexto_bi_roberto() -> dict:
     """
     cfg = get_roberto_config()
     unidos = _get_bi_dataset()
+    return _montar_contexto_bi_roberto_por_linhas(unidos, cfg)
+
+
+def _montar_contexto_bi_roberto_por_linhas(unidos: list[dict], cfg=None) -> dict:
+    """Monta contexto analítico a partir de linhas já selecionadas (upload/base ativa)."""
+    if cfg is None:
+        cfg = get_roberto_config()
     qualidade_base = calcular_qualidade_base(unidos)
     resultado = None
     qualidade_previsao: dict | None = None
@@ -313,6 +320,24 @@ def _montar_contexto_bi_roberto() -> dict:
         "recomendacoes_analise": recomendacoes,
         "serie_temporal": serie_temporal,
     }
+
+
+def get_contexto_bi_roberto_upload_only() -> dict | None:
+    """
+    Contexto analítico estrito de upload do usuário.
+    Retorna None quando não há upload ativo (não faz fallback para base ouro).
+    """
+    cliente = _buscar_base_cliente()
+    cliente = _enriquecer_ufs_cliente(cliente)
+    if not cliente:
+        return None
+    origem_param = None
+    if has_request_context():
+        p = request.args.get("origem_uf")
+        if p:
+            origem_param = str(p).strip().upper()[:2]
+    unidos = _filtrar_por_origem_upload(cliente, origem_param)
+    return _montar_contexto_bi_roberto_por_linhas(unidos, get_roberto_config())
 
 
 def get_contexto_bi_roberto() -> dict:
@@ -488,12 +513,11 @@ def _classificar_niveis_temperatura_por_direcao(scores_uf: list[tuple[str, float
     return out
 
 
-def heatmap_brasil() -> dict:
+def _heatmap_brasil_por_linhas(unidos: list[dict], cfg=None) -> dict:
     """
-    Heatmap por UF destino: previsão Roberto (6 meses) sobre até 18 meses de histórico,
-    score = média das variações mês a mês previstas; níveis por sinal do score e intensidade relativa em cada lado.
+    Heatmap por UF destino a partir de linhas já selecionadas.
+    Mantém a mesma lógica do endpoint, mas permite reutilização em upload-only.
     """
-    unidos = _get_bi_dataset()
     if not unidos:
         return {
             "ufs": [],
@@ -508,7 +532,8 @@ def heatmap_brasil() -> dict:
         uf = (r.get("uf_destino") or "").strip().upper()[:2]
         if uf:
             por_uf[uf].append(r)
-    cfg = get_roberto_config()
+    if cfg is None:
+        cfg = get_roberto_config()
     por_uf = _filtrar_grupos_por_min_linhas(por_uf, cfg.min_linhas_uf_heatmap_ranking)
     if not por_uf:
         return {
@@ -575,6 +600,38 @@ def heatmap_brasil() -> dict:
         "tendencia_alta": tendencia_alta,
         "qualidade_uf": qualidade_uf,
     }
+
+
+def heatmap_brasil() -> dict:
+    """
+    Heatmap por UF destino: previsão Roberto (6 meses) sobre até 18 meses de histórico,
+    score = média das variações mês a mês previstas; níveis por sinal do score e intensidade relativa em cada lado.
+    """
+    return _heatmap_brasil_por_linhas(_get_bi_dataset(), get_roberto_config())
+
+
+def heatmap_brasil_upload_only() -> dict:
+    """
+    Heatmap estrito do upload ativo do usuário.
+    Retorna vazio quando não há upload ou quando a filtragem deixa a base sem linhas válidas.
+    """
+    cliente = _buscar_base_cliente()
+    cliente = _enriquecer_ufs_cliente(cliente)
+    if not cliente:
+        return {
+            "ufs": [],
+            "valores": [],
+            "nivel_temperatura": [],
+            "tendencia_alta": [],
+            "qualidade_uf": [],
+        }
+    origem_param = None
+    if has_request_context():
+        p = request.args.get("origem_uf")
+        if p:
+            origem_param = str(p).strip().upper()[:2]
+    unidos = _filtrar_por_origem_upload(cliente, origem_param)
+    return _heatmap_brasil_por_linhas(unidos, get_roberto_config())
 
 
 def proporcao_modal() -> dict:

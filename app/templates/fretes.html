@@ -212,6 +212,14 @@
 </div>
 
 <script>
+  window.ROBERTO_CHAT_AUTHENTICATED = {{ 'true' if current_user.is_authenticated else 'false' }};
+  window.ROBERTO_CHAT_LIMITS = {{ (roberto_chat_limits or {})|tojson }};
+  window.ROBERTO_CHAT_MAX_HISTORY = {{ roberto_chat_max_history|default(10)|int }};
+</script>
+{% include 'chat_roberto_fretes.html' %}
+<script src="{{ url_for('static', filename='js/chat_roberto_fretes.js') }}"></script>
+
+<script>
 (function() {
   // Capturamos apenas o valor numérico da Média Bruta vindo do backend
   const vBruto = Number("{{ resultado.media_bruta if resultado else 0 }}");

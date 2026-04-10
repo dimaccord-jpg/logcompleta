@@ -1,36 +1,38 @@
-# Diagnóstico de Homologação e Publicação
+# Diagnostico de Homologacao e Publicacao
 
-Este documento complementa o `README.md` principal com foco exclusivo em go/no-go de homologação.
+Este documento complementa o `README.md` principal com foco exclusivo em go/no-go de homologacao.
+Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 
 ## Estado Atual Confirmado
 
-- pacote funcional da Fase 2 integrado localmente;
-- chat da Júlia atualizado com renderer markdown seguro, sugestões clicáveis e busca web contextual filtrada;
-- detalhe de notícia/artigo ajustado com botão `Voltar Para Home`;
-- publicação final em homolog ainda depende da validação completa de migrations no ambiente alvo.
+- pacote funcional da fase atual integrado localmente;
+- chat da Julia com renderer markdown seguro, sugestoes clicaveis e busca web contextual filtrada;
+- chat do Roberto na `/fretes` com UX visual atualizada no frontend, incluindo orientacao inicial de upload e copia local de respostas sem impacto em governanca, consumo ou observabilidade;
+- detalhe de noticia/artigo com botao `Voltar Para Home`;
+- publicacao final em homolog ainda depende da validacao completa de migrations no ambiente alvo.
 
-## Escopo Operacional Sensível
+## Escopo Operacional Sensivel
 
-Não tratar como opcional:
+Nao tratar como opcional:
 
-- governança operacional por franquia;
-- autorização operacional usada pelo chat da Júlia e pelo upload Roberto;
-- identidade de consumo por conta/franquia/usuário;
+- governanca operacional por franquia;
+- autorizacao operacional usada pelo chat da Julia e pelo upload/chat Roberto;
+- identidade de consumo por conta, franquia e usuario;
 - migrations da cadeia ativa;
 - telas admin alinhadas com o backend.
 
-## Bloqueio Histórico de Homolog
+## Bloqueio Historico de Homolog
 
-O ponto crítico conhecido continua sendo a estratégia de migrations no runtime de homolog.  
-Sem confirmar `upgrade head` e `current` no ambiente alvo, não há homolog concluída.
+O ponto critico conhecido continua sendo a estrategia de migrations no runtime de homolog.
+Sem confirmar `upgrade head` e `current` no ambiente alvo, nao ha homolog concluida.
 
 ## Go / No-Go
 
 ### No-Go
 
-- migrations não executadas ou não confirmadas;
-- schema não validado;
-- health checks ou fluxos reais não validados.
+- migrations nao executadas ou nao confirmadas;
+- schema nao validado;
+- health checks ou fluxos reais nao validados.
 
 ### Go
 
@@ -41,13 +43,9 @@ Somente quando todos forem verdadeiros:
 3. health checks ok;
 4. cron protegido validado;
 5. telas admin ok;
-6. chat Júlia validado com:
-   - autorização por franquia
-   - sugestões
-   - busca web contextual
-   - markdown seguro
-7. upload Roberto validado.
+6. chat Julia validado com autorizacao por franquia, sugestoes, busca web contextual e markdown seguro;
+7. upload Roberto e chat Roberto validados no fluxo real da `/fretes`.
 
-## Referência Principal
+## Referencia Principal
 
-Detalhes funcionais, fluxos e regras críticas ficam consolidados no `README.md` da raiz.
+Detalhes funcionais, fluxos, regras criticas e experiencia visual vigente ficam consolidados no `README.md` da raiz.

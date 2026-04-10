@@ -529,8 +529,23 @@ def fretes():
         else:
             resultado = resultado_calculo
 
+    roberto_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
+    try:
+        from app.services.roberto_config_service import get_roberto_config
+
+        roberto_chat_max_history = int(get_roberto_config().chat_max_history)
+    except Exception:
+        roberto_chat_max_history = 10
+    roberto_chat_max_history = max(1, min(100, roberto_chat_max_history))
+
     # Mantemos o retorno original passando os índices reais para o template
-    return render_template('fretes.html', indices=indices, resultado=resultado)
+    return render_template(
+        'fretes.html',
+        indices=indices,
+        resultado=resultado,
+        roberto_chat_limits=roberto_chat_limits,
+        roberto_chat_max_history=roberto_chat_max_history,
+    )
 
 
 @app.route('/auditoria-frete', methods=['GET', 'POST'])
@@ -767,6 +782,48 @@ def api_chat_julia():
         return jsonify(result)
     except Exception as e:
         logging.exception("Erro em /api/chat_julia: %s", e)
+        return jsonify({"reply": "Ocorreu um erro ao processar sua mensagem. Tente novamente."}), 500
+
+
+@app.route('/api/chat_roberto', methods=['POST'])
+def api_chat_roberto():
+    """Endpoint oficial do Chat Roberto (/fretes), com governança Cleiton."""
+    if not current_user.is_authenticated:
+        return jsonify({
+            "error": "É necessário estar logado para conversar com o Roberto.",
+            "require_login": True,
+        }), 401
+    try:
+        data = request.get_json(silent=True) or {}
+        user_message = (data.get("message") or "").strip()
+        execution_id = (request.headers.get("X-Execution-ID") or data.get("execution_id") or "").strip() or None
+        history = data.get("history")
+        if history is None:
+            history = []
+        authz = avaliar_autorizacao_operacao_por_franquia(current_user)
+        if not authz.get("permitido", True):
+            msg = authz.get("mensagem_usuario") or "Operação indisponível para este usuário no momento."
+            return jsonify({
+                "reply": msg,
+                "limit_reached": True,
+                "authorization": authz,
+            })
+        from app.run_roberto_chat import chat_roberto_reply
+        from app.services.roberto_config_service import get_roberto_config
+
+        max_history = max(1, min(100, int(get_roberto_config().chat_max_history)))
+        result = chat_roberto_reply(
+            user_message,
+            history,
+            max_history=max_history,
+            execution_id=execution_id,
+        )
+        result["authorization"] = authz
+        result["limit_reached"] = not authz.get("permitido", True)
+        result["max_history"] = max_history
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("Erro em /api/chat_roberto: %s", e)
         return jsonify({"reply": "Ocorreu um erro ao processar sua mensagem. Tente novamente."}), 500
 
 

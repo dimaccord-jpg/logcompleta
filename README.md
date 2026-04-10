@@ -4,7 +4,7 @@ Aplicacao Flask com tres frentes principais:
 
 - `Julia`: editorial, chat logistico, insights e artigos.
 - `Cleiton`: governanca operacional, consumo por franquia, billing tecnico e validacao administrativa.
-- `Roberto`: upload, BI e previsao de frete.
+- `Roberto`: upload, BI, previsao de frete e chat analitico na `/fretes`.
 
 Este `README.md` e a fonte principal de contexto funcional e operacional do projeto.
 Os demais guias devem existir apenas como anexos curtos de apoio, sem competir com este documento.
@@ -19,20 +19,24 @@ Escopo atual confirmado:
 - painel admin operacional;
 - pipeline editorial da Julia;
 - chat da Julia com markdown seguro, sugestoes clicaveis e busca web contextual restrita;
+- chat do Roberto na `/fretes`, com contexto analitico canônico do BI e memoria propria;
 - mensageria operacional centralizada do dominio Cleiton;
 - CTA de upgrade parametrizado por ambiente via `PLANOS_UPGRADE_URL`;
 - jornada de contratacao de plano iniciada pelo card `Pagamento` em `/perfil`;
 - Roberto com upload oficial governado, persistencia temporaria dedicada, painel admin de controles e limites operacionais parametrizaveis.
+- ajustes recentes de experiencia visual consolidados sem alterar governanca, billing, autorizacao operacional e observabilidade.
 
 ## Regras Criticas do Sistema
 
 Estas regras nao devem ser violadas em ajustes futuros:
 
 - o endpoint `/api/chat_julia` continua sendo a rota oficial do chat;
+- o endpoint `/api/chat_roberto` e a rota oficial do chat do Roberto na `/fretes`;
 - autorizacao operacional passa por `avaliar_autorizacao_operacao_por_franquia`;
 - consumo e observabilidade de IA continuam passando pelo trilho oficial do Cleiton;
 - nao criar fluxo paralelo para a Julia;
 - nao criar fluxo paralelo para upload do Roberto;
+- nao criar fluxo paralelo para chat do Roberto;
 - nao separar artificialmente frontend, autorizacao e governanca, porque o comportamento real depende do conjunto.
 
 ## Roberto Atual
@@ -80,6 +84,7 @@ Parametros atualmente suportados:
 - `max_linhas_uf_heatmap`
 - `max_linhas_uf_ranking`
 - `upload_ttl_minutes`
+- `chat_max_history`
 
 Valores iniciais atuais do projeto:
 
@@ -92,6 +97,7 @@ Valores iniciais atuais do projeto:
 - `max_linhas_uf_heatmap = 300`
 - `max_linhas_uf_ranking = 300`
 - `upload_ttl_minutes = 30`
+- `chat_max_history = 10`
 
 Regras atuais de validacao de configuracao:
 
@@ -142,6 +148,38 @@ Estas regras nao devem ser violadas em ajustes futuros:
 - nao mover limpeza pesada de expirados para o caminho comum de leitura do BI;
 - nao aumentar chamadas de IA para resolver problema analitico do upload.
 
+### Chat Roberto em `/fretes`
+
+- frontend oficial: balao flutuante no canto da tela, com mensagens proativas quando fechado;
+- experiencia visual recente do chat:
+  - mensagem inicial orientativa antes do upload: `Realize o upload do arquivo para que possamos analisa-lo juntos.`
+  - cada resposta do Roberto exibe acao discreta de `Copiar`;
+  - a copia atua apenas no frontend, sobre o texto ja renderizado;
+  - o feedback visual curto apos copia e `Copiado`;
+- backend oficial: `app/run_roberto_chat.py` + endpoint `/api/chat_roberto` em `app/web.py`;
+- regra de contexto do chat: uso exclusivo do upload ativo do proprio usuario;
+- sem upload ativo: o chat responde de forma controlada e nao usa base ouro;
+- autorizacao pre-consumo obrigatoria por `avaliar_autorizacao_operacao_por_franquia(current_user)`;
+- toda chamada LLM do Roberto passa por `cleiton_governed_generate_content(...)` com:
+  - `agent="roberto"`
+  - `flow_type="roberto_chat_fretes"`
+  - `api_key_label="GEMINI_API_KEY_ROBERTO"`
+- chave exclusiva do chat do Roberto: `GEMINI_API_KEY_ROBERTO` (sem mistura com chaves da Julia);
+- memoria propria do Roberto: `chat_max_history` (admin em `/admin/agentes/roberto`);
+- janela de contexto aplicada em duas camadas:
+  - frontend: recorte de historico enviado ao endpoint;
+  - backend: recorte final antes da montagem do prompt;
+- fonte de contexto: snapshot compacto derivado do motor oficial de BI (`app/roberto_bi.py`) em modo upload-only, sem fallback para base ouro e sem envio de dataset bruto ao modelo;
+- observabilidade de processamento: montagem do snapshot do chat registrada em `ProcessingEvent` (`flow_type="roberto_chat_snapshot"`) sem duplicacao de eventos;
+- observabilidade: consumo IA registrado em `IaConsumoEvento` via governanca Cleiton.
+
+Regras adicionais de experiencia visual do chat Roberto:
+
+- ajustes de UX do chat devem permanecer preferencialmente no frontend oficial (`app/templates/chat_roberto_fretes.html` e `app/static/js/chat_roberto_fretes.js`);
+- melhorias visuais nao devem criar rota nova, callback de telemetria, evento tecnico adicional nem chamada extra ao modelo;
+- acoes puramente visuais, como copiar resposta, nao devem gerar `ProcessingEvent`, `IaConsumoEvento` ou abatimento de franquia;
+- qualquer ajuste visual deve preservar a autorizacao por franquia e o trilho oficial do Cleiton sem bifurcacao paralela.
+
 ## Experiencia Atual de Telas
 
 Este bloco documenta o comportamento vigente de frontend relevante.
@@ -163,6 +201,10 @@ Nao houve mudanca de regra de governanca, autorizacao operacional por franquia, 
   - quantidade descartada por limite operacional;
 - o titulo visual da serie do Roberto passou a ser:
   - `Evolucao do custo medio e previsao`
+- o chat do Roberto aparece na propria `/fretes` com identidade visual separada da Julia;
+- quando ainda nao ha upload util para analise, a mensagem visual inicial do chat orienta o usuario a subir o arquivo antes de conversar;
+- as respostas do Roberto podem ser copiadas diretamente no frontend, sem nova chamada de rede;
+- o chat do Roberto e restrito ao universo analitico de fretes/logistica e pode gerar e-mail executivo sob solicitacao.
 
 ### Tela `/admin/agentes/roberto`
 
@@ -296,6 +338,7 @@ Validacao minima recomendada:
 8. validar `/fretes` em dois perfis:
    - admin: consulta `UF + Cidade` e bloco completo;
    - usuario comum: fluxo visual de upload/BI com blocos analiticos ocultos;
+   - em ambos: validar Chat Roberto (abrir/fechar, sugestao proativa, mensagem normal e pedido de e-mail executivo);
 9. validar `/perfil`:
    - card `Pagamento` clicavel;
    - redirecionamento para `/contrate-um-plano`;
@@ -307,6 +350,7 @@ Validacao minima recomendada:
    - `tests/test_roberto_controles.py`
    - `tests/test_cleiton_upload_billing_service.py`
    - `tests/test_franquia_operacao_autorizacao_service.py`
+   - incluir testes do chat Roberto quando houver suite dedicada.
 
 ## Homologacao e Deploy
 
@@ -337,4 +381,5 @@ Para evitar perda de conhecimento por excesso de fonte:
 - este `README.md` deve permanecer como documento principal;
 - os demais guias devem ser mantidos curtos, especializados e coerentes com ele;
 - nenhuma regra funcional central deve existir apenas em anexo operacional;
+- alteracoes recentes de experiencia visual tambem devem ser consolidadas primeiro aqui, mesmo quando a implementacao for apenas de frontend;
 - qualquer mudanca relevante no Roberto, na Julia, no frontend editorial ou na governanca operacional deve ser refletida primeiro aqui.
