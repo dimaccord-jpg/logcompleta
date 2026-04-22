@@ -9,6 +9,7 @@ Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 - chat da Julia com renderer markdown seguro, sugestoes clicaveis e busca web contextual filtrada;
 - chat do Roberto na `/fretes` com UX visual atualizada no frontend, incluindo orientacao inicial de upload e copia local de respostas sem impacto em governanca, consumo ou observabilidade;
 - detalhe de noticia/artigo com botao `Voltar Para Home`;
+- monetizacao Stripe estabilizada com contratacao inicial, upgrade na assinatura existente, downgrade pago agendado e cancelamento para `free` por `cancel_at_period_end`;
 - publicacao final em homolog ainda depende da validacao completa de migrations no ambiente alvo.
 
 ## Escopo Operacional Sensivel
@@ -18,6 +19,8 @@ Nao tratar como opcional:
 - governanca operacional por franquia;
 - autorizacao operacional usada pelo chat da Julia e pelo upload/chat Roberto;
 - identidade de consumo por conta, franquia e usuario;
+- coerencia entre Stripe, `ContaMonetizacaoVinculo` e `MonetizacaoFato`;
+- execucao real da virada de ciclo em `/cron/executar-cleiton`;
 - migrations da cadeia ativa;
 - telas admin alinhadas com o backend.
 
@@ -44,7 +47,11 @@ Somente quando todos forem verdadeiros:
 4. cron protegido validado;
 5. telas admin ok;
 6. chat Julia validado com autorizacao por franquia, sugestoes, busca web contextual e markdown seguro;
-7. upload Roberto e chat Roberto validados no fluxo real da `/fretes`.
+7. upload Roberto e chat Roberto validados no fluxo real da `/fretes`;
+8. webhook Stripe validado no ambiente correto com assinatura valida;
+9. retorno do checkout conciliado com `session_id` real;
+10. downgrade `pro -> starter` ou `starter/pro -> free` com pendencia interna auditavel;
+11. virada de ciclo confirmada em cron.
 
 ## Referencia Principal
 

@@ -2,9 +2,16 @@
 Serviços para Termos de Uso: termo vigente, diretório de PDFs e URL estática.
 Evita hardcode e centraliza referência ao termo ativo no banco e nos templates.
 """
+import logging
 import os
+
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.extensions import db
 from app.models import TermsOfUse
+
+
+logger = logging.getLogger(__name__)
 
 
 # Subpasta sob static onde os PDFs são armazenados (path relativo ao static)
@@ -36,6 +43,15 @@ def get_active_term():
     Retorna o registro TermsOfUse ativo (is_active=True) ou None.
     Usado em templates e rotas para link dinâmico ao PDF vigente.
     """
-    return TermsOfUse.query.filter_by(is_active=True).order_by(TermsOfUse.upload_date.desc()).first()
+    try:
+        return (
+            TermsOfUse.query.filter_by(is_active=True)
+            .order_by(TermsOfUse.upload_date.desc())
+            .first()
+        )
+    except SQLAlchemyError as exc:
+        logger.exception("Falha ao consultar termo ativo: %s", exc)
+        db.session.rollback()
+        return None
 
 

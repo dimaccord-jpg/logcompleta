@@ -1,5 +1,10 @@
 import json
+import shutil
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
 
 from app.roberto_bi import _filtrar_grupos_por_min_linhas, _limitar_rows_por_data
 from app.roberto_modelo import _limitar_historico_por_mes
@@ -10,6 +15,18 @@ from app.services.roberto_config_service import (
     salvar_roberto_config,
 )
 from app.upload_handler import _aplicar_limite_upload_total, get_dados_upload_cliente
+
+
+@pytest.fixture
+def roberto_temp_dir():
+    base_root = Path(__file__).resolve().parent / ".tmp_roberto"
+    base_root.mkdir(parents=True, exist_ok=True)
+    tmp_dir = base_root / f"roberto-tests-{uuid4().hex}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        yield tmp_dir
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def test_roberto_config_defaults_and_save(app):
@@ -93,15 +110,15 @@ def test_upload_total_cap_quando_limite_menor_que_meses_mantem_amplitude_tempora
     assert stats["registros_descartados"] == 3
 
 
-def test_upload_store_respects_ttl(tmp_path, monkeypatch):
+def test_upload_store_respects_ttl(roberto_temp_dir, monkeypatch):
     import app.roberto_upload_store as store
 
-    monkeypatch.setattr(store, "_base_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(store, "_base_dir", lambda: str(roberto_temp_dir))
     upload_id = save_upload_data([{"data_emissao": "2024-01-01"}])
 
     assert read_upload_data(upload_id, 30) == [{"data_emissao": "2024-01-01"}]
 
-    fpath = tmp_path / f"{upload_id}.json"
+    fpath = roberto_temp_dir / f"{upload_id}.json"
     payload = json.loads(fpath.read_text(encoding="utf-8"))
     payload["created_at"] = (datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=120)).isoformat()
     fpath.write_text(json.dumps(payload), encoding="utf-8")
@@ -110,10 +127,10 @@ def test_upload_store_respects_ttl(tmp_path, monkeypatch):
     assert not fpath.exists()
 
 
-def test_get_dados_upload_cliente_nao_varre_diretorio_por_request_comum(tmp_path, monkeypatch, app):
+def test_get_dados_upload_cliente_nao_varre_diretorio_por_request_comum(roberto_temp_dir, monkeypatch, app):
     import app.roberto_upload_store as store
 
-    monkeypatch.setattr(store, "_base_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(store, "_base_dir", lambda: str(roberto_temp_dir))
     upload_id = save_upload_data([{"data_emissao": "2024-01-01"}])
 
     def _listdir_fail(_path):
@@ -129,10 +146,10 @@ def test_get_dados_upload_cliente_nao_varre_diretorio_por_request_comum(tmp_path
         assert rows == [{"data_emissao": "2024-01-01"}]
 
 
-def test_cleanup_periodico_evitando_varredura_frequente(tmp_path, monkeypatch):
+def test_cleanup_periodico_evitando_varredura_frequente(roberto_temp_dir, monkeypatch):
     import app.roberto_upload_store as store
 
-    monkeypatch.setattr(store, "_base_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(store, "_base_dir", lambda: str(roberto_temp_dir))
     # Primeira chamada cria metadado de sweep
     maybe_cleanup_expired_uploads(30, min_interval_seconds=3600)
 
@@ -142,6 +159,17 @@ def test_cleanup_periodico_evitando_varredura_frequente(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "cleanup_expired_uploads", _fail_cleanup)
     # Segunda chamada imediata deve pular sweep pesado.
     assert maybe_cleanup_expired_uploads(30, min_interval_seconds=3600) == 0
+
+
+def test_cleanup_expired_uploads_ignora_arquivo_meta(roberto_temp_dir, monkeypatch):
+    import app.roberto_upload_store as store
+
+    monkeypatch.setattr(store, "_base_dir", lambda: str(roberto_temp_dir))
+    meta_path = roberto_temp_dir / ".cleanup_meta.json"
+    meta_path.write_text(json.dumps({"last_run_at": datetime.now(UTC).isoformat()}), encoding="utf-8")
+    removed = store.cleanup_expired_uploads(30)
+    assert removed == 0
+    assert meta_path.exists()
 
 
 def test_bi_min_linhas_e_limite_por_data():

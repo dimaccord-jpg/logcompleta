@@ -221,8 +221,9 @@ Nao houve mudanca de regra de governanca, autorizacao operacional por franquia, 
 
 - o card `Pagamento` foi transformado em bloco clicavel;
 - o clique redireciona para `/contrate-um-plano`;
-- a pagina `Contrate um Plano` continua com conteudo provisoria:
-  - `Estamos construindo essa funcionalidade.`
+- a pagina `Contrate um Plano` executa a jornada oficial de contratacao Stripe embedded;
+- os planos `starter` e `pro` aparecem com status de prontidao por configuracao admin;
+- a inicializacao de checkout ocorre somente pelo endpoint oficial `/api/contratacao/stripe/iniciar`.
 
 ## Governanca de Creditos e Planos
 
@@ -266,6 +267,264 @@ Este bloco consolida a regra oficial atual de creditos, franquia e onboarding.
   - `franquia_id` do usuario criado;
   - `Franquia.limite_total`;
   - `Franquia.status`.
+
+## Stripe e Governanca Cleiton
+
+Este bloco registra o estado implantado do trilho Stripe integrado a governanca Cleiton.
+Stripe fornece fatos externos; a operacao continua decidida por `Franquia`.
+
+### O que o codigo confirma hoje
+
+- a fonte de verdade operacional continua sendo `Franquia`, nao `User.creditos`;
+- a autorizacao pre-consumo oficial continua em `avaliar_autorizacao_operacao_por_franquia`;
+- o estado operacional lido pela aplicacao continua vindo de `ler_franquia_operacional_cleiton`;
+- a auditoria administrativa oficial continua exposta em `/admin/api/cleiton-franquia/<franquia_id>/validacao`;
+- os limites comerciais continuam sendo parametrizados no admin via `plano_service` e `/admin/planos/saas/salvar`;
+- a jornada visual de pagamento agora usa fluxo white label embedded na tela oficial `/contrate-um-plano`;
+- existe endpoint autenticado oficial para iniciar checkout Stripe (`/api/contratacao/stripe/iniciar`);
+- existe endpoint oficial de webhook Stripe (`/api/webhook/stripe`) com verificacao de assinatura e idempotencia por evento;
+- existe preparacao de persistencia canonica em `Conta` para vinculo comercial externo e fatos append-only de monetizacao;
+- fatos Stripe relevantes passam a ser correlacionados e persistidos em `MonetizacaoFato`, com pendencia explicita quando faltar correlacao inequívoca;
+- eventos pendentes de correlacao podem ser reprocessados apenas por acao administrativa explicita no endpoint oficial de validacao (`acao=reprocessar_pendencias_correlacao`), sem mutacao automatica em leitura;
+- o reprocessamento administrativo reutiliza o pipeline oficial de correlacao/processamento do Cleiton, com idempotencia por evento e trilha auditavel no proprio fato interno;
+- a auditoria admin destaca divergencias relevantes entre ultimo fato interno com efeito e vinculo comercial externo ativo, mantendo o fato interno como referencia primaria;
+- aplicacao contratual sobre `Franquia` continua mediada pela camada central do Cleiton.
+
+### Contrato operacional vigente
+
+- o trilho oficial de contratacao permanece em `/api/contratacao/stripe/iniciar`;
+- o trilho oficial de webhook permanece em `/api/webhook/stripe`, com assinatura e idempotencia;
+- o trilho oficial de auditoria/reprocessamento admin permanece em `/admin/api/cleiton-franquia/<franquia_id>/validacao`;
+- nenhum efeito operacional de plano ignora o Cleiton: aplicacao contratual converge para `Franquia`;
+- `User.creditos` permanece legado e fora da governanca operacional.
+
+### Risco residual conhecido no trilho Stripe
+
+- para `starter` e `pro`, `garantir_ciclo_operacional_franquia` usa renovacao mensal aproximada e marca a pendencia `renovacao_recorrente_aproximada_sem_data_pagamento`;
+- ainda podem existir eventos Stripe sem correlacao inequívoca de `conta_id` e `franquia_id`; nesses casos o fato e registrado como pendente sem efeito operacional;
+- ciclos contratuais sem dados Stripe confiaveis continuam dependentes de fallback interno como excecao controlada;
+- o motor operacional continua sem depender de Stripe para autorizacao pre-consumo e governanca de consumo.
+
+### Restricoes permanentes do dominio
+
+- manter Stripe como origem de fatos, nunca como fonte operacional final;
+- manter governanca operacional e autorizacao no Cleiton sem rota paralela;
+- manter identidade operacional por `conta_id` + `franquia_id` + `usuario_id`;
+- manter parametrizacao de planos sem hardcode de ids/valores externos;
+- manter reflexo contratual auditavel em `Franquia` e fatos internos append-only.
+ 
+### Complementos operacionais estabilizados
+
+- existe conciliacao explicita do retorno do checkout por `conciliar_checkout_session_stripe(...)` no fluxo de `/contrate-um-plano`;
+- existe rotina oficial de virada por `efetivar_mudancas_pendentes_ciclo(...)`, executada em `/cron/executar-cleiton`;
+- o trilho oficial de conciliacao do retorno permanece em `/contrate-um-plano?checkout=success&session_id=...`, sempre com `session_id` real;
+- o trilho oficial de virada de ciclo permanece em `/cron/executar-cleiton`, protegido por `CRON_SECRET`;
+- todo usuario nasce em `free`;
+- os planos pagos no estado atual sao `starter` e `pro`;
+- `free` nao existe como `price` no Stripe;
+- downgrade para `free` significa `cancel_at_period_end=true` na assinatura atual e troca interna posterior pela virada de ciclo;
+- downgrade pago `pro -> starter` altera a assinatura existente e posterga o efeito operacional para a virada;
+- checkout novo so e permitido quando a conta nao possui assinatura Stripe ativa canonica.
+
+### Persistencia canonica de monetizacao
+
+Entidade principal:
+
+- `ContaMonetizacaoVinculo`
+
+Campos que a equipe deve auditar primeiro:
+
+- `customer_id`
+- `subscription_id`
+- `price_id`
+- `plano_interno`
+- `status_contratual_externo`
+- `ativo`
+- `snapshot_normalizado_json`
+
+Regras importantes:
+
+- existe no maximo um vinculo `ativo=true` por conta;
+- o historico da conta e preservado em vinculos antigos;
+- a pendencia de mudanca fica no `snapshot_normalizado_json`;
+- os campos de snapshot mais importantes nos downgrades atuais sao `mudanca_pendente`, `tipo_mudanca`, `plano_futuro` e `efetivar_em`;
+- a trilha append-only e auditavel fica em `MonetizacaoFato`.
+
+### Assinatura canonica e prevencao de multiplas assinaturas
+
+Houve bug anterior de abertura indevida de checkout para conta que ja tinha assinatura. O comportamento correto agora e:
+
+- `_obter_assinatura_stripe_ativa(...)` tenta primeiro o vinculo ativo da conta;
+- se o vinculo ativo estiver contaminado, cancelado ou insuficiente, tenta o historico da mesma conta;
+- depois disso, ainda existe fallback por `customer_id` na Stripe;
+- se ja existe assinatura ativa canonica para a conta, nao abrir novo checkout pago;
+- upgrade e downgrade pago devem atualizar a assinatura existente;
+- webhook e conciliacao nao devem promover vinculo inconsistente quando `customer_id` ou `subscription_id` divergirem do vinculo ativo.
+
+### Fluxos de monetizacao suportados hoje
+
+#### `free -> starter`
+
+- Stripe:
+  - abre checkout embedded de nova assinatura;
+  - usa `price_id` do plano pago selecionado.
+- Banco:
+  - registra `stripe_checkout_session_created`;
+  - nao altera a franquia operacional apenas por abrir checkout.
+- UI:
+  - a tela `/contrate-um-plano` recebe o embedded checkout;
+  - no retorno, a conciliacao usa `session_id` valido.
+
+#### `starter -> pro`
+
+- Stripe:
+  - reaproveita a assinatura existente da conta;
+  - atualiza a subscription sem abrir checkout novo;
+  - usa `proration_behavior=none`.
+- Banco:
+  - sincroniza `ContaMonetizacaoVinculo`;
+  - registra `stripe_subscription_plan_modify_requested`.
+- UI:
+  - nao depende de uma segunda assinatura para fazer upgrade.
+
+#### `pro -> starter`
+
+- Stripe:
+  - nao cria nova assinatura;
+  - altera a assinatura existente para o `price` de `starter`.
+- Banco:
+  - registra `mudanca_pendente=true`;
+  - registra `plano_futuro=starter`;
+  - registra `efetivar_em`;
+  - mantem o plano operacional atual ate a virada.
+- UI:
+  - deve tratar como downgrade agendado, nao imediato.
+
+#### `starter/pro -> free`
+
+- Stripe:
+  - nao existe `price` free;
+  - encontra a assinatura ativa canonica;
+  - envia `cancel_at_period_end=true`.
+- Banco:
+  - registra `mudanca_pendente=true`;
+  - registra `plano_futuro=free`;
+  - registra `efetivar_em`;
+  - mantem o plano atual operacional ate a virada.
+- UI:
+  - deve comunicar cancelamento ao fim do periodo, nao remocao imediata do acesso pago.
+
+### Papel do Stripe vs papel do sistema interno
+
+- Stripe:
+  - `customer`
+  - `subscription`
+  - `price`
+  - status contratual externo
+  - periodo de vigencia externa
+  - webhooks e retorno do checkout
+- Aplicacao:
+  - `Franquia` como estado operacional
+  - plano efetivamente vigente no uso
+  - limite, consumo e status de acesso
+  - pendencias internas de mudanca
+  - efetivacao final na virada de ciclo
+
+### Webhook, conciliacao e virada de ciclo
+
+- webhook oficial: `/api/webhook/stripe`
+- conciliacao oficial do retorno: `conciliar_checkout_session_stripe(session_id)`
+- rotina de efetivacao interna: `efetivar_mudancas_pendentes_ciclo(...)`
+- cron oficial: `/cron/executar-cleiton`
+
+Comportamento esperado:
+
+- o webhook recebe fatos externos assinados, aplica idempotencia e registra fatos internos;
+- a conciliacao de checkout busca a `checkout session` e, quando existir, a `subscription` correspondente para fechar o fluxo do retorno do usuario;
+- `checkout.session.completed` sozinho nao deve ser tratado como prova suficiente de efeito operacional final;
+- a virada de ciclo e quem efetiva internamente downgrades pendentes para `starter` e `free`;
+- o Stripe informa o encerramento ou a troca contratual, mas a aplicacao continua responsavel pela transicao operacional final.
+
+## Observabilidade e Auditoria do Cleiton
+
+Este bloco consolida o que Cleiton ja rastreia hoje e o que precisa permanecer como trilho oficial em qualquer evolucao.
+
+### Fontes oficiais de observabilidade
+
+- `IaConsumoEvento`: tentativa real de chamada LLM, com `provider`, `operation`, `model`, `agent`, `flow_type`, `api_key_label`, tokens, status e identidade `conta_id`/`franquia_id`/`usuario_id`;
+- `ProcessingEvent`: processamento nao-LLM, com `agent`, `flow_type`, `processing_type`, `rows_processed`, `processing_time_ms`, status e identidade completa;
+- `CleitonBillingApropriacao`: apropriacao idempotente de billing tecnico, hoje usada no upload Roberto;
+- `Franquia`: estado operacional persistido consumido pela autorizacao em tempo de uso;
+- `IaBillingCostSnapshot`: snapshot de custo real para dashboard operacional;
+- `AuditoriaGerencial`: trilha gerencial de decisoes do Cleiton fora da camada direta de franquia.
+
+### Funcoes operacionais do Cleiton rastreadas no codigo
+
+- autorizacao pre-consumo: `avaliar_autorizacao_operacao_por_franquia`;
+- mensageria operacional para UI: `montar_mensagem_operacao`;
+- leitura operacional consolidada: `ler_franquia_operacional_cleiton`;
+- classificacao de estado por plano, vigencia, limite e bloqueio manual: `classificar_estado_operacional_franquia`;
+- inicializacao e leitura de ciclo operacional: `garantir_ciclo_operacional_franquia` e `ler_ciclo_vigente`;
+- reconciliacao entre consumo persistido e eventos abataveis: `reconciliar_franquia_cleiton`;
+- pacote administrativo de auditoria: `obter_pacote_validacao_franquia_cleiton`;
+- apropriacao idempotente de billing tecnico do Roberto: `apropriar_billing_upload_roberto`;
+- parametrizacao comercial de planos e franquias de referencia: `plano_service`.
+
+### O que o endpoint administrativo de validacao entrega
+
+Endpoint oficial:
+
+- `/admin/api/cleiton-franquia/<franquia_id>/validacao`
+
+Capacidades atuais:
+
+- leitura operacional da franquia;
+- reconciliacao entre `Franquia.consumo_acumulado` e soma recalculada dos eventos abataveis;
+- lista de pendencias do plano/ciclo;
+- contexto monetario da conta (vinculo comercial externo + fatos recentes de monetizacao);
+- pendencias explicitas de configuracao Stripe para `starter` e `pro` (sem bloqueio operacional);
+- opcao de sincronizar ciclo na leitura;
+- opcao administrativa explicita de aplicar correcao de reconciliacao.
+
+### Regra obrigatoria para futuras monetizacoes
+
+- nao criar trilha de observabilidade separada para pagamento fora do dominio Cleiton;
+- nao liberar acesso apenas por retorno de frontend;
+- nao decidir status operacional com base em campo legado ou sessao;
+- nao atualizar consumo, limite ou status fora da entidade `Franquia`;
+- nao ocultar do admin os fatos necessarios para auditar ativacao, renovacao, falha ou cancelamento.
+
+## Papel dos Documentos
+
+Este bloco resume o papel de cada documento relevante para a equipe.
+
+- `README.md`: documento principal do produto, da governanca Cleiton e do estado funcional vigente;
+- `app/README_RUN.md`: lembrete curto de execucao local;
+- `app/README_DEPLOY.md`: lembrete curto de deploy;
+- `app/GUIA_TEMPLATES_HTML.md`: referencia curta de comportamento visual e templates;
+- `migrations/README`: ordem e criticidade da cadeia de migrations;
+- `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`: fotografia operacional de homologacao/publicacao;
+- `SECURITY_SECRETS.md` e `scripts/security/*`: rotinas e guardrails de segredos/rotacao;
+- `app/.env.example`: contrato de configuracao por ambiente, incluindo URL de upgrade e variaveis operacionais.
+
+## Estado de Encerramento da Implantacao Stripe/Cleiton
+
+Encerramento funcional confirmado no codigo:
+
+- contratacao Stripe em jornada embedded oficial na tela `/contrate-um-plano`;
+- webhook Stripe oficial com validacao de assinatura, idempotencia e correlacao;
+- reprocessamento admin explicito para pendencias de correlacao no endpoint de validacao;
+- auditoria monetaria consolidada no pacote admin com contexto de vinculo/fatos/divergencias;
+- aplicacao contratual sobre `Franquia` preservando Cleiton como camada central.
+
+## Prompt de Auditoria Externa (Opcional)
+
+Se precisar de segunda opiniao em modo somente leitura, usar prompt de auditoria focado no estado implantado:
+
+- confirmar aderencia dos endpoints oficiais `/api/contratacao/stripe/iniciar`, `/api/webhook/stripe` e `/admin/api/cleiton-franquia/<franquia_id>/validacao`;
+- confirmar que `Franquia` permanece fonte operacional unica e que `User.creditos` segue legado;
+- confirmar observabilidade/auditoria no trilho Cleiton sem rotas paralelas;
+- listar apenas riscos residuais e pendencias operacionais objetivas, sem ampliar escopo.
 
 ## Chat da Julia
 
@@ -347,22 +606,127 @@ Validacao minima recomendada:
    - presenca do link markdown de upgrade;
 11. validar `PLANOS_UPGRADE_URL` por ambiente;
 12. rodar testes principais:
+   - `tests/test_cleiton_monetizacao_service.py`
+   - `tests/test_cleiton_franquia_validacao_admin_service.py`
+   - `tests/test_stripe_webhook_route.py`
+   - `tests/test_contratacao_stripe_route.py`
    - `tests/test_roberto_controles.py`
    - `tests/test_cleiton_upload_billing_service.py`
    - `tests/test_franquia_operacao_autorizacao_service.py`
-   - incluir testes do chat Roberto quando houver suite dedicada.
+13. rodar suite completa: `python -m pytest -q`.
 
 ## Homologacao e Deploy
 
-Status atual conhecido:
+Pre-condicao explicita de fechamento:
 
-- a homologacao nao deve ser considerada concluida sem validar migrations, schema e fluxos reais;
-- o Roberto faz parte desse checklist de homologacao com upload, BI, ranking e heatmap.
+- homologacao Stripe so pode ser considerada concluida com evidencias objetivas de credenciais e webhook no ambiente de homolog (`STRIPE_API_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, endpoint `/api/webhook/stripe` ativo e assinado).
 
-Bloqueios operacionais historicos relevantes:
+### Checklist final de homologacao
 
-- necessidade de confirmar `upgrade head` e `current` no ambiente alvo antes de qualquer go-live;
-- nao considerar deploy valido sem persistencia adequada e variaveis corretas por ambiente.
+- migrations aplicadas no alvo com `upgrade head` e `current` coerentes;
+- fluxo `/api/contratacao/stripe/iniciar` validado com usuario autenticado;
+- fluxo `/api/webhook/stripe` validado com assinatura correta e replay idempotente;
+- retorno `/contrate-um-plano?checkout=success&session_id=...` validado com `session_id` real e conciliacao positiva;
+- fluxo `/admin/api/cleiton-franquia/<franquia_id>/validacao` validado em leitura e reprocessamento admin;
+- painel `/contrate-um-plano` validado com plano pronto e retorno de erro contratual quando plano estiver pendente;
+- trilho Roberto validado (upload, BI, ranking/heatmap e limpeza de upload temporario).
+
+### Checklist de prontidao para producao
+
+- variaveis de ambiente obrigatorias revisadas por ambiente (`APP_ENV`, `DATABASE_URL`, segredos Stripe, `APP_DATA_DIR`, `CRON_SECRET`);
+- persistencia de dados confirmada para `APP_DATA_DIR` e artefatos temporarios operacionais;
+- observabilidade habilitada para `IaConsumoEvento`, `ProcessingEvent`, `MonetizacaoFato` e pacote admin de validacao;
+- monitoramento de webhook com alarmes para falhas 4xx/5xx e volume anomalo de pendencias de correlacao;
+- procedimento de suporte documentado para reconciliacao e reprocessamento sem mutacao manual fora do trilho oficial.
+
+### Riscos residuais aceitaveis
+
+- eventos Stripe sem correlacao inequívoca ficam pendentes sem efeito operacional ate acao admin;
+- fallback interno de ciclo pode ser usado como excecao controlada quando evento nao trouxer ciclo confiavel;
+- warning de biblioteca externa (`flask_session` deprecado) sem impacto funcional imediato na implantacao Stripe/Cleiton.
+
+### Riscos residuais nao aceitaveis
+
+- qualquer bypass que altere consumo/status sem passar por `Franquia` e camada central Cleiton;
+- qualquer rota paralela para contratacao/webhook/governanca fora dos endpoints oficiais;
+- homologacao declarada sem evidencia de segredo de webhook e validacao de assinatura;
+- deploy sem migrations aplicadas ou sem persistencia operacional configurada.
+
+### Criterio objetivo de encerramento definitivo
+
+- `tests/test_roberto_controles.py` verde sem `PermissionError` de `tmp_path` no ambiente local;
+- suite Stripe/Cleiton verde (`tests/test_cleiton_monetizacao_service.py`, `tests/test_cleiton_franquia_validacao_admin_service.py`, `tests/test_stripe_webhook_route.py`, `tests/test_contratacao_stripe_route.py`);
+- suite completa do projeto verde no ambiente local;
+- trilho oficial preservado sem novos endpoints paralelos;
+- documentacao e contrato de ambiente atualizados para refletir estado implantado real.
+
+## Troubleshooting Stripe e Operacao
+
+Este bloco concentra os incidentes reais ja enfrentados e a forma correta de investigar.
+
+### Webhook local nao chegando
+
+- confirmar que o endpoint publicado e `/api/webhook/stripe`;
+- confirmar que o `cloudflared` atual e o mesmo endpoint cadastrado no Stripe;
+- sempre que a URL publica do tunel mudar, atualizar o endpoint de webhook no dashboard Stripe;
+- validar se o evento foi enviado para o ambiente correto: `test` e `live` sao separados;
+- em erro `400`, revisar `Stripe-Signature` e `STRIPE_WEBHOOK_SECRET`;
+- em erro `500`, revisar logs do backend e payload recebido.
+
+### Cloudflared com URL antiga
+
+- este ja foi um problema operacional real;
+- sintoma comum: checkout fecha, mas o backend local nao recebe evento;
+- correcao:
+  - subir tunel novo;
+  - copiar a URL HTTPS publica atual;
+  - atualizar a configuracao do webhook no Stripe;
+  - reenviar evento de teste e confirmar `200`.
+
+### Vinculo ativo inconsistente
+
+- o vinculo ativo pode ficar contaminado quando houve checkout novo indevido no passado;
+- a recuperacao canonica de assinatura agora segue esta ordem:
+  - vinculo ativo;
+  - historico da mesma conta;
+  - fallback por `customer_id`;
+- evento divergente nao deve promover automaticamente um vinculo novo;
+- antes de mexer no banco, revisar o pacote admin de validacao da franquia.
+
+### Multiplas assinaturas por checkout novo indevido
+
+- este foi um bug real e ja tratado com guardrails;
+- comportamento correto atual:
+  - se existe assinatura ativa canonica, nao abrir checkout pago novo;
+  - upgrade e downgrade pago devem usar update da assinatura existente;
+- ao investigar, conferir:
+  - `customer_id`
+  - `subscription_id`
+  - `price_id`
+  - se houve revalidacao antes do `/checkout/sessions`
+  - se a UI retornou com `session_id` correto.
+
+### Assinatura antiga ou cancelada presa no banco
+
+- um `subscription_id` historico pode continuar no banco sem ser a assinatura vigente;
+- `_obter_assinatura_stripe_ativa(...)` ja faz GET e aceita apenas status usaveis como canonicos;
+- ao auditar, revisar origem da recuperacao:
+  - vinculo ativo
+  - historico da conta
+  - fallback por `customer_id`
+
+### Checklist minimo de validacao operacional
+
+1. contratacao inicial:
+   validar `customer_id`, `subscription_id`, `price_id`, fatos internos e efeito operacional final.
+2. downgrade para `free`:
+   validar `cancel_at_period_end=true`, `mudanca_pendente`, `plano_futuro=free` e `efetivar_em`.
+3. downgrade pago `pro -> starter`:
+   validar alteracao da assinatura existente, ausencia de checkout novo e pendencia interna.
+4. virada de ciclo:
+   validar execucao do `/cron/executar-cleiton`, efetivacao do plano futuro e limpeza da pendencia.
+5. homologacao/local:
+   validar ambiente Stripe correto, webhook correto, tunel correto e cron protegido.
 
 ## Guias Complementares
 
