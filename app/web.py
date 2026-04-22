@@ -27,6 +27,7 @@ from sqlalchemy import text
 
 # 1. Imports do Flask e Extensões Base
 from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify
+from flask_migrate import Migrate
 from flask_session import Session
 from flask_login import login_user, login_required, logout_user, current_user
 from app.extensions import db, login_manager
@@ -92,6 +93,7 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
+migrate = Migrate()
 logger = logging.getLogger(__name__)
 
 _diretorio_dados = settings.data_dir
@@ -130,6 +132,7 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' if settings.oauth_insecure_trans
 
 # 4. Inicializar extensões e Blueprints
 db.init_app(app)
+migrate.init_app(app, db)
 
 login_manager.init_app(app)
 
