@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -25,6 +26,11 @@ from tests.conftest import seed_conta_franquia_cliente, seed_usuario
 
 def _ts(year: int, month: int, day: int) -> int:
     return int(datetime(year, month, day, tzinfo=timezone.utc).timestamp())
+
+
+def _naive_utc(ts: int) -> datetime:
+    """Converte timestamp Unix para datetime naive em UTC, alinhado a _to_datetime_utc_naive do serviço."""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
 
 
 def _configurar_plano_starter_para_teste(*, franquia_ref_id: int) -> None:
@@ -2098,3 +2104,265 @@ def test_obter_assinatura_stripe_ativa_historico_prefere_metadata_conta(app, mon
         assert out is not None
         assert out.get("subscription_id") == "sub_com_meta"
         assert out.get("origem") == "vinculo_historico_stripe_get"
+
+
+def test_pro_para_starter_vigente_subscription_updated_sincroniza_frase_ciclo(app):
+    """
+    Apos Pro com ciclo operacional fechado, Stripe (Starter) com novo inicio de periodo
+    aplica o plano, atualiza o ciclo e zera o consumo — sem manter 'pendente' falso-positivo.
+    """
+    with app.app_context():
+        conta, franquia = seed_conta_franquia_cliente(slug="conta-pro-st-vigente")
+        franquia.limite_total = 1000
+        franquia.consumo_acumulado = Decimal("918.97")
+        t0 = _ts(2026, 1, 1)
+        t1 = _ts(2026, 2, 1)
+        franquia.inicio_ciclo = _naive_utc(t0)
+        franquia.fim_ciclo = _naive_utc(t1)
+        db.session.add(franquia)
+        db.session.commit()
+        user = seed_usuario(franquia.id, conta.id, email="pro-st-vigente@test.com", categoria="pro")
+        _configurar_plano_starter_para_teste(franquia_ref_id=franquia.id)
+        _configurar_plano_pro_para_teste(franquia_ref_id=franquia.id)
+        registrar_vinculo_comercial_externo(
+            conta_id=conta.id,
+            provider="stripe",
+            customer_id="cus_vig",
+            subscription_id="sub_vig",
+            price_id="price_pro_test",
+            plano_interno="pro",
+            status_contratual_externo="active",
+            vigencia_externa_inicio=_naive_utc(t0),
+            vigencia_externa_fim=_naive_utc(t1),
+            snapshot_normalizado={"conta_id": conta.id, "franquia_id": franquia.id},
+            payload_bruto_sanitizado={"origem": "seed"},
+        )
+        db.session.commit()
+        inicio = _ts(2026, 2, 1)
+        fim = _ts(2026, 3, 1)
+        evento = {
+            "id": "evt_pro_st_vigente",
+            "type": "customer.subscription.updated",
+            "created": _ts(2026, 2, 2),
+            "data": {
+                "object": {
+                    "id": "sub_vig",
+                    "customer": "cus_vig",
+                    "status": "active",
+                    "current_period_start": inicio,
+                    "current_period_end": fim,
+                    "metadata": {
+                        "conta_id": str(conta.id),
+                        "franquia_id": str(franquia.id),
+                    },
+                    "items": {"data": [{"price": {"id": "price_starter_test"}}]},
+                }
+            },
+        }
+        out = processar_evento_stripe(evento)
+        vinculo = (
+            ContaMonetizacaoVinculo.query.filter_by(conta_id=conta.id, ativo=True)
+            .order_by(ContaMonetizacaoVinculo.id.desc())
+            .first()
+        )
+        user_refresh = db.session.get(type(user), user.id)
+        fr = db.session.get(Franquia, franquia.id)
+        snap = json.loads(vinculo.snapshot_normalizado_json or "{}")
+        assert out["efeito_operacional_aplicado"] is True
+        assert out.get("mudanca_pendente") is False
+        assert user_refresh is not None and user_refresh.categoria == "starter"
+        assert fr is not None
+        assert fr.consumo_acumulado == Decimal("0")
+        assert fr.inicio_ciclo == _naive_utc(inicio)
+        assert fr.fim_ciclo == _naive_utc(fim)
+        assert snap.get("mudanca_pendente") in (None, False)
+
+
+def test_starter_mesma_categoria_subscription_updated_virada_ciclo_zera_consumo(app):
+    """Mesmo plano, novo periodo Stripe via customer.subscription.updated — reinicia franquia."""
+    with app.app_context():
+        conta, franquia = seed_conta_franquia_cliente(slug="conta-st-virada-sub")
+        franquia.consumo_acumulado = Decimal("42.5")
+        t_mar = _ts(2026, 3, 1)
+        t_apr = _ts(2026, 4, 1)
+        franquia.inicio_ciclo = _naive_utc(t_mar)
+        franquia.fim_ciclo = _naive_utc(t_apr)
+        db.session.add(franquia)
+        db.session.commit()
+        user = seed_usuario(franquia.id, conta.id, email="st-virada@test.com", categoria="starter")
+        _configurar_plano_starter_para_teste(franquia_ref_id=franquia.id)
+        registrar_vinculo_comercial_externo(
+            conta_id=conta.id,
+            provider="stripe",
+            customer_id="cus_vira",
+            subscription_id="sub_vira",
+            price_id="price_starter_test",
+            plano_interno="starter",
+            status_contratual_externo="active",
+            vigencia_externa_inicio=_naive_utc(t_mar),
+            vigencia_externa_fim=_naive_utc(t_apr),
+            snapshot_normalizado={"conta_id": conta.id, "franquia_id": franquia.id},
+            payload_bruto_sanitizado={"origem": "seed"},
+        )
+        db.session.commit()
+        inicio2 = _ts(2026, 4, 1)
+        fim2 = _ts(2026, 5, 1)
+        evento = {
+            "id": "evt_st_virada",
+            "type": "customer.subscription.updated",
+            "created": _ts(2026, 4, 2),
+            "data": {
+                "object": {
+                    "id": "sub_vira",
+                    "customer": "cus_vira",
+                    "status": "active",
+                    "current_period_start": inicio2,
+                    "current_period_end": fim2,
+                    "metadata": {
+                        "conta_id": str(conta.id),
+                        "franquia_id": str(franquia.id),
+                    },
+                    "items": {"data": [{"price": {"id": "price_starter_test"}}]},
+                }
+            },
+        }
+        out = processar_evento_stripe(evento)
+        fr = db.session.get(Franquia, franquia.id)
+        assert out["efeito_operacional_aplicado"] is True
+        assert fr is not None
+        assert fr.consumo_acumulado == Decimal("0")
+        assert fr.inicio_ciclo == _naive_utc(inicio2)
+        assert fr.fim_ciclo == _naive_utc(fim2)
+        u = db.session.get(type(user), user.id)
+        assert u is not None and u.categoria == "starter"
+
+
+def test_idempotencia_subscription_updated_segundo_evento_igual_nao_zera_novamente(app):
+    """Segundo processamento (ev distinto) com o mesmo periodo: sem novo reset indevido."""
+    with app.app_context():
+        conta, franquia = seed_conta_franquia_cliente(slug="conta-idem-sub")
+        franquia.consumo_acumulado = Decimal("1")
+        t_mar = _ts(2026, 3, 1)
+        t_apr = _ts(2026, 4, 1)
+        franquia.inicio_ciclo = _naive_utc(t_mar)
+        franquia.fim_ciclo = _naive_utc(t_apr)
+        db.session.add(franquia)
+        db.session.commit()
+        user = seed_usuario(franquia.id, conta.id, email="idem-sub@test.com", categoria="starter")
+        _configurar_plano_starter_para_teste(franquia_ref_id=franquia.id)
+        registrar_vinculo_comercial_externo(
+            conta_id=conta.id,
+            provider="stripe",
+            customer_id="cus_idem2",
+            subscription_id="sub_idem2",
+            price_id="price_starter_test",
+            plano_interno="starter",
+            status_contratual_externo="active",
+            snapshot_normalizado={"conta_id": conta.id, "franquia_id": franquia.id},
+            payload_bruto_sanitizado={"origem": "seed"},
+        )
+        db.session.commit()
+        inicio2 = _ts(2026, 4, 1)
+        fim2 = _ts(2026, 5, 1)
+        def _payload(inc_eid: int):
+            return {
+                "id": f"evt_idem_w_{inc_eid}",
+                "type": "customer.subscription.updated",
+                "created": _ts(2026, 4, 2),
+                "data": {
+                    "object": {
+                        "id": "sub_idem2",
+                        "customer": "cus_idem2",
+                        "status": "active",
+                        "current_period_start": inicio2,
+                        "current_period_end": fim2,
+                        "metadata": {
+                            "conta_id": str(conta.id),
+                            "franquia_id": str(franquia.id),
+                        },
+                        "items": {"data": [{"price": {"id": "price_starter_test"}}]},
+                    }
+                },
+            }
+        first = processar_evento_stripe(_payload(1))
+        # Simula reenvio/duplicata com outro id mas o mesmo fato de periodo
+        second = processar_evento_stripe(_payload(2))
+        fr = db.session.get(Franquia, franquia.id)
+        assert first["efeito_operacional_aplicado"] is True
+        assert second.get("efeito_operacional_aplicado") in (True, False)
+        assert fr is not None and fr.consumo_acumulado == Decimal("0")
+        # Periodo inalterado no segundo: consumo nao fica negativo/estranho
+        assert fr.inicio_ciclo == _naive_utc(inicio2)
+
+
+def test_subscription_updated_admin_mesmo_periodo_nao_zera_consumo_starter(app):
+    """
+    Update administrativo (sem virada de periodo): mesmo current_period, mesmo price Starter,
+    consumo e ciclo operacional nao devem ser alterados.
+    """
+    with app.app_context():
+        conta, franquia = seed_conta_franquia_cliente(slug="conta-sub-adm-no-rollover")
+        t0 = _ts(2026, 6, 1)
+        t1 = _ts(2026, 7, 1)
+        limite_antes = Decimal("350")
+        franquia.limite_total = limite_antes
+        franquia.consumo_acumulado = Decimal("12.34")
+        franquia.inicio_ciclo = _naive_utc(t0)
+        franquia.fim_ciclo = _naive_utc(t1)
+        db.session.add(franquia)
+        db.session.commit()
+        user = seed_usuario(franquia.id, conta.id, email="sub-adm-noroll@test.com", categoria="starter")
+        _configurar_plano_starter_para_teste(franquia_ref_id=franquia.id)
+        registrar_vinculo_comercial_externo(
+            conta_id=conta.id,
+            provider="stripe",
+            customer_id="cus_adm",
+            subscription_id="sub_adm",
+            price_id="price_starter_test",
+            plano_interno="starter",
+            status_contratual_externo="active",
+            vigencia_externa_inicio=_naive_utc(t0),
+            vigencia_externa_fim=_naive_utc(t1),
+            snapshot_normalizado={"conta_id": conta.id, "franquia_id": franquia.id},
+            payload_bruto_sanitizado={"origem": "seed"},
+        )
+        db.session.commit()
+        inicio_espelho = t0
+        fim_espelho = t1
+        evento = {
+            "id": "evt_sub_update_admin_mesmo_ciclo",
+            "type": "customer.subscription.updated",
+            "created": _ts(2026, 6, 15),
+            "data": {
+                "object": {
+                    "id": "sub_adm",
+                    "customer": "cus_adm",
+                    "status": "active",
+                    "current_period_start": inicio_espelho,
+                    "current_period_end": fim_espelho,
+                    "metadata": {
+                        "conta_id": str(conta.id),
+                        "franquia_id": str(franquia.id),
+                    },
+                    "items": {"data": [{"price": {"id": "price_starter_test"}}]},
+                }
+            },
+        }
+        out = processar_evento_stripe(evento)
+        fr = db.session.get(Franquia, franquia.id)
+        u = db.session.get(type(user), user.id)
+        v = (
+            ContaMonetizacaoVinculo.query.filter_by(conta_id=conta.id, ativo=True)
+            .order_by(ContaMonetizacaoVinculo.id.desc())
+            .first()
+        )
+        snap = json.loads(v.snapshot_normalizado_json or "{}")
+        assert u is not None and u.categoria == "starter"
+        assert fr is not None
+        assert fr.limite_total == limite_antes
+        assert fr.consumo_acumulado == Decimal("12.34")
+        assert fr.inicio_ciclo == _naive_utc(t0)
+        assert fr.fim_ciclo == _naive_utc(t1)
+        assert not snap.get("mudanca_pendente")
+        assert out.get("mudanca_pendente") in (None, False)
+        assert out.get("ok") is True

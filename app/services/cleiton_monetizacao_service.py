@@ -2561,6 +2561,23 @@ def _aplicar_plano_operacional_franquia(fr: Franquia, plano_n: str) -> bool:
     return alterou
 
 
+def _downgrade_pago_ja_vigente_ciclo_stripe(fr: Franquia, ciclo: dict[str, Any]) -> bool:
+    """
+    O periodo de cobranca do evento (inicio) ja e posterior ao fim de ciclo operacional
+    conhecido, ou, sem fim local, o inicio Stripe e estritamente posterior ao inicio local.
+    Isto alinha fim/virada reais: downgrade agendado continua com fim de ciclo ainda distante
+    (ex.: 2099) e nao e confundido com virada ja ocorrida.
+    """
+    ci = ciclo.get("inicio_ciclo")
+    if not isinstance(ci, datetime):
+        return False
+    if fr.fim_ciclo is not None:
+        return ci >= fr.fim_ciclo
+    if fr.inicio_ciclo is not None:
+        return ci > fr.inicio_ciclo
+    return False
+
+
 def aplicar_fato_contratual_em_franquia(
     *,
     franquia_id: int,
@@ -2605,8 +2622,16 @@ def aplicar_fato_contratual_em_franquia(
         and _rank_plano(plano_n) < _rank_plano(plano_atual)
     )
     downgrade_para_plano_pago = bool(eh_downgrade and plano_n not in (None, "free"))
+    downgrade_pago_ja_vigente = bool(
+        downgrade_para_plano_pago and _downgrade_pago_ja_vigente_ciclo_stripe(fr, ciclo)
+    )
 
-    if downgrade_para_plano_pago:
+    if downgrade_pago_ja_vigente:
+        if vinculo_ativo_conta is not None:
+            _limpar_mudanca_pendente_vinculo(vinculo_ativo_conta)
+        if _aplicar_plano_operacional_franquia(fr, str(plano_n)):
+            alterou = True
+    elif downgrade_para_plano_pago:
         # Downgrade para plano pago inferior (ex.: Pro -> Starter): nunca aplicar operacional
         # imediato quando faltar data no evento; mantem a mesma ordem Stripe do resolver quando ha datas.
         efetivar_dt = _resolver_data_efetivacao_downgrade(
@@ -2684,7 +2709,7 @@ def aplicar_fato_contratual_em_franquia(
     inicio = ciclo.get("inicio_ciclo")
     fim = ciclo.get("fim_ciclo")
     if (
-        event_type == "invoice.paid"
+        (event_type or "").strip().lower() in ("invoice.paid", "customer.subscription.updated")
         and inicio is not None
         and fim is not None
         and fr.fim_ciclo is not None
@@ -2694,8 +2719,9 @@ def aplicar_fato_contratual_em_franquia(
         inicio = None
         fim = None
         ciclo_ignorado_evento_antigo = True
+    event_type_l = (event_type or "").strip().lower()
     ciclo_renovado = bool(
-        event_type == "invoice.paid"
+        event_type_l in ("invoice.paid", "customer.subscription.updated")
         and inicio is not None
         and fim is not None
         and (fr.inicio_ciclo != inicio or fr.fim_ciclo != fim)
