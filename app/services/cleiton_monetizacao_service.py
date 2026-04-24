@@ -1807,6 +1807,8 @@ def processar_fato_stripe_conciliado(
         ids=ids,
         correlacao=correlacao,
     )
+    if event_type_n == "customer.subscription.deleted":
+        plano_codigo = "free"
     logging.info(
         "[StripeDebug][FatoConciliado] Plano interno resolvido plano_codigo=%s",
         plano_codigo,
@@ -1963,6 +1965,10 @@ def processar_fato_stripe_conciliado(
             "[StripeDebug][FatoConciliado] Depois aplicar_fato_contratual_em_franquia retorno=%s",
             efeito_operacional,
         )
+    if event_type_n == "customer.subscription.deleted" and vinculo_atualizado is not None:
+        vinculo_atualizado.ativo = False
+        vinculo_atualizado.desativado_em = utcnow_naive()
+        db.session.add(vinculo_atualizado)
     efeito_aplicado = bool(efeito_operacional.get("aplicado"))
 
     status_tecnico = STATUS_TEC_APLICADO if efeito_aplicado else STATUS_TEC_SEM_EFEITO
@@ -2148,6 +2154,8 @@ def processar_evento_stripe(
         ids=ids,
         correlacao=correlacao,
     )
+    if event_type == "customer.subscription.deleted":
+        plano_codigo = "free"
     status_contratual = _resolver_status_contratual_evento(event_type=event_type, object_data=object_data)
     ciclo = _resolver_ciclo_evento_stripe(event_type=event_type, object_data=object_data)
     efeito_operacional = {
@@ -2205,8 +2213,9 @@ def processar_evento_stripe(
             },
             payload_bruto_sanitizado=object_data,
         )
+    vinculo_stripe: ContaMonetizacaoVinculo | None = None
     if not ignorar_atualizacao_vinculo_evento_antigo and not bloquear_promocao_vinculo_ids:
-        atualizar_vinculo_comercial_stripe(
+        vinculo_stripe = atualizar_vinculo_comercial_stripe(
             conta_id=int(correlacao["conta_id"]),
             plano_interno=plano_codigo,
             status_contratual_externo=status_contratual,
@@ -2237,6 +2246,10 @@ def processar_evento_stripe(
             status_contratual_externo=status_contratual,
             ciclo=ciclo,
         )
+    if event_type == "customer.subscription.deleted" and vinculo_stripe is not None:
+        vinculo_stripe.ativo = False
+        vinculo_stripe.desativado_em = utcnow_naive()
+        db.session.add(vinculo_stripe)
     efeito_aplicado = bool(efeito_operacional.get("aplicado"))
 
     status_tecnico = STATUS_TEC_APLICADO if efeito_aplicado else STATUS_TEC_SEM_EFEITO
@@ -2626,7 +2639,12 @@ def aplicar_fato_contratual_em_franquia(
         downgrade_para_plano_pago and _downgrade_pago_ja_vigente_ciclo_stripe(fr, ciclo)
     )
 
-    if downgrade_pago_ja_vigente:
+    if (event_type or "").strip().lower() == "customer.subscription.deleted":
+        if vinculo_ativo_conta is not None:
+            _limpar_mudanca_pendente_vinculo(vinculo_ativo_conta)
+        if _aplicar_plano_operacional_franquia(fr, "free"):
+            alterou = True
+    elif downgrade_pago_ja_vigente:
         if vinculo_ativo_conta is not None:
             _limpar_mudanca_pendente_vinculo(vinculo_ativo_conta)
         if _aplicar_plano_operacional_franquia(fr, str(plano_n)):
