@@ -33,6 +33,11 @@ PLANOS_SAAS_ADMIN = (
     {"codigo": "avulso", "nome": "Avulso", "categorias": ("avulso",)},
 )
 _PLANOS_POR_CODIGO = {p["codigo"]: p for p in PLANOS_SAAS_ADMIN}
+PLANOS_GATEWAY_MONETIZACAO = ("starter", "pro")
+
+_GATEWAY_PROVIDER_OPCOES = {"stripe"}
+_GATEWAY_INTERVALO_OPCOES = {"month", "year"}
+_GATEWAY_CURRENCY_OPCOES = {"brl", "usd", "eur"}
 
 
 def _to_decimal(v) -> Decimal | None:
@@ -82,6 +87,143 @@ def _config_key_franquia_ref(plano_codigo: str) -> str:
 
 def _config_desc_valor_plano(plano_nome: str) -> str:
     return f"Valor administrativo do plano {plano_nome} (R$)"
+
+
+def _config_key_gateway_provider(plano_codigo: str) -> str:
+    return f"plano_gateway_provider_admin_{plano_codigo}"
+
+
+def _config_key_gateway_product_id(plano_codigo: str) -> str:
+    return f"plano_gateway_product_id_admin_{plano_codigo}"
+
+
+def _config_key_gateway_price_id(plano_codigo: str) -> str:
+    return f"plano_gateway_price_id_admin_{plano_codigo}"
+
+
+def _config_key_gateway_currency(plano_codigo: str) -> str:
+    return f"plano_gateway_currency_admin_{plano_codigo}"
+
+
+def _config_key_gateway_interval(plano_codigo: str) -> str:
+    return f"plano_gateway_interval_admin_{plano_codigo}"
+
+
+def _config_key_gateway_ready(plano_codigo: str) -> str:
+    return f"plano_gateway_ready_admin_{plano_codigo}"
+
+
+def _bool_from_raw(raw: str | bool | None) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    txt = (raw or "").strip().lower()
+    return txt in {"1", "true", "yes", "on"}
+
+
+def _normalizar_gateway_provider(raw: str | None) -> str | None:
+    txt = (raw or "").strip().lower()
+    if not txt:
+        return None
+    if txt not in _GATEWAY_PROVIDER_OPCOES:
+        raise ValueError(
+            "Provider externo inválido. Valores aceitos nesta fase: stripe."
+        )
+    return txt
+
+
+def _normalizar_gateway_product_id(raw: str | None) -> str | None:
+    txt = (raw or "").strip()
+    return txt or None
+
+
+def _normalizar_gateway_price_id(raw: str | None) -> str | None:
+    txt = (raw or "").strip()
+    return txt or None
+
+
+def _normalizar_gateway_currency(raw: str | None) -> str | None:
+    txt = (raw or "").strip().lower()
+    if not txt:
+        return None
+    if txt not in _GATEWAY_CURRENCY_OPCOES:
+        raise ValueError("Moeda inválida para gateway. Use brl, usd ou eur.")
+    return txt
+
+
+def _normalizar_gateway_interval(raw: str | None) -> str | None:
+    txt = (raw or "").strip().lower()
+    if not txt:
+        return None
+    if txt not in _GATEWAY_INTERVALO_OPCOES:
+        raise ValueError("Periodicidade inválida para gateway. Use month ou year.")
+    return txt
+
+
+def _obter_cfg_map(chaves: list[str]) -> dict[str, ConfigRegras]:
+    if not chaves:
+        return {}
+    rows = ConfigRegras.query.filter(ConfigRegras.chave.in_(chaves)).all()
+    return {row.chave: row for row in rows}
+
+
+def _upsert_cfg_texto(cfg_map: dict[str, ConfigRegras], chave: str, descricao: str, valor: str | None) -> None:
+    cfg = cfg_map.get(chave)
+    if not cfg:
+        cfg = ConfigRegras(chave=chave, descricao=descricao)
+        db.session.add(cfg)
+        cfg_map[chave] = cfg
+    cfg.valor_texto = valor
+    cfg.valor_real = None
+    cfg.valor_inteiro = None
+    db.session.add(cfg)
+
+
+def _upsert_cfg_bool(cfg_map: dict[str, ConfigRegras], chave: str, descricao: str, valor: bool) -> None:
+    cfg = cfg_map.get(chave)
+    if not cfg:
+        cfg = ConfigRegras(chave=chave, descricao=descricao)
+        db.session.add(cfg)
+        cfg_map[chave] = cfg
+    cfg.valor_inteiro = 1 if valor else 0
+    cfg.valor_texto = "1" if valor else "0"
+    cfg.valor_real = None
+    db.session.add(cfg)
+
+
+def _ler_config_gateway_plano(cfg_map: dict[str, ConfigRegras], plano_codigo: str) -> dict:
+    provider = (cfg_map.get(_config_key_gateway_provider(plano_codigo)).valor_texto if cfg_map.get(_config_key_gateway_provider(plano_codigo)) else None)
+    product_id = (cfg_map.get(_config_key_gateway_product_id(plano_codigo)).valor_texto if cfg_map.get(_config_key_gateway_product_id(plano_codigo)) else None)
+    price_id = (cfg_map.get(_config_key_gateway_price_id(plano_codigo)).valor_texto if cfg_map.get(_config_key_gateway_price_id(plano_codigo)) else None)
+    currency = (cfg_map.get(_config_key_gateway_currency(plano_codigo)).valor_texto if cfg_map.get(_config_key_gateway_currency(plano_codigo)) else None)
+    interval = (cfg_map.get(_config_key_gateway_interval(plano_codigo)).valor_texto if cfg_map.get(_config_key_gateway_interval(plano_codigo)) else None)
+    cfg_ready = cfg_map.get(_config_key_gateway_ready(plano_codigo))
+    pronto = bool(cfg_ready and (cfg_ready.valor_inteiro or 0) == 1)
+
+    pendencias: list[str] = []
+    if not provider:
+        pendencias.append("gateway_provider_nao_configurado")
+    if not product_id:
+        pendencias.append("gateway_product_id_nao_configurado")
+    if not price_id:
+        pendencias.append("gateway_price_id_nao_configurado")
+    if not currency:
+        pendencias.append("gateway_currency_nao_configurado")
+    if not interval:
+        pendencias.append("gateway_interval_nao_configurado")
+    if not pronto:
+        pendencias.append("gateway_pronto_desmarcado")
+
+    configuracao_valida = len(pendencias) == 0
+    return {
+        "provider": provider,
+        "product_id": product_id,
+        "price_id": price_id,
+        "currency": currency,
+        "interval": interval,
+        "pronto": pronto,
+        "configuracao_valida": configuracao_valida,
+        "pendencias": pendencias,
+    }
 
 
 def obter_nome_exibivel_plano(plano_codigo: str | None) -> str:
@@ -150,7 +292,7 @@ def corrigir_franquias_free_sem_limite() -> dict:
         .join(User, User.franquia_id == Franquia.id)
         .filter(db.func.lower(User.categoria) == "free")
         .filter(Franquia.limite_total.is_(None))
-        .distinct(Franquia.id)
+        .distinct()
         .all()
     )
     atualizadas = 0
@@ -182,10 +324,18 @@ def listar_planos_saas_admin() -> list[dict]:
     for p in PLANOS_SAAS_ADMIN:
         cfg_keys.append(_config_key_valor_plano(p["codigo"]))
         cfg_keys.append(_config_key_franquia_ref(p["codigo"]))
-    cfg_rows = (
-        ConfigRegras.query.filter(ConfigRegras.chave.in_(cfg_keys)).all()
-    )
-    cfg_map = {row.chave: row for row in cfg_rows}
+        if p["codigo"] in PLANOS_GATEWAY_MONETIZACAO:
+            cfg_keys.extend(
+                [
+                    _config_key_gateway_provider(p["codigo"]),
+                    _config_key_gateway_product_id(p["codigo"]),
+                    _config_key_gateway_price_id(p["codigo"]),
+                    _config_key_gateway_currency(p["codigo"]),
+                    _config_key_gateway_interval(p["codigo"]),
+                    _config_key_gateway_ready(p["codigo"]),
+                ]
+            )
+    cfg_map = _obter_cfg_map(cfg_keys)
 
     planos: list[dict] = []
     for p in PLANOS_SAAS_ADMIN:
@@ -200,7 +350,7 @@ def listar_planos_saas_admin() -> list[dict]:
             db.session.query(Franquia)
             .join(User, User.franquia_id == Franquia.id)
             .filter(db.func.lower(User.categoria).in_(categorias))
-            .distinct(Franquia.id)
+            .distinct()
             .all()
         )
         cfg_franquia_ref = cfg_map.get(_config_key_franquia_ref(p["codigo"]))
@@ -224,6 +374,11 @@ def listar_planos_saas_admin() -> list[dict]:
                 "franquias_vinculadas": len(franquias),
                 "franquias_com_limite": len(limites),
                 "franquia_referencia": limite_referencia,
+                "gateway_config": (
+                    _ler_config_gateway_plano(cfg_map, p["codigo"])
+                    if p["codigo"] in PLANOS_GATEWAY_MONETIZACAO
+                    else None
+                ),
             }
         )
     return planos
@@ -233,6 +388,12 @@ def atualizar_parametros_plano_admin(
     plano_codigo: str,
     valor_plano_raw: str | None,
     franquia_limite_total_raw: str | None,
+    gateway_provider_raw: str | None = None,
+    gateway_product_id_raw: str | None = None,
+    gateway_price_id_raw: str | None = None,
+    gateway_currency_raw: str | None = None,
+    gateway_interval_raw: str | None = None,
+    gateway_pronto_raw: str | bool | None = None,
 ) -> dict:
     """
     Atualiza parâmetros administrativos do plano:
@@ -246,12 +407,18 @@ def atualizar_parametros_plano_admin(
 
     valor_plano = _parse_valor_plano_raw(valor_plano_raw)
     novo_limite = _parse_franquia_limite_raw(franquia_limite_total_raw)
+    gateway_provider = _normalizar_gateway_provider(gateway_provider_raw)
+    gateway_product_id = _normalizar_gateway_product_id(gateway_product_id_raw)
+    gateway_price_id = _normalizar_gateway_price_id(gateway_price_id_raw)
+    gateway_currency = _normalizar_gateway_currency(gateway_currency_raw)
+    gateway_interval = _normalizar_gateway_interval(gateway_interval_raw)
+    gateway_pronto = _bool_from_raw(gateway_pronto_raw)
     categorias = tuple(c.lower() for c in plano["categorias"])
     franquias = (
         db.session.query(Franquia)
         .join(User, User.franquia_id == Franquia.id)
         .filter(db.func.lower(User.categoria).in_(categorias))
-        .distinct(Franquia.id)
+        .distinct()
         .all()
     )
 
@@ -267,6 +434,18 @@ def atualizar_parametros_plano_admin(
     cfg.valor_real = float(valor_plano)
     cfg.valor_texto = str(valor_plano)
     cfg.valor_inteiro = None
+
+    gateway_cfg_chaves = []
+    if codigo in PLANOS_GATEWAY_MONETIZACAO:
+        gateway_cfg_chaves = [
+            _config_key_gateway_provider(codigo),
+            _config_key_gateway_product_id(codigo),
+            _config_key_gateway_price_id(codigo),
+            _config_key_gateway_currency(codigo),
+            _config_key_gateway_interval(codigo),
+            _config_key_gateway_ready(codigo),
+        ]
+    gateway_cfg_map = _obter_cfg_map(gateway_cfg_chaves)
 
     cfg_ref_key = _config_key_franquia_ref(codigo)
     cfg_ref = ConfigRegras.query.filter_by(chave=cfg_ref_key).first()
@@ -324,6 +503,45 @@ def atualizar_parametros_plano_admin(
                 fr.limite_total = novo_limite
                 db.session.add(fr)
                 atualizadas += 1
+
+        if codigo in PLANOS_GATEWAY_MONETIZACAO:
+            _upsert_cfg_texto(
+                gateway_cfg_map,
+                _config_key_gateway_provider(codigo),
+                f"Provider externo do plano {plano['nome']}",
+                gateway_provider,
+            )
+            _upsert_cfg_texto(
+                gateway_cfg_map,
+                _config_key_gateway_product_id(codigo),
+                f"Product ID externo do plano {plano['nome']}",
+                gateway_product_id,
+            )
+            _upsert_cfg_texto(
+                gateway_cfg_map,
+                _config_key_gateway_price_id(codigo),
+                f"Price ID externo ativo do plano {plano['nome']}",
+                gateway_price_id,
+            )
+            _upsert_cfg_texto(
+                gateway_cfg_map,
+                _config_key_gateway_currency(codigo),
+                f"Moeda externa do plano {plano['nome']}",
+                gateway_currency,
+            )
+            _upsert_cfg_texto(
+                gateway_cfg_map,
+                _config_key_gateway_interval(codigo),
+                f"Periodicidade externa do plano {plano['nome']}",
+                gateway_interval,
+            )
+            _upsert_cfg_bool(
+                gateway_cfg_map,
+                _config_key_gateway_ready(codigo),
+                f"Indicador de prontidao de configuracao externa do plano {plano['nome']}",
+                gateway_pronto,
+            )
+
         db.session.commit()
     except Exception as e:
         logger.exception(
@@ -334,12 +552,20 @@ def atualizar_parametros_plano_admin(
         db.session.rollback()
         raise
 
+    gateway_config = None
+    if codigo in PLANOS_GATEWAY_MONETIZACAO:
+        gateway_config = _ler_config_gateway_plano(
+            _obter_cfg_map(gateway_cfg_chaves),
+            codigo,
+        )
+
     return {
         "plano_nome": plano["nome"],
         "valor_plano": valor_plano,
         "franquia_limite_total": novo_limite,
         "franquias_total": len(franquias_para_aplicar),
         "franquias_atualizadas": atualizadas,
+        "gateway_config": gateway_config,
     }
 
 
@@ -352,6 +578,107 @@ def obter_config_planos():
         "planos_saas": listar_planos_saas_admin(),
         "freemium_trial_dias": get_freemium_trial_dias(),
     }
+
+
+def listar_pendencias_gateway_monetizacao_admin() -> list[dict]:
+    """
+    Retorna pendencias explicitas de configuracao de gateway para starter/pro.
+    Nao bloqueia operacao; apenas sinaliza estado administrativo.
+    """
+    planos = listar_planos_saas_admin()
+    pendencias: list[dict] = []
+    for plano in planos:
+        if plano["codigo"] not in PLANOS_GATEWAY_MONETIZACAO:
+            continue
+        gateway = plano.get("gateway_config") or {}
+        for pendencia in gateway.get("pendencias", []):
+            pendencias.append(
+                {
+                    "plano_codigo": plano["codigo"],
+                    "plano_nome": plano["nome"],
+                    "pendencia": pendencia,
+                }
+            )
+    return pendencias
+
+
+def listar_pendencias_gateway_monetizacao_por_plano_admin(
+    plano_codigo: str | None,
+) -> list[dict]:
+    """
+    Retorna pendencias de configuracao externa apenas do plano informado.
+    Se o plano nao participa do escopo Stripe da fase 1, retorna lista vazia.
+    """
+    codigo = (plano_codigo or "").strip().lower()
+    if codigo not in PLANOS_GATEWAY_MONETIZACAO:
+        return []
+    planos = listar_planos_saas_admin()
+    for plano in planos:
+        if plano.get("codigo") != codigo:
+            continue
+        gateway = plano.get("gateway_config") or {}
+        return [
+            {
+                "plano_codigo": plano["codigo"],
+                "plano_nome": plano["nome"],
+                "pendencia": pendencia,
+            }
+            for pendencia in gateway.get("pendencias", [])
+        ]
+    return [
+        {
+            "plano_codigo": codigo,
+            "plano_nome": codigo.capitalize(),
+            "pendencia": "plano_nao_encontrado_config_admin",
+        }
+    ]
+
+
+def obter_configuracao_gateway_plano_admin(plano_codigo: str | None) -> dict | None:
+    """
+    Retorna configuracao de gateway do plano informado no formato consolidado do admin.
+    Retorna None quando o plano nao participa do escopo de monetizacao recorrente.
+    """
+    codigo = (plano_codigo or "").strip().lower()
+    if codigo not in PLANOS_GATEWAY_MONETIZACAO:
+        return None
+    planos = listar_planos_saas_admin()
+    for plano in planos:
+        if plano.get("codigo") == codigo:
+            gateway_cfg = dict(plano.get("gateway_config") or {})
+            gateway_cfg["plano_codigo"] = plano.get("codigo")
+            gateway_cfg["plano_nome"] = plano.get("nome")
+            return gateway_cfg
+    return None
+
+
+def resolver_plano_por_gateway_price_id_admin(
+    *,
+    provider: str | None,
+    price_id: str | None,
+) -> dict | None:
+    """
+    Resolve o plano interno por price_id configurado no admin.
+    Usado para correlacao de eventos Stripe sem hardcode de plano.
+    """
+    provider_n = (provider or "").strip().lower()
+    price_id_n = (price_id or "").strip()
+    if provider_n != "stripe" or not price_id_n:
+        return None
+    for plano in listar_planos_saas_admin():
+        if plano.get("codigo") not in PLANOS_GATEWAY_MONETIZACAO:
+            continue
+        gateway = plano.get("gateway_config") or {}
+        if (gateway.get("provider") or "").strip().lower() != provider_n:
+            continue
+        if (gateway.get("price_id") or "").strip() != price_id_n:
+            continue
+        return {
+            "plano_codigo": plano.get("codigo"),
+            "plano_nome": plano.get("nome"),
+            "gateway_config": gateway,
+        }
+    return None
 
 
 def salvar_julia_chat_max_history(julia_chat_max_history_raw: str | None) -> int | None:

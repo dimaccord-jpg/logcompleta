@@ -52,6 +52,93 @@
                             </small>
                         </div>
 
+                        {% if plano.codigo in ["starter", "pro"] %}
+                        <hr>
+                        <p class="small fw-bold mb-2">Configuração externa (Fase 1 Stripe-ready)</p>
+
+                        <div class="mb-2">
+                            <label class="form-label small fw-bold">Provider externo</label>
+                            <input
+                                type="text"
+                                class="form-control"
+                                name="gateway_provider"
+                                value="{{ plano.gateway_config.provider if plano.gateway_config else '' }}"
+                                placeholder="stripe"
+                            >
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small fw-bold">Product ID</label>
+                            <input
+                                type="text"
+                                class="form-control"
+                                name="gateway_product_id"
+                                value="{{ plano.gateway_config.product_id if plano.gateway_config else '' }}"
+                                placeholder="prod_xxx"
+                            >
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small fw-bold">Price ID ativo</label>
+                            <input
+                                type="text"
+                                class="form-control"
+                                name="gateway_price_id"
+                                value="{{ plano.gateway_config.price_id if plano.gateway_config else '' }}"
+                                placeholder="price_xxx"
+                            >
+                        </div>
+
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label class="form-label small fw-bold">Moeda</label>
+                                <input
+                                    type="text"
+                                    class="form-control"
+                                    name="gateway_currency"
+                                    value="{{ plano.gateway_config.currency if plano.gateway_config else '' }}"
+                                    placeholder="brl"
+                                >
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small fw-bold">Periodicidade</label>
+                                <input
+                                    type="text"
+                                    class="form-control"
+                                    name="gateway_interval"
+                                    value="{{ plano.gateway_config.interval if plano.gateway_config else '' }}"
+                                    placeholder="month"
+                                >
+                            </div>
+                        </div>
+
+                        <div class="form-check mb-3">
+                            <input
+                                class="form-check-input"
+                                type="checkbox"
+                                id="gateway_pronto_{{ plano.codigo }}"
+                                name="gateway_pronto"
+                                {% if plano.gateway_config and plano.gateway_config.pronto %}checked{% endif %}
+                            >
+                            <label class="form-check-label small" for="gateway_pronto_{{ plano.codigo }}">
+                                Indicador de prontidão da configuração externa
+                            </label>
+                        </div>
+
+                        {% if plano.gateway_config %}
+                        <div class="mb-3">
+                            {% if plano.gateway_config.configuracao_valida %}
+                            <span class="badge bg-success">Configuração externa válida</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Configuração externa pendente</span>
+                            <small class="text-muted d-block mt-1">
+                                Pendências: {{ plano.gateway_config.pendencias|join(", ") }}
+                            </small>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                        {% endif %}
+
                         {% if plano.codigo == "free" %}
                         <div class="mb-3">
                             <label for="freemium_trial_dias" class="form-label small fw-bold">Dias de Teste (Trial)</label>
@@ -78,7 +165,7 @@
                             </small>
                         </div>
 
-                        <button type="submit" class="btn btn-sm btn-outline-dark w-100">Salvar Valor + Franquia</button>
+                        <button type="submit" class="btn btn-sm btn-outline-dark w-100">Salvar configuração administrativa</button>
                     </form>
                 </div>
             </div>

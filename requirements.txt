@@ -18,3 +18,4 @@ openpyxl
 pytest>=8.0.0
 
 alembic
+Flask-Migrate

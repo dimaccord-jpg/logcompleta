@@ -27,6 +27,7 @@ from sqlalchemy import text
 
 # 1. Imports do Flask e Extensões Base
 from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify
+from flask_migrate import Migrate
 from flask_session import Session
 from flask_login import login_user, login_required, logout_user, current_user
 from app.extensions import db, login_manager
@@ -41,6 +42,10 @@ from app.infra import (
 )
 from app.services.cleiton_operacao_autorizacao_service import (
     avaliar_autorizacao_operacao_por_franquia,
+)
+from app.services.cleiton_monetizacao_service import (
+    efetivar_mudancas_pendentes_ciclo,
+    processar_webhook_stripe,
 )
 from app.auth_services import (
     authenticate_user,
@@ -88,6 +93,7 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
+migrate = Migrate()
 logger = logging.getLogger(__name__)
 
 _diretorio_dados = settings.data_dir
@@ -126,6 +132,7 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' if settings.oauth_insecure_trans
 
 # 4. Inicializar extensões e Blueprints
 db.init_app(app)
+migrate.init_app(app, db)
 
 login_manager.init_app(app)
 
@@ -827,6 +834,50 @@ def api_chat_roberto():
         return jsonify({"reply": "Ocorreu um erro ao processar sua mensagem. Tente novamente."}), 500
 
 
+@app.route("/api/webhook/stripe", methods=["POST"])
+def api_webhook_stripe():
+    """
+    Endpoint oficial Stripe webhook.
+    Nao aplica efeito operacional direto fora da camada central do Cleiton.
+    """
+    payload_raw = request.get_data(cache=False, as_text=False) or b""
+    assinatura = request.headers.get("Stripe-Signature")
+    try:
+        out = processar_webhook_stripe(
+            raw_payload=payload_raw,
+            stripe_signature_header=assinatura,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "event_id": out.get("event_id"),
+                "event_type": out.get("event_type"),
+                "replay": bool(out.get("replay")),
+                # Campos opcionais para clareza operacional, sem quebrar contrato legado.
+                "status_tecnico": out.get("status_tecnico"),
+                "efeito_operacional_aplicado": bool(out.get("efeito_operacional_aplicado")),
+                "pendente_correlacao": bool(out.get("pendente_correlacao")),
+            }
+        ), 200
+    except ValueError as exc:
+        return jsonify(
+            {
+                "ok": False,
+                "erro": str(exc),
+                "codigo_erro": "webhook_stripe_requisicao_invalida",
+            }
+        ), 400
+    except Exception as exc:
+        logging.exception("Falha no webhook Stripe: %s", exc)
+        return jsonify(
+            {
+                "ok": False,
+                "erro": "falha_interna_webhook_stripe",
+                "codigo_erro": "webhook_stripe_falha_interna",
+            }
+        ), 500
+
+
 # Rota para newsletter
 
 @app.route('/inscrever-newsletter', methods=['POST'])
@@ -962,13 +1013,14 @@ def cron_executar_cleiton():
         return {"ok": False, "error": "unauthorized"}, 403
     try:
         from app.run_cleiton import executar_orquestracao
+        monetizacao = efetivar_mudancas_pendentes_ciclo()
         resultado = executar_orquestracao(app, bypass_frequencia=False) or {}
         status = resultado.get("status", "falha")
         return {
             "ok": status == "sucesso",
             "status": status,
             "motivo": resultado.get("motivo", ""),
-
+            "monetizacao_downgrade": monetizacao,
             "mission_id": resultado.get("mission_id"),
         }, 200
     except Exception as e:

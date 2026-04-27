@@ -2,13 +2,222 @@
 
 {% block content %}
 <div class="container py-5">
-    <div class="row justify-content-center">
-        <div class="col-12 col-lg-8">
+    <div class="row g-4">
+        <div class="col-12">
             <div class="card shadow-sm border-0">
-                <div class="card-body p-5 text-center">
-                    <h2 class="fw-bold mb-3">Contrate um Plano</h2>
-                    <p class="text-muted mb-0">Estamos construindo essa funcionalidade.</p>
+                <div class="card-body p-4 p-lg-5">
+                    <h2 class="fw-bold mb-2">Contrate um Plano</h2>
+                    <p class="text-muted mb-0">
+                        Jornada oficial de contratacao no proprio site, com governanca central do Cleiton.
+                    </p>
                 </div>
+            </div>
+        </div>
+    </div>
+    <div class="row g-4 mt-1">
+        <div class="col-12 col-xl-4">
+            <div class="card shadow-sm border-0 h-100">
+                <div class="card-body">
+                    <h5 class="fw-bold mb-3">Planos disponiveis</h5>
+                    <div
+                        id="plano-contexto"
+                        data-plano-atual="{{ plano_atual_codigo or 'free' }}"
+                        data-vencimento-atual="{{ data_vencimento_atual or '' }}"
+                    ></div>
+                    {% if planos_contratacao %}
+                        {% for plano in planos_contratacao %}
+                        <div class="border rounded p-3 mb-3">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <strong>{{ plano.nome }}</strong>
+                                {% if plano.habilitado_checkout %}
+                                <span class="badge bg-success">Pronto</span>
+                                {% else %}
+                                <span class="badge bg-warning text-dark">Pendente</span>
+                                {% endif %}
+                            </div>
+                            <div class="small text-muted mb-2">
+                                {% if plano.valor_admin %}
+                                Valor admin: R$ {{ plano.valor_admin }}
+                                {% else %}
+                                Valor admin nao configurado
+                                {% endif %}
+                            </div>
+                            <div class="small text-muted mb-3">
+                                Limite operacional de referencia:
+                                {{ plano.limite_franquia_referencia or "nao configurado" }}
+                            </div>
+                            {% if plano.habilitado_checkout %}
+                            <button
+                                type="button"
+                                class="btn btn-dark btn-sm w-100 js-iniciar-checkout"
+                                data-plano-codigo="{{ plano.codigo }}"
+                                data-plano-nome="{{ plano.nome }}"
+                            >
+                                {% if plano.codigo == "free" %}
+                                Migrar para {{ plano.nome }}
+                                {% else %}
+                                Contratar {{ plano.nome }}
+                                {% endif %}
+                            </button>
+                            {% else %}
+                            <div class="small text-muted">
+                                Pendencias: {{ plano.pendencias_gateway|join(", ") if plano.pendencias_gateway else "configuracao incompleta" }}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhum plano Stripe habilitado no momento.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-xl-8">
+            <div class="card shadow-sm border-0">
+                <div class="card-body">
+                    <h5 class="fw-bold mb-3">Checkout embedded</h5>
+                    <p class="text-muted small mb-3">
+                        O checkout abre neste bloco. Nenhum retorno de frontend libera operacao diretamente.
+                    </p>
+                    {% if checkout_feedback %}
+                    <div class="alert alert-{{ checkout_feedback.nivel }} small mb-3" role="alert">
+                        {{ checkout_feedback.mensagem }}
+                    </div>
+                    {% endif %}
+                    <div id="checkout-status" class="alert alert-light border small mb-3">
+                        Selecione um plano para iniciar a jornada de contratacao.
+                    </div>
+                    <div id="checkout-embed" class="border rounded p-2" style="min-height: 420px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+(() => {
+    const statusEl = document.getElementById("checkout-status");
+    const embedEl = document.getElementById("checkout-embed");
+    const botoes = document.querySelectorAll(".js-iniciar-checkout");
+    const contextoEl = document.getElementById("plano-contexto");
+    const planoAtual = (contextoEl?.getAttribute("data-plano-atual") || "free").toLowerCase();
+    const vencimentoAtual = contextoEl?.getAttribute("data-vencimento-atual") || "";
+    const ordemPlanos = { free: 0, starter: 1, pro: 2 };
+    let embeddedCheckout = null;
+    let confirmacaoPendente = null;
+
+    function ehDowngrade(planoDestino) {
+        const destino = (planoDestino || "").toLowerCase();
+        return (ordemPlanos[destino] ?? -1) < (ordemPlanos[planoAtual] ?? -1);
+    }
+
+    function abrirConfirmacaoDowngrade(planoCodigo, planoNome) {
+        const mensagem = document.getElementById("downgrade-confirm-message");
+        const btnConfirmar = document.getElementById("btn-confirmar-downgrade");
+        if (!mensagem || !btnConfirmar) {
+            return false;
+        }
+        mensagem.textContent =
+            `Atenção sobre seu plano:\n\n` +
+            `Você está prestes a confirmar o downgrade para o plano ${planoNome}.\n\n` +
+            `A partir de ${vencimentoAtual || "a data de vencimento atual"}, as funcionalidades exclusivas e o limite de créditos do plano ${planoAtual.toUpperCase()} não estarão mais disponíveis na sua conta.\n\n` +
+            `Deseja prosseguir com a alteração?`;
+        confirmacaoPendente = { planoCodigo, planoNome };
+        const modal = new bootstrap.Modal(document.getElementById("modal-confirmar-downgrade"));
+        modal.show();
+        btnConfirmar.onclick = () => {
+            modal.hide();
+            if (confirmacaoPendente) {
+                iniciarCheckout(confirmacaoPendente.planoCodigo, true);
+                confirmacaoPendente = null;
+            }
+        };
+        return true;
+    }
+
+    async function iniciarCheckout(planoCodigo, confirmarDowngrade = false) {
+        statusEl.className = "alert alert-info small mb-3";
+        statusEl.textContent = "Iniciando jornada de contratacao...";
+        try {
+            const resp = await fetch("{{ url_for('user.iniciar_contratacao_stripe') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    plano_codigo: planoCodigo,
+                    confirmar_downgrade: confirmarDowngrade,
+                }),
+            });
+            const payload = await resp.json();
+            if (!resp.ok || !payload.ok) {
+                throw new Error(payload.erro || "Falha ao iniciar checkout.");
+            }
+            if (payload.downgrade_agendado) {
+                statusEl.className = "alert alert-success small mb-3";
+                if ((planoCodigo || "").toLowerCase() === "free") {
+                    statusEl.textContent = `Sua assinatura do plano ${planoAtual.toUpperCase()} foi cancelada. Essa alteracao entrara em vigor em ${payload.efetivar_em || vencimentoAtual || "seu vencimento atual"}.`;
+                } else {
+                    statusEl.textContent = `Sua alteracao para o plano ${(planoCodigo || "").toUpperCase()} foi registrada. Ela entrara em vigor em ${payload.efetivar_em || vencimentoAtual || "seu vencimento atual"}.`;
+                }
+                return;
+            }
+            if (payload.assinatura_atualizada_sem_checkout) {
+                statusEl.className = "alert alert-success small mb-3";
+                statusEl.textContent = "Assinatura existente atualizada no Stripe. Acompanhe o status na sua area ou aguarde a sincronizacao automatica.";
+                return;
+            }
+            if (!payload.publishable_key || !payload.checkout_client_secret) {
+                throw new Error("Resposta de checkout incompleta.");
+            }
+            const stripe = window.Stripe(payload.publishable_key);
+            if (!stripe) {
+                throw new Error("Stripe.js indisponivel.");
+            }
+            if (embeddedCheckout && typeof embeddedCheckout.destroy === "function") {
+                embeddedCheckout.destroy();
+            }
+            embeddedCheckout = await stripe.initEmbeddedCheckout({
+                clientSecret: payload.checkout_client_secret,
+            });
+            embedEl.innerHTML = "";
+            embeddedCheckout.mount("#checkout-embed");
+            statusEl.className = "alert alert-success small mb-3";
+            statusEl.textContent = "Checkout iniciado. Complete a contratacao neste painel.";
+        } catch (err) {
+            statusEl.className = "alert alert-danger small mb-3";
+            statusEl.textContent = err && err.message ? err.message : "Falha ao iniciar checkout.";
+        }
+    }
+
+    botoes.forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const planoCodigo = btn.getAttribute("data-plano-codigo");
+            const planoNome = btn.getAttribute("data-plano-nome") || (planoCodigo || "").toUpperCase();
+            if (!planoCodigo) {
+                return;
+            }
+            if (ehDowngrade(planoCodigo)) {
+                abrirConfirmacaoDowngrade(planoCodigo, planoNome);
+                return;
+            }
+            iniciarCheckout(planoCodigo, false);
+        });
+    });
+})();
+</script>
+<div class="modal fade" id="modal-confirmar-downgrade" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirmacao de downgrade</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="downgrade-confirm-message" class="mb-0" style="white-space: pre-wrap;"></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Nao, manter meu plano atual</button>
+                <button type="button" class="btn btn-danger" id="btn-confirmar-downgrade">Sim, confirmar</button>
             </div>
         </div>
     </div>

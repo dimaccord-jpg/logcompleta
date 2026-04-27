@@ -69,6 +69,18 @@ def verificar_acesso_admin():
     return current_user.is_authenticated and user_is_admin(current_user)
 
 
+def _erro_admin_validacao_payload(erro: str, codigo_erro: str) -> dict:
+    """
+    Preserva chaves legadas (`error`/`erro`) e adiciona código estável.
+    """
+    return {
+        "ok": False,
+        "erro": erro,
+        "error": erro,
+        "codigo_erro": codigo_erro,
+    }
+
+
 # --- Dashboard ---
 @admin_bp.route("/")
 @admin_bp.route("/dashboard")
@@ -142,32 +154,81 @@ def admin_api_cleiton_franquia_validacao(franquia_id):
     Query: sincronizar_ciclo=1, aplicar_correcao=1 (POST).
     """
     if not verificar_acesso_admin():
-        return jsonify({"error": "forbidden"}), 403
+        return jsonify(
+            _erro_admin_validacao_payload("forbidden", "admin_validacao_forbidden")
+        ), 403
     sinc = request.args.get("sincronizar_ciclo", "").strip().lower() in (
         "1",
         "true",
         "yes",
     )
+    payload_raw = request.get_json(silent=True)
+    payload = payload_raw if isinstance(payload_raw, dict) else {}
     aplicar = False
-    if request.method == "POST":
-        aplicar = request.args.get("aplicar_correcao", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        if request.is_json and request.json:
-            aplicar = aplicar or bool(request.json.get("aplicar_correcao"))
-    from app.services.cleiton_franquia_validacao_admin_service import (
-        obter_pacote_validacao_franquia_cleiton,
-    )
+    try:
+        acao = ""
+        if request.method == "POST":
+            acao = (payload.get("acao") or "").strip().lower()
+        if acao == "reprocessar_pendencias_correlacao":
+            from app.services.cleiton_franquia_validacao_admin_service import (
+                reprocessar_pendencias_monetizacao_franquia_admin,
+            )
 
-    return jsonify(
-        obter_pacote_validacao_franquia_cleiton(
-            franquia_id,
-            sincronizar_ciclo_leitura=sinc,
-            aplicar_correcao=aplicar,
+            limite = payload.get("limite", 20)
+            try:
+                limite = int(limite)
+            except (TypeError, ValueError):
+                limite = 20
+            admin_user_id = getattr(current_user, "id", None)
+            return jsonify(
+                reprocessar_pendencias_monetizacao_franquia_admin(
+                    franquia_id=franquia_id,
+                    admin_user_id=int(admin_user_id) if admin_user_id is not None else None,
+                    limite=limite,
+                )
+            )
+        if request.method == "POST":
+            aplicar = request.args.get("aplicar_correcao", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            aplicar = aplicar or bool(payload.get("aplicar_correcao"))
+        from app.services.cleiton_franquia_validacao_admin_service import (
+            obter_pacote_validacao_franquia_cleiton,
         )
-    )
+
+        return jsonify(
+            obter_pacote_validacao_franquia_cleiton(
+                franquia_id,
+                sincronizar_ciclo_leitura=sinc,
+                aplicar_correcao=aplicar,
+            )
+        )
+    except ValueError as exc:
+        _log.warning(
+            "Erro de validacao no endpoint admin de franquia %s: %s",
+            franquia_id,
+            exc,
+        )
+        return jsonify(
+            _erro_admin_validacao_payload(
+                str(exc),
+                "admin_validacao_requisicao_invalida",
+            )
+        ), 400
+    except Exception as exc:
+        _log.exception(
+            "Falha no endpoint admin de validacao da franquia %s: %s",
+            franquia_id,
+            exc,
+        )
+        return jsonify(
+            _erro_admin_validacao_payload(
+                "falha_interna_validacao_admin",
+                "admin_validacao_falha_interna",
+            )
+        ), 500
 
 
 # --- Agentes ---
@@ -743,17 +804,41 @@ def planos_saas_salvar():
     valor_plano = (request.form.get("valor_plano") or "").strip()
     franquia_limite_total = (request.form.get("franquia_limite_total") or "").strip()
     freemium_trial_dias = (request.form.get("freemium_trial_dias") or "").strip()
+    gateway_provider = (request.form.get("gateway_provider") or "").strip()
+    gateway_product_id = (request.form.get("gateway_product_id") or "").strip()
+    gateway_price_id = (request.form.get("gateway_price_id") or "").strip()
+    gateway_currency = (request.form.get("gateway_currency") or "").strip()
+    gateway_interval = (request.form.get("gateway_interval") or "").strip()
+    gateway_pronto = bool(request.form.get("gateway_pronto"))
     try:
         resultado = plano_service.atualizar_parametros_plano_admin(
             plano_codigo=plano_codigo,
             valor_plano_raw=valor_plano,
             franquia_limite_total_raw=franquia_limite_total,
+            gateway_provider_raw=gateway_provider or None,
+            gateway_product_id_raw=gateway_product_id or None,
+            gateway_price_id_raw=gateway_price_id or None,
+            gateway_currency_raw=gateway_currency or None,
+            gateway_interval_raw=gateway_interval or None,
+            gateway_pronto_raw=gateway_pronto,
         )
         trial_salvo = None
         if plano_codigo.lower() == "free" and freemium_trial_dias:
             trial_salvo = plano_service.salvar_freemium_trial_dias(
                 freemium_trial_dias
             )
+        gateway_info = resultado.get("gateway_config") or {}
+        gateway_situacao = ""
+        if gateway_info:
+            if gateway_info.get("configuracao_valida"):
+                gateway_situacao = " Gateway externo: configurado e pronto."
+            else:
+                pendencias_gateway = ", ".join(gateway_info.get("pendencias", []))
+                gateway_situacao = (
+                    " Gateway externo com pendencias: "
+                    + (pendencias_gateway or "configuracao_incompleta")
+                    + "."
+                )
         flash(
             (
                 f"Plano {resultado['plano_nome']} salvo com valor R$ {resultado['valor_plano']} "
@@ -769,6 +854,7 @@ def planos_saas_salvar():
                     else ""
                 )
                 + f"Franquias atualizadas: {resultado['franquias_atualizadas']}/{resultado['franquias_total']}."
+                + gateway_situacao
             ),
             "success",
         )

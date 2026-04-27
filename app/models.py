@@ -467,3 +467,92 @@ class CleitonBillingApropriacao(db.Model):
     conta_id = db.Column(db.Integer, nullable=True, index=True)
     franquia_id = db.Column(db.Integer, nullable=True, index=True)
     usuario_id = db.Column(db.Integer, nullable=True, index=True)
+
+
+class ContaMonetizacaoVinculo(db.Model):
+    """
+    Vínculo comercial externo da Conta (Stripe-ready), sem alterar a fonte operacional em Franquia.
+    Histórico é preservado com múltiplos registros por conta.
+    """
+
+    __tablename__ = "conta_monetizacao_vinculo"
+    __table_args__ = (
+        db.Index(
+            "uq_conta_monetizacao_vinculo_conta_ativo_true",
+            "conta_id",
+            unique=True,
+            postgresql_where=db.text("ativo IS TRUE"),
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+
+    provider = db.Column(db.String(40), nullable=False, index=True)
+    customer_id = db.Column(db.String(160), nullable=True, index=True)
+    subscription_id = db.Column(db.String(160), nullable=True, index=True)
+    price_id = db.Column(db.String(160), nullable=True, index=True)
+    plano_interno = db.Column(db.String(40), nullable=True, index=True)
+    status_contratual_externo = db.Column(db.String(60), nullable=True, index=True)
+    vigencia_externa_inicio = db.Column(db.DateTime, nullable=True)
+    vigencia_externa_fim = db.Column(db.DateTime, nullable=True)
+
+    ativo = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    snapshot_normalizado_json = db.Column(db.Text, nullable=True)
+    payload_bruto_sanitizado_json = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False, index=True)
+    updated_at = db.Column(
+        db.DateTime,
+        default=utcnow_naive,
+        onupdate=utcnow_naive,
+        nullable=False,
+    )
+    desativado_em = db.Column(db.DateTime, nullable=True)
+
+    conta = db.relationship("Conta", backref=db.backref("monetizacao_vinculos", lazy="dynamic"))
+
+
+class MonetizacaoFato(db.Model):
+    """
+    Fato append-only de monetização para auditoria/governança.
+    Prepara correlação futura (checkout/webhook), sem automação nesta fase.
+    """
+
+    __tablename__ = "monetizacao_fato"
+    __table_args__ = (
+        db.Index(
+            "uq_monetizacao_fato_idempotency_key_not_null",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=db.text("idempotency_key IS NOT NULL"),
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    tipo_fato = db.Column(db.String(80), nullable=False, index=True)
+    status_tecnico = db.Column(db.String(40), nullable=False, index=True)
+    idempotency_key = db.Column(db.String(200), nullable=True, index=True)
+    correlation_key = db.Column(db.String(200), nullable=True, index=True)
+
+    timestamp_externo = db.Column(db.DateTime, nullable=True, index=True)
+    timestamp_interno = db.Column(db.DateTime, nullable=False, default=utcnow_naive, index=True)
+
+    provider = db.Column(db.String(40), nullable=True, index=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=True, index=True)
+    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=True, index=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+
+    external_event_id = db.Column(db.String(200), nullable=True, index=True)
+    customer_id = db.Column(db.String(160), nullable=True, index=True)
+    subscription_id = db.Column(db.String(160), nullable=True, index=True)
+    price_id = db.Column(db.String(160), nullable=True, index=True)
+    invoice_id = db.Column(db.String(160), nullable=True, index=True)
+    identificadores_externos_json = db.Column(db.Text, nullable=True)
+
+    snapshot_normalizado_json = db.Column(db.Text, nullable=False)
+    payload_bruto_sanitizado_json = db.Column(db.Text, nullable=True)
+
+    conta = db.relationship("Conta", backref=db.backref("fatos_monetizacao", lazy="dynamic"))
+    franquia = db.relationship("Franquia", backref=db.backref("fatos_monetizacao", lazy="dynamic"))
+    usuario = db.relationship("User", backref=db.backref("fatos_monetizacao", lazy="dynamic"))

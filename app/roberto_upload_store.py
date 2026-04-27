@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -51,6 +52,56 @@ def _cleanup_meta_path() -> str:
     return os.path.join(_base_dir(), ".cleanup_meta.json")
 
 
+def _safe_remove_file(path: str, *, retries: int = 2, retry_delay_s: float = 0.02) -> bool:
+    """
+    Remove arquivo com tolerância mínima a lock transitório (Windows).
+    """
+    for attempt in range(max(0, int(retries)) + 1):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            return True
+        except PermissionError:
+            if attempt >= retries:
+                return False
+            time.sleep(max(0.0, float(retry_delay_s)))
+        except Exception:
+            return False
+    return False
+
+
+def _write_json_atomic(
+    path: str,
+    payload: dict,
+    *,
+    retries: int = 3,
+    retry_delay_s: float = 0.03,
+) -> None:
+    """
+    Escrita atômica resiliente a locks transitórios (Windows).
+    """
+    last_error: Exception | None = None
+    for attempt in range(max(0, int(retries)) + 1):
+        temp_path = f"{path}.{uuid4().hex}.tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=True)
+            os.replace(temp_path, path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            _safe_remove_file(temp_path)
+            if attempt >= retries:
+                break
+            time.sleep(max(0.0, float(retry_delay_s)))
+        except Exception as exc:
+            last_error = exc
+            _safe_remove_file(temp_path)
+            break
+    if last_error is not None:
+        raise last_error
+
+
 def _is_expired(created_at: datetime, ttl_minutes: int) -> bool:
     return datetime.now(UTC).replace(tzinfo=None) - created_at > timedelta(
         minutes=max(1, int(ttl_minutes))
@@ -65,10 +116,7 @@ def save_upload_data(rows: list[dict]) -> str:
         "rows": rows,
     }
     path = _file_path(upload_id)
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=True)
-    os.replace(temp_path, path)
+    _write_json_atomic(path, payload)
     return upload_id
 
 
@@ -96,8 +144,7 @@ def clear_upload_data(upload_id: str) -> None:
         return
     path = _file_path(upload_id)
     try:
-        if os.path.exists(path):
-            os.remove(path)
+        _safe_remove_file(path)
     except Exception:
         pass
 
@@ -105,8 +152,11 @@ def clear_upload_data(upload_id: str) -> None:
 def cleanup_expired_uploads(ttl_minutes: int) -> int:
     removed = 0
     ttl = max(1, int(ttl_minutes))
+    meta_name = os.path.basename(_cleanup_meta_path())
     for name in os.listdir(_base_dir()):
         if not name.endswith(".json"):
+            continue
+        if name == meta_name:
             continue
         path = os.path.join(_base_dir(), name)
         try:
@@ -114,13 +164,13 @@ def cleanup_expired_uploads(ttl_minutes: int) -> int:
                 payload = json.load(f)
             created_at = _parse_iso(payload.get("created_at"))
             if created_at is None or _is_expired(created_at, ttl):
-                os.remove(path)
-                removed += 1
+                if _safe_remove_file(path):
+                    removed += 1
         except Exception:
             # Arquivo inválido também deve ser limpo para manter o diretório saudável.
             try:
-                os.remove(path)
-                removed += 1
+                if _safe_remove_file(path):
+                    removed += 1
             except Exception:
                 pass
     return removed
@@ -146,11 +196,8 @@ def maybe_cleanup_expired_uploads(ttl_minutes: int, min_interval_seconds: int = 
         pass
 
     removed = cleanup_expired_uploads(ttl_minutes)
-    tmp = f"{meta_path}.tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"last_run_at": _utcnow_iso()}, f, ensure_ascii=True)
-        os.replace(tmp, meta_path)
+        _write_json_atomic(meta_path, {"last_run_at": _utcnow_iso()})
     except Exception:
         pass
     return removed
