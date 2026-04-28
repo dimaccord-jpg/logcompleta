@@ -319,6 +319,7 @@ Stripe fornece fatos externos; a operacao continua decidida por `Franquia`.
 - existe rotina oficial de virada por `efetivar_mudancas_pendentes_ciclo(...)`, executada em `/cron/executar-cleiton`;
 - o trilho oficial de conciliacao do retorno permanece em `/contrate-um-plano?checkout=success&session_id=...`, sempre com `session_id` real;
 - o trilho oficial de virada de ciclo permanece em `/cron/executar-cleiton`, protegido por `CRON_SECRET`;
+- o padrao operacional de cron em homolog/prod e `curl -fsS -X POST "$APP_BASE_URL/cron/executar-cleiton" -H "X-Cron-Secret: $CRON_SECRET"` e `curl -fsS -X POST "$APP_BASE_URL/cron/billing-snapshot" -H "X-Cron-Secret: $CRON_SECRET"`;
 - todo usuario nasce em `free`;
 - os planos pagos no estado atual sao `starter` e `pro`;
 - `free` nao existe como `price` no Stripe;
@@ -727,6 +728,25 @@ Este bloco concentra os incidentes reais ja enfrentados e a forma correta de inv
    validar execucao do `/cron/executar-cleiton`, efetivacao do plano futuro e limpeza da pendencia.
 5. homologacao/local:
    validar ambiente Stripe correto, webhook correto, tunel correto e cron protegido.
+
+## Cron no Render
+
+- Variaveis necessarias no Cron Job:
+  - `APP_BASE_URL`
+  - `CRON_SECRET`
+- Comandos padrao:
+
+```bash
+curl -fsS -X POST "$APP_BASE_URL/cron/executar-cleiton" -H "X-Cron-Secret: $CRON_SECRET"
+curl -fsS -X POST "$APP_BASE_URL/cron/billing-snapshot" -H "X-Cron-Secret: $CRON_SECRET"
+```
+
+- Validacao esperada:
+  - sem header retorna `403`
+  - header invalido retorna `403`
+  - header correto retorna `200` ou executa a rotina
+  - `curl -f` torna falhas `4xx/5xx` visiveis no Render
+  - `?secret=` permanece apenas como compatibilidade temporaria e sera removido depois da homologacao
 
 ## Guias Complementares
 

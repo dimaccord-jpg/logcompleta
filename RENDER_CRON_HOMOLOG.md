@@ -11,13 +11,29 @@ Consulte este arquivo somente para detalhes especificos de execucao automatica e
 - `APP_ENV=homolog`
 - `DATABASE_URL` correto
 - `CRON_SECRET` configurado
+- `APP_BASE_URL` configurado no Cron Job
 - persistencia valida
 - migrations ja tratadas no ambiente alvo
+
+## Comandos Render
+
+```bash
+curl -fsS -X POST "$APP_BASE_URL/cron/executar-cleiton" -H "X-Cron-Secret: $CRON_SECRET"
+curl -fsS -X POST "$APP_BASE_URL/cron/billing-snapshot" -H "X-Cron-Secret: $CRON_SECRET"
+```
+
+## Variaveis necessarias no Cron Job
+
+- `APP_BASE_URL`
+- `CRON_SECRET`
 
 ## Validacao
 
 - cron protegido responde `403` sem segredo;
+- cron protegido responde `403` com header invalido;
 - cron responde `200` com segredo valido;
+- `curl -f` torna falhas `4xx/5xx` visiveis no Render;
+- `?secret=` permanece apenas como compatibilidade temporaria e sera removido apos a homologacao;
 - a resposta deve expor `monetizacao_downgrade` para inspecao operacional da virada;
 - downgrades pendentes para `starter` e `free` so sao efetivados por essa rotina, nao pelo frontend;
 - tarefas automaticas nao quebram health checks;

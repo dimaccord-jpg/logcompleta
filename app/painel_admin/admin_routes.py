@@ -31,7 +31,11 @@ from app.infra import (
 )
 from app.consumo_identidade import capture_consumo_identidade_for_background
 from app.terms_services import get_active_term
-from app.finance import atualizar_indices
+from app.finance import (
+    atualizar_indices,
+    configurar_finance_frequencia_horas,
+    obter_finance_frequencia_horas,
+)
 from app.run_julia_regras import status_verificacao_permitidos
 
 from app.services import agent_service
@@ -874,8 +878,34 @@ def importacao_dados():
         return "Acesso Negado", 403
     execucoes_indices = agent_service.ler_execucoes_indices_admin()
     return render_template(
-        "importacao.html", execucoes_indices=execucoes_indices
+        "importacao.html",
+        execucoes_indices=execucoes_indices,
+        finance_frequencia_horas=obter_finance_frequencia_horas(),
     )
+
+
+@admin_bp.route("/indices/frequencia", methods=["POST"])
+@login_required
+def indices_configurar_frequencia():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    valor_raw = (request.form.get("finance_frequencia_horas") or "").strip()
+    try:
+        valor = int(valor_raw)
+        if valor < 1:
+            raise ValueError("Frequencia deve ser maior que zero.")
+    except (ValueError, TypeError):
+        flash(
+            "Valor de frequencia financeira invalido. Informe horas inteiras (ex.: 1, 3, 6, 12).",
+            "warning",
+        )
+        return redirect(url_for("admin.importacao_dados"))
+    try:
+        configurar_finance_frequencia_horas(valor)
+        flash(f"Frequencia automatica dos indices atualizada para {valor}h.", "success")
+    except Exception as e:
+        flash(f"Erro ao atualizar frequencia financeira: {str(e)}", "danger")
+    return redirect(url_for("admin.importacao_dados"))
 
 
 @admin_bp.route("/processar_importacao/<tipo>", methods=["POST"])
@@ -946,7 +976,7 @@ def indices_atualizar_manual():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
     try:
-        resultado = atualizar_indices() or {}
+        resultado = atualizar_indices(bypass_frequencia=True) or {}
         agent_service.persistir_execucao_indices_admin(resultado)
         status_global = resultado.get("status_global") or "desconhecido"
         mensagem = resultado.get("mensagem") or "Execução manual dos índices concluída."

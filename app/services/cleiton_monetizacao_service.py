@@ -1965,10 +1965,6 @@ def processar_fato_stripe_conciliado(
             "[StripeDebug][FatoConciliado] Depois aplicar_fato_contratual_em_franquia retorno=%s",
             efeito_operacional,
         )
-    if event_type_n == "customer.subscription.deleted" and vinculo_atualizado is not None:
-        vinculo_atualizado.ativo = False
-        vinculo_atualizado.desativado_em = utcnow_naive()
-        db.session.add(vinculo_atualizado)
     efeito_aplicado = bool(efeito_operacional.get("aplicado"))
 
     status_tecnico = STATUS_TEC_APLICADO if efeito_aplicado else STATUS_TEC_SEM_EFEITO
@@ -2246,10 +2242,6 @@ def processar_evento_stripe(
             status_contratual_externo=status_contratual,
             ciclo=ciclo,
         )
-    if event_type == "customer.subscription.deleted" and vinculo_stripe is not None:
-        vinculo_stripe.ativo = False
-        vinculo_stripe.desativado_em = utcnow_naive()
-        db.session.add(vinculo_stripe)
     efeito_aplicado = bool(efeito_operacional.get("aplicado"))
 
     status_tecnico = STATUS_TEC_APLICADO if efeito_aplicado else STATUS_TEC_SEM_EFEITO
@@ -2640,10 +2632,25 @@ def aplicar_fato_contratual_em_franquia(
     )
 
     if (event_type or "").strip().lower() == "customer.subscription.deleted":
+        pendencia_existente = None
         if vinculo_ativo_conta is not None:
-            _limpar_mudanca_pendente_vinculo(vinculo_ativo_conta)
-        if _aplicar_plano_operacional_franquia(fr, "free"):
-            alterou = True
+            pendencia_existente = _extrair_pendencia_downgrade_snapshot(
+                _json_loads(vinculo_ativo_conta.snapshot_normalizado_json)
+            )
+        if (
+            pendencia_existente is not None
+            and pendencia_existente.get("plano_futuro") == "free"
+            and _to_datetime_utc_naive(pendencia_existente.get("efetivar_em")) is not None
+            and _to_datetime_utc_naive(pendencia_existente.get("efetivar_em")) > agora
+        ):
+            mudanca_pendente = True
+            plano_pendente = "free"
+            efetivar_em = pendencia_existente.get("efetivar_em")
+        else:
+            if vinculo_ativo_conta is not None:
+                _limpar_mudanca_pendente_vinculo(vinculo_ativo_conta)
+            if _aplicar_plano_operacional_franquia(fr, "free"):
+                alterou = True
     elif downgrade_pago_ja_vigente:
         if vinculo_ativo_conta is not None:
             _limpar_mudanca_pendente_vinculo(vinculo_ativo_conta)
