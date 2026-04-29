@@ -68,7 +68,7 @@ def obter_plano_ativo() -> PlanoEstrategico | None:
 
 
 def ultima_auditoria_orquestracao() -> datetime | None:
-    """Data/hora da última decisão de tipo orquestracao (para frequência)."""
+    """Data/hora da última execução efetiva de orquestração válida para frequência."""
     try:
         registros = (
             AuditoriaGerencial.query.filter_by(tipo_decisao="orquestracao")
@@ -77,6 +77,8 @@ def ultima_auditoria_orquestracao() -> datetime | None:
             .all()
         )
         for r in registros:
+            if (r.resultado or "").strip().lower() == "ignorado":
+                continue
             if not _contexto_indica_bypass_frequencia(r.contexto_json):
                 return r.created_at
         return None

@@ -78,20 +78,20 @@
         <div class="card-body">
             <h6 class="mb-3">Ajuste de frequencia do ciclo</h6>
             <p class="text-muted mb-3">
-                Defina a frequencia em horas para os ciclos automaticos em producao. Em ambiente de desenvolvimento,
-                o loop automatico permanece desabilitado por seguranca de custo.
+                Defina a frequencia em minutos para os ciclos automaticos. Em homologacao e desenvolvimento,
+                o painel aceita testes rapidos; em producao, o backend mantem limite minimo de 60 minutos.
             </p>
             <form method="post" action="{{ url_for('admin.agentes_julia_configurar_frequencia') }}" class="row g-2 align-items-end">
                 <div class="col-md-4">
-                    <label for="frequencia_horas" class="form-label">Frequencia (horas)</label>
+                    <label for="frequencia_minutos" class="form-label">Frequencia (minutos)</label>
                     <input
-                        id="frequencia_horas"
-                        name="frequencia_horas"
+                        id="frequencia_minutos"
+                        name="frequencia_minutos"
                         type="number"
-                        min="1"
+                        min="{{ frequencia_minima_admin|default(5) }}"
                         step="1"
                         class="form-control"
-                        value="{{ frequencia_horas|default(3) }}"
+                        value="{{ frequencia_minutos|default(180) }}"
                         required
                     >
                 </div>
@@ -100,12 +100,18 @@
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-save me-1"></i> Salvar frequencia
                         </button>
-                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_horas" value="1">1h</button>
-                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_horas" value="3">3h</button>
-                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_horas" value="6">6h</button>
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_minutos" value="{{ 60 if frequencia_minima_admin >= 60 else 5 }}">{{ '60 min' if frequencia_minima_admin >= 60 else '5 min' }}</button>
+                        {% if frequencia_minima_admin < 60 %}
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_minutos" value="10">10 min</button>
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_minutos" value="15">15 min</button>
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_minutos" value="30">30 min</button>
+                        {% endif %}
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_minutos" value="60">1h</button>
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_minutos" value="180">3h</button>
+                        <button type="submit" class="btn btn-outline-secondary" name="frequencia_minutos" value="360">6h</button>
                     </div>
                     <small class="text-muted d-block mt-2">
-                        Valor atual: {{ frequencia_horas|default(3) }}h.
+                        Valor atual: {{ frequencia_label|default('3h') }}.
                     </small>
                 </div>
             </form>
@@ -139,7 +145,7 @@
             <hr class="my-3">
             <h6 class="mb-2">Próxima notícia automática (homolog/prod)</h6>
             <ul class="mb-0 text-muted small">
-                <li><strong>Frequência atual:</strong> {{ frequencia_horas|default(3) }}h entre ciclos.</li>
+                <li><strong>Frequência atual:</strong> {{ frequencia_label|default('3h') }} entre ciclos.</li>
                 <li><strong>Janela de publicação:</strong> {{ janela_inicio|default(6) }}h às {{ janela_fim|default(22) }}h (ciclo só roda dentro desse horário).</li>
                 <li><strong>Última execução (ciclo automático):</strong>
                     {% if ultima_execucao %}

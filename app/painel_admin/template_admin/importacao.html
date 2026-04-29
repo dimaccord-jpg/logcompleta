@@ -7,6 +7,27 @@
             <i class="bi bi-database-up text-success me-2"></i>Carga de Arquivos Críticos
         </div>
         <div class="card-body">
+            <form action="{{ url_for('admin.indices_configurar_frequencia') }}" method="POST" class="row g-2 align-items-end mb-3">
+                <div class="col-md-4">
+                    <label for="finance_frequencia_minutos" class="form-label">Frequência automática (minutos)</label>
+                    <input type="number"
+                           min="{{ frequencia_minima_admin|default(5) }}"
+                           step="1"
+                           id="finance_frequencia_minutos"
+                           name="finance_frequencia_minutos"
+                           class="form-control"
+                           value="{{ finance_frequencia_minutos|default(360) }}"
+                           required>
+                </div>
+                <div class="col-md-auto">
+                    <button type="submit" class="btn btn-outline-secondary">Salvar frequência</button>
+                </div>
+                <div class="col-12">
+                    <small class="text-muted">
+                        Regra automática única para Dólar, Petróleo, BDI e FBX. O agendador só dispara; a aplicação decide se executa ou pula por frequência. Valor atual: {{ finance_frequencia_label|default('6h') }}.
+                    </small>
+                </div>
+            </form>
             <div class="row g-4">
                 <div class="col-md-6 border-end">
                     <h6 class="fw-bold text-muted small mb-3 text-uppercase">Tabelas de Frete (CSV)</h6>
@@ -79,6 +100,8 @@
                                         <span class="badge bg-success">Sucesso</span>
                                     {% elif exec.status_global == 'sucesso_parcial' %}
                                         <span class="badge bg-warning text-dark">Sucesso parcial</span>
+                                    {% elif exec.status_global == 'ignorado' %}
+                                        <span class="badge bg-secondary">Pulado por frequência</span>
                                     {% elif exec.status_global == 'falha' %}
                                         <span class="badge bg-danger">Falha</span>
                                     {% else %}

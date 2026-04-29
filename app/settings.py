@@ -6,6 +6,7 @@ from app import env_loader
 
 
 AppEnv = Literal["dev", "homolog", "prod"]
+DEV_SECRET_KEY_FALLBACK = "chave_insegura_padrao_dev"
 
 
 def _detect_app_env() -> AppEnv:
@@ -84,7 +85,18 @@ def _build_settings() -> Settings:
     log_level = (os.getenv("LOG_LEVEL", "INFO") or "INFO").upper()
 
     # 5) Segurança e banco principal (mono PostgreSQL; contrato canônico: DATABASE_URL)
-    secret_key = os.getenv("SECRET_KEY", "chave_insegura_padrao_dev")
+    secret_key = (os.getenv("SECRET_KEY") or "").strip()
+    if not secret_key:
+        if app_env == "dev":
+            secret_key = DEV_SECRET_KEY_FALLBACK
+        else:
+            raise RuntimeError(
+                "SECRET_KEY obrigatoria em homolog/prod. Defina uma chave forte e unica por ambiente antes do boot."
+            )
+    elif app_env in ("homolog", "prod") and secret_key == DEV_SECRET_KEY_FALLBACK:
+        raise RuntimeError(
+            "SECRET_KEY insegura em homolog/prod. O fallback de desenvolvimento e proibido fora de dev."
+        )
     database_url_raw = (os.getenv("DATABASE_URL") or "").strip()
     database_url_l = database_url_raw.lower()
     if (not database_url_raw) or database_url_l.startswith("sqlite://") or not database_url_l.startswith("postgres"):
@@ -98,7 +110,7 @@ def _build_settings() -> Settings:
     # 7) Sessão
     session_type = "filesystem"
     session_lifetime_seconds = 24 * 3600
-    session_cookie_secure = False
+    session_cookie_secure = app_env in ("homolog", "prod")
     session_cookie_httponly = True
     session_cookie_samesite = "Lax"
 

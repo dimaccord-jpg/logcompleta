@@ -1,14 +1,168 @@
 import yfinance as yf
 import json
 import re
+import math
 import requests
+import logging
 from bs4 import BeautifulSoup
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from app.extensions import db
+from app.models import ConfigRegras
 from app.settings import settings
 
 INDICES_FILE = Path(settings.indices_file_path)
 LEGACY_INDICES_FILE = Path(__file__).resolve().parent / 'indices.json'
+CHAVE_FINANCE_FREQUENCIA_HORAS = "finance_frequencia_horas"
+CHAVE_FINANCE_FREQUENCIA_MINUTOS = "finance_frequencia_minutos"
+CHAVE_FINANCE_ULTIMA_EXECUCAO_EM = "finance_ultima_execucao_em"
+DEFAULT_FINANCE_FREQUENCIA_HORAS = 6
+DEFAULT_FINANCE_FREQUENCIA_MINUTOS = 360
+logger = logging.getLogger(__name__)
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def bootstrap_finance_regras() -> None:
+    try:
+        cfg_min = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS).first()
+        if not cfg_min:
+            cfg_min = ConfigRegras(
+                chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS,
+                valor_inteiro=DEFAULT_FINANCE_FREQUENCIA_MINUTOS,
+                descricao="Intervalo em minutos para atualizar indices financeiros automaticamente.",
+            )
+            db.session.add(cfg_min)
+        cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_HORAS).first()
+        if not cfg:
+            cfg = ConfigRegras(
+                chave=CHAVE_FINANCE_FREQUENCIA_HORAS,
+                valor_inteiro=DEFAULT_FINANCE_FREQUENCIA_HORAS,
+                descricao="Intervalo em horas para atualizar indices financeiros automaticamente.",
+            )
+            db.session.add(cfg)
+        last_run = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_ULTIMA_EXECUCAO_EM).first()
+        if not last_run:
+            last_run = ConfigRegras(
+                chave=CHAVE_FINANCE_ULTIMA_EXECUCAO_EM,
+                descricao="Timestamp ISO UTC da ultima atualizacao automatica de indices financeiros.",
+            )
+            db.session.add(last_run)
+        db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
+def obter_finance_frequencia_horas() -> int:
+    try:
+        bootstrap_finance_regras()
+        return max(1, int(math.ceil(obter_finance_frequencia_minutos() / 60.0)))
+    except Exception:
+        pass
+    return DEFAULT_FINANCE_FREQUENCIA_HORAS
+
+
+def obter_finance_frequencia_minutos() -> int:
+    try:
+        bootstrap_finance_regras()
+        cfg_min = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS).first()
+        cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_HORAS).first()
+        if (
+            cfg_min
+            and cfg_min.valor_inteiro is not None
+            and cfg
+            and cfg.valor_inteiro is not None
+            and int(cfg_min.valor_inteiro) == DEFAULT_FINANCE_FREQUENCIA_MINUTOS
+            and int(cfg.valor_inteiro) != DEFAULT_FINANCE_FREQUENCIA_HORAS
+        ):
+            return max(1, int(cfg.valor_inteiro)) * 60
+        if cfg_min and cfg_min.valor_inteiro is not None:
+            return max(1, int(cfg_min.valor_inteiro))
+        if cfg and cfg.valor_inteiro is not None:
+            return max(1, int(cfg.valor_inteiro)) * 60
+    except Exception:
+        pass
+    return DEFAULT_FINANCE_FREQUENCIA_MINUTOS
+
+
+def configurar_finance_frequencia_horas(valor: int) -> None:
+    configurar_finance_frequencia_minutos(int(valor) * 60)
+
+
+def configurar_finance_frequencia_minutos(valor: int) -> None:
+    bootstrap_finance_regras()
+    minutos = max(1, int(valor))
+
+    cfg_min = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS).first()
+    if not cfg_min:
+        cfg_min = ConfigRegras(
+            chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS,
+            descricao="Intervalo em minutos para atualizar indices financeiros automaticamente.",
+        )
+        db.session.add(cfg_min)
+    cfg_min.valor_inteiro = minutos
+    cfg_min.valor_texto = None
+    cfg_min.valor_real = None
+
+    cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_HORAS).first()
+    if not cfg:
+        cfg = ConfigRegras(
+            chave=CHAVE_FINANCE_FREQUENCIA_HORAS,
+            descricao="Intervalo em horas para atualizar indices financeiros automaticamente.",
+        )
+        db.session.add(cfg)
+    cfg.valor_inteiro = max(1, int(math.ceil(minutos / 60.0)))
+    cfg.valor_texto = None
+    cfg.valor_real = None
+    db.session.commit()
+
+
+def ler_finance_ultima_execucao() -> datetime | None:
+    try:
+        bootstrap_finance_regras()
+        cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_ULTIMA_EXECUCAO_EM).first()
+        raw = (cfg.valor_texto or "").strip() if cfg else ""
+        if not raw:
+            return None
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo:
+            off = dt.utcoffset()
+            dt = (dt.replace(tzinfo=None) - off) if off else dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def persistir_finance_ultima_execucao(quando: datetime | None = None) -> None:
+    bootstrap_finance_regras()
+    cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_ULTIMA_EXECUCAO_EM).first()
+    if not cfg:
+        cfg = ConfigRegras(
+            chave=CHAVE_FINANCE_ULTIMA_EXECUCAO_EM,
+            descricao="Timestamp ISO UTC da ultima atualizacao automatica de indices financeiros.",
+        )
+        db.session.add(cfg)
+    ref = quando or _utcnow_naive()
+    cfg.valor_texto = ref.isoformat() + "Z"
+    cfg.valor_inteiro = None
+    cfg.valor_real = None
+    db.session.commit()
+
+
+def pode_atualizar_indices_por_frequencia(
+    ultima_execucao: datetime | None,
+    agora: datetime | None = None,
+) -> bool:
+    if ultima_execucao is None:
+        return True
+    ref = agora or _utcnow_naive()
+    delta = ref - ultima_execucao
+    return delta.total_seconds() >= obter_finance_frequencia_minutos() * 60
 
 
 def _load_historico(path: Path):
@@ -117,7 +271,7 @@ def get_fbx_index(fallback_val: str) -> str:
         print(f"⚠️ Erro ao obter FBX em {url}: {e}")
     return fallback_val
 
-def atualizar_indices():
+def atualizar_indices(bypass_frequencia: bool = False):
     print("\n" + "="*40)
     print("📊 CLEITON FINANCE: ATUALIZANDO MERCADO")
     print("="*40)
@@ -131,6 +285,26 @@ def atualizar_indices():
     }
     status_global = "falha"
     mensagem_global = ""
+
+    if not bypass_frequencia:
+        ultima_execucao = ler_finance_ultima_execucao()
+        if not pode_atualizar_indices_por_frequencia(ultima_execucao):
+            msg = "Atualizacao de indices pulada por frequencia."
+            print(f"SKIP: {msg}")
+            return {
+                "status_global": "ignorado",
+                "mensagem": msg,
+                "motivo": "pulado_frequencia",
+                "executou": False,
+                "bypass_frequencia": False,
+                "frequencia_horas": obter_finance_frequencia_horas(),
+                "ultima_execucao_em": (
+                    ultima_execucao.isoformat() + "Z" if ultima_execucao else None
+                ),
+                "indices": status_indices,
+                "arquivo_destino": str(INDICES_FILE),
+                "data_referencia": None,
+            }
 
     try:
         # 1. Carregar histórico existente para fallback seguro
@@ -217,6 +391,7 @@ def atualizar_indices():
         INDICES_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(INDICES_FILE, "w", encoding="utf-8") as f:
             json.dump(final_json, f, indent=4, ensure_ascii=False)
+        persistir_finance_ultima_execucao()
 
         print(f"✅ Sincronização concluída! Histórico: {len(historico_filtrado)} registros.")
         print("=" * 40 + "\n")
@@ -237,10 +412,44 @@ def atualizar_indices():
     return {
         "status_global": status_global,
         "mensagem": mensagem_global,
+        "motivo": "executou" if status_global.startswith("sucesso") else "falha",
+        "executou": status_global.startswith("sucesso"),
+        "bypass_frequencia": bool(bypass_frequencia),
+        "frequencia_horas": obter_finance_frequencia_horas(),
+        "ultima_execucao_em": (
+            (ler_finance_ultima_execucao().isoformat() + "Z")
+            if ler_finance_ultima_execucao()
+            else None
+        ),
         "indices": status_indices,
         "arquivo_destino": str(INDICES_FILE),
         "data_referencia": novos_dados.get("data"),
     }
+
+
+def executar_coleta_financeira(bypass_frequencia: bool = False) -> dict:
+    """
+    Fachada idempotente para disparar a coleta financeira a partir de CLI ou HTTP.
+    Preserva o contrato atual de atualizar_indices e centraliza logs operacionais.
+    """
+    logger.info(
+        "Finance cron: iniciando coleta de indices (bypass_frequencia=%s, destino=%s)",
+        bypass_frequencia,
+        INDICES_FILE,
+    )
+    try:
+        resultado = atualizar_indices(bypass_frequencia=bypass_frequencia) or {}
+        logger.info(
+            "Finance cron: coleta finalizada (status_global=%s, executou=%s, motivo=%s, destino=%s)",
+            resultado.get("status_global"),
+            resultado.get("executou"),
+            resultado.get("motivo"),
+            resultado.get("arquivo_destino") or INDICES_FILE,
+        )
+        return resultado
+    except Exception:
+        logger.exception("Finance cron: falha critica durante coleta de indices")
+        raise
 
 if __name__ == "__main__":
     from app.web import app
@@ -248,4 +457,4 @@ if __name__ == "__main__":
 
     with app.app_context():
         ensure_consumo_identidade_no_app_context()
-        atualizar_indices()
+        executar_coleta_financeira()

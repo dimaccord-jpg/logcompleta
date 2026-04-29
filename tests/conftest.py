@@ -1,7 +1,37 @@
+import shutil
+from pathlib import Path
+from uuid import uuid4
+
 import pytest
 from flask import Flask
 
 from app.extensions import db
+
+
+def _patch_pytest_tmp_cleanup_for_windows() -> None:
+    import sys
+
+    if sys.platform != "win32":
+        return
+
+    from _pytest import pathlib as pytest_pathlib
+    from _pytest import tmpdir as pytest_tmpdir
+
+    original_cleanup = pytest_pathlib.cleanup_dead_symlinks
+
+    def _safe_cleanup_dead_symlinks(root):
+        try:
+            return original_cleanup(root)
+        except PermissionError:
+            # Python 3.14 + Windows can deny scandir/rmtree on pytest's own
+            # temp root during session teardown even when tests passed.
+            return None
+
+    pytest_pathlib.cleanup_dead_symlinks = _safe_cleanup_dead_symlinks
+    pytest_tmpdir.cleanup_dead_symlinks = _safe_cleanup_dead_symlinks
+
+
+_patch_pytest_tmp_cleanup_for_windows()
 
 
 @pytest.fixture(scope="function")
@@ -17,6 +47,18 @@ def app():
     yield flask_app
     with flask_app.app_context():
         db.drop_all()
+
+
+@pytest.fixture
+def tmp_path():
+    root = Path.cwd() / ".tmp_pytest_fixture"
+    root.mkdir(exist_ok=True)
+    path = root / f"logcompleta_{uuid4().hex}"
+    path.mkdir()
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

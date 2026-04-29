@@ -23,6 +23,7 @@ from app.run_cleiton_agente_regras import (
     bootstrap_regras,
     CHAVE_FREQUENCIA_HORAS,
     DEFAULTS,
+    get_frequencia_minutos as _get_frequencia_minutos,
     get_janela_publicacao,
 )
 from app.run_cleiton_agente_orquestrador import ultima_auditoria_orquestracao
@@ -200,19 +201,28 @@ def obter_frequencia_horas() -> int:
         return 3
 
 
+def obter_frequencia_minutos() -> int:
+    """Retorna a frequência atual do ciclo em minutos."""
+    try:
+        bootstrap_regras()
+        return max(1, int(_get_frequencia_minutos()))
+    except Exception:
+        return 180
+
+
 def obter_ultima_e_proxima_execucao(
-    frequencia_horas: int,
+    frequencia_minutos: int,
 ) -> tuple[datetime | None, datetime | None]:
     """
     Retorna (última execução de orquestração, próxima prevista).
-    Próxima = última + frequência em horas.
+    Próxima = última + frequência em minutos.
     """
     try:
         from datetime import timedelta
         ultima = ultima_auditoria_orquestracao()
         if ultima is None:
             return None, None
-        proxima = ultima + timedelta(hours=max(1, frequencia_horas))
+        proxima = ultima + timedelta(minutes=max(1, frequencia_minutos))
         return ultima, proxima
     except Exception:
         return None, None
@@ -294,18 +304,14 @@ def obter_ultima_publicacao_artigo() -> datetime | None:
 
 def configurar_frequencia_horas(valor: int) -> None:
     """Persiste a frequência do ciclo em horas em ConfigRegras."""
-    bootstrap_regras()
-    cfg = ConfigRegras.query.filter_by(chave=CHAVE_FREQUENCIA_HORAS).first()
-    if not cfg:
-        cfg = ConfigRegras(
-            chave=CHAVE_FREQUENCIA_HORAS,
-            descricao="Intervalo de execução do ciclo em horas",
-        )
-        db.session.add(cfg)
-    cfg.valor_inteiro = valor
-    cfg.valor_texto = None
-    cfg.valor_real = None
-    db.session.commit()
+    configurar_frequencia_minutos(int(valor) * 60)
+
+
+def configurar_frequencia_minutos(valor: int) -> None:
+    """Persiste a frequência do ciclo em minutos."""
+    from app.run_cleiton_agente_regras import configurar_frequencia_minutos as _config
+
+    _config(valor)
 
 
 def formatar_mensagem_resultado_cleiton(resultado: dict) -> str:

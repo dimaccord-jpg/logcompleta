@@ -3,6 +3,7 @@ Cleiton - Agente Regras: engine de regras (prioridade, frequência, janela, retr
 Regras vêm de configuração persistida (ConfigRegras); sem hardcode de valores de negócio.
 """
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from app.extensions import db
 from app.models import ConfigRegras
@@ -16,6 +17,7 @@ def _utcnow_naive() -> datetime:
 
 # Chaves de configuração (valores padrão só quando DB não tem registro)
 CHAVE_FREQUENCIA_HORAS = "frequencia_horas"
+CHAVE_FREQUENCIA_MINUTOS = "frequencia_minutos"
 CHAVE_PRIORIDADE_PADRAO = "prioridade_padrao"
 CHAVE_JANELA_INICIO = "janela_publicacao_inicio"  # hora 0-23
 CHAVE_JANELA_FIM = "janela_publicacao_fim"
@@ -27,6 +29,7 @@ CHAVE_MAX_TENTATIVAS_ARTIGO_DIA = "max_tentativas_artigo_dia"
 
 DEFAULTS = {
     CHAVE_FREQUENCIA_HORAS: 3,
+    CHAVE_FREQUENCIA_MINUTOS: 180,
     CHAVE_PRIORIDADE_PADRAO: 5,
     CHAVE_JANELA_INICIO: 6,
     CHAVE_JANELA_FIM: 22,
@@ -54,9 +57,29 @@ def _get_valor(chave: str, tipo: str = "inteiro") -> int | float | str | None:
 
 
 def get_frequencia_horas() -> int:
-    """Intervalo em horas entre ciclos de orquestração."""
-    v = _get_valor(CHAVE_FREQUENCIA_HORAS, "inteiro")
-    return v if v is not None else DEFAULTS[CHAVE_FREQUENCIA_HORAS]
+    """Compatibilidade legada: retorna a frequência arredondada para cima em horas."""
+    return max(1, int(math.ceil(get_frequencia_minutos() / 60.0)))
+
+
+def get_frequencia_minutos() -> int:
+    """
+    Intervalo em minutos entre ciclos de orquestração.
+    Compatível com a configuração legada em horas.
+    """
+    v = _get_valor(CHAVE_FREQUENCIA_MINUTOS, "inteiro")
+    horas = _get_valor(CHAVE_FREQUENCIA_HORAS, "inteiro")
+    if (
+        v is not None
+        and horas is not None
+        and int(v) == int(DEFAULTS[CHAVE_FREQUENCIA_MINUTOS])
+        and int(horas) != int(DEFAULTS[CHAVE_FREQUENCIA_HORAS])
+    ):
+        return max(1, int(horas)) * 60
+    if v is not None:
+        return max(1, int(v))
+    if horas is not None:
+        return max(1, int(horas)) * 60
+    return DEFAULTS[CHAVE_FREQUENCIA_MINUTOS]
 
 
 def get_prioridade_padrao() -> int:
@@ -123,16 +146,54 @@ def pode_executar_por_frequencia(ultima_execucao: datetime | None, agora: dateti
         return True
     t = agora or _utcnow_naive()
     delta = t - ultima_execucao
-    return delta.total_seconds() >= get_frequencia_horas() * 3600
+    return delta.total_seconds() >= get_frequencia_minutos() * 60
+
+
+def configurar_frequencia_minutos(valor: int) -> None:
+    """
+    Persiste a frequência do ciclo em minutos, preservando compatibilidade com a chave legada em horas.
+    """
+    minutos = max(1, int(valor))
+    bootstrap_regras()
+
+    cfg_min = ConfigRegras.query.filter_by(chave=CHAVE_FREQUENCIA_MINUTOS).first()
+    if not cfg_min:
+        cfg_min = ConfigRegras(
+            chave=CHAVE_FREQUENCIA_MINUTOS,
+            descricao="Intervalo de execução do ciclo em minutos",
+        )
+        db.session.add(cfg_min)
+    cfg_min.valor_inteiro = minutos
+    cfg_min.valor_texto = None
+    cfg_min.valor_real = None
+
+    cfg_horas = ConfigRegras.query.filter_by(chave=CHAVE_FREQUENCIA_HORAS).first()
+    if not cfg_horas:
+        cfg_horas = ConfigRegras(
+            chave=CHAVE_FREQUENCIA_HORAS,
+            descricao="Intervalo de execução do ciclo em horas",
+        )
+        db.session.add(cfg_horas)
+    cfg_horas.valor_inteiro = max(1, int(math.ceil(minutos / 60.0)))
+    cfg_horas.valor_texto = None
+    cfg_horas.valor_real = None
+    db.session.commit()
 
 
 def bootstrap_regras() -> None:
     """Garante que existam registros padrão em ConfigRegras (idempotente)."""
     try:
+        cfg_horas_existente = ConfigRegras.query.filter_by(chave=CHAVE_FREQUENCIA_HORAS).first()
         for chave, valor in DEFAULTS.items():
             r = ConfigRegras.query.filter_by(chave=chave).first()
             if not r:
                 r = ConfigRegras(chave=chave, valor_inteiro=valor, descricao=f"Padrão {chave}")
+                if (
+                    chave == CHAVE_FREQUENCIA_MINUTOS
+                    and cfg_horas_existente
+                    and cfg_horas_existente.valor_inteiro is not None
+                ):
+                    r.valor_inteiro = max(1, int(cfg_horas_existente.valor_inteiro)) * 60
                 db.session.add(r)
         db.session.commit()
         logger.info("ConfigRegras: bootstrap de chaves padrão concluído.")

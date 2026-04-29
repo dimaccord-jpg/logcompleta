@@ -23,6 +23,7 @@ python -m app.web
 
 - web: `python -m app.web`
 - indices financeiros: `python -m app.finance`
+- cron financeiro HTTP: `POST /cron/finance` com `X-Cron-Secret`
 - ciclo Cleiton: `python -m app.run_cleiton`
 - testes Roberto/Cleiton:
   - `pytest tests/test_roberto_controles.py`
