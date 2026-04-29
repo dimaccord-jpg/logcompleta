@@ -3,6 +3,7 @@ import json
 import re
 import math
 import requests
+import logging
 from bs4 import BeautifulSoup
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ CHAVE_FINANCE_FREQUENCIA_MINUTOS = "finance_frequencia_minutos"
 CHAVE_FINANCE_ULTIMA_EXECUCAO_EM = "finance_ultima_execucao_em"
 DEFAULT_FINANCE_FREQUENCIA_HORAS = 6
 DEFAULT_FINANCE_FREQUENCIA_MINUTOS = 360
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_naive() -> datetime:
@@ -424,10 +426,35 @@ def atualizar_indices(bypass_frequencia: bool = False):
         "data_referencia": novos_dados.get("data"),
     }
 
+
+def executar_coleta_financeira(bypass_frequencia: bool = False) -> dict:
+    """
+    Fachada idempotente para disparar a coleta financeira a partir de CLI ou HTTP.
+    Preserva o contrato atual de atualizar_indices e centraliza logs operacionais.
+    """
+    logger.info(
+        "Finance cron: iniciando coleta de indices (bypass_frequencia=%s, destino=%s)",
+        bypass_frequencia,
+        INDICES_FILE,
+    )
+    try:
+        resultado = atualizar_indices(bypass_frequencia=bypass_frequencia) or {}
+        logger.info(
+            "Finance cron: coleta finalizada (status_global=%s, executou=%s, motivo=%s, destino=%s)",
+            resultado.get("status_global"),
+            resultado.get("executou"),
+            resultado.get("motivo"),
+            resultado.get("arquivo_destino") or INDICES_FILE,
+        )
+        return resultado
+    except Exception:
+        logger.exception("Finance cron: falha critica durante coleta de indices")
+        raise
+
 if __name__ == "__main__":
     from app.web import app
     from app.consumo_identidade import ensure_consumo_identidade_no_app_context
 
     with app.app_context():
         ensure_consumo_identidade_no_app_context()
-        atualizar_indices()
+        executar_coleta_financeira()

@@ -124,3 +124,20 @@ def test_atualizar_indices_executa_quando_fora_da_janela(app, monkeypatch, tmp_p
         assert resultado["motivo"] == "executou"
         assert resultado["executou"] is True
         assert (tmp_path / "indices.json").exists()
+
+
+def test_executar_coleta_financeira_reaproveita_atualizacao(app, monkeypatch, tmp_path):
+    finance = _load_finance(monkeypatch, tmp_path)
+
+    with app.app_context():
+        monkeypatch.setattr(finance, "atualizar_indices", lambda bypass_frequencia=False: {
+            "status_global": "sucesso",
+            "motivo": "executou",
+            "executou": True,
+            "arquivo_destino": str(tmp_path / "indices.json"),
+        })
+
+        resultado = finance.executar_coleta_financeira()
+
+        assert resultado["status_global"] == "sucesso"
+        assert resultado["executou"] is True

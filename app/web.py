@@ -99,6 +99,72 @@ logger = logging.getLogger(__name__)
 _diretorio_dados = settings.data_dir
 app.config["DATA_DIR"] = settings.data_dir  # usado pelo Admin para persistir última execução manual
 
+
+def _get_cron_secret_or_403():
+    secret = request.headers.get("X-Cron-Secret") or request.args.get("secret")
+    expected = settings.cron_secret
+    if not expected or secret != expected:
+        return None, ({"ok": False, "error": "unauthorized"}, 403)
+    return expected, None
+
+
+def _candidate_indices_paths() -> list[str]:
+    candidate_paths = [
+        settings.indices_file_path,
+        "/var/data/indices.json",
+        os.path.join(_diretorio_app, "indices.json"),
+    ]
+    ordered_paths = []
+    for p in candidate_paths:
+        if p and p not in ordered_paths:
+            ordered_paths.append(p)
+    return ordered_paths
+
+
+def _load_indices_payload() -> dict:
+    fallback_payload = {"ultima_atualizacao": "N/A", "historico": []}
+    for p in _candidate_indices_paths():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                conteudo_indices = json.load(f)
+            if isinstance(conteudo_indices, dict):
+                return conteudo_indices
+            if isinstance(conteudo_indices, list):
+                return {"ultima_atualizacao": "N/A", "historico": conteudo_indices}
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+            continue
+    return fallback_payload
+
+
+def _load_home_indicadores() -> dict:
+    fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
+    for p in _candidate_indices_paths():
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                conteudo_indices = json.load(f)
+            ultimo_registro = None
+
+            if isinstance(conteudo_indices, dict) and isinstance(conteudo_indices.get('historico'), list):
+                historico = conteudo_indices.get('historico') or []
+                if not historico:
+                    continue
+                ultimo_registro = historico[-1]
+            elif isinstance(conteudo_indices, dict):
+                ultimo_registro = conteudo_indices
+            elif isinstance(conteudo_indices, list) and conteudo_indices:
+                ultimo_registro = conteudo_indices[-1]
+
+            if ultimo_registro:
+                return {
+                    "dolar": ultimo_registro.get("dolar", fallback_indicadores["dolar"]),
+                    "petroleo": ultimo_registro.get("petroleo", fallback_indicadores["petroleo"]),
+                    "bdi": ultimo_registro.get("bdi", fallback_indicadores["bdi"]),
+                    "fbx": ultimo_registro.get("fbx", fallback_indicadores["fbx"]),
+                }
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+            continue
+    return fallback_indicadores
+
 # 3. Configurações de Segurança e Banco de Dados (OBRIGATÓRIO ANTES DO INIT_APP)
 app.config['SECRET_KEY'] = settings.secret_key
 _uri = (settings.sqlalchemy_database_uri or "").strip()
@@ -175,50 +241,7 @@ def load_user(user_id):
 # --- ROTAS PÚBLICAS E ACESSO ---
 @app.route('/')
 def index():
-    # Localiza o arquivo de índices dinâmicos com fallback de caminhos legados.
-    path_indices = settings.indices_file_path
-    candidate_paths = [
-        path_indices,
-        '/var/data/indices.json',
-        os.path.join(_diretorio_app, 'indices.json'),
-    ]
-    ordered_paths = []
-    for p in candidate_paths:
-        if p and p not in ordered_paths:
-            ordered_paths.append(p)
-
-    fallback_indicadores = {"dolar": "0.00", "petroleo": "0.00", "bdi": "-", "fbx": "-"}
-    indicadores = fallback_indicadores
-    for p in ordered_paths:
-        try:
-            with open(p, 'r', encoding='utf-8') as f:
-                conteudo_indices = json.load(f)
-            # Compatibilidade com múltiplos formatos:
-            # 1) formato histórico: {"ultima_atualizacao", "historico": [...]}
-            # 2) formato antigo:    {"dolar", "petroleo", "bdi", "fbx"}
-            # 3) formato lista:     [{"data", "dolar", "petroleo", "bdi", "fbx"}, ...]
-            ultimo_registro = None
-
-            if isinstance(conteudo_indices, dict) and isinstance(conteudo_indices.get('historico'), list):
-                historico = conteudo_indices.get('historico') or []
-                if not historico:
-                    continue
-                ultimo_registro = historico[-1]
-            elif isinstance(conteudo_indices, dict):
-                ultimo_registro = conteudo_indices
-            elif isinstance(conteudo_indices, list) and conteudo_indices:
-                ultimo_registro = conteudo_indices[-1]
-
-            if ultimo_registro:
-                indicadores = {
-                    "dolar": ultimo_registro.get("dolar", fallback_indicadores["dolar"]),
-                    "petroleo": ultimo_registro.get("petroleo", fallback_indicadores["petroleo"]),
-                    "bdi": ultimo_registro.get("bdi", fallback_indicadores["bdi"]),
-                    "fbx": ultimo_registro.get("fbx", fallback_indicadores["fbx"]),
-                }
-                break
-        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
-            continue
+    indicadores = _load_home_indicadores()
 
     # Consultas separadas: 5 mais recentes de cada tipo (limites parametrizados em settings)
     limite_noticias = getattr(settings, 'noticias_limite', 5)
@@ -509,13 +532,7 @@ def logout():
 
 @app.route('/fretes', methods=['GET', 'POST'])
 def fretes():
-    # ALTERAÇÃO 1: Carregar os dados reais do indices.json
-    try:
-        with open(os.path.join(_diretorio_app, 'indices.json'), 'r', encoding='utf-8') as f:
-            indices = json.load(f)
-    except Exception:
-        # Fallback de segurança caso o arquivo não exista ainda
-        indices = {"ultima_atualizacao": "N/A", "historico": []}
+    indices = _load_indices_payload()
 
     resultado = None
     
@@ -1007,10 +1024,9 @@ def cron_executar_cleiton():
     Rota para agendador (ex.: Render Cron Job). Respeita frequência e janela; não usa bypass.
     Protegida por CRON_SECRET: header X-Cron-Secret ou query ?secret=<CRON_SECRET>.
     """
-    secret = request.headers.get("X-Cron-Secret") or request.args.get("secret")
-    expected = settings.cron_secret
-    if not expected or secret != expected:
-        return {"ok": False, "error": "unauthorized"}, 403
+    _, unauthorized = _get_cron_secret_or_403()
+    if unauthorized:
+        return unauthorized
     try:
         from app.run_cleiton import executar_orquestracao
         monetizacao = efetivar_mudancas_pendentes_ciclo()
@@ -1028,16 +1044,43 @@ def cron_executar_cleiton():
         return {"ok": False, "error": str(e)}, 500
 
 
+@app.route("/cron/finance", methods=["GET", "POST"])
+def cron_finance():
+    """
+    Executa a coleta financeira no serviço principal usando o mesmo storage persistente.
+    Protegida por CRON_SECRET: header X-Cron-Secret ou query ?secret=<CRON_SECRET>.
+    """
+    _, unauthorized = _get_cron_secret_or_403()
+    if unauthorized:
+        return unauthorized
+    try:
+        from app.finance import executar_coleta_financeira
+
+        resultado = executar_coleta_financeira(bypass_frequencia=False) or {}
+        status_global = resultado.get("status_global", "falha")
+        return {
+            "ok": status_global in ("sucesso", "sucesso_parcial", "ignorado"),
+            "status": status_global,
+            "motivo": resultado.get("motivo"),
+            "executou": resultado.get("executou"),
+            "mensagem": resultado.get("mensagem"),
+            "arquivo_destino": resultado.get("arquivo_destino"),
+            "data_referencia": resultado.get("data_referencia"),
+        }, 200
+    except Exception as e:
+        logging.exception("Cron finance: %s", e)
+        return {"ok": False, "error": str(e)}, 500
+
+
 @app.route("/cron/billing-snapshot", methods=["GET", "POST"])
 def cron_billing_snapshot():
     """
     Coleta custo month-to-date no BigQuery (export billing) e grava snapshot interno.
     Agendar ~4x/dia (ex.: Render Cron). Protegida por CRON_SECRET.
     """
-    secret = request.headers.get("X-Cron-Secret") or request.args.get("secret")
-    expected = settings.cron_secret
-    if not expected or secret != expected:
-        return {"ok": False, "error": "unauthorized"}, 403
+    _, unauthorized = _get_cron_secret_or_403()
+    if unauthorized:
+        return unauthorized
     try:
         from app.services.billing_bigquery_service import collect_and_persist_billing_snapshot
         from app.consumo_identidade import ensure_consumo_identidade_no_app_context
