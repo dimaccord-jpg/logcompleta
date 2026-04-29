@@ -9,14 +9,14 @@
         <div class="card-body">
             <form action="{{ url_for('admin.indices_configurar_frequencia') }}" method="POST" class="row g-2 align-items-end mb-3">
                 <div class="col-md-4">
-                    <label for="finance_frequencia_horas" class="form-label">Frequência automática (horas)</label>
+                    <label for="finance_frequencia_minutos" class="form-label">Frequência automática (minutos)</label>
                     <input type="number"
-                           min="1"
+                           min="{{ frequencia_minima_admin|default(5) }}"
                            step="1"
-                           id="finance_frequencia_horas"
-                           name="finance_frequencia_horas"
+                           id="finance_frequencia_minutos"
+                           name="finance_frequencia_minutos"
                            class="form-control"
-                           value="{{ finance_frequencia_horas|default(6) }}"
+                           value="{{ finance_frequencia_minutos|default(360) }}"
                            required>
                 </div>
                 <div class="col-md-auto">
@@ -24,7 +24,7 @@
                 </div>
                 <div class="col-12">
                     <small class="text-muted">
-                        Regra automática única para Dólar, Petróleo, BDI e FBX. O agendador só dispara; a aplicação decide se executa ou pula por frequência.
+                        Regra automática única para Dólar, Petróleo, BDI e FBX. O agendador só dispara; a aplicação decide se executa ou pula por frequência. Valor atual: {{ finance_frequencia_label|default('6h') }}.
                     </small>
                 </div>
             </form>

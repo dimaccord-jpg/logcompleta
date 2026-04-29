@@ -76,3 +76,38 @@ def test_cron_query_string_temporaria_ainda_autentica(cron_client, path):
     response = cron_client.post(f"{path}?secret=cron-secret-test")
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
+
+
+def test_cron_executar_cleiton_mantem_fluxo_oficial(monkeypatch, tmp_path):
+    web = _load_web(monkeypatch, tmp_path)
+    chamadas = {"monetizacao": 0, "bypass": None}
+
+    monkeypatch.setattr(
+        web,
+        "efetivar_mudancas_pendentes_ciclo",
+        lambda: chamadas.__setitem__("monetizacao", chamadas["monetizacao"] + 1) or {"status": "noop"},
+    )
+
+    fake_run_cleiton = types.ModuleType("app.run_cleiton")
+
+    def _executar(_app, bypass_frequencia=False):
+        chamadas["bypass"] = bypass_frequencia
+        return {"status": "sucesso", "mission_id": "mission-123"}
+
+    fake_run_cleiton.executar_orquestracao = _executar
+    monkeypatch.setitem(sys.modules, "app.run_cleiton", fake_run_cleiton)
+
+    fake_consumo = types.ModuleType("app.consumo_identidade")
+    fake_consumo.apply_consumo_identidade_before_request = lambda: None
+    fake_consumo.ensure_consumo_identidade_no_app_context = lambda: None
+    monkeypatch.setitem(sys.modules, "app.consumo_identidade", fake_consumo)
+
+    client = web.app.test_client()
+    response = client.post(
+        "/cron/executar-cleiton",
+        headers={"X-Cron-Secret": "cron-secret-test"},
+    )
+
+    assert response.status_code == 200
+    assert chamadas["monetizacao"] == 1
+    assert chamadas["bypass"] is False

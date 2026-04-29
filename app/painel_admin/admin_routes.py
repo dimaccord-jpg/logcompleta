@@ -34,7 +34,9 @@ from app.terms_services import get_active_term
 from app.finance import (
     atualizar_indices,
     configurar_finance_frequencia_horas,
+    configurar_finance_frequencia_minutos,
     obter_finance_frequencia_horas,
+    obter_finance_frequencia_minutos,
 )
 from app.run_julia_regras import status_verificacao_permitidos
 
@@ -60,6 +62,39 @@ admin_bp = Blueprint(
     template_folder=pasta_templates,
     url_prefix="/admin",
 )
+
+
+def _admin_app_env() -> str:
+    return (os.getenv("APP_ENV") or "dev").strip().lower()
+
+
+def _min_frequencia_minutos_para_admin() -> int:
+    return 60 if _admin_app_env() == "prod" else 5
+
+
+def _validar_frequencia_minutos_admin(valor_raw: str, *, contexto: str) -> int:
+    try:
+        valor = int((valor_raw or "").strip())
+    except (ValueError, TypeError):
+        raise ValueError(f"Informe minutos inteiros para {contexto}.")
+    minimo = _min_frequencia_minutos_para_admin()
+    if valor < minimo:
+        if minimo >= 60:
+            raise ValueError(
+                f"Em producao, a frequencia minima para {contexto} e de 60 minutos."
+            )
+        raise ValueError(
+            f"Em {_admin_app_env()}, a frequencia minima para {contexto} e de {minimo} minutos."
+        )
+    return valor
+
+
+def _formatar_frequencia_minutos(valor: int) -> str:
+    minutos = max(1, int(valor))
+    if minutos % 60 == 0:
+        horas = minutos // 60
+        return f"{horas}h"
+    return f"{minutos} min"
 
 # Estado para execucao async (Cleiton / artigo manual)
 _CLEITON_FUTURE: Future | None = None
@@ -249,9 +284,9 @@ def agentes_home():
 def agentes_julia():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
-    frequencia_horas = agent_service.obter_frequencia_horas()
+    frequencia_minutos = agent_service.obter_frequencia_minutos()
     ultima_execucao, proxima_prevista = (
-        agent_service.obter_ultima_e_proxima_execucao(frequencia_horas)
+        agent_service.obter_ultima_e_proxima_execucao(frequencia_minutos)
     )
     janela_inicio, janela_fim = agent_service.obter_janela_publicacao()
     status_pautas_artigo = agent_service.obter_status_pautas_artigo()
@@ -259,7 +294,10 @@ def agentes_julia():
     ultima_execucao_manual = agent_service.ler_ultima_execucao_manual()
     return render_template(
         "agentes_julia.html",
-        frequencia_horas=frequencia_horas,
+        frequencia_horas=agent_service.obter_frequencia_horas(),
+        frequencia_minutos=frequencia_minutos,
+        frequencia_label=_formatar_frequencia_minutos(frequencia_minutos),
+        frequencia_minima_admin=_min_frequencia_minutos_para_admin(),
         julia_chat_max_history=get_julia_chat_max_history(),
         ultima_execucao=ultima_execucao,
         proxima_prevista=proxima_prevista,
@@ -276,7 +314,24 @@ def agentes_julia():
 def agentes_julia_configurar_frequencia():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
-    valor_raw = (request.form.get("frequencia_horas") or "").strip()
+    valor_raw = (request.form.get("frequencia_minutos") or "").strip()
+    try:
+        valor = _validar_frequencia_minutos_admin(
+            valor_raw,
+            contexto="o ciclo da Julia/Cleiton",
+        )
+    except ValueError as e:
+        flash(f"Valor de frequencia invalido. {str(e)}", "warning")
+        return redirect(url_for("admin.agentes_julia"))
+    try:
+        agent_service.configurar_frequencia_minutos(valor)
+        flash(
+            f"Frequencia do ciclo atualizada para {_formatar_frequencia_minutos(valor)}.",
+            "success",
+        )
+    except Exception as e:
+        flash(f"Erro ao atualizar frequencia: {str(e)}", "danger")
+    return redirect(url_for("admin.agentes_julia"))
     try:
         valor = int(valor_raw)
         if valor < 1:
@@ -880,7 +935,12 @@ def importacao_dados():
     return render_template(
         "importacao.html",
         execucoes_indices=execucoes_indices,
+        finance_frequencia_minutos=obter_finance_frequencia_minutos(),
         finance_frequencia_horas=obter_finance_frequencia_horas(),
+        finance_frequencia_label=_formatar_frequencia_minutos(
+            obter_finance_frequencia_minutos()
+        ),
+        frequencia_minima_admin=_min_frequencia_minutos_para_admin(),
     )
 
 
@@ -889,7 +949,24 @@ def importacao_dados():
 def indices_configurar_frequencia():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
-    valor_raw = (request.form.get("finance_frequencia_horas") or "").strip()
+    valor_raw = (request.form.get("finance_frequencia_minutos") or "").strip()
+    try:
+        valor = _validar_frequencia_minutos_admin(
+            valor_raw,
+            contexto="a atualizacao financeira",
+        )
+    except ValueError as e:
+        flash(f"Valor de frequencia financeira invalido. {str(e)}", "warning")
+        return redirect(url_for("admin.importacao_dados"))
+    try:
+        configurar_finance_frequencia_minutos(valor)
+        flash(
+            f"Frequencia automatica dos indices atualizada para {_formatar_frequencia_minutos(valor)}.",
+            "success",
+        )
+    except Exception as e:
+        flash(f"Erro ao atualizar frequencia financeira: {str(e)}", "danger")
+    return redirect(url_for("admin.importacao_dados"))
     try:
         valor = int(valor_raw)
         if valor < 1:

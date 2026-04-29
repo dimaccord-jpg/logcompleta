@@ -37,13 +37,25 @@ def test_finance_bootstrap_and_config(app, monkeypatch, tmp_path):
     with app.app_context():
         finance.bootstrap_finance_regras()
         assert finance.obter_finance_frequencia_horas() == 6
+        assert finance.obter_finance_frequencia_minutos() == 360
 
         finance.configurar_finance_frequencia_horas(12)
         assert finance.obter_finance_frequencia_horas() == 12
+        assert finance.obter_finance_frequencia_minutos() == 720
 
         cfg = ConfigRegras.query.filter_by(chave=finance.CHAVE_FINANCE_FREQUENCIA_HORAS).first()
         assert cfg is not None
         assert cfg.valor_inteiro == 12
+
+
+def test_finance_config_aceita_minutos_menor_que_uma_hora(app, monkeypatch, tmp_path):
+    finance = _load_finance(monkeypatch, tmp_path)
+
+    with app.app_context():
+        finance.configurar_finance_frequencia_minutos(15)
+
+        assert finance.obter_finance_frequencia_minutos() == 15
+        assert finance.obter_finance_frequencia_horas() == 1
 
 
 def test_atualizar_indices_pula_por_frequencia(app, monkeypatch, tmp_path):
@@ -59,6 +71,21 @@ def test_atualizar_indices_pula_por_frequencia(app, monkeypatch, tmp_path):
         assert resultado["status_global"] == "ignorado"
         assert resultado["motivo"] == "pulado_frequencia"
         assert resultado["executou"] is False
+
+
+def test_finance_respeita_frequencia_menor_que_uma_hora(app, monkeypatch, tmp_path):
+    finance = _load_finance(monkeypatch, tmp_path)
+
+    with app.app_context():
+        finance.configurar_finance_frequencia_minutos(5)
+        ultima = _utcnow_naive() - timedelta(minutes=4)
+        assert finance.pode_atualizar_indices_por_frequencia(ultima, agora=_utcnow_naive()) is False
+
+        ultima_liberada = _utcnow_naive() - timedelta(minutes=6)
+        assert finance.pode_atualizar_indices_por_frequencia(
+            ultima_liberada,
+            agora=_utcnow_naive(),
+        ) is True
 
 
 def test_atualizar_indices_executa_quando_fora_da_janela(app, monkeypatch, tmp_path):

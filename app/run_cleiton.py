@@ -130,8 +130,9 @@ if __name__ == "__main__":
         try:
             executar_orquestracao(app)
             with app.app_context():
-                from app.run_cleiton_agente_regras import get_frequencia_horas
-                segundos_ciclo = max(1, int(get_frequencia_horas())) * 3600
+                from app.run_cleiton_agente_regras import get_frequencia_minutos
+
+                segundos_ciclo = max(60, int(get_frequencia_minutos())) * 60
             time.sleep(segundos_ciclo)
         except KeyboardInterrupt:
             logger.info("Maestro Cleiton interrompido. Desligando...")

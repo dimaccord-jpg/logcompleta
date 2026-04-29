@@ -1,6 +1,7 @@
 import yfinance as yf
 import json
 import re
+import math
 import requests
 from bs4 import BeautifulSoup
 from pathlib import Path
@@ -12,8 +13,10 @@ from app.settings import settings
 INDICES_FILE = Path(settings.indices_file_path)
 LEGACY_INDICES_FILE = Path(__file__).resolve().parent / 'indices.json'
 CHAVE_FINANCE_FREQUENCIA_HORAS = "finance_frequencia_horas"
+CHAVE_FINANCE_FREQUENCIA_MINUTOS = "finance_frequencia_minutos"
 CHAVE_FINANCE_ULTIMA_EXECUCAO_EM = "finance_ultima_execucao_em"
 DEFAULT_FINANCE_FREQUENCIA_HORAS = 6
+DEFAULT_FINANCE_FREQUENCIA_MINUTOS = 360
 
 
 def _utcnow_naive() -> datetime:
@@ -22,6 +25,14 @@ def _utcnow_naive() -> datetime:
 
 def bootstrap_finance_regras() -> None:
     try:
+        cfg_min = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS).first()
+        if not cfg_min:
+            cfg_min = ConfigRegras(
+                chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS,
+                valor_inteiro=DEFAULT_FINANCE_FREQUENCIA_MINUTOS,
+                descricao="Intervalo em minutos para atualizar indices financeiros automaticamente.",
+            )
+            db.session.add(cfg_min)
         cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_HORAS).first()
         if not cfg:
             cfg = ConfigRegras(
@@ -48,16 +59,54 @@ def bootstrap_finance_regras() -> None:
 def obter_finance_frequencia_horas() -> int:
     try:
         bootstrap_finance_regras()
-        cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_HORAS).first()
-        if cfg and cfg.valor_inteiro is not None:
-            return max(1, int(cfg.valor_inteiro))
+        return max(1, int(math.ceil(obter_finance_frequencia_minutos() / 60.0)))
     except Exception:
         pass
     return DEFAULT_FINANCE_FREQUENCIA_HORAS
 
 
+def obter_finance_frequencia_minutos() -> int:
+    try:
+        bootstrap_finance_regras()
+        cfg_min = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS).first()
+        cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_HORAS).first()
+        if (
+            cfg_min
+            and cfg_min.valor_inteiro is not None
+            and cfg
+            and cfg.valor_inteiro is not None
+            and int(cfg_min.valor_inteiro) == DEFAULT_FINANCE_FREQUENCIA_MINUTOS
+            and int(cfg.valor_inteiro) != DEFAULT_FINANCE_FREQUENCIA_HORAS
+        ):
+            return max(1, int(cfg.valor_inteiro)) * 60
+        if cfg_min and cfg_min.valor_inteiro is not None:
+            return max(1, int(cfg_min.valor_inteiro))
+        if cfg and cfg.valor_inteiro is not None:
+            return max(1, int(cfg.valor_inteiro)) * 60
+    except Exception:
+        pass
+    return DEFAULT_FINANCE_FREQUENCIA_MINUTOS
+
+
 def configurar_finance_frequencia_horas(valor: int) -> None:
+    configurar_finance_frequencia_minutos(int(valor) * 60)
+
+
+def configurar_finance_frequencia_minutos(valor: int) -> None:
     bootstrap_finance_regras()
+    minutos = max(1, int(valor))
+
+    cfg_min = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS).first()
+    if not cfg_min:
+        cfg_min = ConfigRegras(
+            chave=CHAVE_FINANCE_FREQUENCIA_MINUTOS,
+            descricao="Intervalo em minutos para atualizar indices financeiros automaticamente.",
+        )
+        db.session.add(cfg_min)
+    cfg_min.valor_inteiro = minutos
+    cfg_min.valor_texto = None
+    cfg_min.valor_real = None
+
     cfg = ConfigRegras.query.filter_by(chave=CHAVE_FINANCE_FREQUENCIA_HORAS).first()
     if not cfg:
         cfg = ConfigRegras(
@@ -65,7 +114,7 @@ def configurar_finance_frequencia_horas(valor: int) -> None:
             descricao="Intervalo em horas para atualizar indices financeiros automaticamente.",
         )
         db.session.add(cfg)
-    cfg.valor_inteiro = max(1, int(valor))
+    cfg.valor_inteiro = max(1, int(math.ceil(minutos / 60.0)))
     cfg.valor_texto = None
     cfg.valor_real = None
     db.session.commit()
@@ -111,7 +160,7 @@ def pode_atualizar_indices_por_frequencia(
         return True
     ref = agora or _utcnow_naive()
     delta = ref - ultima_execucao
-    return delta.total_seconds() >= obter_finance_frequencia_horas() * 3600
+    return delta.total_seconds() >= obter_finance_frequencia_minutos() * 60
 
 
 def _load_historico(path: Path):
