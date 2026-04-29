@@ -132,7 +132,10 @@ def _chamar_modelo(client, prompt: str, tipo: str) -> dict | None:
             fim = txt.rfind("}") + 1
             if inicio < 0 or fim <= inicio:
                 raise ValueError("Resposta sem JSON válido")
-            return json.loads(txt[inicio:fim])
+            data = json.loads(txt[inicio:fim])
+            if not isinstance(data, dict):
+                raise ValueError("Resposta JSON do modelo não é um objeto.")
+            return data
         except Exception as e:
             last_error = e
             logger.warning("Modelo textual indisponível (%s) para %s: %s", model, tipo, e)
