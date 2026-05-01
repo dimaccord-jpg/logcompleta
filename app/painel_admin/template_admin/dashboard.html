@@ -34,6 +34,7 @@
             <div class="col-md-3">
                 <button type="submit" class="btn btn-primary btn-sm">Aplicar filtros</button>
                 <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-secondary btn-sm ms-1">Limpar</a>
+                <a href="{{ url_for('admin.admin_dashboard_auditoria_clientes_csv', categoria=filtro_categoria, franquia_status=filtro_franquia_status, cancelado=filtro_cancelado) }}" class="btn btn-outline-dark btn-sm ms-1">Baixar auditoria CSV</a>
             </div>
         </div>
         <p class="text-muted small mb-0 mt-2">Cancelados: email no padrão <code>encerrado%@anon.local</code> (encerramento de contrato).</p>
