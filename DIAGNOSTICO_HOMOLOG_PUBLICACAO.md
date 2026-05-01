@@ -10,6 +10,7 @@ Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 - chat do Roberto na `/fretes` com UX visual atualizada no frontend, incluindo orientacao inicial de upload e copia local de respostas sem impacto em governanca, consumo ou observabilidade;
 - detalhe de noticia/artigo com botao `Voltar Para Home`;
 - monetizacao Stripe estabilizada com contratacao inicial, upgrade na assinatura existente, downgrade pago agendado e cancelamento para `free` por `cancel_at_period_end`;
+- CSV administrativo de auditoria local consolidado em `/admin/dashboard/auditoria-clientes.csv`, sem Stripe online e sem mutacao;
 - publicacao final em homolog ainda depende da validacao completa de migrations no ambiente alvo.
 
 ## Escopo Operacional Sensivel
@@ -20,6 +21,7 @@ Nao tratar como opcional:
 - autorizacao operacional usada pelo chat da Julia e pelo upload/chat Roberto;
 - identidade de consumo por conta, franquia e usuario;
 - coerencia entre Stripe, `ContaMonetizacaoVinculo` e `MonetizacaoFato`;
+- coerencia do CSV administrativo entre `User.categoria` legado, `ContaMonetizacaoVinculo`, `Franquia`, `MonetizacaoFato` e `ConfigRegras`;
 - execucao real da virada de ciclo em `/cron/executar-cleiton`;
 - migrations da cadeia ativa;
 - telas admin alinhadas com o backend.
@@ -51,7 +53,8 @@ Somente quando todos forem verdadeiros:
 8. webhook Stripe validado no ambiente correto com assinatura valida;
 9. retorno do checkout conciliado com `session_id` real;
 10. downgrade `pro -> starter` ou `starter/pro -> free` com pendencia interna auditavel;
-11. virada de ciclo confirmada em cron.
+11. virada de ciclo confirmada em cron;
+12. `/admin/dashboard/auditoria-clientes.csv` validado com protecao admin, filtros, flags principais, severidade e ausencia de efeito colateral.
 
 ## Referencia Principal
 

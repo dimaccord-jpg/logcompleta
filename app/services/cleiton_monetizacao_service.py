@@ -577,9 +577,17 @@ def _guardrail_ids_evento_vs_vinculo_ativo(
     }
     if sub_v and sub_e and sub_e != sub_v:
         detalhes["motivo"] = "subscription_id divergente_do_vinculo_ativo"
+        pend = _extrair_pendencia_downgrade_snapshot(_json_loads(v.snapshot_normalizado_json))
+        if pend is not None:
+            detalhes["mudanca_pendente_ativa"] = True
+            detalhes["motivo"] = "subscription_id divergente_do_vinculo_ativo_durante_mudanca_pendente"
         return True, detalhes
     if cus_v and cus_e and cus_e != cus_v:
         detalhes["motivo"] = "customer_id divergente_do_vinculo_ativo"
+        pend = _extrair_pendencia_downgrade_snapshot(_json_loads(v.snapshot_normalizado_json))
+        if pend is not None:
+            detalhes["mudanca_pendente_ativa"] = True
+            detalhes["motivo"] = "customer_id divergente_do_vinculo_ativo_durante_mudanca_pendente"
         return True, detalhes
     return False, detalhes
 
@@ -955,7 +963,38 @@ def iniciar_jornada_assinatura_stripe(
         raise ValueError("Plano fora do escopo de contratacao Stripe.")
 
     vinculo_ativo = _obter_vinculo_ativo_por_conta(conta_id)
+    pendencia_vinculo_ativo = None
+    if vinculo_ativo is not None:
+        pendencia_vinculo_ativo = _extrair_pendencia_downgrade_snapshot(
+            _json_loads(vinculo_ativo.snapshot_normalizado_json)
+        )
+    msg_bloqueio_pendencia = (
+        "Existe uma alteracao de plano pendente para o fim do ciclo. "
+        "Aguarde a efetivacao antes de iniciar nova contratacao."
+    )
     if plano_n == "free":
+        if pendencia_vinculo_ativo is not None:
+            registrar_fato_monetizacao(
+                tipo_fato="stripe_checkout_guardrail_mudanca_pendente",
+                status_tecnico=STATUS_TEC_SEM_EFEITO,
+                provider=PROVIDER_STRIPE,
+                conta_id=conta_id,
+                franquia_id=franquia_id,
+                usuario_id=usuario_id,
+                idempotency_key=(
+                    f"stripe_checkout_guardrail_mudanca_pendente:{conta_id}:{franquia_id}:"
+                    f"free:{pendencia_vinculo_ativo.get('plano_futuro')}:{pendencia_vinculo_ativo.get('efetivar_em')}"
+                )[:190],
+                snapshot_normalizado={
+                    "motivo": "mudanca_pendente_no_vinculo_ativo",
+                    "plano_solicitado": "free",
+                    "plano_pendente": pendencia_vinculo_ativo.get("plano_futuro"),
+                    "efetivar_em": pendencia_vinculo_ativo.get("efetivar_em"),
+                },
+                payload_bruto_sanitizado={"origem": "iniciar_jornada_assinatura_stripe"},
+            )
+            db.session.commit()
+            raise ValueError(msg_bloqueio_pendencia)
         logger.info("[DOWNGRADE_DEBUG] DOWNGRADE_FREE_START conta_id=%s", conta_id)
         assinatura_free = _obter_assinatura_stripe_ativa(conta_id)
         logger.info(
@@ -1077,6 +1116,30 @@ def iniciar_jornada_assinatura_stripe(
         raise ValueError("STRIPE_PUBLISHABLE_KEY ausente no ambiente.")
 
     assinatura_existente = _obter_assinatura_stripe_ativa(conta_id)
+    if pendencia_vinculo_ativo is not None and (
+        assinatura_existente is None or not _norm_text(assinatura_existente.get("subscription_id"))
+    ):
+        registrar_fato_monetizacao(
+            tipo_fato="stripe_checkout_guardrail_mudanca_pendente",
+            status_tecnico=STATUS_TEC_SEM_EFEITO,
+            provider=PROVIDER_STRIPE,
+            conta_id=conta_id,
+            franquia_id=franquia_id,
+            usuario_id=usuario_id,
+            idempotency_key=(
+                f"stripe_checkout_guardrail_mudanca_pendente:{conta_id}:{franquia_id}:{plano_n}:"
+                f"{pendencia_vinculo_ativo.get('plano_futuro')}:{pendencia_vinculo_ativo.get('efetivar_em')}"
+            )[:190],
+            snapshot_normalizado={
+                "motivo": "mudanca_pendente_no_vinculo_ativo",
+                "plano_solicitado": plano_n,
+                "plano_pendente": pendencia_vinculo_ativo.get("plano_futuro"),
+                "efetivar_em": pendencia_vinculo_ativo.get("efetivar_em"),
+            },
+            payload_bruto_sanitizado={"origem": "iniciar_jornada_assinatura_stripe"},
+        )
+        db.session.commit()
+        raise ValueError(msg_bloqueio_pendencia)
     if assinatura_existente is not None and _norm_text(assinatura_existente.get("subscription_id")):
         plano_atual_u = _normalizar_plano_codigo(getattr(user, "categoria", None)) or "free"
         destino = plano_n
@@ -1392,6 +1455,67 @@ def registrar_vinculo_comercial_externo(
     provider_n = (provider or "").strip().lower()
     if not provider_n:
         raise ValueError("provider e obrigatorio para registrar vinculo comercial externo.")
+
+    vinculo_ativo_stripe = (
+        _obter_vinculo_ativo_por_conta(conta_id_i)
+        if provider_n == PROVIDER_STRIPE and substituir_vinculo_ativo
+        else None
+    )
+    if vinculo_ativo_stripe is not None:
+        sub_ativo = _norm_text(vinculo_ativo_stripe.subscription_id)
+        cus_ativo = _norm_text(vinculo_ativo_stripe.customer_id)
+        sub_novo = _norm_text(subscription_id)
+        cus_novo = _norm_text(customer_id)
+        pendencia_ativa = _extrair_pendencia_downgrade_snapshot(
+            _json_loads(vinculo_ativo_stripe.snapshot_normalizado_json)
+        )
+        sub_divergente = bool(sub_ativo and sub_novo and sub_ativo != sub_novo)
+        cus_divergente = bool(cus_ativo and cus_novo and cus_ativo != cus_novo)
+        if sub_divergente or cus_divergente:
+            motivo = "ids_divergentes_do_vinculo_ativo"
+            if sub_divergente:
+                motivo = "subscription_id_divergente_do_vinculo_ativo"
+            if cus_divergente:
+                motivo = "customer_id_divergente_do_vinculo_ativo"
+            if pendencia_ativa is not None:
+                motivo = f"{motivo}_durante_mudanca_pendente"
+            franquia_row = (
+                Franquia.query.filter(Franquia.conta_id == conta_id_i)
+                .order_by(Franquia.id.asc())
+                .first()
+            )
+            registrar_fato_monetizacao(
+                tipo_fato="stripe_vinculo_persistencia_bloqueada",
+                status_tecnico=STATUS_TEC_SEM_EFEITO,
+                provider=provider_n,
+                conta_id=conta_id_i,
+                franquia_id=(int(franquia_row.id) if franquia_row is not None else None),
+                idempotency_key=(
+                    f"stripe_vinculo_persistencia_bloqueada:{conta_id_i}:{motivo}:{sub_novo or '-'}:{cus_novo or '-'}"
+                )[:190],
+                correlation_key=sub_novo or sub_ativo,
+                external_event_id=sub_novo,
+                customer_id=cus_novo,
+                subscription_id=sub_novo,
+                price_id=_norm_text(price_id),
+                snapshot_normalizado={
+                    "motivo": motivo,
+                    "vinculo_id_ativo": int(vinculo_ativo_stripe.id),
+                    "vinculo_subscription_id": sub_ativo,
+                    "vinculo_customer_id": cus_ativo,
+                    "novo_subscription_id": sub_novo,
+                    "novo_customer_id": cus_novo,
+                    "mudanca_pendente": bool(pendencia_ativa is not None),
+                    "plano_pendente": (
+                        pendencia_ativa.get("plano_futuro") if pendencia_ativa is not None else None
+                    ),
+                    "efetivar_em": (
+                        pendencia_ativa.get("efetivar_em") if pendencia_ativa is not None else None
+                    ),
+                },
+                payload_bruto_sanitizado=payload_bruto_sanitizado,
+            )
+            return vinculo_ativo_stripe
 
     novo: ContaMonetizacaoVinculo | None = None
     snapshot_base = dict(snapshot_normalizado or {})
@@ -2630,6 +2754,7 @@ def aplicar_fato_contratual_em_franquia(
     downgrade_pago_ja_vigente = bool(
         downgrade_para_plano_pago and _downgrade_pago_ja_vigente_ciclo_stripe(fr, ciclo)
     )
+    free_efetivado_no_deleted = False
 
     if (event_type or "").strip().lower() == "customer.subscription.deleted":
         pendencia_existente = None
@@ -2649,8 +2774,64 @@ def aplicar_fato_contratual_em_franquia(
         else:
             if vinculo_ativo_conta is not None:
                 _limpar_mudanca_pendente_vinculo(vinculo_ativo_conta)
+                registrar_fato_monetizacao(
+                    tipo_fato="stripe_subscription_deleted_pendencia_limpa",
+                    status_tecnico=STATUS_TEC_APLICADO,
+                    provider=PROVIDER_STRIPE,
+                    conta_id=int(fr.conta_id),
+                    franquia_id=int(fr.id),
+                    customer_id=_norm_text(vinculo_ativo_conta.customer_id),
+                    subscription_id=_norm_text(vinculo_ativo_conta.subscription_id),
+                    price_id=_norm_text(vinculo_ativo_conta.price_id),
+                    idempotency_key=(
+                        f"stripe_subscription_deleted_pendencia_limpa:{fr.conta_id}:{fr.id}:"
+                        f"{_norm_text(vinculo_ativo_conta.subscription_id) or '-'}"
+                    )[:190],
+                    snapshot_normalizado={
+                        "event_type": "customer.subscription.deleted",
+                        "mudanca_pendente_removida": True,
+                    },
+                    payload_bruto_sanitizado={"origem": "aplicar_fato_contratual_em_franquia"},
+                )
             if _aplicar_plano_operacional_franquia(fr, "free"):
                 alterou = True
+            novo_inicio_free = ciclo.get("fim_ciclo") or ciclo.get("inicio_ciclo") or agora
+            if fr.inicio_ciclo != novo_inicio_free:
+                fr.inicio_ciclo = novo_inicio_free
+                alterou = True
+            if fr.fim_ciclo is not None:
+                fr.fim_ciclo = None
+                alterou = True
+            consumo_atual = Decimal(str(fr.consumo_acumulado or "0"))
+            if consumo_atual != Decimal("0"):
+                fr.consumo_acumulado = Decimal("0")
+                consumo_reiniciado = True
+                alterou = True
+            free_efetivado_no_deleted = True
+            registrar_fato_monetizacao(
+                tipo_fato="stripe_subscription_deleted_free_efetivado",
+                status_tecnico=STATUS_TEC_APLICADO,
+                provider=PROVIDER_STRIPE,
+                conta_id=int(fr.conta_id),
+                franquia_id=int(fr.id),
+                customer_id=_norm_text(vinculo_ativo_conta.customer_id if vinculo_ativo_conta else None),
+                subscription_id=_norm_text(
+                    vinculo_ativo_conta.subscription_id if vinculo_ativo_conta else None
+                ),
+                price_id=_norm_text(vinculo_ativo_conta.price_id if vinculo_ativo_conta else None),
+                idempotency_key=(
+                    f"stripe_subscription_deleted_free_efetivado:{fr.conta_id}:{fr.id}:"
+                    f"{_norm_text(vinculo_ativo_conta.subscription_id if vinculo_ativo_conta else None) or '-'}"
+                )[:190],
+                snapshot_normalizado={
+                    "event_type": "customer.subscription.deleted",
+                    "free_efetivado": True,
+                    "inicio_ciclo": novo_inicio_free.isoformat() if isinstance(novo_inicio_free, datetime) else None,
+                    "fim_ciclo": None,
+                    "consumo_zerado": True,
+                },
+                payload_bruto_sanitizado={"origem": "aplicar_fato_contratual_em_franquia"},
+            )
     elif downgrade_pago_ja_vigente:
         if vinculo_ativo_conta is not None:
             _limpar_mudanca_pendente_vinculo(vinculo_ativo_conta)
@@ -2756,6 +2937,7 @@ def aplicar_fato_contratual_em_franquia(
         inicio is not None
         and fim is not None
         and not preservar_ciclo_franquia_consumo_invoice_downgrade_pago_pendente
+        and not free_efetivado_no_deleted
     ):
         if fr.inicio_ciclo != inicio:
             fr.inicio_ciclo = inicio
@@ -2769,7 +2951,7 @@ def aplicar_fato_contratual_em_franquia(
                 fr.consumo_acumulado = Decimal("0")
                 consumo_reiniciado = True
                 alterou = True
-    elif event_type == "customer.subscription.deleted":
+    elif event_type == "customer.subscription.deleted" and not free_efetivado_no_deleted:
         if fim is not None and (fr.fim_ciclo is None or fim > fr.fim_ciclo):
             fr.fim_ciclo = fim
             alterou = True
@@ -2817,6 +2999,29 @@ def aplicar_fato_contratual_em_franquia(
     if alterar_status:
         aplicar_status_apos_mudanca_estrutural(fr.id)
         fr_refresh = db.session.get(Franquia, int(franquia_id))
+        if free_efetivado_no_deleted and fr_refresh is not None and fr_refresh.fim_ciclo is not None:
+            registrar_fato_monetizacao(
+                tipo_fato="stripe_subscription_deleted_free_inconsistente_pos_status",
+                status_tecnico=STATUS_TEC_SEM_EFEITO,
+                provider=PROVIDER_STRIPE,
+                conta_id=int(fr.conta_id),
+                franquia_id=int(fr.id),
+                customer_id=_norm_text(vinculo_ativo_conta.customer_id if vinculo_ativo_conta else None),
+                subscription_id=_norm_text(
+                    vinculo_ativo_conta.subscription_id if vinculo_ativo_conta else None
+                ),
+                price_id=_norm_text(vinculo_ativo_conta.price_id if vinculo_ativo_conta else None),
+                idempotency_key=(
+                    f"stripe_subscription_deleted_free_inconsistente:{fr.conta_id}:{fr.id}:"
+                    f"{_norm_text(vinculo_ativo_conta.subscription_id if vinculo_ativo_conta else None) or '-'}"
+                )[:190],
+                snapshot_normalizado={
+                    "event_type": "customer.subscription.deleted",
+                    "motivo": "fim_ciclo_persistiu_preenchido_apos_reclassificacao",
+                    "fim_ciclo": fr_refresh.fim_ciclo.isoformat(),
+                },
+                payload_bruto_sanitizado={"origem": "aplicar_fato_contratual_em_franquia"},
+            )
         return {
             "aplicado": efeito_operacional_aplicado,
             "consumo_reiniciado_renovacao": consumo_reiniciado,
@@ -3476,6 +3681,42 @@ def efetivar_mudancas_pendentes_ciclo(*, agora: datetime | None = None, limite: 
     for vinculo in vinculos:
         snapshot = _json_loads(vinculo.snapshot_normalizado_json)
         if not snapshot.get("mudanca_pendente"):
+            fatos_recentes = (
+                MonetizacaoFato.query.filter(
+                    MonetizacaoFato.conta_id == int(vinculo.conta_id),
+                    MonetizacaoFato.provider == PROVIDER_STRIPE,
+                )
+                .order_by(MonetizacaoFato.timestamp_interno.desc(), MonetizacaoFato.id.desc())
+                .limit(30)
+                .all()
+            )
+            pendencia_historica = None
+            for fato in fatos_recentes:
+                snap_fato = _json_loads(fato.snapshot_normalizado_json)
+                pend_fato = _extrair_pendencia_downgrade_snapshot(snap_fato)
+                if pend_fato is not None:
+                    pendencia_historica = {"fato_id": int(fato.id), "pendencia": pend_fato}
+                    break
+            if pendencia_historica is not None:
+                registrar_fato_monetizacao(
+                    tipo_fato="cleiton_cron_pendencia_ausente_no_vinculo_ativo",
+                    status_tecnico=STATUS_TEC_SEM_EFEITO,
+                    provider=PROVIDER_STRIPE,
+                    conta_id=int(vinculo.conta_id),
+                    franquia_id=None,
+                    customer_id=_norm_text(vinculo.customer_id),
+                    subscription_id=_norm_text(vinculo.subscription_id),
+                    price_id=_norm_text(vinculo.price_id),
+                    idempotency_key=(
+                        f"cleiton_cron_pendencia_ausente:{vinculo.id}:{pendencia_historica['fato_id']}"
+                    )[:190],
+                    snapshot_normalizado={
+                        "vinculo_id": int(vinculo.id),
+                        "pendencia_historica_fato_id": pendencia_historica["fato_id"],
+                        "pendencia_historica": pendencia_historica["pendencia"],
+                    },
+                    payload_bruto_sanitizado={"origem": "efetivar_mudancas_pendentes_ciclo"},
+                )
             continue
         avaliados += 1
         if (snapshot.get("tipo_mudanca") or "").strip().lower() != "downgrade":

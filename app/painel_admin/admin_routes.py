@@ -13,6 +13,7 @@ from flask import (
     current_app,
     send_file,
     jsonify,
+    Response,
 )
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
@@ -22,7 +23,7 @@ import io
 import logging
 import threading
 from concurrent.futures import Future
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 
 from app.infra import (
     get_admin_executor,
@@ -162,6 +163,50 @@ def admin_dashboard():
         recomendacoes_recentes=recomendacoes_recentes,
         ia_metrics=ia_metrics,
     )
+
+
+@admin_bp.route("/dashboard/auditoria-clientes.csv")
+@login_required
+def admin_dashboard_auditoria_clientes_csv():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services.admin_auditoria_clientes_csv_service import (
+        gerar_csv_auditoria_clientes,
+    )
+
+    categoria_f = (request.args.get("categoria") or "").strip() or None
+    franquia_status_f = (request.args.get("franquia_status") or "").strip() or None
+    cancelado_f = (request.args.get("cancelado") or "ativos").strip().lower()
+    filtros = {
+        "categoria": categoria_f,
+        "franquia_status": franquia_status_f,
+        "cancelado": cancelado_f,
+    }
+    csv_payload, total_exportado = gerar_csv_auditoria_clientes(filtros)
+    nome_arquivo = f"auditoria_clientes_admin_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+
+    try:
+        auditoria_service.registrar_auditoria_admin(
+            actor_email=getattr(current_user, "email", None),
+            tipo_decisao="admin_operacao",
+            decisao="download_csv_auditoria_clientes_dashboard",
+            entidade="admin_dashboard",
+            entidade_id=getattr(current_user, "id", None),
+            estado_antes=None,
+            estado_depois={
+                "filtros": filtros,
+                "total_exportado": int(total_exportado),
+                "arquivo": nome_arquivo,
+            },
+            motivo="export_csv_auditoria_local_readonly",
+            resultado="sucesso",
+        )
+    except Exception:
+        _log.exception("Falha ao registrar auditoria de download do CSV")
+
+    resp = Response(csv_payload, content_type="text/csv; charset=utf-8")
+    resp.headers["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resp
 
 
 # --- Metricas de IA (fase 1: tokens + custo GCP) ---

@@ -279,6 +279,7 @@ Stripe fornece fatos externos; a operacao continua decidida por `Franquia`.
 - a autorizacao pre-consumo oficial continua em `avaliar_autorizacao_operacao_por_franquia`;
 - o estado operacional lido pela aplicacao continua vindo de `ler_franquia_operacional_cleiton`;
 - a auditoria administrativa oficial continua exposta em `/admin/api/cleiton-franquia/<franquia_id>/validacao`;
+- existe export oficial somente leitura do CSV de auditoria de clientes em `/admin/dashboard/auditoria-clientes.csv`;
 - os limites comerciais continuam sendo parametrizados no admin via `plano_service` e `/admin/planos/saas/salvar`;
 - a jornada visual de pagamento agora usa fluxo white label embedded na tela oficial `/contrate-um-plano`;
 - existe endpoint autenticado oficial para iniciar checkout Stripe (`/api/contratacao/stripe/iniciar`);
@@ -295,6 +296,7 @@ Stripe fornece fatos externos; a operacao continua decidida por `Franquia`.
 - o trilho oficial de contratacao permanece em `/api/contratacao/stripe/iniciar`;
 - o trilho oficial de webhook permanece em `/api/webhook/stripe`, com assinatura e idempotencia;
 - o trilho oficial de auditoria/reprocessamento admin permanece em `/admin/api/cleiton-franquia/<franquia_id>/validacao`;
+- o trilho oficial de exportacao administrativa consolidada para auditoria local permanece em `/admin/dashboard/auditoria-clientes.csv`;
 - nenhum efeito operacional de plano ignora o Cleiton: aplicacao contratual converge para `Franquia`;
 - `User.creditos` permanece legado e fora da governanca operacional.
 
@@ -351,6 +353,68 @@ Regras importantes:
 - os campos de snapshot mais importantes nos downgrades atuais sao `mudanca_pendente`, `tipo_mudanca`, `plano_futuro` e `efetivar_em`;
 - a trilha append-only e auditavel fica em `MonetizacaoFato`.
 
+### CSV administrativo de auditoria de clientes
+
+Endpoint oficial:
+
+- `GET /admin/dashboard/auditoria-clientes.csv`
+
+Escopo e governanca:
+
+- rota somente leitura;
+- protegida pelo mesmo mecanismo admin do dashboard (`login_required` + verificacao de admin);
+- sem chamada Stripe online;
+- sem mutacao de plano, franquia, vinculo, consumo ou fatos;
+- sem rota paralela fora do admin;
+- download filtrado pelos mesmos filtros do dashboard (`categoria`, `franquia_status`, `cancelado`).
+
+Objetivo:
+
+- auditar o estado local consolidado por usuario/conta/franquia;
+- detectar divergencias entre legado, contrato e operacao;
+- inspecionar coerencia entre `ContaMonetizacaoVinculo`, `MonetizacaoFato`, `Franquia` e configuracao administrativa local;
+- apoiar auditoria financeira local e investigacao administrativa sem aplicar correcao automatica.
+
+Fontes de verdade expostas no CSV:
+
+- `plano_usuario_legacy`: espelho de `User.categoria`, apenas legado;
+- `plano_contratual_vinculo`: plano local contratado vindo do vinculo comercial exibido;
+- `plano_operacional_resolvido`: plano operacional resolvido pelo Cleiton para a franquia;
+- `status_operacional_franquia`: status persistido da `Franquia`;
+- `status_operacional_recalculado`: status recalculado em leitura por `classificar_estado_operacional_franquia(...)`.
+
+Regras importantes do CSV:
+
+- `User.categoria` nao e fonte de verdade financeira principal;
+- `flag_plano_user_vs_vinculo` e mantida apenas como alias/legado para leitura historica;
+- a severidade nao deve considerar divergencia legacy isolada como prova financeira conclusiva;
+- o CSV distingue `ultimo_fato_geral`, `ultimo_fato_efeito` e `ultimo_fato_relevante`;
+- fatos relevantes de auditoria sao explicitamente listados no servico e nao dependem mais de substring ampla generica;
+- a validacao de `price_id` do plano contratado usa configuracao administrativa local em `ConfigRegras`;
+- a identificacao de plano pago no CSV usa configuracao dinamica (`plano_valor_admin_*` e `plano_gateway_price_id_admin_*`) com fallback defensivo apenas quando a base admin estiver vazia.
+
+Confiabilidade do vinculo exibido:
+
+- `vinculo_exibido` e a linha mostrada no CSV para inspecao humana;
+- `vinculo_confiabilidade` classifica o estado do vinculo como `confiavel`, `inconclusivo`, `ambiguo` ou `ausente`;
+- `vinculo_confiabilidade_conclusiva=true` exige ativo unico coerente, sem conflito relevante, sem pendencia perdida e sem problema local de `price_id`;
+- historico multiplo de `customer_id` ou `subscription_id` impede conclusao automatica forte e tende a rebaixar o vinculo para `inconclusivo`;
+- multiplos vinculos ativos na mesma conta sao tratados como ambiguidade critica.
+
+Pendencia perdida e resolucao:
+
+- o CSV pode destacar pendencia historica em vinculo desativado;
+- a neutralizacao de `flag_pendencia_perdida_vencida` exige correlacao forte com fato posterior local;
+- a correlacao usa janela maxima de resolucao, ids externos compativeis e tipo de fato conhecido de efetivacao;
+- fato posterior fora da janela ou sem ids compativeis nao deve limpar a flag.
+
+Severidade:
+
+- `nivel_risco_auditoria` resume a leitura como `ok`, `atenção` ou `crítico`;
+- divergencia isolada entre status persistido e status recalculado fica em `atenção`;
+- divergencia operacional combinada com evidencia forte de billing/contrato pode subir para `crítico`;
+- `flag_requer_revisao_manual` resume se a linha exige triagem administrativa.
+
 ### Assinatura canonica e prevencao de multiplas assinaturas
 
 Houve bug anterior de abertura indevida de checkout para conta que ja tinha assinatura. O comportamento correto agora e:
@@ -361,6 +425,12 @@ Houve bug anterior de abertura indevida de checkout para conta que ja tinha assi
 - se ja existe assinatura ativa canonica para a conta, nao abrir novo checkout pago;
 - upgrade e downgrade pago devem atualizar a assinatura existente;
 - webhook e conciliacao nao devem promover vinculo inconsistente quando `customer_id` ou `subscription_id` divergirem do vinculo ativo.
+
+Na leitura administrativa local via CSV:
+
+- vinculo unico nao deve ser tratado automaticamente como prova absoluta se houver conflito relevante local;
+- historico multiplo de ids ou divergencia com fato relevante pode marcar o vinculo como `inconclusivo`;
+- a confiabilidade local do vinculo exportado e um sinal administrativo, nao substitui a necessidade de conferir os fatos internos quando houver risco alto.
 
 ### Fluxos de monetizacao suportados hoje
 
@@ -487,6 +557,16 @@ Capacidades atuais:
 - opcao de sincronizar ciclo na leitura;
 - opcao administrativa explicita de aplicar correcao de reconciliacao.
 
+### O que o CSV administrativo de auditoria entrega
+
+- linha por usuario com contexto de `conta` e `franquia`;
+- separacao explicita entre legado (`User.categoria`), contrato local (`ContaMonetizacaoVinculo`) e operacao (`Franquia`);
+- status persistido e status recalculado da franquia;
+- vinculo exibido, nivel de confiabilidade do vinculo e motivo da classificacao;
+- ultimo fato geral, ultimo fato com efeito operacional e ultimo fato relevante de auditoria;
+- flags de price/config local, pendencia perdida, ids entrelacados, historico multiplo e coerencia operacional;
+- severidade final local (`nivel_risco_auditoria`) para triagem administrativa.
+
 ### Regra obrigatoria para futuras monetizacoes
 
 - nao criar trilha de observabilidade separada para pagamento fora do dominio Cleiton;
@@ -588,6 +668,7 @@ Validacao minima recomendada:
    - validar limpeza do upload;
 6. validar telas admin:
    - `/admin/dashboard`
+   - `/admin/dashboard/auditoria-clientes.csv`
    - `/admin/agentes/julia`
    - `/admin/agentes/cleiton`
    - `/admin/agentes/roberto`
@@ -607,6 +688,7 @@ Validacao minima recomendada:
    - presenca do link markdown de upgrade;
 11. validar `PLANOS_UPGRADE_URL` por ambiente;
 12. rodar testes principais:
+   - `tests/test_admin_dashboard_auditoria_csv.py`
    - `tests/test_cleiton_monetizacao_service.py`
    - `tests/test_cleiton_franquia_validacao_admin_service.py`
    - `tests/test_stripe_webhook_route.py`
@@ -629,6 +711,7 @@ Pre-condicao explicita de fechamento:
 - fluxo `/api/webhook/stripe` validado com assinatura correta e replay idempotente;
 - retorno `/contrate-um-plano?checkout=success&session_id=...` validado com `session_id` real e conciliacao positiva;
 - fluxo `/admin/api/cleiton-franquia/<franquia_id>/validacao` validado em leitura e reprocessamento admin;
+- fluxo `/admin/dashboard/auditoria-clientes.csv` validado em leitura, protecao admin, filtros, severidade e download sem efeitos colaterais;
 - painel `/contrate-um-plano` validado com plano pronto e retorno de erro contratual quando plano estiver pendente;
 - trilho Roberto validado (upload, BI, ranking/heatmap e limpeza de upload temporario).
 
@@ -637,6 +720,7 @@ Pre-condicao explicita de fechamento:
 - variaveis de ambiente obrigatorias revisadas por ambiente (`APP_ENV`, `DATABASE_URL`, segredos Stripe, `APP_DATA_DIR`, `CRON_SECRET`);
 - persistencia de dados confirmada para `APP_DATA_DIR` e artefatos temporarios operacionais;
 - observabilidade habilitada para `IaConsumoEvento`, `ProcessingEvent`, `MonetizacaoFato` e pacote admin de validacao;
+- export administrativo de auditoria de clientes validado com base local coerente (`ContaMonetizacaoVinculo`, `MonetizacaoFato`, `Franquia`, `ConfigRegras`);
 - monitoramento de webhook com alarmes para falhas 4xx/5xx e volume anomalo de pendencias de correlacao;
 - procedimento de suporte documentado para reconciliacao e reprocessamento sem mutacao manual fora do trilho oficial.
 
@@ -644,12 +728,15 @@ Pre-condicao explicita de fechamento:
 
 - eventos Stripe sem correlacao inequívoca ficam pendentes sem efeito operacional ate acao admin;
 - fallback interno de ciclo pode ser usado como excecao controlada quando evento nao trouxer ciclo confiavel;
+- o CSV de auditoria continua sendo auditoria financeira local, nao prova externa online em tempo real;
+- vinculo local ainda pode exigir revisao humana quando o proprio historico interno estiver contaminado;
 - warning de biblioteca externa (`flask_session` deprecado) sem impacto funcional imediato na implantacao Stripe/Cleiton.
 
 ### Riscos residuais nao aceitaveis
 
 - qualquer bypass que altere consumo/status sem passar por `Franquia` e camada central Cleiton;
 - qualquer rota paralela para contratacao/webhook/governanca fora dos endpoints oficiais;
+- qualquer export ou rotina admin que trate `User.categoria` isoladamente como prova financeira conclusiva;
 - homologacao declarada sem evidencia de segredo de webhook e validacao de assinatura;
 - deploy sem migrations aplicadas ou sem persistencia operacional configurada.
 
