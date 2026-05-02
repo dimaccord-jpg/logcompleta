@@ -687,16 +687,25 @@ Validacao minima recomendada:
    - presenca do nome amigavel do plano;
    - presenca do link markdown de upgrade;
 11. validar `PLANOS_UPGRADE_URL` por ambiente;
-12. rodar testes principais:
-   - `tests/test_admin_dashboard_auditoria_csv.py`
-   - `tests/test_cleiton_monetizacao_service.py`
-   - `tests/test_cleiton_franquia_validacao_admin_service.py`
-   - `tests/test_stripe_webhook_route.py`
-   - `tests/test_contratacao_stripe_route.py`
-   - `tests/test_roberto_controles.py`
-   - `tests/test_cleiton_upload_billing_service.py`
-   - `tests/test_franquia_operacao_autorizacao_service.py`
-13. rodar suite completa: `python -m pytest -q`.
+12. rodar a suite critica local por dominio:
+   - Stripe/monetizacao: contratacao, guardrails, blockers, upgrade/downgrade e vinculo comercial;
+   - cron seguro: autenticacao por `X-Cron-Secret`, `/cron/executar-cleiton`, `/cron/finance` e `/cron/billing-snapshot`;
+   - franquia/autorizacao: classificacao operacional, bloqueio, degradacao e CTA de upgrade;
+   - billing/auditoria: reconciliacao, apropriacao de billing e export administrativo de auditoria;
+   - Roberto: controles de upload/TTL/BI e rotas principais;
+13. rodar suite completa local: `python -m pytest -q`.
+
+## Politica de Testes
+
+- testes nao fazem parte do deploy de runtime em homologacao ou producao;
+- testes rodam apenas localmente, usando dependencias de desenvolvimento;
+- a suite critica local deve proteger no minimo:
+  - Stripe e monetizacao;
+  - cron seguro;
+  - franquia e autorizacao operacional;
+  - billing, reconciliacao e auditoria;
+- remocao de testes so deve ocorrer com evidencia objetiva de obsolescencia, substituicao ou consolidacao;
+- quando nomes de arquivos mudarem, a documentacao deve priorizar dominios e categorias em vez de listas fixas de arquivos.
 
 ## Homologacao e Deploy
 
@@ -743,7 +752,7 @@ Pre-condicao explicita de fechamento:
 ### Criterio objetivo de encerramento definitivo
 
 - `tests/test_roberto_controles.py` verde sem `PermissionError` de `tmp_path` no ambiente local;
-- suite Stripe/Cleiton verde (`tests/test_cleiton_monetizacao_service.py`, `tests/test_cleiton_franquia_validacao_admin_service.py`, `tests/test_stripe_webhook_route.py`, `tests/test_contratacao_stripe_route.py`);
+- suite critica local verde nos dominios Stripe/monetizacao, cron seguro, franquia/autorizacao e billing/auditoria;
 - suite completa do projeto verde no ambiente local;
 - trilho oficial preservado sem novos endpoints paralelos;
 - documentacao e contrato de ambiente atualizados para refletir estado implantado real.
