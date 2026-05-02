@@ -106,6 +106,13 @@
     const ordemPlanos = { free: 0, starter: 1, pro: 2 };
     let embeddedCheckout = null;
     let confirmacaoPendente = null;
+    let checkoutInFlight = false;
+
+    function setBotoesCheckoutDesabilitados(desabilitado) {
+        botoes.forEach((btn) => {
+            btn.disabled = !!desabilitado;
+        });
+    }
 
     function ehDowngrade(planoDestino) {
         const destino = (planoDestino || "").toLowerCase();
@@ -137,6 +144,11 @@
     }
 
     async function iniciarCheckout(planoCodigo, confirmarDowngrade = false) {
+        if (checkoutInFlight) {
+            return;
+        }
+        checkoutInFlight = true;
+        setBotoesCheckoutDesabilitados(true);
         statusEl.className = "alert alert-info small mb-3";
         statusEl.textContent = "Iniciando jornada de contratacao...";
         try {
@@ -151,6 +163,9 @@
             const payload = await resp.json();
             if (!resp.ok || !payload.ok) {
                 throw new Error(payload.erro || "Falha ao iniciar checkout.");
+            }
+            if (window.LogCompletaPixel && typeof window.LogCompletaPixel.track === "function") {
+                window.LogCompletaPixel.track("InitiateCheckout");
             }
             if (payload.downgrade_agendado) {
                 statusEl.className = "alert alert-success small mb-3";
@@ -186,6 +201,9 @@
         } catch (err) {
             statusEl.className = "alert alert-danger small mb-3";
             statusEl.textContent = err && err.message ? err.message : "Falha ao iniciar checkout.";
+        } finally {
+            checkoutInFlight = false;
+            setBotoesCheckoutDesabilitados(false);
         }
     }
 

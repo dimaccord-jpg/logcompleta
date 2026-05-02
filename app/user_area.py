@@ -142,6 +142,7 @@ def contrate_plano():
     if plano_atual == "free":
         planos_filtrados = [p for p in planos if (p.get("codigo") or "").strip().lower() != "free"]
     checkout_feedback = None
+    pixel_subscribe_event = None
     checkout_flag = (request.args.get("checkout") or "").strip().lower()
     session_id = (request.args.get("session_id") or "").strip()
     session_id_valido = bool(session_id) and "CHECKOUT_SESSION_ID" not in session_id
@@ -166,11 +167,19 @@ def contrate_plano():
                 getattr(current_user, "id", None),
                 resultado,
             )
-            if resultado.get("efeito_operacional_aplicado"):
+            if (
+                resultado.get("efeito_operacional_aplicado")
+                and not resultado.get("replay")
+                and not resultado.get("mudanca_pendente")
+            ):
                 _limpar_contexto_sessao_contratacao_embed()
                 checkout_feedback = {
                     "nivel": "success",
                     "mensagem": "Contratacao confirmada com sucesso. Seu plano pago ja foi refletido no sistema.",
+                }
+                pixel_subscribe_event = {
+                    "event_name": "Subscribe",
+                    "session_id": session_id,
                 }
             elif resultado.get("mudanca_pendente") and resultado.get("plano_pendente"):
                 _limpar_contexto_sessao_contratacao_embed()
@@ -259,6 +268,7 @@ def contrate_plano():
         checkout_feedback=checkout_feedback,
         plano_atual_codigo=plano_atual,
         data_vencimento_atual=data_vencimento_iso,
+        pixel_subscribe_event=pixel_subscribe_event,
     )
 
 
