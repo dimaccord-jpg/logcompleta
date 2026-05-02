@@ -290,6 +290,9 @@ def index():
     )
 
 
+_SEO_CANONICAL_ORIGIN = "https://agentefrete.com.br"
+
+
 @app.route("/sitemap.xml")
 def sitemap_xml():
     noticias_publicadas = (
@@ -301,12 +304,12 @@ def sitemap_xml():
     if noticias_publicadas and noticias_publicadas[0].publicado_em:
         home_lastmod = noticias_publicadas[0].publicado_em.date().isoformat()
 
-    urls = [{"loc": url_for("index", _external=True), "lastmod": home_lastmod}]
+    urls = [{"loc": f"{_SEO_CANONICAL_ORIGIN}/", "lastmod": home_lastmod}]
     for noticia in noticias_publicadas:
         publicado_em = noticia.publicado_em
         urls.append(
             {
-                "loc": url_for("detalhe_noticia", noticia_id=noticia.id, _external=True),
+                "loc": f"{_SEO_CANONICAL_ORIGIN}/noticia/{noticia.id}",
                 "lastmod": publicado_em.date().isoformat() if publicado_em else None,
             }
         )
@@ -317,7 +320,7 @@ def sitemap_xml():
 
 @app.route("/robots.txt")
 def robots_txt():
-    sitemap_url = url_for("sitemap_xml", _external=True)
+    sitemap_url = f"{_SEO_CANONICAL_ORIGIN}/sitemap.xml"
     body = "\n".join(
         [
             "User-agent: *",
