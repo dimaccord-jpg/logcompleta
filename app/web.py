@@ -26,7 +26,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 # 1. Imports do Flask e Extensões Base
-from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify
+from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify, Response
 from flask_migrate import Migrate
 from flask_session import Session
 from flask_login import login_user, login_required, logout_user, current_user
@@ -288,6 +288,62 @@ def index():
         julia_chat_max_history=julia_chat_max_history,
         julia_chat_limits=julia_chat_limits,
     )
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    noticias_publicadas = (
+        NoticiaPortal.query.filter(NoticiaPortal.publicado_em.isnot(None))
+        .order_by(NoticiaPortal.publicado_em.desc())
+        .all()
+    )
+    home_lastmod = None
+    if noticias_publicadas and noticias_publicadas[0].publicado_em:
+        home_lastmod = noticias_publicadas[0].publicado_em.date().isoformat()
+
+    urls = [{"loc": url_for("index", _external=True), "lastmod": home_lastmod}]
+    for noticia in noticias_publicadas:
+        publicado_em = noticia.publicado_em
+        urls.append(
+            {
+                "loc": url_for("detalhe_noticia", noticia_id=noticia.id, _external=True),
+                "lastmod": publicado_em.date().isoformat() if publicado_em else None,
+            }
+        )
+
+    xml_payload = render_template("sitemap.xml", urls=urls)
+    return Response(xml_payload, mimetype="application/xml")
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    sitemap_url = url_for("sitemap_xml", _external=True)
+    body = "\n".join(
+        [
+            "User-agent: *",
+            "Disallow: /admin/",
+            "Disallow: /perfil",
+            "Disallow: /fretes",
+            "Disallow: /contrate-um-plano",
+            "Disallow: /api/",
+            "Disallow: /cron/",
+            "Disallow: /ops/",
+            "Disallow: /health/",
+            "Disallow: /login",
+            "Disallow: /logout",
+            "Disallow: /register",
+            "Disallow: /reset-password/",
+            "Disallow: /request-password-reset",
+            "Disallow: /executar-cleiton",
+            "Disallow: /executar-insight",
+            "Disallow: /stripe",
+            "Disallow: /webhook",
+            "",
+            f"Sitemap: {sitemap_url}",
+            "",
+        ]
+    )
+    return Response(body, mimetype="text/plain")
 
 # --- Login (delegação para auth_services) ---
 @app.route('/login', methods=['GET', 'POST'])
