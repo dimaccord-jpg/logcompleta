@@ -1,4 +1,54 @@
-{% extends "base.html" %} 
+{% extends "base.html" %}
+
+{% set base_url = "https://agentefrete.com.br" %}
+{% if url_imagem_resolvida %}
+  {% if url_imagem_resolvida.startswith('http') %}
+    {% set seo_image = url_imagem_resolvida %}
+  {% elif url_imagem_resolvida.startswith('/') %}
+    {% set seo_image = base_url ~ url_imagem_resolvida %}
+  {% else %}
+    {% set seo_image = base_url ~ '/' ~ url_imagem_resolvida %}
+  {% endif %}
+{% else %}{% set seo_image = "https://agentefrete.com.br/static/img/logo.png" %}{% endif %}
+
+{% block title %}
+{{ noticia.titulo_julia }} | Agentefrete
+{% endblock %}
+
+{% block meta_description %}
+{{ noticia.resumo_julia or noticia.subtitulo or "Notícia sobre logística e transporte rodoviário." }}
+{% endblock %}
+
+{% block canonical %}
+{{ base_url }}{{ request.path }}
+{% endblock %}
+
+{% block og_type %}article{% endblock %}
+
+{% block og_image %}
+{{ seo_image }}
+{% endblock %}
+
+{% block extra_head %}
+<script type="application/ld+json">
+{
+  "@context": {{ "https://schema.org" | tojson }},
+  "@type": {{ "NewsArticle" | tojson }},
+  "headline": {{ noticia.titulo_julia | tojson }},
+  "datePublished": {{ (noticia.publicado_em.isoformat() if noticia.publicado_em else "") | tojson }},
+  "image": [{{ seo_image | tojson }}],
+  "author": {
+    "@type": {{ "Organization" | tojson }},
+    "name": {{ "Agentefrete" | tojson }}
+  },
+  "publisher": {
+    "@type": {{ "Organization" | tojson }},
+    "name": {{ "Agentefrete" | tojson }}
+  },
+  "description": {{ (noticia.resumo_julia or "") | tojson }}
+}
+</script>
+{% endblock %}
 
 {% block content %}
 <div class="container mt-5 mb-5">
