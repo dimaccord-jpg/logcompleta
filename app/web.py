@@ -70,6 +70,8 @@ from app.settings import settings
 from app.env_loader import mask_database_url_for_log, log_database_boot_diagnostics
 
 
+_SESSION_PIXEL_EVENT_LEAD = "pixel_event_lead_once"
+
 
 # Define diretorio_atual para uso em resolve_indices_file_path
 diretorio_atual = os.path.dirname(os.path.abspath(__file__))
@@ -191,6 +193,7 @@ app.config['SESSION_COOKIE_SECURE'] = settings.session_cookie_secure
 app.config['SESSION_COOKIE_HTTPONLY'] = settings.session_cookie_httponly
 app.config['SESSION_COOKIE_SAMESITE'] = settings.session_cookie_samesite
 app.config['PLANOS_UPGRADE_URL'] = settings.planos_upgrade_url
+app.config['FACEBOOK_PIXEL_ID'] = settings.facebook_pixel_id
 
 # Configuração para OAuth em HTTPS com auto-redirecionamento
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.
@@ -217,6 +220,13 @@ REDIRECT_URI = settings.google_redirect_uri
 app.register_blueprint(admin_bp)
 app.register_blueprint(ops_bp)
 app.register_blueprint(user_bp)
+
+@app.context_processor
+def inject_facebook_pixel_context():
+    return {
+        "facebook_pixel_id": (app.config.get("FACEBOOK_PIXEL_ID") or "").strip(),
+        "pixel_event_lead": bool(session.pop(_SESSION_PIXEL_EVENT_LEAD, False)),
+    }
 
 
 @app.before_request
@@ -439,7 +449,7 @@ def google_callback():
         flash('Erro na autenticação: %s' % error, 'danger')
         return redirect(url_for('login'))
     code = request.args.get('code')
-    user, err_msg, needs_profile = handle_google_oauth_callback(
+    user, err_msg, needs_profile, created_new_user = handle_google_oauth_callback(
         code or "",
         state or "",
         session_state or "",
@@ -453,6 +463,8 @@ def google_callback():
         flash(err_msg or 'Erro no login com Google.', 'danger')
         return redirect(url_for('login'))
     login_user(user)
+    if created_new_user:
+        session[_SESSION_PIXEL_EVENT_LEAD] = True
     flash('Login com Google realizado com sucesso.', 'success')
     session.pop('oauth_state', None)
     if state and state in session_states:
@@ -520,6 +532,7 @@ def register():
     if new_user is None:
         flash(error or 'Erro ao cadastrar.', 'danger')
         return redirect(url_for('login'))
+    session[_SESSION_PIXEL_EVENT_LEAD] = True
     flash('Conta criada com sucesso! Faça login.', 'success')
     return redirect(url_for('login'))
 

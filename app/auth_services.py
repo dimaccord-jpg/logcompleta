@@ -349,15 +349,15 @@ def handle_google_oauth_callback(
 ):
     """
     Troca code por token, obtém userinfo, busca/cria usuário.
-    Retorna (user, error_message, needs_profile_completion).
+    Retorna (user, error_message, needs_profile_completion, created_new_user).
     error_message é None em sucesso; needs_profile_completion indica redirect para complete_profile.
     """
     if not state or state != session_state:
         logger.error("State inválido ou não encontrado - proteção CSRF falhada")
-        return None, "Falha na validação de segurança. Tente novamente.", False
+        return None, "Falha na validação de segurança. Tente novamente.", False, False
 
     if not code:
-        return None, "Authorization code não fornecido.", False
+        return None, "Authorization code não fornecido.", False, False
 
     try:
         token_data = {
@@ -370,18 +370,18 @@ def handle_google_oauth_callback(
         token_response = requests.post(token_url, data=token_data, timeout=30)
         if token_response.status_code != 200:
             logger.error("Erro ao obter token: %s", token_response.text)
-            return None, "Não foi possível obter o token de acesso.", False
+            return None, "Não foi possível obter o token de acesso.", False, False
 
         tokens = token_response.json()
         access_token = tokens.get("access_token")
         if not access_token:
-            return None, "Não foi possível obter o token de acesso.", False
+            return None, "Não foi possível obter o token de acesso.", False, False
 
         headers = {"Authorization": f"Bearer {access_token}"}
         userinfo_response = requests.get(userinfo_url, headers=headers, timeout=30)
         if userinfo_response.status_code != 200:
             logger.error("Erro ao obter userinfo: %s", userinfo_response.text)
-            return None, "Não foi possível obter os dados do Google.", False
+            return None, "Não foi possível obter os dados do Google.", False, False
 
         user_data = userinfo_response.json()
         email = _normalize_email(user_data.get("email") or "")
@@ -390,10 +390,11 @@ def handle_google_oauth_callback(
         google_id = (user_data.get("sub") or user_data.get("id") or "").strip() or None
 
         if not email:
-            return None, "Sua conta Google não retornou um e-mail válido.", False
+            return None, "Sua conta Google não retornou um e-mail válido.", False, False
 
         admin_emails = _get_admin_emails()
         user = None
+        created_new_user = False
         if google_id:
             user = User.query.filter_by(oauth_provider="google", oauth_sub=google_id).first()
 
@@ -434,6 +435,7 @@ def handle_google_oauth_callback(
                 franquia_id=franquia.id,
             )
             db.session.add(user)
+            created_new_user = True
         else:
             if not user.oauth_provider:
                 user.oauth_provider = "google"
@@ -452,17 +454,17 @@ def handle_google_oauth_callback(
         # Emergencial: nunca bloquear login OAuth com redirecionamento obrigatório
         # para complete-profile. O perfil pode ser completado manualmente depois.
         needs_profile = False
-        return user, None, needs_profile
+        return user, None, needs_profile, created_new_user
 
     except requests.RequestException as e:
         logger.exception("Erro de rede no callback OAuth: %s", e)
-        return None, f"Erro no login com Google: {e}", False
+        return None, f"Erro no login com Google: {e}", False, False
     except ValueError as e:
         logger.warning("Configuração inválida no onboarding Google: %s", e)
-        return None, str(e), False
+        return None, str(e), False, False
     except Exception as e:
         logger.exception("Erro no google_callback: %s", e)
-        return None, f"Erro no login com Google: {str(e)}", False
+        return None, f"Erro no login com Google: {str(e)}", False, False
 
 
 # --- Perfil e registro ---

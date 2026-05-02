@@ -1,0 +1,92 @@
+{% if facebook_pixel_id %}
+<script>
+(() => {
+    const leadEnabled = {{ (pixel_event_lead or false)|tojson }};
+    const subscribeEvent = {{ (pixel_subscribe_event or {})|tojson }};
+
+    function hasFbq() {
+        return typeof window.fbq === "function";
+    }
+
+    function getStorageSafe() {
+        try {
+            if (typeof window.localStorage !== "undefined") {
+                return window.localStorage;
+            }
+        } catch (err) {
+            return null;
+        }
+        return null;
+    }
+
+    function trackEvent(eventName, params) {
+        if (!eventName || !hasFbq()) {
+            return false;
+        }
+        try {
+            if (params && typeof params === "object" && Object.keys(params).length > 0) {
+                window.fbq("track", eventName, params);
+            } else {
+                window.fbq("track", eventName);
+            }
+            return true;
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function trackEventOnceBySessionId(eventName, sessionId, params) {
+        const normalizedEvent = (eventName || "").trim();
+        const normalizedSession = (sessionId || "").trim();
+        if (!normalizedEvent || !normalizedSession) {
+            return false;
+        }
+
+        const storageKey = "fb_pixel_" + normalizedEvent.toLowerCase() + "_sent_" + normalizedSession;
+        const storage = getStorageSafe();
+
+        if (storage) {
+            try {
+                if (storage.getItem(storageKey) === "1") {
+                    return false;
+                }
+            } catch (err) {
+                // Storage indisponível: segue sem anti-duplicidade persistente.
+            }
+        }
+
+        const sent = trackEvent(normalizedEvent, params);
+        if (!sent) {
+            return false;
+        }
+
+        if (storage) {
+            try {
+                storage.setItem(storageKey, "1");
+            } catch (err) {
+                // Sem storage disponível, mantém execução sem quebra.
+            }
+        }
+        return true;
+    }
+
+    window.LogCompletaPixel = {
+        hasFbq,
+        track: trackEvent,
+        trackOnceBySessionId: trackEventOnceBySessionId,
+    };
+
+    if (leadEnabled) {
+        trackEvent("Lead");
+    }
+
+    if (subscribeEvent && subscribeEvent.session_id) {
+        trackEventOnceBySessionId(
+            subscribeEvent.event_name || "Subscribe",
+            subscribeEvent.session_id,
+            subscribeEvent.params || null,
+        );
+    }
+})();
+</script>
+{% endif %}
