@@ -988,6 +988,8 @@ def analise():
 def detalhe_noticia(noticia_id):
     # Busca a notícia específica no banco pelo ID
     noticia = NoticiaPortal.query.get_or_404(noticia_id)
+    if not noticia.publicado_em:
+        abort(404)
 
     def _resolver_url_imagem(raw_url: str | None) -> str | None:
         """Converte caminhos locais de imagem para URL pública de static com url_for."""
