@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    {% set base_url = "https://agentefrete.com.br" %}
+    {% set base_url = "https://www.agentefrete.com.br" %}
     <meta name="theme-color" content="#0A0A0F">
     <title>
     {% block title %}Agentefrete | Inteligência de Dados para Logística{% endblock %}
@@ -16,7 +16,7 @@
     <meta property="og:description" content="{% block og_description %}{{ self.meta_description()|striptags|trim }}{% endblock %}">
     <meta property="og:url" content="{{ base_url }}{{ request.path }}">
     <meta property="og:type" content="{% block og_type %}website{% endblock %}">
-    <meta property="og:image" content="{% block og_image %}https://agentefrete.com.br/static/img/logo.png{% endblock %}">
+    <meta property="og:image" content="{% block og_image %}https://www.agentefrete.com.br/static/img/logo.png{% endblock %}">
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">

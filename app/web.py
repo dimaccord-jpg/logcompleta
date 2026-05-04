@@ -290,7 +290,7 @@ def index():
     )
 
 
-_SEO_CANONICAL_ORIGIN = "https://agentefrete.com.br"
+_SEO_CANONICAL_ORIGIN = "https://www.agentefrete.com.br"
 
 
 @app.route("/sitemap.xml")
