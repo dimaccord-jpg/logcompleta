@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% set base_url = "https://agentefrete.com.br" %}
+{% set base_url = "https://www.agentefrete.com.br" %}
 {% if url_imagem_resolvida %}
   {% if url_imagem_resolvida.startswith('http') %}
     {% set seo_image = url_imagem_resolvida %}
@@ -9,7 +9,7 @@
   {% else %}
     {% set seo_image = base_url ~ '/' ~ url_imagem_resolvida %}
   {% endif %}
-{% else %}{% set seo_image = "https://agentefrete.com.br/static/img/logo.png" %}{% endif %}
+{% else %}{% set seo_image = base_url ~ "/static/img/logo.png" %}{% endif %}
 
 {% block title %}
 {{ noticia.titulo_julia }} | Agentefrete
