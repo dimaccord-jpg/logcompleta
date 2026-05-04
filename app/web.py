@@ -305,6 +305,12 @@ def sitemap_xml():
         home_lastmod = noticias_publicadas[0].publicado_em.date().isoformat()
 
     urls = [{"loc": f"{_SEO_CANONICAL_ORIGIN}/", "lastmod": home_lastmod}]
+    for path in (
+        "/fretes",
+    ):
+        urls.append(
+            {"loc": f"{_SEO_CANONICAL_ORIGIN}{path}", "lastmod": home_lastmod}
+        )
     for noticia in noticias_publicadas:
         publicado_em = noticia.publicado_em
         urls.append(
@@ -326,7 +332,6 @@ def robots_txt():
             "User-agent: *",
             "Disallow: /admin/",
             "Disallow: /perfil",
-            "Disallow: /fretes",
             "Disallow: /contrate-um-plano",
             "Disallow: /api/",
             "Disallow: /cron/",
