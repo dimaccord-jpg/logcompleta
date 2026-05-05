@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 
+{% block title %}Análise de Fretes com Inteligência Artificial | Agentefrete{% endblock %}
+
+{% block meta_description %}Analise custos de frete, identifique padrões logísticos e visualize tendências com inteligência de dados aplicada ao transporte.{% endblock %}
+
+{% block og_title %}Análise de Fretes com Inteligência Artificial | Agentefrete{% endblock %}
+
+{% block og_description %}Analise custos de frete, identifique padrões logísticos e visualize tendências com inteligência de dados aplicada ao transporte.{% endblock %}
+
 {% block content %}
 <style>
   :root{
@@ -44,6 +52,56 @@
 
 <div class="container mt-4 ri-page">
   {% set pode_ver_consulta_frete_real = current_user.is_authenticated and (current_user.is_admin is true) %}
+  <section class="ri-card shadow-sm mb-4">
+    <div class="card-body p-4 p-lg-5">
+      <h1 class="fw-bold mb-3">Análise de Fretes com Inteligência Artificial</h1>
+      <p class="text-muted mb-3">
+        A análise de fretes é uma etapa estratégica para empresas que precisam controlar custos logísticos, entender a
+        eficiência das rotas e tomar decisões mais seguras no transporte de cargas. Em vez de avaliar cada operação de
+        forma isolada, a leitura histórica dos fretes permite enxergar tendências de preço, diferenças entre origens e
+        destinos, comportamento por faixa de peso e oscilações que afetam a rentabilidade da operação.
+      </p>
+      <p class="text-muted mb-3">
+        Com inteligência de dados aplicada à logística, esse processo deixa de depender apenas de percepção manual.
+        Ao consolidar históricos de frete e organizar os registros em uma visão analítica, fica mais fácil identificar
+        padrões relevantes, comparar desempenho entre rotas e reconhecer movimentos de alta ou queda nos custos. Isso
+        ajuda transportadores, embarcadores, operadores logísticos e gestores de supply chain a agir com mais contexto,
+        reduzindo decisões baseadas em suposição.
+      </p>
+
+      <div class="row g-4 mt-1">
+        <div class="col-12 col-lg-7">
+          <h2 class="h5 fw-bold mb-2">Como o histórico de fretes ajuda na tomada de decisão</h2>
+          <p class="text-muted mb-3">
+            Quando o histórico operacional é analisado com consistência, ele revela mais do que um preço médio. Ele
+            mostra recorrência de custos, sazonalidade, variações por região, estabilidade das rotas e sinais de
+            tendência que podem orientar negociações, orçamento logístico e planejamento comercial. Esse tipo de leitura
+            cria uma base mais sólida para avaliar viabilidade, revisar contratos e priorizar movimentos com melhor
+            margem.
+          </p>
+          <p class="text-muted mb-0">
+            No Agentefrete, a proposta é transformar dados de transporte em inteligência prática. A página de fretes
+            reúne uma visão pública e indexável sobre o uso de dados históricos, combinando análise, contexto logístico
+            e recursos de apoio para quem busca entender custos, padrões e tendências do transporte rodoviário de forma
+            mais objetiva.
+          </p>
+        </div>
+        <div class="col-12 col-lg-5">
+          <div class="ri-surface p-4 h-100">
+            <h2 class="h5 fw-bold mb-3">Benefícios da análise de fretes</h2>
+            <ul class="mb-0 text-muted">
+              <li>Identificar padrões de custo por rota, origem e destino.</li>
+              <li>Visualizar tendências logísticas com base em dados históricos.</li>
+              <li>Apoiar negociações com mais evidência operacional.</li>
+              <li>Reduzir incerteza na avaliação de viabilidade de transporte.</li>
+              <li>Tomar decisões com mais contexto sobre eficiência logística.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Header -->
   <div class="row align-items-start mb-4">
     <div class="col-12">
@@ -200,7 +258,7 @@
               </div>
             </div>
             {% endif %}
-          </div>        
+          </div>
         </div>
       </div>
     </div>
@@ -224,7 +282,7 @@
   // Capturamos apenas o valor numérico da Média Bruta vindo do backend
   const vBruto = Number("{{ resultado.media_bruta if resultado else 0 }}");
   const switchBtn = document.getElementById('switchUnidade');
-  
+
   if (!switchBtn) return;
 
   switchBtn.addEventListener('change', function() {
