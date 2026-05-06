@@ -1,6 +1,7 @@
 {% if facebook_pixel_id %}
 <script>
 (() => {
+    const completeRegistrationEnabled = {{ (pixel_event_complete_registration or false)|tojson }};
     const leadEnabled = {{ (pixel_event_lead or false)|tojson }};
     const subscribeEvent = {{ (pixel_subscribe_event or {})|tojson }};
 
@@ -76,13 +77,17 @@
         trackOnceBySessionId: trackEventOnceBySessionId,
     };
 
+    if (completeRegistrationEnabled) {
+        trackEvent("CompleteRegistration");
+    }
+
     if (leadEnabled) {
         trackEvent("Lead");
     }
 
     if (subscribeEvent && subscribeEvent.session_id) {
         trackEventOnceBySessionId(
-            subscribeEvent.event_name || "Subscribe",
+            subscribeEvent.event_name || "Purchase",
             subscribeEvent.session_id,
             subscribeEvent.params || null,
         );

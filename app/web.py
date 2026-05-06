@@ -70,6 +70,7 @@ from app.settings import settings
 from app.env_loader import mask_database_url_for_log, log_database_boot_diagnostics
 
 
+_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION = "pixel_event_complete_registration_once"
 _SESSION_PIXEL_EVENT_LEAD = "pixel_event_lead_once"
 
 
@@ -225,6 +226,9 @@ app.register_blueprint(user_bp)
 def inject_facebook_pixel_context():
     return {
         "facebook_pixel_id": (app.config.get("FACEBOOK_PIXEL_ID") or "").strip(),
+        "pixel_event_complete_registration": bool(
+            session.pop(_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION, False)
+        ),
         "pixel_event_lead": bool(session.pop(_SESSION_PIXEL_EVENT_LEAD, False)),
     }
 
@@ -528,7 +532,7 @@ def google_callback():
         return redirect(url_for('login'))
     login_user(user)
     if created_new_user:
-        session[_SESSION_PIXEL_EVENT_LEAD] = True
+        session[_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION] = True
     flash('Login com Google realizado com sucesso.', 'success')
     session.pop('oauth_state', None)
     if state and state in session_states:
@@ -567,6 +571,8 @@ def complete_profile():
         flash(message, 'success' if success else 'danger')
         if not success:
             return redirect(url_for('complete_profile'))
+        if accept_terms:
+            session[_SESSION_PIXEL_EVENT_LEAD] = True
         session.pop('pending_profile_completion', None)
         if user_is_admin(user):
             return redirect(url_for('admin.admin_dashboard'))
@@ -596,7 +602,7 @@ def register():
     if new_user is None:
         flash(error or 'Erro ao cadastrar.', 'danger')
         return redirect(url_for('login'))
-    session[_SESSION_PIXEL_EVENT_LEAD] = True
+    session[_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION] = True
     flash('Conta criada com sucesso! Faça login.', 'success')
     return redirect(url_for('login'))
 

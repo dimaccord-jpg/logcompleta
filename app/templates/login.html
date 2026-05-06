@@ -132,7 +132,7 @@
                                 <input class="form-check-input" type="checkbox" value="1" id="accept_terms" name="accept_terms" required>
                                 <label class="form-check-label small" for="accept_terms">
                                     Li e aceito os
-                                    {% if active_term %}
+                                    {% if active_term and active_term.filename %}
                                     <a href="{{ url_for('static', filename='terms/' + active_term.filename) }}" target="_blank" rel="noopener noreferrer">Termos de Uso</a>.
                                     {% else %}
                                     Termos de Uso.

@@ -38,17 +38,38 @@ def ensure_terms_dir_exists(app=None):
     return terms_dir
 
 
+def _term_file_exists(filename: str | None) -> bool:
+    """Valida se o PDF do termo existe fisicamente em app/static/terms/."""
+    nome = (filename or "").strip()
+    if not nome:
+        return False
+    terms_dir = os.path.abspath(get_terms_upload_dir())
+    absolute_path = os.path.abspath(os.path.join(terms_dir, nome))
+    if os.path.commonpath([terms_dir, absolute_path]) != terms_dir:
+        return False
+    return os.path.isfile(absolute_path)
+
+
 def get_active_term():
     """
     Retorna o registro TermsOfUse ativo (is_active=True) ou None.
     Usado em templates e rotas para link dinâmico ao PDF vigente.
     """
     try:
-        return (
+        active_term = (
             TermsOfUse.query.filter_by(is_active=True)
             .order_by(TermsOfUse.upload_date.desc())
             .first()
         )
+        if not active_term:
+            return None
+        if not _term_file_exists(active_term.filename):
+            logger.warning(
+                "Termo ativo inconsistente no banco (arquivo ausente): %s",
+                active_term.filename,
+            )
+            return None
+        return active_term
     except SQLAlchemyError as exc:
         logger.exception("Falha ao consultar termo ativo: %s", exc)
         db.session.rollback()
