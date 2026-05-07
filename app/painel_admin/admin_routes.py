@@ -32,6 +32,7 @@ from app.infra import (
 )
 from app.consumo_identidade import capture_consumo_identidade_for_background
 from app.terms_services import get_active_term
+from app.privacy_policy_services import get_active_privacy_policy
 from app.finance import (
     atualizar_indices,
     configurar_finance_frequencia_horas,
@@ -47,6 +48,7 @@ from app.services import serie_service
 from app.services import import_service
 from app.services import plano_service
 from app.services import termo_service
+from app.services import privacy_policy_service
 from app.services import auditoria_service
 from app.services import user_admin_control_service
 from app.services import user_plan_control_service
@@ -727,11 +729,13 @@ def gestao_planos():
         return "Acesso Negado", 403
     config_atual = plano_service.obter_config_planos()
     active_term = get_active_term()
+    active_privacy_policy = get_active_privacy_policy()
     return render_template(
         "planos.html",
         config=config_atual,
         planos_saas=config_atual["planos_saas"],
         active_term=active_term,
+        active_privacy_policy=active_privacy_policy,
         freemium_trial_dias=config_atual["freemium_trial_dias"],
     )
 
@@ -896,6 +900,49 @@ def planos_termos_upload():
     except Exception as e:
         _log.exception("Erro ao fazer upload do termo de uso: %s", e)
         flash(f"Erro ao enviar termo de uso: {str(e)}", "danger")
+    return redirect(url_for("admin.gestao_planos"))
+
+
+@admin_bp.route("/planos/privacy-policy/upload", methods=["POST"])
+@login_required
+def planos_privacy_policy_upload():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    if "privacy_policy_pdf" not in request.files:
+        flash("Selecione um arquivo PDF para enviar.", "danger")
+        return redirect(url_for("admin.gestao_planos"))
+    file = request.files["privacy_policy_pdf"]
+    if not file or not file.filename:
+        flash("Nenhum arquivo selecionado.", "warning")
+        return redirect(url_for("admin.gestao_planos"))
+    if not privacy_policy_service.extensao_privacy_policy_permitida(file.filename):
+        flash(
+            "Apenas arquivos .pdf são permitidos para a Política de Privacidade.",
+            "danger",
+        )
+        return redirect(url_for("admin.gestao_planos"))
+    try:
+        _, sent, failed, notification_mode = privacy_policy_service.processar_upload_privacy_policy(
+            current_app,
+            file,
+            uploaded_by_user_id=getattr(current_user, "id", None),
+        )
+        if notification_mode == "async":
+            mensagem = (
+                "Política de Privacidade atualizada com sucesso. "
+                "Notificações operacionais agendadas em background."
+            )
+        else:
+            mensagem = (
+                "Política de Privacidade atualizada com sucesso. "
+                f"Notificações enviadas: {sent}."
+            )
+            if failed:
+                mensagem += f" Falhas: {failed}."
+        flash(mensagem, "success")
+    except Exception as e:
+        _log.exception("Erro ao fazer upload da Política de Privacidade: %s", e)
+        flash(f"Erro ao enviar Política de Privacidade: {str(e)}", "danger")
     return redirect(url_for("admin.gestao_planos"))
 
 

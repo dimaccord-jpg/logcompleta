@@ -120,6 +120,27 @@ class TermsOfUse(db.Model):
     is_active = db.Column(db.Boolean, default=True, index=True)
 
 
+class PrivacyPolicy(db.Model):
+    """Política de Privacidade vigente: PDF em app/static/privacy_policies/, com histórico."""
+
+    __tablename__ = "privacy_policy"
+
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    original_filename = db.Column(db.String(255), nullable=True)
+    upload_date = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, index=True, nullable=False)
+    uploaded_by_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+    file_size_bytes = db.Column(db.Integer, nullable=False, default=0)
+    mime_type = db.Column(db.String(120), nullable=True)
+
+    uploaded_by = db.relationship(
+        "User",
+        foreign_keys=[uploaded_by_user_id],
+        backref=db.backref("privacy_policies_uploaded", lazy="dynamic"),
+    )
+
+
 class FreteReal(db.Model):
     # Alterado para 'historico' para separar do banco de cidades
     __tablename__ = 'frete_real'
