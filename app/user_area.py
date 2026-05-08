@@ -178,7 +178,7 @@ def contrate_plano():
                     "mensagem": "Contratacao confirmada com sucesso. Seu plano pago ja foi refletido no sistema.",
                 }
                 pixel_subscribe_event = {
-                    "event_name": "Subscribe",
+                    "event_name": "Purchase",
                     "session_id": session_id,
                 }
             elif resultado.get("mudanca_pendente") and resultado.get("plano_pendente"):

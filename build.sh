@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # exit on error
 set -o errexit
 
@@ -26,6 +27,3 @@ echo "ERRO: APP_ENV inválido: ${APP_ENV}. Valores aceitos: dev|homolog|prod"
 exit 1
 ;;
 esac
-
-gunicorn --config gunicorn_config.py app.web:app
-

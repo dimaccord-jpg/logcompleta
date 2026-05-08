@@ -1,0 +1,138 @@
+services:
+  # Ajuste "name" para os IDs reais dos seus serviços no Render, se já existirem.
+  # Esta versão evita segredos em git e padroniza o deploy para usar build.sh/start.sh.
+  - type: web
+    name: logcompleta-web-homolog
+    env: python
+    branch: homolog
+    autoDeploy: true
+    buildCommand: bash ./build.sh
+    startCommand: bash ./start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: homolog
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: APP_DATA_DIR
+        sync: false
+      - key: INDICES_FILE_PATH
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+      - key: PLANOS_UPGRADE_URL
+        sync: false
+      - key: OPS_TOKEN
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: MAIL_DEFAULT_SENDER
+        sync: false
+      - key: MAIL_USERNAME
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        sync: false
+      - key: STRIPE_API_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_SUCCESS_URL
+        sync: false
+      - key: STRIPE_CANCEL_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_ROBERTO
+        sync: false
+      - key: GUNICORN_TIMEOUT_SECONDS
+        sync: false
+      - key: GUNICORN_GRACEFUL_TIMEOUT_SECONDS
+        sync: false
+      - key: GUNICORN_KEEPALIVE_SECONDS
+        sync: false
+
+  - type: web
+    name: logcompleta-web-prod
+    env: python
+    branch: main
+    autoDeploy: false
+    buildCommand: bash ./build.sh
+    startCommand: bash ./start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: APP_DATA_DIR
+        sync: false
+      - key: INDICES_FILE_PATH
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+      - key: PLANOS_UPGRADE_URL
+        sync: false
+      - key: OPS_TOKEN
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: MAIL_DEFAULT_SENDER
+        sync: false
+      - key: MAIL_USERNAME
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        sync: false
+      - key: STRIPE_API_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_SUCCESS_URL
+        sync: false
+      - key: STRIPE_CANCEL_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_ROBERTO
+        sync: false
+      - key: GUNICORN_TIMEOUT_SECONDS
+        sync: false
+      - key: GUNICORN_GRACEFUL_TIMEOUT_SECONDS
+        sync: false
+      - key: GUNICORN_KEEPALIVE_SECONDS
+        sync: false

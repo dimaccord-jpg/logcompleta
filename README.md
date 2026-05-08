@@ -724,6 +724,43 @@ Pre-condicao explicita de fechamento:
 - painel `/contrate-um-plano` validado com plano pronto e retorno de erro contratual quando plano estiver pendente;
 - trilho Roberto validado (upload, BI, ranking/heatmap e limpeza de upload temporario).
 
+### Comando de start com migration obrigatoria
+
+Para evitar subir aplicacao com schema defasado (ex.: tabela nova ausente), o start do servico web deve executar migration antes do Gunicorn.
+
+- Build Command (Render): `bash ./build.sh`
+- Start Command (Render): `bash ./start.sh`
+- Infra versionada: `render.yaml` na raiz (homolog + prod)
+
+Fluxo do `start.sh`:
+
+1. `python -m flask --app app.web db upgrade`
+2. `gunicorn --config gunicorn_config.py app.web:app`
+
+Regras operacionais:
+
+- `build.sh` nao pode subir servidor web;
+- segredos (`DATABASE_URL`, `SECRET_KEY`, Stripe, Resend, OAuth, tokens) nao devem ser versionados;
+- no Render, manter essas variaveis no painel com `sync: false` no `render.yaml`.
+
+Validacao minima de startup no deploy:
+
+1. logs mostram `db upgrade` antes do `gunicorn`;
+2. `python -m flask --app app.web db current` retorna revisao esperada;
+3. `/admin/planos` abre sem erro de tabela;
+4. `/politica-de-privacidade` responde (404 sem politica ativa e comportamento esperado).
+
+Checklist operacional para homologacao/producao:
+
+1. validar `render.yaml` versionado;
+2. conferir env vars por ambiente no Render (homolog x prod);
+3. deploy em homolog;
+4. validar logs e schema;
+5. validar `/admin/planos` e upload da politica;
+6. validar trilho de termo sem regressao;
+7. validar cron protegido;
+8. promover para producao e repetir validacoes criticas.
+
 ### Checklist de prontidao para producao
 
 - variaveis de ambiente obrigatorias revisadas por ambiente (`APP_ENV`, `DATABASE_URL`, segredos Stripe, `APP_DATA_DIR`, `CRON_SECRET`);

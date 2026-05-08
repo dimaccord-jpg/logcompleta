@@ -200,6 +200,44 @@
         </div>
     </div>
 
+    <div class="card border-0 shadow-sm mb-5 border-start border-4 border-info">
+        <div class="card-header bg-white fw-bold py-3">
+            <i class="bi bi-shield-lock me-2 text-info"></i>Política de Privacidade
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Envie um PDF para ser a política vigente. A política anterior será desativada automaticamente e os usuários receberão comunicação operacional/legal.
+            </p>
+            {% if active_privacy_policy %}
+            <p class="small mb-1">
+                <strong>Política vigente:</strong>
+                {{ active_privacy_policy.original_filename or active_privacy_policy.filename }}
+            </p>
+            <p class="small mb-3">
+                <strong>Upload:</strong>
+                {{ active_privacy_policy.upload_date.strftime('%d/%m/%Y %H:%M') if active_privacy_policy.upload_date else '—' }}
+                |
+                <a href="{{ url_for('privacy_policy') }}" target="_blank" rel="noopener noreferrer">Abrir política atual</a>
+            </p>
+            {% else %}
+            <p class="small mb-3 text-muted">
+                Nenhuma Política de Privacidade ativa no momento.
+            </p>
+            {% endif %}
+            <form action="{{ url_for('admin.planos_privacy_policy_upload') }}" method="POST" enctype="multipart/form-data">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">Novo PDF (apenas .pdf)</label>
+                        <input type="file" name="privacy_policy_pdf" class="form-control" accept=".pdf" required>
+                    </div>
+                    <div class="col-md-4">
+                        <button type="submit" class="btn btn-info text-white w-100">Enviar e ativar política</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div class="card border-0 shadow-sm bg-light">
         <div class="card-header bg-white fw-bold py-3">
             <i class="bi bi-megaphone-fill text-danger me-2"></i>Campanhas de Marketing & Up-selling

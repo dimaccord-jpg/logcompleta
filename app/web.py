@@ -26,10 +26,11 @@ from pathlib import Path
 from sqlalchemy import text
 
 # 1. Imports do Flask e Extensões Base
-from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify, Response
+from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify, Response, send_file, send_from_directory
 from flask_migrate import Migrate
 from flask_session import Session
 from flask_login import login_user, login_required, logout_user, current_user
+from werkzeug.exceptions import NotFound
 from app.extensions import db, login_manager
 from app.painel_admin.admin_routes import admin_bp
 from app.ops_routes import ops_bp
@@ -70,6 +71,7 @@ from app.settings import settings
 from app.env_loader import mask_database_url_for_log, log_database_boot_diagnostics
 
 
+_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION = "pixel_event_complete_registration_once"
 _SESSION_PIXEL_EVENT_LEAD = "pixel_event_lead_once"
 
 
@@ -225,6 +227,9 @@ app.register_blueprint(user_bp)
 def inject_facebook_pixel_context():
     return {
         "facebook_pixel_id": (app.config.get("FACEBOOK_PIXEL_ID") or "").strip(),
+        "pixel_event_complete_registration": bool(
+            session.pop(_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION, False)
+        ),
         "pixel_event_lead": bool(session.pop(_SESSION_PIXEL_EVENT_LEAD, False)),
     }
 
@@ -288,6 +293,32 @@ def index():
         julia_chat_max_history=julia_chat_max_history,
         julia_chat_limits=julia_chat_limits,
     )
+
+
+@app.route("/politica-de-privacidade", methods=["GET"])
+def privacy_policy():
+    from app.privacy_policy_services import (
+        get_active_privacy_policy,
+        get_privacy_policy_upload_dir,
+    )
+
+    active_policy = get_active_privacy_policy()
+    if not active_policy:
+        return "Política de Privacidade não encontrada.", 404
+
+    try:
+        return send_from_directory(
+            get_privacy_policy_upload_dir(),
+            active_policy.filename,
+            mimetype="application/pdf",
+            as_attachment=False,
+        )
+    except NotFound:
+        logging.warning(
+            "Arquivo da política ativa não encontrado em disco: %s",
+            active_policy.filename,
+        )
+        return "Política de Privacidade não encontrada.", 404
 
 
 _SEO_CANONICAL_ORIGIN = "https://www.agentefrete.com.br"
@@ -528,7 +559,7 @@ def google_callback():
         return redirect(url_for('login'))
     login_user(user)
     if created_new_user:
-        session[_SESSION_PIXEL_EVENT_LEAD] = True
+        session[_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION] = True
     flash('Login com Google realizado com sucesso.', 'success')
     session.pop('oauth_state', None)
     if state and state in session_states:
@@ -567,6 +598,8 @@ def complete_profile():
         flash(message, 'success' if success else 'danger')
         if not success:
             return redirect(url_for('complete_profile'))
+        if accept_terms:
+            session[_SESSION_PIXEL_EVENT_LEAD] = True
         session.pop('pending_profile_completion', None)
         if user_is_admin(user):
             return redirect(url_for('admin.admin_dashboard'))
@@ -596,7 +629,7 @@ def register():
     if new_user is None:
         flash(error or 'Erro ao cadastrar.', 'danger')
         return redirect(url_for('login'))
-    session[_SESSION_PIXEL_EVENT_LEAD] = True
+    session[_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION] = True
     flash('Conta criada com sucesso! Faça login.', 'success')
     return redirect(url_for('login'))
 
@@ -608,6 +641,7 @@ def logout():
 # --- ROTAS DE INTELIGÊNCIA (CONECTADAS AO BRAIN) ---
 
 @app.route('/fretes', methods=['GET', 'POST'])
+@login_required
 def fretes():
     indices = _load_indices_payload()
 
@@ -646,6 +680,21 @@ def fretes():
         resultado=resultado,
         roberto_chat_limits=roberto_chat_limits,
         roberto_chat_max_history=roberto_chat_max_history,
+    )
+
+
+@app.route('/fretes/template', methods=['GET'])
+@login_required
+def fretes_template_download():
+    template_path = Path(app.root_path) / 'protected_files' / 'templates' / 'template_fretes.xlsx'
+    if not template_path.exists() or not template_path.is_file():
+        logger.warning("Template de fretes não encontrado em %s", template_path)
+        return "Arquivo de modelo indisponível no momento.", 404
+    return send_file(
+        template_path,
+        as_attachment=True,
+        download_name='template_fretes.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
 
 

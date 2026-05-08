@@ -108,6 +108,39 @@ Equipe Agentefrete
     send_email(to_email=to_email, subject=subject, html=html, text=text)
 
 
+def send_privacy_policy_updated_notification(
+    user_email: str,
+    user_name: str,
+    policy_url: str,
+    upload_date,
+) -> None:
+    """Notifica o usuário sobre atualização da Política de Privacidade."""
+    data_fmt = (
+        upload_date.strftime("%d/%m/%Y %H:%M")
+        if hasattr(upload_date, "strftime")
+        else str(upload_date or "N/A")
+    )
+    subject = "Atualização da Política de Privacidade - Agentefrete"
+    text = f"""Olá {user_name},
+
+Informamos que a Política de Privacidade da plataforma Agentefrete foi atualizada em {data_fmt}.
+
+Esta é uma comunicação operacional/legal. Leia a versão vigente no link abaixo:
+{policy_url}
+
+Atenciosamente,
+Equipe Agentefrete
+"""
+    html = f"""
+<p>Olá {user_name},</p>
+<p>Informamos que a Política de Privacidade da plataforma Agentefrete foi atualizada em <strong>{data_fmt}</strong>.</p>
+<p>Esta é uma comunicação operacional/legal. Leia a versão vigente no link abaixo:</p>
+<p><a href="{policy_url}">Acessar Política de Privacidade vigente</a></p>
+<p>Atenciosamente,<br>Equipe Agentefrete</p>
+""".strip()
+    send_email(to_email=user_email, subject=subject, html=html, text=text)
+
+
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
