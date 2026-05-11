@@ -448,3 +448,122 @@ header.bg-light, header.border-bottom { background: var(--af-bg-card) !important
     margin-left: 0; 
   }
 }
+
+/* 15. MODAL DE DOWNGRADE (encapsulado) */
+.af-downgrade-modal .modal-dialog {
+  max-width: 640px;
+}
+
+.af-downgrade-modal .modal-content,
+.af-downgrade-modal__content {
+  background: linear-gradient(160deg, var(--af-bg-card), var(--af-bg-elevated)) !important;
+  border: 1px solid var(--af-border-hover) !important;
+  border-radius: var(--af-radius-lg) !important;
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 191, 255, 0.12) !important;
+  color: var(--af-text-secondary) !important;
+  overflow: hidden;
+}
+
+.af-downgrade-modal .modal-header {
+  border-bottom: 1px solid var(--af-border) !important;
+  background: rgba(0, 0, 0, 0.25) !important;
+  padding: 1rem 1.25rem;
+}
+
+.af-downgrade-modal .modal-title {
+  color: var(--af-text-primary) !important;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.af-downgrade-modal .modal-body {
+  padding: 1.1rem 1.25rem;
+}
+
+.af-downgrade-modal__message {
+  white-space: pre-line;
+  color: var(--af-text-secondary) !important;
+  line-height: 1.65;
+  font-size: 0.96rem;
+}
+
+.af-downgrade-modal .modal-footer {
+  border-top: 1px solid var(--af-border) !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+  gap: 0.55rem;
+  padding: 1rem 1.25rem 1.15rem;
+}
+
+.af-downgrade-modal__cancel,
+.af-downgrade-modal__confirm {
+  border-radius: var(--af-radius-md) !important;
+  font-weight: 600;
+  min-height: 42px;
+  padding: 0.55rem 1rem;
+}
+
+.af-downgrade-modal__cancel {
+  background: transparent !important;
+  border: 1px solid var(--af-border-hover) !important;
+  color: var(--af-text-primary) !important;
+}
+
+.af-downgrade-modal__cancel:hover {
+  background: var(--af-cyan-glow) !important;
+  border-color: var(--af-cyan) !important;
+}
+
+.af-downgrade-modal__confirm {
+  background: linear-gradient(135deg, rgba(255, 77, 106, 0.9), #d93c55) !important;
+  border: 1px solid rgba(255, 77, 106, 0.75) !important;
+  color: #fff !important;
+  box-shadow: 0 8px 20px rgba(255, 77, 106, 0.22) !important;
+}
+
+.af-downgrade-modal__confirm:hover {
+  filter: brightness(1.06);
+}
+
+.af-downgrade-modal .btn:focus-visible,
+.af-downgrade-modal .btn-close:focus-visible {
+  outline: 2px solid var(--af-cyan) !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px var(--af-cyan-glow) !important;
+}
+
+body.af-downgrade-modal-open .modal-backdrop.show {
+  background: rgba(4, 8, 18, 0.82);
+}
+
+@media (max-width: 575.98px) {
+  .af-downgrade-modal .modal-dialog {
+    margin: 0.75rem;
+  }
+
+  .af-downgrade-modal .modal-header,
+  .af-downgrade-modal .modal-body,
+  .af-downgrade-modal .modal-footer {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .af-downgrade-modal .modal-footer .btn {
+    width: 100%;
+  }
+}
+
+.af-terms-check .form-check-label {
+  display: inline;
+}
+
+.af-terms-link {
+  color: var(--af-cyan) !important;
+  text-decoration: underline !important;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+
+.af-terms-link:hover,
+.af-terms-link:focus-visible {
+  color: var(--af-cyan-bright) !important;
+}

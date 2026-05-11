@@ -47,73 +47,136 @@
     border-radius: 1rem;
   }
   .extra-small{ font-size: .75rem; }
-  .upload-only-view .roberto-bi{ margin-top: .75rem !important; }
+  .ri-hero{
+    background: linear-gradient(135deg, #ffffff 0%, #f5f9ff 100%);
+    border: 1px solid rgba(13,110,253,.12);
+  }
+  .ri-operational-stack .roberto-bi{
+    margin-top: 0 !important;
+    margin-bottom: 2rem !important;
+  }
+  .ri-seo-content p{
+    line-height: 1.65;
+  }
+  .ri-seo-content{
+    background: linear-gradient(180deg, rgba(8,15,28,.92) 0%, rgba(10,18,34,.88) 100%);
+    border-color: rgba(115,149,197,.2);
+  }
+  .ri-seo-intro{
+    max-width: 860px;
+  }
+  .ri-seo-preview{
+    color: rgba(228,237,252,.92) !important;
+    padding-left: 1.1rem;
+    margin-bottom: 0;
+  }
+  .ri-seo-preview li + li{
+    margin-top: .35rem;
+  }
+  .ri-seo-disclosure{
+    margin-top: 1rem;
+    border-top: 1px solid rgba(125,159,214,.28);
+    padding-top: 1rem;
+  }
+  .ri-seo-summary{
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: .55rem;
+    cursor: pointer;
+    border: 1px solid rgba(125,159,214,.35);
+    border-radius: 999px;
+    padding: .45rem .95rem;
+    color: #eaf2ff;
+    background: rgba(24,38,66,.6);
+    user-select: none;
+    transition: background-color .2s ease, border-color .2s ease;
+  }
+  .ri-seo-summary:hover{
+    background: rgba(31,49,84,.74);
+    border-color: rgba(154,188,242,.55);
+  }
+  .ri-seo-summary::-webkit-details-marker{
+    display: none;
+  }
+  .ri-seo-summary::before{
+    content: "\F282";
+    font-family: bootstrap-icons;
+    font-size: .85rem;
+  }
+  .ri-seo-disclosure[open] .ri-seo-summary::before{
+    content: "\F286";
+  }
+  .ri-seo-summary-label-close{
+    display: none;
+  }
+  .ri-seo-disclosure[open] .ri-seo-summary-label-open{
+    display: none;
+  }
+  .ri-seo-disclosure[open] .ri-seo-summary-label-close{
+    display: inline;
+  }
+  .ri-seo-expanded{
+    margin-top: 1rem;
+  }
+  .ri-seo-content h2,
+  .ri-seo-content h3{
+    color: #f4f8ff;
+  }
+  .ri-seo-content .text-muted{
+    color: rgba(223,234,250,.88) !important;
+  }
+  .ri-seo-benefits{
+    background: linear-gradient(180deg, rgba(20,32,56,.94) 0%, rgba(17,28,48,.9) 100%);
+    border: 1px solid rgba(125,159,214,.32);
+    box-shadow: 0 14px 36px rgba(3,9,20,.28);
+  }
+  .ri-seo-benefits h3{
+    color: #f4f8ff;
+  }
+  .ri-seo-benefits ul{
+    color: rgba(228,237,252,.92) !important;
+    padding-left: 1.1rem;
+  }
+  .ri-seo-benefits li + li{
+    margin-top: .45rem;
+  }
+  .ri-page{
+    padding-bottom: 4.5rem;
+  }
+  @media (max-width: 991.98px){
+    .ri-page{
+      padding-bottom: 5.5rem;
+    }
+  }
 </style>
 
 <div class="container mt-4 ri-page">
   {% set pode_ver_consulta_frete_real = current_user.is_authenticated and (current_user.is_admin is true) %}
-  <section class="ri-card shadow-sm mb-4">
+  <section class="ri-card ri-hero shadow-sm mb-4">
     <div class="card-body p-4 p-lg-5">
-      <h1 class="fw-bold mb-3">Análise de Fretes com Inteligência Artificial</h1>
-      <p class="text-muted mb-3">
-        A análise de fretes é uma etapa estratégica para empresas que precisam controlar custos logísticos, entender a
-        eficiência das rotas e tomar decisões mais seguras no transporte de cargas. Em vez de avaliar cada operação de
-        forma isolada, a leitura histórica dos fretes permite enxergar tendências de preço, diferenças entre origens e
-        destinos, comportamento por faixa de peso e oscilações que afetam a rentabilidade da operação.
-      </p>
-      <p class="text-muted mb-3">
-        Com inteligência de dados aplicada à logística, esse processo deixa de depender apenas de percepção manual.
-        Ao consolidar históricos de frete e organizar os registros em uma visão analítica, fica mais fácil identificar
-        padrões relevantes, comparar desempenho entre rotas e reconhecer movimentos de alta ou queda nos custos. Isso
-        ajuda transportadores, embarcadores, operadores logísticos e gestores de supply chain a agir com mais contexto,
-        reduzindo decisões baseadas em suposição.
-      </p>
-
-      <div class="row g-4 mt-1">
-        <div class="col-12 col-lg-7">
-          <h2 class="h5 fw-bold mb-2">Como o histórico de fretes ajuda na tomada de decisão</h2>
-          <p class="text-muted mb-3">
-            Quando o histórico operacional é analisado com consistência, ele revela mais do que um preço médio. Ele
-            mostra recorrência de custos, sazonalidade, variações por região, estabilidade das rotas e sinais de
-            tendência que podem orientar negociações, orçamento logístico e planejamento comercial. Esse tipo de leitura
-            cria uma base mais sólida para avaliar viabilidade, revisar contratos e priorizar movimentos com melhor
-            margem.
-          </p>
-          <p class="text-muted mb-0">
-            No Agentefrete, a proposta é transformar dados de transporte em inteligência prática. A página de fretes
-            reúne uma visão pública e indexável sobre o uso de dados históricos, combinando análise, contexto logístico
-            e recursos de apoio para quem busca entender custos, padrões e tendências do transporte rodoviário de forma
-            mais objetiva.
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-lg-8">
+          <h1 class="fw-bold mb-2">Análise de Fretes com Inteligência Artificial</h1>
+          <p class="text-muted mb-3 mb-lg-0">
+            Envie sua planilha, visualize o BI de fretes e identifique tendências de custo em poucos segundos para tomar decisões logísticas com mais segurança.
           </p>
         </div>
-        <div class="col-12 col-lg-5">
-          <div class="ri-surface p-4 h-100">
-            <h2 class="h5 fw-bold mb-3">Benefícios da análise de fretes</h2>
-            <ul class="mb-0 text-muted">
-              <li>Identificar padrões de custo por rota, origem e destino.</li>
-              <li>Visualizar tendências logísticas com base em dados históricos.</li>
-              <li>Apoiar negociações com mais evidência operacional.</li>
-              <li>Reduzir incerteza na avaliação de viabilidade de transporte.</li>
-              <li>Tomar decisões com mais contexto sobre eficiência logística.</li>
-            </ul>
+        <div class="col-12 col-lg-4">
+          <div class="d-grid gap-2">
+            <a class="btn btn-primary fw-bold" href="#roberto-bi-section">
+              <i class="bi bi-upload me-2"></i>Enviar planilha e abrir BI
+            </a>
+            {% if pode_ver_consulta_frete_real %}
+              <a class="btn btn-outline-primary" href="#consulta-rota-form">
+                <i class="bi bi-search me-2"></i>Analisar rota específica
+              </a>
+            {% endif %}
           </div>
         </div>
       </div>
     </div>
   </section>
-
-  <!-- Header -->
-  <div class="row align-items-start mb-4">
-    <div class="col-12">
-      <div class="d-flex align-items-center gap-2">
-        <i class="bi bi-cpu-fill text-primary fs-4"></i>
-        <div>
-          <h2 class="fw-bold mb-1">Roberto Intelligence</h2>
-          <p class="text-muted mb-0">Consulte a viabilidade de fretes com base em dados históricos.</p>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <!-- Alerts -->
   {% with messages = get_flashed_messages() %}
@@ -127,146 +190,226 @@
     {% endif %}
   {% endwith %}
 
-  {% if pode_ver_consulta_frete_real %}
-    <!-- Filters / Form -->
-    <div class="ri-card shadow-sm mb-4">
-      <div class="card-body p-4">
-        <form method="POST" class="row g-3">
-          <div class="col-md-3">
-            <label class="form-label small fw-bold">Cidade Origem</label>
-            <input type="text" name="origem" class="form-control" placeholder="Ex: Cariacica" required>
-          </div>
-          <div class="col-md-2">
-            <label class="form-label small fw-bold">UF Origem</label>
-            <input type="text" name="uf_origem" class="form-control" placeholder="ES" maxlength="2" style="text-transform: uppercase;" required>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label small fw-bold">Cidade Destino</label>
-            <input type="text" name="destino" class="form-control" placeholder="Ex: São Paulo" required>
-          </div>
-          <div class="col-md-2">
-            <label class="form-label small fw-bold">UF Destino</label>
-            <input type="text" name="uf_destino" class="form-control" placeholder="SP" maxlength="2" style="text-transform: uppercase;" required>
-          </div>
-          <div class="col-md-2 d-flex align-items-end">
-            <button type="submit" class="btn btn-primary w-100 fw-bold">
-              <i class="bi bi-search me-2"></i>Analisar Rota
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  {% endif %}
-
-  {% if pode_ver_consulta_frete_real and resultado %}
-    <!-- Results -->
-    <div class="row mb-5">
+  <div class="ri-operational-stack">
+    <!-- Header -->
+    <div class="row align-items-start mb-4">
       <div class="col-12">
-        <div class="ri-card shadow-sm overflow-hidden">
-          <div class="card-header bg-white p-4 border-0">
-            <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-              <div>
-                <span class="badge ri-badge-soft-primary mb-2">
-                  <i class="bi bi-graph-up-arrow me-1"></i>Resultado da Análise
-                </span>
-                <h4 class="fw-bold mb-0">{{ resultado.rota }}</h4>
-              </div>
-              <div class="text-end">
-                <span class="d-block small text-muted">Amostras analisadas</span>
-                <span class="badge bg-dark">
-                  <i class="bi bi-database-fill me-1"></i>{{ resultado.amostras }} fretes
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div class="card-body p-4 ri-surface">
-            <div class="row g-4 text-center">
-              <div class="col-md-4">
-                <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
-                  <h6 class="text-uppercase small fw-bold text-muted mb-2">Média Bruta</h6>
-                  <h2 class="fw-bold text-primary mb-0" id="txt_valor_frete">R$ {{ "%.2f"|format(resultado.media_bruta) }}</h2>
-                  <span class="small text-muted fw-bold" id="txt_unidade">R$ / KG</span>
-                  <div class="form-check form-switch d-flex justify-content-center mt-3">
-                    <input class="form-check-input me-2" type="checkbox" id="switchUnidade" role="switch">
-                    <label class="form-check-label extra-small fw-bold" for="switchUnidade">Ver em Tonelada</label>
-                  </div>
-                </div>
-              </div>
-              <div class="col-md-4">
-                <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
-                  <h6 class="text-uppercase small fw-bold text-muted mb-2">Tendência (Modelo)</h6>
-                  <h2 class="fw-bold text-warning mb-0" id="txt_previsao">{{ resultado.previsao_roberto }}</h2>
-                  <span class="small text-muted">Previsão estatística</span>
-                </div>
-              </div>
-              <div class="col-md-4">
-                <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
-                  <h6 class="text-uppercase small fw-bold text-muted mb-2">Assertividade do Modelo</h6>
-                  <h2 class="fw-bold text-primary mb-0" id="txt_assertividade">{{ (resultado.assertividade * 100)|int }}%</h2>
-                  <span class="small text-muted">Métricas reais do modelo</span>
-                </div>
-              </div>
-            </div>
-
-            {% if resultado.previsao_numerica and resultado.previsao_numerica.valores_rs_kg %}
-            <div class="row g-4 mt-2">
-              <div class="col-12">
-                <div class="bg-white p-3 ri-metric shadow-sm">
-                  <h6 class="text-uppercase small fw-bold text-muted mb-2">Previsão numérica (próximos 6 meses) — R$/kg</h6>
-                  <div class="table-responsive">
-                    <table class="table table-sm table-bordered mb-0 small">
-                      <thead><tr><th>Mês</th>{% for m in resultado.previsao_numerica.meses %}<th class="text-end">{{ m }}</th>{% endfor %}</tr></thead>
-                      <tbody>
-                        <tr><td class="fw-bold">Previsão</td>{% for v in resultado.previsao_numerica.valores_rs_kg %}<td class="text-end">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
-                        {% if resultado.intervalo_confianca %}
-                        <tr><td class="text-muted">IC inferior</td>{% for v in resultado.intervalo_confianca.inferior %}<td class="text-end text-muted">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
-                        <tr><td class="text-muted">IC superior</td>{% for v in resultado.intervalo_confianca.superior %}<td class="text-end text-muted">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
-                        {% endif %}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </div>
-            {% endif %}
-
-            {% if resultado.metrica_erro and (resultado.metrica_erro.get('rmse') is not none or resultado.metrica_erro.get('mae') is not none) %}
-            <div class="row g-4 mt-2">
-              <div class="col-12 col-md-6">
-                <div class="bg-white p-3 ri-metric shadow-sm">
-                  <h6 class="text-uppercase small fw-bold text-muted mb-2">Métricas de erro do modelo</h6>
-                  <ul class="list-unstyled mb-0 small">
-                    {% if resultado.metrica_erro.get('rmse') is not none %}<li>RMSE: {{ "%.6f"|format(resultado.metrica_erro.rmse) }} R$/kg</li>{% endif %}
-                    {% if resultado.metrica_erro.get('mae') is not none %}<li>MAE: {{ "%.6f"|format(resultado.metrica_erro.mae) }} R$/kg</li>{% endif %}
-                    <li>Amostras: {{ resultado.metrica_erro.get('n_amostras', '—') }} | Meses na série: {{ resultado.metrica_erro.get('n_meses', '—') }}</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-            {% endif %}
-
-            {% if resultado.explicacao_llm or resultado.insights_adicionais or resultado.recado_roberto %}
-            <div class="row g-4 mt-2">
-              <div class="col-12">
-                <div class="ri-insight p-3">
-                  <h6 class="small fw-bold text-muted mb-2">Explicação e análise (IA)</h6>
-                  {% if resultado.explicacao_llm %}<p class="small mb-2">{{ resultado.explicacao_llm }}</p>{% endif %}
-                  {% if resultado.insights_adicionais %}<p class="small mb-2"><strong>Insights:</strong> {{ resultado.insights_adicionais }}</p>{% endif %}
-                  {% if resultado.recado_roberto %}<p class="small mb-0 fst-italic">— {{ resultado.recado_roberto }}</p>{% endif %}
-                </div>
-              </div>
-            </div>
-            {% endif %}
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-cpu-fill text-primary fs-4"></i>
+          <div>
+            <h2 class="fw-bold mb-1">Painel Operacional de Fretes</h2>
+            <p class="text-muted mb-0">Suba dados, acompanhe indicadores e use inteligência operacional para decidir com mais rapidez.</p>
           </div>
         </div>
       </div>
     </div>
-  {% endif %}
 
-  <div class="{{ 'upload-only-view' if not pode_ver_consulta_frete_real else '' }}">
     {% include 'roberto_bi.html' %}
+
+    {% if pode_ver_consulta_frete_real %}
+      <!-- Filters / Form -->
+      <div class="ri-card shadow-sm mb-4" id="consulta-rota-form">
+        <div class="card-body p-4">
+          <form method="POST" class="row g-3">
+            <div class="col-md-3">
+              <label class="form-label small fw-bold">Cidade Origem</label>
+              <input type="text" name="origem" class="form-control" placeholder="Ex: Cariacica" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label small fw-bold">UF Origem</label>
+              <input type="text" name="uf_origem" class="form-control" placeholder="ES" maxlength="2" style="text-transform: uppercase;" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small fw-bold">Cidade Destino</label>
+              <input type="text" name="destino" class="form-control" placeholder="Ex: São Paulo" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label small fw-bold">UF Destino</label>
+              <input type="text" name="uf_destino" class="form-control" placeholder="SP" maxlength="2" style="text-transform: uppercase;" required>
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+              <button type="submit" class="btn btn-primary w-100 fw-bold">
+                <i class="bi bi-search me-2"></i>Analisar Rota
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if pode_ver_consulta_frete_real and resultado %}
+      <!-- Results -->
+      <div class="row mb-5">
+        <div class="col-12">
+          <div class="ri-card shadow-sm overflow-hidden">
+            <div class="card-header bg-white p-4 border-0">
+              <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                <div>
+                  <span class="badge ri-badge-soft-primary mb-2">
+                    <i class="bi bi-graph-up-arrow me-1"></i>Resultado da Análise
+                  </span>
+                  <h4 class="fw-bold mb-0">{{ resultado.rota }}</h4>
+                </div>
+                <div class="text-end">
+                  <span class="d-block small text-muted">Amostras analisadas</span>
+                  <span class="badge bg-dark">
+                    <i class="bi bi-database-fill me-1"></i>{{ resultado.amostras }} fretes
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-body p-4 ri-surface">
+              <div class="row g-4 text-center">
+                <div class="col-md-4">
+                  <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
+                    <h6 class="text-uppercase small fw-bold text-muted mb-2">Média Bruta</h6>
+                    <h2 class="fw-bold text-primary mb-0" id="txt_valor_frete">R$ {{ "%.2f"|format(resultado.media_bruta) }}</h2>
+                    <span class="small text-muted fw-bold" id="txt_unidade">R$ / KG</span>
+                    <div class="form-check form-switch d-flex justify-content-center mt-3">
+                      <input class="form-check-input me-2" type="checkbox" id="switchUnidade" role="switch">
+                      <label class="form-check-label extra-small fw-bold" for="switchUnidade">Ver em Tonelada</label>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
+                    <h6 class="text-uppercase small fw-bold text-muted mb-2">Tendência (Modelo)</h6>
+                    <h2 class="fw-bold text-warning mb-0" id="txt_previsao">{{ resultado.previsao_roberto }}</h2>
+                    <span class="small text-muted">Previsão estatística</span>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="bg-white p-4 ri-metric shadow-sm h-100 d-flex flex-column justify-content-center">
+                    <h6 class="text-uppercase small fw-bold text-muted mb-2">Assertividade do Modelo</h6>
+                    <h2 class="fw-bold text-primary mb-0" id="txt_assertividade">{{ (resultado.assertividade * 100)|int }}%</h2>
+                    <span class="small text-muted">Métricas reais do modelo</span>
+                  </div>
+                </div>
+              </div>
+
+              {% if resultado.previsao_numerica and resultado.previsao_numerica.valores_rs_kg %}
+              <div class="row g-4 mt-2">
+                <div class="col-12">
+                  <div class="bg-white p-3 ri-metric shadow-sm">
+                    <h6 class="text-uppercase small fw-bold text-muted mb-2">Previsão numérica (próximos 6 meses) — R$/kg</h6>
+                    <div class="table-responsive">
+                      <table class="table table-sm table-bordered mb-0 small">
+                        <thead><tr><th>Mês</th>{% for m in resultado.previsao_numerica.meses %}<th class="text-end">{{ m }}</th>{% endfor %}</tr></thead>
+                        <tbody>
+                          <tr><td class="fw-bold">Previsão</td>{% for v in resultado.previsao_numerica.valores_rs_kg %}<td class="text-end">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
+                          {% if resultado.intervalo_confianca %}
+                          <tr><td class="text-muted">IC inferior</td>{% for v in resultado.intervalo_confianca.inferior %}<td class="text-end text-muted">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
+                          <tr><td class="text-muted">IC superior</td>{% for v in resultado.intervalo_confianca.superior %}<td class="text-end text-muted">R$ {{ "%.4f"|format(v) }}</td>{% endfor %}</tr>
+                          {% endif %}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {% endif %}
+
+              {% if resultado.metrica_erro and (resultado.metrica_erro.get('rmse') is not none or resultado.metrica_erro.get('mae') is not none) %}
+              <div class="row g-4 mt-2">
+                <div class="col-12 col-md-6">
+                  <div class="bg-white p-3 ri-metric shadow-sm">
+                    <h6 class="text-uppercase small fw-bold text-muted mb-2">Métricas de erro do modelo</h6>
+                    <ul class="list-unstyled mb-0 small">
+                      {% if resultado.metrica_erro.get('rmse') is not none %}<li>RMSE: {{ "%.6f"|format(resultado.metrica_erro.rmse) }} R$/kg</li>{% endif %}
+                      {% if resultado.metrica_erro.get('mae') is not none %}<li>MAE: {{ "%.6f"|format(resultado.metrica_erro.mae) }} R$/kg</li>{% endif %}
+                      <li>Amostras: {{ resultado.metrica_erro.get('n_amostras', '—') }} | Meses na série: {{ resultado.metrica_erro.get('n_meses', '—') }}</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+              {% endif %}
+
+              {% if resultado.explicacao_llm or resultado.insights_adicionais or resultado.recado_roberto %}
+              <div class="row g-4 mt-2">
+                <div class="col-12">
+                  <div class="ri-insight p-3">
+                    <h6 class="small fw-bold text-muted mb-2">Explicação e análise (IA)</h6>
+                    {% if resultado.explicacao_llm %}<p class="small mb-2">{{ resultado.explicacao_llm }}</p>{% endif %}
+                    {% if resultado.insights_adicionais %}<p class="small mb-2"><strong>Insights:</strong> {{ resultado.insights_adicionais }}</p>{% endif %}
+                    {% if resultado.recado_roberto %}<p class="small mb-0 fst-italic">— {{ resultado.recado_roberto }}</p>{% endif %}
+                  </div>
+                </div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endif %}
   </div>
+
+  <section class="ri-card shadow-sm mb-4 ri-seo-content">
+    <div class="card-body p-4 p-lg-5">
+      <h2 class="h3 fw-bold mb-3">Como a análise de fretes melhora decisões logísticas</h2>
+      <p class="text-muted mb-3 ri-seo-intro">
+        Conteúdo técnico e indexável sobre análise de fretes, tendências logísticas e inteligência operacional. Expanda para visualizar a versão completa.
+      </p>
+      <ul class="ri-seo-preview small">
+        <li>Leitura de padrões de custo por rota, origem e destino.</li>
+        <li>Contexto para negociação, orçamento e planejamento logístico.</li>
+        <li>Uso de histórico para decisões com menos incerteza operacional.</li>
+      </ul>
+
+      <details class="ri-seo-disclosure" id="fretes-seo-details">
+        <summary class="ri-seo-summary" aria-controls="fretes-seo-expanded">
+          <span class="ri-seo-summary-label-open">Ler conteúdo completo</span>
+          <span class="ri-seo-summary-label-close">Recolher conteúdo</span>
+        </summary>
+        <div class="ri-seo-expanded" id="fretes-seo-expanded">
+          <p class="text-muted mb-3">
+            A análise de fretes é uma etapa estratégica para empresas que precisam controlar custos logísticos, entender a
+            eficiência das rotas e tomar decisões mais seguras no transporte de cargas. Em vez de avaliar cada operação de
+            forma isolada, a leitura histórica dos fretes permite enxergar tendências de preço, diferenças entre origens e
+            destinos, comportamento por faixa de peso e oscilações que afetam a rentabilidade da operação.
+          </p>
+          <p class="text-muted mb-3">
+            Com inteligência de dados aplicada à logística, esse processo deixa de depender apenas de percepção manual.
+            Ao consolidar históricos de frete e organizar os registros em uma visão analítica, fica mais fácil identificar
+            padrões relevantes, comparar desempenho entre rotas e reconhecer movimentos de alta ou queda nos custos. Isso
+            ajuda transportadores, embarcadores, operadores logísticos e gestores de supply chain a agir com mais contexto,
+            reduzindo decisões baseadas em suposição.
+          </p>
+
+          <div class="row g-4 mt-1">
+            <div class="col-12 col-lg-7">
+              <h3 class="h5 fw-bold mb-2">Como o histórico de fretes ajuda na tomada de decisão</h3>
+              <p class="text-muted mb-3">
+                Quando o histórico operacional é analisado com consistência, ele revela mais do que um preço médio. Ele
+                mostra recorrência de custos, sazonalidade, variações por região, estabilidade das rotas e sinais de
+                tendência que podem orientar negociações, orçamento logístico e planejamento comercial. Esse tipo de leitura
+                cria uma base mais sólida para avaliar viabilidade, revisar contratos e priorizar movimentos com melhor
+                margem.
+              </p>
+              <p class="text-muted mb-0">
+                No Agentefrete, a proposta é transformar dados de transporte em inteligência prática. A página de fretes
+                reúne uma visão pública e indexável sobre o uso de dados históricos, combinando análise, contexto logístico
+                e recursos de apoio para quem busca entender custos, padrões e tendências do transporte rodoviário de forma
+                mais objetiva.
+              </p>
+            </div>
+            <div class="col-12 col-lg-5">
+              <div class="ri-surface ri-seo-benefits p-4 h-100">
+                <h3 class="h5 fw-bold mb-3">Benefícios da análise de fretes</h3>
+                <ul class="mb-0 text-muted">
+                  <li>Identificar padrões de custo por rota, origem e destino.</li>
+                  <li>Visualizar tendências logísticas com base em dados históricos.</li>
+                  <li>Apoiar negociações com mais evidência operacional.</li>
+                  <li>Reduzir incerteza na avaliação de viabilidade de transporte.</li>
+                  <li>Tomar decisões com mais contexto sobre eficiência logística.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+  </section>
 </div>
 
 <script>

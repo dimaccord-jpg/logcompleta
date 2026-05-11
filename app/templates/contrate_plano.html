@@ -104,6 +104,7 @@
     const planoAtual = (contextoEl?.getAttribute("data-plano-atual") || "free").toLowerCase();
     const vencimentoAtual = contextoEl?.getAttribute("data-vencimento-atual") || "";
     const ordemPlanos = { free: 0, starter: 1, pro: 2 };
+    const nomesExibicaoPlano = { free: "Free", starter: "Starter", pro: "Pro" };
     let embeddedCheckout = null;
     let confirmacaoPendente = null;
     let checkoutInFlight = false;
@@ -119,10 +120,28 @@
         return (ordemPlanos[destino] ?? -1) < (ordemPlanos[planoAtual] ?? -1);
     }
 
+    function obterNomeExibivelPlano(planoCodigo) {
+        const codigo = (planoCodigo || "").toLowerCase();
+        return nomesExibicaoPlano[codigo] || (planoCodigo || "atual");
+    }
+
+    function formatarDataApresentacaoBR(valor) {
+        const texto = (valor || "").trim();
+        const match = texto.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) {
+            return `${match[3]}/${match[2]}/${match[1]}`;
+        }
+        return texto;
+    }
+
     function abrirConfirmacaoDowngrade(planoCodigo, planoNome) {
+        const modalDowngradeEl = document.getElementById("modal-confirmar-downgrade");
         const mensagem = document.getElementById("downgrade-confirm-message");
         const btnConfirmar = document.getElementById("btn-confirmar-downgrade");
-        if (!mensagem || !btnConfirmar) {
+        if (!mensagem || !btnConfirmar || !modalDowngradeEl) {
+            statusEl.className = "alert alert-danger small mb-3";
+            statusEl.textContent =
+                "Não foi possível abrir a confirmação de downgrade. Recarregue a página e tente novamente.";
             return false;
         }
         mensagem.textContent =
@@ -131,7 +150,7 @@
             `A partir de ${vencimentoAtual || "a data de vencimento atual"}, as funcionalidades exclusivas e o limite de créditos do plano ${planoAtual.toUpperCase()} não estarão mais disponíveis na sua conta.\n\n` +
             `Deseja prosseguir com a alteração?`;
         confirmacaoPendente = { planoCodigo, planoNome };
-        const modal = new bootstrap.Modal(document.getElementById("modal-confirmar-downgrade"));
+        const modal = new bootstrap.Modal(modalDowngradeEl);
         modal.show();
         btnConfirmar.onclick = () => {
             modal.hide();
@@ -169,16 +188,21 @@
             }
             if (payload.downgrade_agendado) {
                 statusEl.className = "alert alert-success small mb-3";
+                const planoAtualExibicao = obterNomeExibivelPlano(planoAtual);
+                const planoDestinoExibicao = obterNomeExibivelPlano(planoCodigo);
+                const dataEfetivacao = formatarDataApresentacaoBR(
+                    payload.efetivar_em || vencimentoAtual || "seu vencimento atual"
+                );
                 if ((planoCodigo || "").toLowerCase() === "free") {
-                    statusEl.textContent = `Sua assinatura do plano ${planoAtual.toUpperCase()} foi cancelada. Essa alteracao entrara em vigor em ${payload.efetivar_em || vencimentoAtual || "seu vencimento atual"}.`;
+                    statusEl.textContent = `Sua assinatura do plano ${planoAtualExibicao} foi cancelada. Essa alteração entrará em vigor em ${dataEfetivacao}.`;
                 } else {
-                    statusEl.textContent = `Sua alteracao para o plano ${(planoCodigo || "").toUpperCase()} foi registrada. Ela entrara em vigor em ${payload.efetivar_em || vencimentoAtual || "seu vencimento atual"}.`;
+                    statusEl.textContent = `Sua alteração para o plano ${planoDestinoExibicao} foi registrada. Ela entrará em vigor em ${dataEfetivacao}.`;
                 }
                 return;
             }
             if (payload.assinatura_atualizada_sem_checkout) {
                 statusEl.className = "alert alert-success small mb-3";
-                statusEl.textContent = "Assinatura existente atualizada no Stripe. Acompanhe o status na sua area ou aguarde a sincronizacao automatica.";
+                statusEl.textContent = "Benefício exclusivo: ao fazer upgrade, seu novo limite será atualizado após a confirmação do pagamento, mantendo todo o consumo já realizado e sem cobrança proporcional adicional neste momento.";
                 return;
             }
             if (!payload.publishable_key || !payload.checkout_client_secret) {
@@ -221,21 +245,34 @@
             iniciarCheckout(planoCodigo, false);
         });
     });
+
+    document.addEventListener("DOMContentLoaded", () => {
+        const modalDowngradeEl = document.getElementById("modal-confirmar-downgrade");
+        if (!modalDowngradeEl) {
+            return;
+        }
+        modalDowngradeEl.addEventListener("show.bs.modal", () => {
+            document.body.classList.add("af-downgrade-modal-open");
+        });
+        modalDowngradeEl.addEventListener("hidden.bs.modal", () => {
+            document.body.classList.remove("af-downgrade-modal-open");
+        });
+    });
 })();
 </script>
-<div class="modal fade" id="modal-confirmar-downgrade" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
+<div class="modal fade af-downgrade-modal" id="modal-confirmar-downgrade" tabindex="-1" aria-labelledby="downgrade-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content af-downgrade-modal__content">
             <div class="modal-header">
-                <h5 class="modal-title">Confirmacao de downgrade</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                <h5 class="modal-title" id="downgrade-modal-title">Confirmação de downgrade</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
-                <pre id="downgrade-confirm-message" class="mb-0" style="white-space: pre-wrap;"></pre>
+                <div id="downgrade-confirm-message" class="af-downgrade-modal__message mb-0" role="status" aria-live="polite"></div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Nao, manter meu plano atual</button>
-                <button type="button" class="btn btn-danger" id="btn-confirmar-downgrade">Sim, confirmar</button>
+                <button type="button" class="btn af-downgrade-modal__cancel" data-bs-dismiss="modal">Não, manter meu plano atual</button>
+                <button type="button" class="btn af-downgrade-modal__confirm" id="btn-confirmar-downgrade">Sim, confirmar</button>
             </div>
         </div>
     </div>
