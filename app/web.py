@@ -321,6 +321,29 @@ def privacy_policy():
         return "Política de Privacidade não encontrada.", 404
 
 
+@app.route("/termos-de-uso", methods=["GET"])
+def terms_of_use():
+    from app.terms_services import get_active_term, get_terms_upload_dir
+
+    active_term = get_active_term()
+    if not active_term:
+        return "Termos de Uso nao encontrados.", 404
+
+    try:
+        return send_from_directory(
+            get_terms_upload_dir(),
+            active_term.filename,
+            mimetype="application/pdf",
+            as_attachment=False,
+        )
+    except NotFound:
+        logging.warning(
+            "Arquivo do termo ativo nao encontrado em disco: %s",
+            active_term.filename,
+        )
+        return "Termos de Uso nao encontrados.", 404
+
+
 _SEO_CANONICAL_ORIGIN = "https://www.agentefrete.com.br"
 
 

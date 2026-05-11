@@ -551,3 +551,19 @@ body.af-downgrade-modal-open .modal-backdrop.show {
     width: 100%;
   }
 }
+
+.af-terms-check .form-check-label {
+  display: inline;
+}
+
+.af-terms-link {
+  color: var(--af-cyan) !important;
+  text-decoration: underline !important;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+
+.af-terms-link:hover,
+.af-terms-link:focus-visible {
+  color: var(--af-cyan-bright) !important;
+}
