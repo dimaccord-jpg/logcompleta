@@ -101,7 +101,6 @@
     const embedEl = document.getElementById("checkout-embed");
     const botoes = document.querySelectorAll(".js-iniciar-checkout");
     const contextoEl = document.getElementById("plano-contexto");
-    const modalDowngradeEl = document.getElementById("modal-confirmar-downgrade");
     const planoAtual = (contextoEl?.getAttribute("data-plano-atual") || "free").toLowerCase();
     const vencimentoAtual = contextoEl?.getAttribute("data-vencimento-atual") || "";
     const ordemPlanos = { free: 0, starter: 1, pro: 2 };
@@ -136,9 +135,13 @@
     }
 
     function abrirConfirmacaoDowngrade(planoCodigo, planoNome) {
+        const modalDowngradeEl = document.getElementById("modal-confirmar-downgrade");
         const mensagem = document.getElementById("downgrade-confirm-message");
         const btnConfirmar = document.getElementById("btn-confirmar-downgrade");
         if (!mensagem || !btnConfirmar || !modalDowngradeEl) {
+            statusEl.className = "alert alert-danger small mb-3";
+            statusEl.textContent =
+                "Não foi possível abrir a confirmação de downgrade. Recarregue a página e tente novamente.";
             return false;
         }
         mensagem.textContent =
@@ -243,14 +246,18 @@
         });
     });
 
-    if (modalDowngradeEl) {
+    document.addEventListener("DOMContentLoaded", () => {
+        const modalDowngradeEl = document.getElementById("modal-confirmar-downgrade");
+        if (!modalDowngradeEl) {
+            return;
+        }
         modalDowngradeEl.addEventListener("show.bs.modal", () => {
             document.body.classList.add("af-downgrade-modal-open");
         });
         modalDowngradeEl.addEventListener("hidden.bs.modal", () => {
             document.body.classList.remove("af-downgrade-modal-open");
         });
-    }
+    });
 })();
 </script>
 <div class="modal fade af-downgrade-modal" id="modal-confirmar-downgrade" tabindex="-1" aria-labelledby="downgrade-modal-title" aria-hidden="true">
