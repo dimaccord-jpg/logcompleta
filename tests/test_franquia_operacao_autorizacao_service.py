@@ -50,8 +50,7 @@ def test_degraded_permite_operacao_degradada(monkeypatch):
     assert out["sugerir_upgrade"] is True
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
-        "Faça o upgrade e continue criando sem interrupções: "
-        "[/contrate-um-plano](/contrate-um-plano)"
+        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
     )
 
 
@@ -66,8 +65,7 @@ def test_blocked_bloqueia_antes_da_operacao(monkeypatch):
     assert out["modo_operacao"] == "blocked"
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
-        "Faça o upgrade e continue criando sem interrupções: "
-        "[/contrate-um-plano](/contrate-um-plano)"
+        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
     )
 
 
@@ -83,8 +81,7 @@ def test_expired_bloqueia_antes_da_operacao(monkeypatch):
     assert out["status_franquia"] == Franquia.STATUS_EXPIRED
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
-        "Faça o upgrade e continue criando sem interrupções: "
-        "[/contrate-um-plano](/contrate-um-plano)"
+        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
     )
 
 
@@ -108,8 +105,7 @@ def test_bloqueio_manual_nao_sugere_upgrade(monkeypatch):
     assert out["sugerir_upgrade"] is False
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
-        "Faça o upgrade e continue criando sem interrupções: "
-        "[/contrate-um-plano](/contrate-um-plano)"
+        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
     )
 
 
@@ -126,6 +122,5 @@ def test_avulso_recebe_cta_padrao_mvp(monkeypatch):
     assert out["permitido"] is False
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Avulso. Não pare agora! "
-        "Faça o upgrade e continue criando sem interrupções: "
-        "[/contrate-um-plano](/contrate-um-plano)"
+        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
     )

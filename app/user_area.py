@@ -13,6 +13,7 @@ from app.services.cleiton_monetizacao_service import (
     listar_planos_contratacao_publica,
     obter_pendencia_downgrade_conta_ativa,
 )
+from app.services.plano_service import obter_nome_exibivel_plano
 
 logger = logging.getLogger(__name__)
 HIERARQUIA_PLANOS = {"free": 0, "starter": 1, "pro": 2}
@@ -88,21 +89,37 @@ def _checkout_feedback_downgrade_pendente(
     efetivar_em: str,
     data_vencimento_iso: str | None,
 ) -> dict[str, str]:
+    def _formatar_data_apresentacao_br(data_iso: str) -> str:
+        texto = (data_iso or "").strip()
+        if not texto:
+            return ""
+        match = texto[:10]
+        if len(match) == 10 and match[4] == "-" and match[7] == "-":
+            return f"{match[8:10]}/{match[5:7]}/{match[0:4]}"
+        try:
+            dt = datetime.fromisoformat(texto.replace("Z", "+00:00"))
+            return dt.strftime("%d/%m/%Y")
+        except Exception:
+            return texto
+
     plano_pendente_l = (plano_pendente or "").strip().lower()
-    efetivar = (efetivar_em or data_vencimento_iso or "").strip()
+    nome_plano_atual = obter_nome_exibivel_plano(plano_atual)
+    nome_plano_pendente = obter_nome_exibivel_plano(plano_pendente_l)
+    efetivar_raw = (efetivar_em or data_vencimento_iso or "").strip()
+    efetivar = _formatar_data_apresentacao_br(efetivar_raw)
     if plano_pendente_l == "free":
         return {
             "nivel": "success",
             "mensagem": (
-                f"Sua assinatura do plano {plano_atual.capitalize()} foi cancelada. "
-                f"Essa alteracao entrara em vigor em {efetivar}."
+                f"Sua assinatura do plano {nome_plano_atual} foi cancelada. "
+                f"Essa alteração entrará em vigor em {efetivar}."
             ),
         }
     return {
         "nivel": "success",
         "mensagem": (
-            f"Sua alteracao para o plano {plano_pendente_l.capitalize()} foi registrada. "
-            f"Ela entrara em vigor em {efetivar}."
+            f"Sua alteração para o plano {nome_plano_pendente} foi registrada. "
+            f"Ela entrará em vigor em {efetivar}."
         ),
     }
 
