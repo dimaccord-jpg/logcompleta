@@ -1,53 +1,45 @@
 """
-Serviços para Termos de Uso: termo vigente, diretório de PDFs e URL estática.
+Serviços para Termos de Uso: termo vigente e diretório persistente de PDFs.
 Evita hardcode e centraliza referência ao termo ativo no banco e nos templates.
 """
 import logging
-import os
 
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.extensions import db
+from app.legal_document_storage import (
+    build_safe_storage_path,
+    ensure_terms_storage_dir,
+    get_terms_storage_dir,
+)
 from app.models import TermsOfUse
 
 
 logger = logging.getLogger(__name__)
 
 
-# Subpasta sob static onde os PDFs são armazenados (path relativo ao static)
-TERMS_STATIC_SUBDIR = "terms"
-
-
 def get_terms_upload_dir(app=None):
     """
     Retorna o diretório absoluto para armazenar PDFs dos termos.
-    Diretório seguro: app/static/terms/ (sempre dentro do app).
+    Diretório seguro em storage persistente: <data_dir>/legal/terms/.
     """
-    if app is None:
-        from flask import current_app
-        app = current_app
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    terms_dir = os.path.join(root, "app", "static", TERMS_STATIC_SUBDIR)
-    return terms_dir
+    _ = app  # compatibilidade de assinatura
+    return str(get_terms_storage_dir())
 
 
 def ensure_terms_dir_exists(app=None):
-    """Garante que o diretório app/static/terms/ exista."""
-    terms_dir = get_terms_upload_dir(app)
-    os.makedirs(terms_dir, exist_ok=True)
-    return terms_dir
+    """Garante que o diretório persistente de termos exista."""
+    _ = app  # compatibilidade de assinatura
+    return str(ensure_terms_storage_dir())
 
 
 def _term_file_exists(filename: str | None) -> bool:
-    """Valida se o PDF do termo existe fisicamente em app/static/terms/."""
-    nome = (filename or "").strip()
-    if not nome:
+    """Valida se o PDF do termo existe fisicamente no storage persistente."""
+    try:
+        absolute_path = build_safe_storage_path(get_terms_storage_dir(), filename)
+    except ValueError:
         return False
-    terms_dir = os.path.abspath(get_terms_upload_dir())
-    absolute_path = os.path.abspath(os.path.join(terms_dir, nome))
-    if os.path.commonpath([terms_dir, absolute_path]) != terms_dir:
-        return False
-    return os.path.isfile(absolute_path)
+    return absolute_path.is_file()
 
 
 def get_active_term():

@@ -5,9 +5,11 @@ Upload de PDF, ativação do novo termo, desativação do anterior e notificaç�
 import os
 import logging
 from datetime import datetime
+from pathlib import Path
 from werkzeug.datastructures import FileStorage
 
 from app.extensions import db
+from app.legal_document_storage import build_safe_storage_path
 from app.models import TermsOfUse, User
 from app.terms_services import get_terms_upload_dir, ensure_terms_dir_exists
 from app.utils.email_helper import send_terms_updated_notification
@@ -41,10 +43,12 @@ def processar_upload_termo(app, file: FileStorage) -> tuple[int, int]:
     Retorna (enviados, falhas) de notificações por e-mail.
     """
     ensure_terms_dir_exists(app)
-    terms_dir = get_terms_upload_dir(app)
+    terms_dir = Path(get_terms_upload_dir(app))
     safe_name = nome_seguro_termo(file.filename or "")
-    filepath = os.path.join(terms_dir, safe_name)
-    file.save(filepath)
+    filepath = build_safe_storage_path(terms_dir, safe_name)
+    file.save(str(filepath))
+    if not filepath.is_file():
+        raise ValueError("Falha ao persistir o arquivo de Termos de Uso.")
 
     TermsOfUse.query.filter_by(is_active=True).update({"is_active": False})
     new_term = TermsOfUse(filename=safe_name, is_active=True)
@@ -54,7 +58,8 @@ def processar_upload_termo(app, file: FileStorage) -> tuple[int, int]:
     terms_url = None
     with app.app_context():
         from flask import url_for
-        terms_url = url_for("static", filename=f"terms/{safe_name}", _external=True)
+
+        terms_url = url_for("terms_of_use", _external=True)
     sent, failed = 0, 0
     for u in User.query.all():
         try:

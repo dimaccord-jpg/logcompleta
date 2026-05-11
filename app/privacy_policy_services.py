@@ -3,46 +3,40 @@ Serviços de leitura para Política de Privacidade: política vigente, diretóri
 Mantém este domínio desacoplado dos Termos de Uso.
 """
 import logging
-import os
 
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.extensions import db
+from app.legal_document_storage import (
+    build_safe_storage_path,
+    ensure_privacy_policies_storage_dir,
+    get_privacy_policies_storage_dir,
+)
 from app.models import PrivacyPolicy
 
 
 logger = logging.getLogger(__name__)
 
-PRIVACY_POLICY_STATIC_SUBDIR = "privacy_policies"
-
 
 def get_privacy_policy_upload_dir(app=None):
     """Retorna o diretório absoluto para armazenar PDFs da política de privacidade."""
-    if app is None:
-        from flask import current_app
-
-        app = current_app
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(root, "app", "static", PRIVACY_POLICY_STATIC_SUBDIR)
+    _ = app  # compatibilidade de assinatura
+    return str(get_privacy_policies_storage_dir())
 
 
 def ensure_privacy_policy_dir_exists(app=None):
-    """Garante que o diretório app/static/privacy_policies/ exista."""
-    privacy_dir = get_privacy_policy_upload_dir(app)
-    os.makedirs(privacy_dir, exist_ok=True)
-    return privacy_dir
+    """Garante que o diretório persistente de política de privacidade exista."""
+    _ = app  # compatibilidade de assinatura
+    return str(ensure_privacy_policies_storage_dir())
 
 
 def _privacy_policy_file_exists(filename: str | None) -> bool:
-    """Valida se o PDF da política existe fisicamente em app/static/privacy_policies/."""
-    nome = (filename or "").strip()
-    if not nome:
+    """Valida se o PDF da política existe fisicamente no storage persistente."""
+    try:
+        absolute_path = build_safe_storage_path(get_privacy_policies_storage_dir(), filename)
+    except ValueError:
         return False
-    privacy_dir = os.path.abspath(get_privacy_policy_upload_dir())
-    absolute_path = os.path.abspath(os.path.join(privacy_dir, nome))
-    if os.path.commonpath([privacy_dir, absolute_path]) != privacy_dir:
-        return False
-    return os.path.isfile(absolute_path)
+    return absolute_path.is_file()
 
 
 def get_active_privacy_policy():
