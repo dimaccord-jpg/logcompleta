@@ -32,11 +32,10 @@ def montar_mensagem_operacao(
 
     if status_franquia in _STATUS_COM_CTA:
         nome_plano = obter_nome_exibivel_plano(plano_codigo)
-        url_planos = _obter_url_upgrade_planos()
         return (
             f"Você atingiu o limite de uso do plano {nome_plano}. "
-            "Não pare agora! Faça o upgrade e continue criando sem interrupções: "
-            f"[{url_planos}]({url_planos})"
+            "Não pare agora! [Faça o upgrade](/contrate-um-plano) "
+            "e continue criando sem interrupções."
         )
 
     if sugerir_upgrade:

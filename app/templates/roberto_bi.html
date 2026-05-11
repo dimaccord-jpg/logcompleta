@@ -22,13 +22,21 @@
       </div>
     </div>
     <div class="card-body p-3">
-      <p class="text-muted small mb-3">
-        Nossa IA analisa o histórico de fretes para identificar padrões reais de custo e projetar tendências futuras.
-        <br><br>
-        Utilizamos um modelo matemático de tendência aplicado sobre dados tratados para reduzir distorções, garantindo previsões mais estáveis.
-        <br><br>
-        Além da previsão, você também visualiza o nível de confiabilidade e a qualidade da base utilizada.
-      </p>
+      <p class="text-muted small mb-2">Use esta área para transformar sua planilha de fretes em análises visuais e receber orientações práticas sobre sua operação.</p>
+      <div class="bi-usage-guide mb-3" aria-label="Guia rápido de uso do BI">
+        <div class="bi-usage-step">
+          <strong>1. Baixe e preencha o modelo</strong>
+          <span>Clique em "Baixar Modelo", preencha a planilha com seus fretes e depois envie o arquivo em "Enviar Excel".</span>
+        </div>
+        <div class="bi-usage-step">
+          <strong>2. Abra as análises</strong>
+          <span>Depois do envio, clique em "Ver análises de BI" para visualizar gráficos, tendências, padrões de custo e desempenho das rotas.</span>
+        </div>
+        <div class="bi-usage-step">
+          <strong>3. Converse com Roberto</strong>
+          <span>Use o chat do Roberto para receber insights, interpretações e orientações sobre os dados analisados.</span>
+        </div>
+      </div>
       <div id="roberto-upload-status" class="small"></div>
       <div class="mt-3">
         <button type="button" class="btn btn-primary btn-sm" id="roberto-toggle-bi" aria-expanded="false">
@@ -135,6 +143,34 @@
 </section>
 
 <style>
+  .bi-usage-guide {
+    display: grid;
+    gap: .5rem;
+  }
+  .bi-usage-step {
+    background: linear-gradient(180deg, rgba(18,31,54,.9) 0%, rgba(15,26,46,.88) 100%);
+    border: 1px solid rgba(112,149,206,.28);
+    border-radius: .75rem;
+    padding: .6rem .75rem;
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+  }
+  .bi-usage-step strong {
+    font-size: .8rem;
+    color: rgba(238,245,255,.95);
+    line-height: 1.3;
+  }
+  .bi-usage-step span {
+    font-size: .76rem;
+    color: rgba(215,228,248,.9);
+    line-height: 1.4;
+  }
+  @media (max-width: 575.98px) {
+    .bi-usage-step {
+      padding: .55rem .65rem;
+    }
+  }
   .roberto-heatmap-map-wrap { max-width: 100%; overflow: hidden; }
   .roberto-heatmap-map-wrap svg { display: block; width: 100%; max-height: 300px; height: auto; }
   .roberto-map-final .roberto-heatmap-map-wrap svg { max-height: 340px; }
