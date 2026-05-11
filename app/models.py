@@ -112,7 +112,7 @@ class MultiuserFranquiaCodigo(db.Model):
 
 
 class TermsOfUse(db.Model):
-    """Termo de Uso vigente: PDF em app/static/terms/, um ativo por vez."""
+    """Termo de Uso vigente: PDF em storage persistente (data_dir/legal/terms), um ativo por vez."""
     __tablename__ = "terms_of_use"
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(255), nullable=False)
@@ -121,7 +121,7 @@ class TermsOfUse(db.Model):
 
 
 class PrivacyPolicy(db.Model):
-    """Política de Privacidade vigente: PDF em app/static/privacy_policies/, com histórico."""
+    """Política de Privacidade vigente: PDF em storage persistente (data_dir/legal/privacy_policies), com histórico."""
 
     __tablename__ = "privacy_policy"
 

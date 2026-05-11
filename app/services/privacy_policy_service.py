@@ -5,6 +5,7 @@ Upload de PDF, ativação da nova política, desativação da anterior e notific
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.datastructures import FileStorage
@@ -13,6 +14,7 @@ from werkzeug.utils import secure_filename
 from app.auth_services import send_privacy_policy_updated_notification
 from app.extensions import db
 from app.infra import get_admin_executor
+from app.legal_document_storage import build_safe_storage_path
 from app.models import PrivacyPolicy, User
 from app.privacy_policy_services import (
     ensure_privacy_policy_dir_exists,
@@ -95,15 +97,6 @@ def _build_unique_privacy_policy_filename(upload_dir: str, original_filename: st
         )
         suffix += 1
     return candidate
-
-
-def _safe_privacy_policy_path(upload_dir: str, filename: str) -> str:
-    """Monta caminho absoluto com proteção contra path traversal."""
-    absolute_upload_dir = os.path.abspath(upload_dir)
-    absolute_path = os.path.abspath(os.path.join(absolute_upload_dir, filename))
-    if os.path.commonpath([absolute_upload_dir, absolute_path]) != absolute_upload_dir:
-        raise ValueError("Nome de arquivo inválido para upload de Política de Privacidade.")
-    return absolute_path
 
 
 def _notify_privacy_policy_update(app, policy_url: str, upload_date) -> tuple[int, int]:
@@ -199,13 +192,15 @@ def processar_upload_privacy_policy(app, file: FileStorage, uploaded_by_user_id:
     ensure_privacy_policy_dir_exists(app)
     upload_dir = get_privacy_policy_upload_dir(app)
     safe_filename = _build_unique_privacy_policy_filename(upload_dir, file.filename or "")
-    save_path = _safe_privacy_policy_path(upload_dir, safe_filename)
+    save_path = build_safe_storage_path(Path(upload_dir), safe_filename)
     sent = 0
     failed = 0
     notification_mode = "sync"
 
     try:
-        file.save(save_path)
+        file.save(str(save_path))
+        if not save_path.is_file():
+            raise ValueError("Falha ao persistir arquivo da Política de Privacidade.")
 
         previous_policy = (
             PrivacyPolicy.query.filter_by(is_active=True)
@@ -267,18 +262,18 @@ def processar_upload_privacy_policy(app, file: FileStorage, uploaded_by_user_id:
         return active_policy, sent, failed, notification_mode
     except (ValueError, SQLAlchemyError) as exc:
         db.session.rollback()
-        if os.path.exists(save_path):
+        if save_path.exists():
             try:
-                os.remove(save_path)
+                save_path.unlink()
             except OSError:
                 logger.exception("Falha ao limpar arquivo de política após erro.")
         logger.exception("Falha no upload de Política de Privacidade: %s", exc)
         raise
     except Exception as exc:
         db.session.rollback()
-        if os.path.exists(save_path):
+        if save_path.exists():
             try:
-                os.remove(save_path)
+                save_path.unlink()
             except OSError:
                 logger.exception("Falha ao limpar arquivo de política após erro inesperado.")
         logger.exception("Erro inesperado no upload de Política de Privacidade: %s", exc)
