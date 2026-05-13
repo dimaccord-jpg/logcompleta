@@ -6,10 +6,14 @@ Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 ## Estado Atual Confirmado
 
 - pacote funcional da fase atual integrado localmente;
+- homolog validada no commit `77b675a` e producao atualizada apos merge `b1ade34`;
 - chat da Julia com renderer markdown seguro, sugestoes clicaveis e busca web contextual filtrada;
 - chat do Roberto na `/fretes` com UX visual atualizada no frontend, incluindo orientacao inicial de upload e copia local de respostas sem impacto em governanca, consumo ou observabilidade;
 - detalhe de noticia/artigo com botao `Voltar Para Home`;
 - monetizacao Stripe estabilizada com contratacao inicial, upgrade na assinatura existente, downgrade pago agendado e cancelamento para `free` por `cancel_at_period_end`;
+- regressao do modal de downgrade corrigida: a confirmacao deve abrir antes da chamada a `/api/contratacao/stripe/iniciar`;
+- documentos legais estabilizados com storage persistente em `settings.data_dir`, sem dependencia operacional de `app/static/...`;
+- rota publica `/termos-de-uso` restaurada como entrada canonica para fluxo publico;
 - CSV administrativo de auditoria local consolidado em `/admin/dashboard/auditoria-clientes.csv`, sem Stripe online e sem mutacao;
 - publicacao final em homolog ainda depende da validacao completa de migrations no ambiente alvo.
 
@@ -24,6 +28,8 @@ Nao tratar como opcional:
 - coerencia do CSV administrativo entre `User.categoria` legado, `ContaMonetizacaoVinculo`, `Franquia`, `MonetizacaoFato` e `ConfigRegras`;
 - execucao real da virada de ciclo em `/cron/executar-cleiton`;
 - migrations da cadeia ativa;
+- disco persistente do Render montado e coerente com `APP_DATA_DIR` ou `RENDER_DISK_PATH`;
+- persistencia fisica dos documentos ativos em `${settings.data_dir}/legal/terms` e `${settings.data_dir}/legal/privacy_policies`;
 - telas admin alinhadas com o backend.
 
 ## Bloqueio Historico de Homolog
@@ -54,7 +60,11 @@ Somente quando todos forem verdadeiros:
 9. retorno do checkout conciliado com `session_id` real;
 10. downgrade `pro -> starter` ou `starter/pro -> free` com pendencia interna auditavel;
 11. virada de ciclo confirmada em cron;
-12. `/admin/dashboard/auditoria-clientes.csv` validado com protecao admin, filtros, flags principais, severidade e ausencia de efeito colateral.
+12. `/admin/dashboard/auditoria-clientes.csv` validado com protecao admin, filtros, flags principais, severidade e ausencia de efeito colateral;
+13. `/termos-de-uso` validado com `200` e arquivo fisico persistente;
+14. `/politica-de-privacidade` validada com `200` e arquivo fisico persistente;
+15. `/login` validado com link clicavel de Termos;
+16. redeploy de prova executado apos upload dos documentos legais sem perda de disponibilidade.
 
 ## Referencia Principal
 

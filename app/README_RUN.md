@@ -10,6 +10,7 @@ Pre-requisitos minimos:
 - `pip install -r requirements.txt`
 - `DATABASE_URL` valido
 - `APP_ENV` definido explicitamente
+- `APP_DATA_DIR` definido quando quiser reproduzir localmente o comportamento persistente de documentos legais
 - ambiente carregado a partir de `app/.env.example`
 
 PowerShell:
@@ -29,6 +30,11 @@ python -m app.web
   - `pytest tests/test_roberto_controles.py`
   - `pytest tests/test_cleiton_upload_billing_service.py`
   - `pytest tests/test_franquia_operacao_autorizacao_service.py`
+- testes minimos pos-alteracoes recentes:
+  - `python -m pytest tests/test_login_terms_link.py tests/test_user_area_checkout_feedback.py tests/test_franquia_operacao_autorizacao_service.py tests/test_legal_documents_persistent_storage.py -q`
+- suites Stripe/monetizacao relevantes quando o assunto for checkout, downgrade ou guardrails:
+  - `pytest tests/test_cleiton_monetizacao_stripe_guardrails.py`
+  - `pytest tests/test_cleiton_monetizacao_stripe_blockers.py`
 
 ## Referencia Principal
 
