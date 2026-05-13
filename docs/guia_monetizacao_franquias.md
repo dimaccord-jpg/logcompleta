@@ -388,6 +388,13 @@ Fluxo atual documentado:
 - `pro -> starter`: downgrade pendente para virar no proximo ciclo
 - `starter/pro -> free`: `cancel_at_period_end = true` e troca interna posterior
 
+Guardrail de UX atual:
+
+- downgrade para `free` ou `starter` deve abrir modal de confirmacao antes de qualquer chamada ao backend;
+- o endpoint oficial permanece `/api/contratacao/stripe/iniciar`;
+- o payload oficial permanece `{ plano_codigo, confirmar_downgrade }`;
+- ausencia do modal deve ser tratada como erro visivel no frontend, nao como falha silenciosa.
+
 Importante:
 
 - nenhum efeito operacional de plano deve ignorar o Cleiton

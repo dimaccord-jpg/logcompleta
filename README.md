@@ -713,6 +713,42 @@ Pre-condicao explicita de fechamento:
 
 - homologacao Stripe so pode ser considerada concluida com evidencias objetivas de credenciais e webhook no ambiente de homolog (`STRIPE_API_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, endpoint `/api/webhook/stripe` ativo e assinado).
 
+### Estado implantado recente
+
+- branch `homolog` validada no commit `77b675a` (`fix: usa storage persistente para documentos legais`);
+- branch `producao` atualizada apos merge `b1ade34` (`merge: leva storage persistente de documentos legais para producao`);
+- correcoes recentes relevantes tambem incluem:
+  - `afb6317` (`feat: aprimora monetizacao auditoria e politica de privacidade`);
+  - `7dd9616` (`fix: restaura link publico de termos de uso`);
+  - `8be2bae` (`fix: corrige abertura do modal de downgrade`).
+
+### Documentos legais em producao/homolog
+
+Estado correto atual:
+
+- uploads operacionais de Termos de Uso e Politica de Privacidade nao devem depender de `app/static/...`;
+- o storage oficial agora e persistente, via `settings.data_dir`;
+- diretórios canonicos:
+  - `${settings.data_dir}/legal/terms`
+  - `${settings.data_dir}/legal/privacy_policies`
+- em `dev`, sem `APP_DATA_DIR`, o sistema pode cair para diretorio local do app como fallback controlado;
+- em homolog/prod, o ambiente deve expor `APP_DATA_DIR` ou `RENDER_DISK_PATH` validos;
+- upload via tela admin so deve ativar documento quando o arquivo for salvo e existir fisicamente no storage persistente;
+- as rotas publicas canonicas sao:
+  - `/termos-de-uso`
+  - `/politica-de-privacidade`
+- login/cadastro, fluxo publico e notificacoes nao devem apontar para `/static/terms/...` nem `/static/privacy_policies/...`.
+
+Incidente historico corrigido:
+
+- antes, uploads operacionais podiam cair em `app/static/terms` e `app/static/privacy_policies`, dentro da release efemera;
+- apos novo deploy, os arquivos podiam sumir;
+- o banco permanecia apontando para `filename` ativo inexistente;
+- sintomas observados:
+  - `/termos-de-uso` retornando `404`;
+  - `/politica-de-privacidade` retornando `404`;
+  - `/login` exibindo `Termos de Uso` como texto sem link.
+
 ### Checklist final de homologacao
 
 - migrations aplicadas no alvo com `upgrade head` e `current` coerentes;
@@ -722,6 +758,10 @@ Pre-condicao explicita de fechamento:
 - fluxo `/admin/api/cleiton-franquia/<franquia_id>/validacao` validado em leitura e reprocessamento admin;
 - fluxo `/admin/dashboard/auditoria-clientes.csv` validado em leitura, protecao admin, filtros, severidade e download sem efeitos colaterais;
 - painel `/contrate-um-plano` validado com plano pronto e retorno de erro contratual quando plano estiver pendente;
+- downgrade para `free` ou `starter` validado com abertura de modal antes de qualquer chamada ao backend;
+- rotas publicas `/termos-de-uso` e `/politica-de-privacidade` respondendo `200` quando houver documento ativo com arquivo fisico valido;
+- `/login` validado com link clicavel de Termos somente quando existir termo ativo com arquivo fisico persistido;
+- upload admin de documentos legais validado com storage persistente e redeploy de prova sem perda de arquivo;
 - trilho Roberto validado (upload, BI, ranking/heatmap e limpeza de upload temporario).
 
 ### Comando de start com migration obrigatoria
@@ -748,23 +788,30 @@ Validacao minima de startup no deploy:
 1. logs mostram `db upgrade` antes do `gunicorn`;
 2. `python -m flask --app app.web db current` retorna revisao esperada;
 3. `/admin/planos` abre sem erro de tabela;
-4. `/politica-de-privacidade` responde (404 sem politica ativa e comportamento esperado).
+4. `APP_DATA_DIR` ou `RENDER_DISK_PATH` estao coerentes com o disco persistente montado;
+5. `/politica-de-privacidade` responde com comportamento esperado;
+6. `/termos-de-uso` responde com comportamento esperado.
 
 Checklist operacional para homologacao/producao:
 
 1. validar `render.yaml` versionado;
-2. conferir env vars por ambiente no Render (homolog x prod);
+2. conferir env vars por ambiente no Render (homolog x prod), com foco em `APP_DATA_DIR` ou `RENDER_DISK_PATH`;
 3. deploy em homolog;
 4. validar logs e schema;
-5. validar `/admin/planos` e upload da politica;
-6. validar trilho de termo sem regressao;
-7. validar cron protegido;
-8. promover para producao e repetir validacoes criticas.
+5. validar disco persistente montado no servico;
+6. validar `/admin/planos`, upload da politica e upload do termo;
+7. validar `/termos-de-uso` e `/politica-de-privacidade` com `200` quando houver arquivos ativos;
+8. validar `/login` com link de Termos;
+9. validar painel `/contrate-um-plano`, incluindo abertura do modal de downgrade para `free`/`starter` antes do backend;
+10. fazer redeploy de prova apos upload de documentos legais e validar novamente as rotas publicas;
+11. validar cron protegido;
+12. promover para producao e repetir validacoes criticas.
 
 ### Checklist de prontidao para producao
 
 - variaveis de ambiente obrigatorias revisadas por ambiente (`APP_ENV`, `DATABASE_URL`, segredos Stripe, `APP_DATA_DIR`, `CRON_SECRET`);
 - persistencia de dados confirmada para `APP_DATA_DIR` e artefatos temporarios operacionais;
+- disco persistente do Render confirmado e mapeado para o caminho usado por `settings.data_dir`;
 - observabilidade habilitada para `IaConsumoEvento`, `ProcessingEvent`, `MonetizacaoFato` e pacote admin de validacao;
 - export administrativo de auditoria de clientes validado com base local coerente (`ContaMonetizacaoVinculo`, `MonetizacaoFato`, `Franquia`, `ConfigRegras`);
 - monitoramento de webhook com alarmes para falhas 4xx/5xx e volume anomalo de pendencias de correlacao;
@@ -784,6 +831,7 @@ Checklist operacional para homologacao/producao:
 - qualquer rota paralela para contratacao/webhook/governanca fora dos endpoints oficiais;
 - qualquer export ou rotina admin que trate `User.categoria` isoladamente como prova financeira conclusiva;
 - homologacao declarada sem evidencia de segredo de webhook e validacao de assinatura;
+- deploy aprovado com documentos legais quebrados ou apontando para storage efemero;
 - deploy sem migrations aplicadas ou sem persistencia operacional configurada.
 
 ### Criterio objetivo de encerramento definitivo
@@ -840,6 +888,27 @@ Este bloco concentra os incidentes reais ja enfrentados e a forma correta de inv
   - se houve revalidacao antes do `/checkout/sessions`
   - se a UI retornou com `session_id` correto.
 
+### Modal de downgrade nao abre
+
+- esta regressao ja existiu no frontend de `/contrate-um-plano`;
+- causa historica: script capturava `modal-confirmar-downgrade` antes do modal existir no DOM;
+- sintoma: clique em `Free` ou `Starter` nao abria confirmacao e podia bloquear a chamada correta ao backend;
+- comportamento correto atual:
+  - a UI deve localizar o modal no momento do clique;
+  - deve abrir a confirmacao antes de chamar `/api/contratacao/stripe/iniciar`;
+  - deve preservar o payload `{ plano_codigo, confirmar_downgrade }`;
+  - ausencia do modal deve produzir erro visivel, nao falha silenciosa.
+
+### Documentos legais somem apos deploy
+
+- este foi um incidente real resolvido pela migracao do upload operacional para storage persistente;
+- comportamento correto atual:
+  - admin grava arquivo persistente em `${settings.data_dir}/legal/...`;
+  - banco mantem apenas `filename`;
+  - rotas publicas continuam servindo o documento ativo por `/termos-de-uso` e `/politica-de-privacidade`;
+  - login so mostra link de Termos se existir documento ativo com arquivo fisico valido;
+  - upload de homolog/producao deve sempre ser seguido de redeploy de prova e nova validacao.
+
 ### Assinatura antiga ou cancelada presa no banco
 
 - um `subscription_id` historico pode continuar no banco sem ser a assinatura vigente;
@@ -889,6 +958,7 @@ Os demais arquivos devem existir apenas como anexos curtos de apoio operacional:
 - `app/README_RUN.md`: lembrete curto de subida local e comandos;
 - `app/README_DEPLOY.md`: lembrete curto de sequencia de deploy;
 - `app/GUIA_TEMPLATES_HTML.md`: padroes de templates/frontend;
+- `docs/runbooks/documentos_legais_storage_persistente.md`: runbook do incidente e operacao de Termos/Politica em storage persistente;
 - `migrations/README`: cadeia de migrations.
 
 ## Diretriz de Documentacao

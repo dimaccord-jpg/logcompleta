@@ -46,3 +46,6 @@ app/indices_manual_log.json
 logs_fallback/
 tests/.tmp_roberto/
 *.xlsx
+
+# === Storage persistente operacional de documentos legais ===
+app/legal/

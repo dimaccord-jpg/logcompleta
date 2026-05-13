@@ -176,20 +176,6 @@ Análise de frete, inteligência logística e tendências do transporte rodoviá
   </div>
 </div>
 
-<footer class="py-4 mt-4" style="background:#050c16; border-top:1px solid rgba(255,255,255,.08);">
-  <div class="container text-center">
-    <a
-      href="{{ url_for('privacy_policy') }}"
-      target="_blank"
-      rel="noopener noreferrer"
-      class="text-decoration-none"
-      style="color:#a8b2d1; font-weight:500;"
-    >
-      Política de Privacidade
-    </a>
-  </div>
-</footer>
-
 <script>
   window.JULIA_CHAT_MAX_HISTORY = {{ julia_chat_max_history|default(10)|int }};
   window.JULIA_CHAT_LIMITS = {{ julia_chat_limits|tojson|safe }};
