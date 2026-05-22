@@ -18,6 +18,7 @@
 
   var chatLimits = window.ROBERTO_CHAT_LIMITS || null;
   var isAuthenticated = window.ROBERTO_CHAT_AUTHENTICATED === true;
+  var loginUrl = (typeof window.ROBERTO_LOGIN_URL === 'string' && window.ROBERTO_LOGIN_URL) ? window.ROBERTO_LOGIN_URL : '/login';
   var maxHistory = (window.ROBERTO_CHAT_MAX_HISTORY && window.ROBERTO_CHAT_MAX_HISTORY > 0)
     ? window.ROBERTO_CHAT_MAX_HISTORY
     : 10;
@@ -234,7 +235,7 @@
     var text = (typeof forcedText === 'string' ? forcedText : (input.value || '')).trim();
     if (!text) return;
     if (!isAuthenticated) {
-      window.location.href = '/login';
+      window.location.href = loginUrl;
       return;
     }
     if (isBlocked(chatLimits)) {

@@ -49,3 +49,6 @@ tests/.tmp_roberto/
 
 # === Storage persistente operacional de documentos legais ===
 app/legal/
+
+# Cleide - uploads temporarios locais
+app/cleide_upload_tmp/

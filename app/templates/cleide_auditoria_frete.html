@@ -1,0 +1,621 @@
+{% extends "base.html" %}
+
+{% block title %}Cleide | Auditoria de Frete Operacional{% endblock %}
+{% block meta_description %}Cleide: inteligência operacional e gerencial para auditoria contextual de frete.{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cleide_auditoria_frete.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="container py-4 py-lg-5 cleide-page">
+  <script>
+    window.CLEIDE_PUBLIC_PAGE = {{ 'true' if cleide_public_page else 'false' }};
+    window.CLEIDE_AUTHENTICATED = {{ 'true' if cleide_is_authenticated else 'false' }};
+    window.CLEIDE_LOGIN_URL = {{ cleide_login_url|tojson }};
+    window.CLEIDE_UPLOAD_AUTHORIZATION = {{ (cleide_upload_authorization or {})|tojson }};
+  </script>
+  <section class="ri-card shadow-sm mb-4 mb-xl-5 cleide-hero" data-testid="cleide-hero">
+    <div class="card-body p-4 p-lg-5 p-xxl-6">
+      <div class="row g-4 align-items-center">
+        <div class="col-12 col-xl-8">
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <span class="badge text-bg-primary">Agente Cleide</span>
+            <span class="badge text-bg-light border">Auditoria operacional premium</span>
+          </div>
+          <h1 class="cleide-display-title fw-bold mb-3">Auditoria de Frete Operacional e Gerencial</h1>
+          <p class="cleide-subtitle text-muted mb-3">
+            A Cleide organiza dados operacionais em contexto analítico para apoiar investigações gerenciais,
+            leitura de variação e identificação de comportamento atípico com visão executiva.
+          </p>
+          <p class="text-muted mb-0">
+            Nesta fase, a Cleide opera com analytics estrutural ativo em cima do dataset da sessão,
+            mantendo IA contextual e insights automáticos ainda inativos.
+          </p>
+        </div>
+        <div class="col-12 col-xl-4">
+          <div class="cleide-hero-actions">
+            <a id="cleideHeroUploadCta" class="btn btn-primary fw-semibold" href="#cleideUploadDropzone">
+              <i class="bi bi-cloud-arrow-up me-2"></i>Iniciar upload
+            </a>
+            <a id="cleideHeroDashboardCta" class="btn btn-outline-secondary" href="#cleideDashboardFilterTop">
+              <i class="bi bi-sliders me-2"></i>Ir para dashboard
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ri-card shadow-sm mb-4 mb-xl-5 cleide-section" data-testid="cleide-flow">
+    <div class="card-body p-4 p-lg-5">
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <i class="bi bi-diagram-3 text-primary"></i>
+        <h2 class="h5 mb-0">Fluxo estrutural da Cleide</h2>
+      </div>
+      <div class="row g-3 g-xl-4">
+        <div class="col-12 col-md-6 col-xl-4">
+          <div class="cleide-step">
+            <span class="cleide-step-number">1</span>
+            <h3 class="h6 mb-1">Envio da base operacional</h3>
+            <p class="text-muted mb-0">Upload XLSX/CSV ativo com substituição por sessão.</p>
+          </div>
+        </div>
+        <div class="col-12 col-md-6 col-xl-4">
+          <div class="cleide-step">
+            <span class="cleide-step-number">2</span>
+            <h3 class="h6 mb-1">Validação estrutural</h3>
+            <p class="text-muted mb-0">Detecção de colunas, aliases e obrigatórias ausentes.</p>
+          </div>
+        </div>
+        <div class="col-12 col-md-6 col-xl-4">
+          <div class="cleide-step">
+            <span class="cleide-step-number">3</span>
+            <h3 class="h6 mb-1">Dataset preparado</h3>
+            <p class="text-muted mb-0">Contexto tabular pronto para fases futuras de processamento.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ri-card shadow-sm mb-4 mb-xl-5 cleide-section" data-testid="cleide-upload-placeholder">
+    <div class="card-body p-4 p-lg-5">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+        <h2 class="h5 mb-0"><i class="bi bi-cloud-upload me-2 text-primary"></i>Upload operacional</h2>
+        {% if cleide_is_authenticated %}
+        <span class="badge text-bg-success">Upload ativo por sessão</span>
+        {% else %}
+        <span class="badge text-bg-warning">Login necessário para upload</span>
+        {% endif %}
+      </div>
+      <div class="cleide-upload-dropzone" id="cleideUploadDropzone">
+        <i class="bi bi-cloud-arrow-up fs-2" aria-hidden="true"></i>
+        <p class="mb-1 fw-semibold">Arraste sua planilha ou clique para selecionar</p>
+        <p class="text-muted mb-4">Formatos aceitos: XLSX e CSV</p>
+        <form id="cleideUploadForm" class="d-flex flex-wrap gap-2 justify-content-center" enctype="multipart/form-data">
+          <input
+            type="file"
+            id="cleideUploadInput"
+            name="file"
+            class="d-none"
+            accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          >
+          <button class="btn btn-primary" type="button" id="cleideUploadSelectBtn">Selecionar arquivo</button>
+          <button class="btn btn-outline-secondary" type="submit" id="cleideUploadSubmitBtn" disabled>Enviar upload</button>
+          <button class="btn btn-outline-danger" type="button" id="cleideUploadClearBtn" disabled>Limpar upload</button>
+          <a
+            class="btn btn-outline-success"
+            id="cleideTemplateDownloadBtn"
+            href="{{ url_for('cleide.cleide_template_download') }}"
+            data-testid="cleide-template-download"
+          >
+            Baixar modelo
+          </a>
+        </form>
+        <p class="small text-muted mt-3 mb-0">
+          Use o modelo padrão da Cleide para preparar a planilha antes do upload.
+        </p>
+        <div class="d-flex flex-wrap gap-2 justify-content-center mt-2">
+          <span class="badge text-bg-light border">Ciclo de upload: 1 ativo por sessão</span>
+          <span class="badge text-bg-light border">Análise operacional em evolução (sem BI/IA ativos)</span>
+        </div>
+        <div id="cleideUploadStatus" class="small mt-3 text-muted">Aguardando upload</div>
+        {% if not cleide_is_authenticated %}
+        <div class="alert alert-info mt-3 mb-0 py-2 px-3 small" data-testid="cleide-login-cta">
+          Faça <a href="{{ cleide_login_url }}">login</a> para enviar planilhas, processar dados e usar os recursos privados da Cleide.
+        </div>
+        {% endif %}
+        <div id="cleideStructuralFeedback" class="small mt-2 text-muted">
+          Aguardando upload para validação estrutural.
+        </div>
+        <div id="cleideStructuralDetails" class="small mt-2 text-muted">
+          Colunas detectadas: - | Colunas faltantes: - | Linhas: 0 | Sheet: n/a
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="mb-4 mb-xl-5 cleide-section" data-testid="cleide-kpis">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+      <span class="badge text-bg-light border" id="cleideKpiScopeBadge">KPIs globais da sessão</span>
+      <small class="text-muted" id="cleideKpiScopeHint">
+        Os KPIs representam a visão global do dataset da sessão.
+      </small>
+    </div>
+    <div class="row g-3 g-xl-4">
+      <div class="col-12 col-md-6 col-xl-4 col-xxl-2">
+        <article class="ri-card shadow-sm h-100 cleide-kpi-card">
+          <div class="card-body p-3 p-xl-4">
+            <p class="text-muted mb-1">Total documentos</p>
+            <div class="fw-semibold cleide-kpi-value" id="cleideKpiTotalDocumentos">0</div>
+          </div>
+        </article>
+      </div>
+      <div class="col-12 col-md-6 col-xl-4 col-xxl-2">
+        <article class="ri-card shadow-sm h-100 cleide-kpi-card">
+          <div class="card-body p-3 p-xl-4">
+            <p class="text-muted mb-1">Valor total frete</p>
+            <div class="fw-semibold cleide-kpi-value" id="cleideKpiValorTotalFrete">R$ 0,00</div>
+          </div>
+        </article>
+      </div>
+      <div class="col-12 col-md-6 col-xl-4 col-xxl-2">
+        <article class="ri-card shadow-sm h-100 cleide-kpi-card">
+          <div class="card-body p-3 p-xl-4">
+            <p class="text-muted mb-1">Peso total</p>
+            <div class="fw-semibold cleide-kpi-value" id="cleideKpiPesoTotal">0,00</div>
+          </div>
+        </article>
+      </div>
+      <div class="col-12 col-md-6 col-xl-4 col-xxl-2">
+        <article class="ri-card shadow-sm h-100 cleide-kpi-card">
+          <div class="card-body p-3 p-xl-4">
+            <p class="text-muted mb-1">Ticket médio</p>
+            <div class="fw-semibold cleide-kpi-value" id="cleideKpiTicketMedio">R$ 0,00</div>
+          </div>
+        </article>
+      </div>
+      <div class="col-12 col-md-6 col-xl-4 col-xxl-2">
+        <article class="ri-card shadow-sm h-100 cleide-kpi-card">
+          <div class="card-body p-3 p-xl-4">
+            <p class="text-muted mb-1">Fretes zerados (%)</p>
+            <div class="fw-semibold cleide-kpi-value" id="cleideKpiFretesZerados">0,00%</div>
+          </div>
+        </article>
+      </div>
+      <div class="col-12 col-md-6 col-xl-4 col-xxl-2">
+        <article class="ri-card shadow-sm h-100 cleide-kpi-card">
+          <div class="card-body p-3 p-xl-4">
+            <p class="text-muted mb-1">Período</p>
+            <div class="fw-semibold cleide-kpi-value cleide-kpi-value-sm" id="cleideKpiPeriodo">n/a</div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="ri-card shadow-sm mb-4 mb-xl-5 cleide-section" data-testid="cleide-quality-panel">
+    <div class="card-body p-4 p-lg-5">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+        <h2 class="h5 mb-0">Qualidade básica do dataset</h2>
+        <span class="badge text-bg-light border" id="cleideDatasetLinhaBadge">Linhas processadas: 0</span>
+      </div>
+      <div class="row g-3 g-xl-4" id="cleideQualityIndicators">
+        <div class="col-12 col-md-6 col-xl-3">
+          <article class="ri-card bg-light h-100 cleide-quality-card">
+            <div class="card-body p-3 p-xl-4">
+              <p class="text-muted mb-1 d-flex align-items-center gap-1">
+                Números inválidos
+                <button
+                  type="button"
+                  class="btn btn-link btn-sm p-0 text-warning d-none"
+                  id="cleideNumericIssueAlertBtn"
+                  data-bs-toggle="popover"
+                  data-bs-trigger="hover focus"
+                  data-bs-placement="top"
+                  data-bs-title="Números inválidos"
+                  aria-label="Detalhes de números inválidos"
+                >
+                  <i class="bi bi-exclamation-triangle-fill"></i>
+                </button>
+              </p>
+              <div class="fw-semibold cleide-quality-value" id="cleideQualityInvalidNumeric">0</div>
+            </div>
+          </article>
+        </div>
+        <div class="col-12 col-md-6 col-xl-3">
+          <article class="ri-card bg-light h-100 cleide-quality-card">
+            <div class="card-body p-3 p-xl-4">
+              <p class="text-muted mb-1">Datas inválidas</p>
+              <div class="fw-semibold cleide-quality-value" id="cleideQualityInvalidDate">0</div>
+            </div>
+          </article>
+        </div>
+        <div class="col-12 col-md-6 col-xl-3">
+          <article class="ri-card bg-light h-100 cleide-quality-card">
+            <div class="card-body p-3 p-xl-4">
+              <p class="text-muted mb-1">Valores negativos</p>
+              <div class="fw-semibold cleide-quality-value" id="cleideQualityNegativeValue">0</div>
+            </div>
+          </article>
+        </div>
+        <div class="col-12 col-md-6 col-xl-3">
+          <article class="ri-card bg-light h-100 cleide-quality-card">
+            <div class="card-body p-3 p-xl-4">
+              <p class="text-muted mb-1">Linhas consideradas</p>
+              <div class="fw-semibold cleide-quality-value" id="cleideQualityLinhasConsideradas">0</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ri-card shadow-sm mb-4 mb-xl-5 cleide-section" data-testid="cleide-dashboard-structural">
+    <div class="card-body p-4 p-lg-5">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+        <h2 class="h5 mb-0">Dashboard operacional</h2>
+        <span class="badge text-bg-light border" id="cleideDashboardState">Sem upload ativo</span>
+      </div>
+      <div class="cleide-dashboard-filter-top mb-3 mb-lg-4" id="cleideDashboardFilterTop" data-testid="cleide-dashboard-filter-top">
+        <div class="cleide-dashboard-filter-row">
+          <div class="cleide-date-range-controls">
+            <label class="form-label text-muted mb-1" for="cleideFilterDateStart">Período</label>
+            <div class="cleide-date-range-inputs">
+              <input class="form-control form-control-sm" type="date" id="cleideFilterDateStart" disabled>
+              <span class="cleide-date-range-separator text-muted">até</span>
+              <input class="form-control form-control-sm" type="date" id="cleideFilterDateEnd" disabled>
+            </div>
+          </div>
+          <button class="btn btn-outline-secondary btn-sm" id="cleideResetFiltersBtn" type="button" disabled>Limpar</button>
+        </div>
+        <div class="cleide-hidden-charts-wrap mb-2" id="cleideHiddenChartsWrap">
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <span class="badge text-bg-light border">Gráficos ocultos</span>
+            <button class="btn btn-outline-secondary btn-sm" type="button" id="cleideShowAllChartsBtn" disabled>
+              Reexibir todos
+            </button>
+          </div>
+          <div class="d-flex flex-wrap gap-2" id="cleideHiddenChartsList">
+            <span class="small text-muted">Nenhum gráfico oculto</span>
+          </div>
+        </div>
+        <div class="small text-muted mb-2" id="cleideFilterStatus">Aguardando upload para ativar filtros.</div>
+        <small class="text-muted d-block mb-2" id="cleideFilterSemanticHint">
+          Interseção real calculada no backend oficial da Cleide.
+        </small>
+        <div class="cleide-active-filter-chips-wrap" id="cleideActiveFilterChipsWrap">
+          <span class="badge text-bg-light border">Filtros ativos</span>
+          <div id="cleideActiveFilterChips" class="d-flex flex-wrap gap-2"></div>
+        </div>
+      </div>
+      <div class="cleide-dashboard-grid">
+        <div
+          id="cleideChartCardTransportadora"
+          class="cleide-chart-card"
+          data-cleide-chart-card="transportadora"
+        >
+          <div class="cleide-analytic-panel">
+          <div class="cleide-chart-card-header">
+            <h3 class="h6 mb-0">Top Transportadoras</h3>
+            <button
+              type="button"
+              class="btn btn-outline-secondary btn-sm cleide-chart-hide-btn"
+              data-cleide-hide-chart="transportadora"
+              aria-label="Ocultar gráfico Top Transportadoras"
+            >
+              Ocultar
+            </button>
+          </div>
+          <div class="cleide-table-controls mb-2">
+            <select id="cleideSortTransportadora" class="form-select form-select-sm" aria-label="Ordenar transportadoras">
+              <option value="valor_total">Ordenar por valor</option>
+              <option value="quantidade">Ordenar por quantidade</option>
+              <option value="peso_total">Ordenar por peso</option>
+              <option value="chave">Ordenar por nome</option>
+            </select>
+            <select id="cleideOrderTransportadora" class="form-select form-select-sm" aria-label="Direção da ordenação das transportadoras">
+              <option value="desc">Desc</option>
+              <option value="asc">Asc</option>
+            </select>
+            <select id="cleidePageSizeTransportadora" class="form-select form-select-sm" aria-label="Itens por página das transportadoras">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+          <div id="cleideTransportadoraVisual" class="small text-muted mb-2">Aguardando dataset validado.</div>
+          <div class="cleide-chart-wrap position-relative" aria-label="Gráfico de transportadoras">
+            <canvas id="cleideChartTransportadora"></canvas>
+          </div>
+          <div id="cleideTableTransportadora" class="small text-muted">Aguardando dataset validado.</div>
+          <div class="cleide-pagination-controls mt-2">
+            <button id="cleidePrevTransportadora" type="button" class="btn btn-outline-secondary btn-sm">Anterior</button>
+            <span id="cleidePageInfoTransportadora" class="small text-muted">Página 0/0</span>
+            <button id="cleideNextTransportadora" type="button" class="btn btn-outline-secondary btn-sm">Próxima</button>
+          </div>
+          </div>
+        </div>
+        <div
+          id="cleideChartCardUfDestino"
+          class="cleide-chart-card"
+          data-cleide-chart-card="uf_destino"
+        >
+          <div class="cleide-analytic-panel">
+          <div class="cleide-chart-card-header">
+            <h3 class="h6 mb-0">Custo por UF Destino</h3>
+            <button
+              type="button"
+              class="btn btn-outline-secondary btn-sm cleide-chart-hide-btn"
+              data-cleide-hide-chart="uf_destino"
+              aria-label="Ocultar gráfico Custo por UF Destino"
+            >
+              Ocultar
+            </button>
+          </div>
+          <div class="cleide-table-controls mb-2">
+            <select id="cleideSortUfDestino" class="form-select form-select-sm" aria-label="Ordenar uf destino">
+              <option value="valor_total">Ordenar por valor</option>
+              <option value="quantidade">Ordenar por quantidade</option>
+              <option value="chave">Ordenar por UF</option>
+            </select>
+            <select id="cleideOrderUfDestino" class="form-select form-select-sm" aria-label="Direção da ordenação da UF de destino">
+              <option value="desc">Desc</option>
+              <option value="asc">Asc</option>
+            </select>
+            <select id="cleidePageSizeUfDestino" class="form-select form-select-sm" aria-label="Itens por página da UF de destino">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+          <div id="cleideUfDestinoVisual" class="small text-muted mb-2">Aguardando dataset validado.</div>
+          <div class="cleide-chart-wrap position-relative" aria-label="Gráfico de UF destino">
+            <canvas id="cleideChartUfDestino"></canvas>
+          </div>
+          <div id="cleideTableUfDestino" class="small text-muted">Aguardando dataset validado.</div>
+          <div class="cleide-pagination-controls mt-2">
+            <button id="cleidePrevUfDestino" type="button" class="btn btn-outline-secondary btn-sm">Anterior</button>
+            <span id="cleidePageInfoUfDestino" class="small text-muted">Página 0/0</span>
+            <button id="cleideNextUfDestino" type="button" class="btn btn-outline-secondary btn-sm">Próxima</button>
+          </div>
+          </div>
+        </div>
+        <div
+          id="cleideChartCardTemporal"
+          class="cleide-chart-card cleide-chart-card--wide"
+          data-cleide-chart-card="temporal"
+        >
+          <div class="cleide-analytic-panel">
+          <div class="cleide-chart-card-header">
+            <h3 class="h6 mb-0">Evolução Diária</h3>
+            <button
+              type="button"
+              class="btn btn-outline-secondary btn-sm cleide-chart-hide-btn"
+              data-cleide-hide-chart="temporal"
+              aria-label="Ocultar gráfico Evolução Diária"
+            >
+              Ocultar
+            </button>
+          </div>
+          <div class="cleide-table-controls mb-2">
+            <select id="cleideSortTemporal" class="form-select form-select-sm" aria-label="Ordenar temporal">
+              <option value="data">Ordenar por data</option>
+              <option value="valor_total">Ordenar por valor</option>
+              <option value="quantidade">Ordenar por quantidade</option>
+            </select>
+            <select id="cleideOrderTemporal" class="form-select form-select-sm" aria-label="Direção da ordenação temporal">
+              <option value="desc">Desc</option>
+              <option value="asc">Asc</option>
+            </select>
+            <select id="cleidePageSizeTemporal" class="form-select form-select-sm" aria-label="Itens por página da série temporal">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+          <div id="cleideTemporalVisual" class="small text-muted mb-2">Aguardando dataset validado.</div>
+          <div class="cleide-chart-wrap position-relative" aria-label="Gráfico temporal">
+            <canvas id="cleideChartTemporal"></canvas>
+          </div>
+          <div id="cleideTableTemporal" class="small text-muted">Aguardando dataset validado.</div>
+          <div class="cleide-pagination-controls mt-2">
+            <button id="cleidePrevTemporal" type="button" class="btn btn-outline-secondary btn-sm">Anterior</button>
+            <span id="cleidePageInfoTemporal" class="small text-muted">Página 0/0</span>
+            <button id="cleideNextTemporal" type="button" class="btn btn-outline-secondary btn-sm">Próxima</button>
+          </div>
+          </div>
+        </div>
+        <div
+          id="cleideChartCardUfOrigem"
+          class="cleide-chart-card"
+          data-cleide-chart-card="uf_origem"
+        >
+          <div class="cleide-analytic-panel">
+          <div class="cleide-chart-card-header">
+            <h3 class="h6 mb-0">Custo por UF Origem</h3>
+            <button
+              type="button"
+              class="btn btn-outline-secondary btn-sm cleide-chart-hide-btn"
+              data-cleide-hide-chart="uf_origem"
+              aria-label="Ocultar gráfico Custo por UF Origem"
+            >
+              Ocultar
+            </button>
+          </div>
+          <div class="cleide-table-controls mb-2">
+            <select id="cleideSortUfOrigem" class="form-select form-select-sm" aria-label="Ordenar uf origem">
+              <option value="valor_total">Ordenar por valor</option>
+              <option value="quantidade">Ordenar por quantidade</option>
+              <option value="chave">Ordenar por UF</option>
+            </select>
+            <select id="cleideOrderUfOrigem" class="form-select form-select-sm" aria-label="Direção da ordenação da UF de origem">
+              <option value="desc">Desc</option>
+              <option value="asc">Asc</option>
+            </select>
+            <select id="cleidePageSizeUfOrigem" class="form-select form-select-sm" aria-label="Itens por página da UF de origem">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+          <div id="cleideUfOrigemVisual" class="small text-muted mb-2">Aguardando dataset validado.</div>
+          <div class="cleide-chart-wrap position-relative" aria-label="Gráfico de UF origem">
+            <canvas id="cleideChartUfOrigem"></canvas>
+          </div>
+          <div id="cleideTableUfOrigem" class="small text-muted">Aguardando dataset validado.</div>
+          <div class="cleide-pagination-controls mt-2">
+            <button id="cleidePrevUfOrigem" type="button" class="btn btn-outline-secondary btn-sm">Anterior</button>
+            <span id="cleidePageInfoUfOrigem" class="small text-muted">Página 0/0</span>
+            <button id="cleideNextUfOrigem" type="button" class="btn btn-outline-secondary btn-sm">Próxima</button>
+          </div>
+          </div>
+        </div>
+        <div
+          id="cleideChartCardVolumeTransportadora"
+          class="cleide-chart-card"
+          data-cleide-chart-card="volume_transportadora"
+        >
+          <div class="cleide-analytic-panel">
+          <div class="cleide-chart-card-header">
+            <h3 class="h6 mb-0">Volume por Transportadora</h3>
+            <button
+              type="button"
+              class="btn btn-outline-secondary btn-sm cleide-chart-hide-btn"
+              data-cleide-hide-chart="volume_transportadora"
+              aria-label="Ocultar gráfico Volume por Transportadora"
+            >
+              Ocultar
+            </button>
+          </div>
+          <div id="cleideOriginCarrierVisual" class="small text-muted mb-2">Aguardando dataset validado.</div>
+          <div class="cleide-chart-wrap position-relative" aria-label="Gráfico de volume por transportadora">
+            <canvas id="cleideChartOriginCarrier"></canvas>
+          </div>
+          </div>
+        </div>
+        <div
+          id="cleideChartCardParetoUf"
+          class="cleide-chart-card"
+          data-cleide-chart-card="pareto_uf"
+        >
+          <div class="cleide-analytic-panel">
+          <div class="cleide-chart-card-header">
+            <h3 class="h6 mb-0">Ocorrências por UF Destino</h3>
+            <button
+              type="button"
+              class="btn btn-outline-secondary btn-sm cleide-chart-hide-btn"
+              data-cleide-hide-chart="pareto_uf"
+              aria-label="Ocultar gráfico Ocorrências por UF Destino"
+            >
+              Ocultar
+            </button>
+          </div>
+          <div id="cleideParetoUfVisual" class="small text-muted mb-2">Aguardando dataset validado.</div>
+          <div class="cleide-chart-wrap position-relative" aria-label="Pareto de fretes zerados por UF destino">
+            <canvas id="cleideChartParetoUf"></canvas>
+          </div>
+          </div>
+        </div>
+        <div
+          id="cleideChartCardParetoTransportadora"
+          class="cleide-chart-card"
+          data-cleide-chart-card="pareto_transportadora"
+        >
+          <div class="cleide-analytic-panel">
+          <div class="cleide-chart-card-header">
+            <h3 class="h6 mb-0">Ocorrências por Transportadora</h3>
+            <button
+              type="button"
+              class="btn btn-outline-secondary btn-sm cleide-chart-hide-btn"
+              data-cleide-hide-chart="pareto_transportadora"
+              aria-label="Ocultar gráfico Ocorrências por Transportadora"
+            >
+              Ocultar
+            </button>
+          </div>
+          <div id="cleideParetoTransportadoraVisual" class="small text-muted mb-2">Aguardando dataset validado.</div>
+          <div class="cleide-chart-wrap position-relative" aria-label="Pareto de fretes zerados por transportadora">
+            <canvas id="cleideChartParetoTransportadora"></canvas>
+          </div>
+          </div>
+        </div>
+      </div>
+      <div class="cleide-all-hidden-message d-none mt-3" id="cleideAllChartsHiddenMessage">
+        Todos os gráficos estão ocultos. Use o bloco acima para reexibir.
+      </div>
+    </div>
+  </section>
+
+  <section
+    id="cleideChatFloating"
+    class="cleide-chat-floating"
+    data-testid="cleide-chat-floating"
+    aria-label="Chat flutuante da Cleide"
+  >
+    <button
+      type="button"
+      id="cleideChatToggle"
+      class="cleide-chat-toggle"
+      aria-controls="cleideChatPanel"
+      aria-expanded="false"
+    >
+      <i class="bi bi-chat-left-text"></i>
+      <span>Chat Cleide</span>
+    </button>
+    <div
+      id="cleideChatPanel"
+      class="cleide-chat-panel"
+      data-testid="cleide-chat-panel"
+      aria-hidden="true"
+    >
+      <div class="cleide-chat-panel__header">
+        <div class="d-flex align-items-center gap-2">
+          <h2 class="h6 mb-0"><i class="bi bi-chat-left-text me-1 text-primary"></i>Chat operacional da Cleide</h2>
+          <span class="badge text-bg-light border" id="cleideChatScopeBadge">Escopo global da sessão</span>
+        </div>
+        <button
+          type="button"
+          id="cleideChatClose"
+          class="btn btn-outline-secondary btn-sm"
+          aria-label="Fechar chat da Cleide"
+        >
+          Fechar
+        </button>
+      </div>
+      <div class="cleide-chat-panel__intro">
+        <p class="small text-muted mb-3" id="cleideChatHint">
+          Faça perguntas executivas com base no contexto seguro da sessão atual da auditoria.
+        </p>
+        <div class="alert alert-warning mt-2 mb-0 py-2 px-3 small d-none" id="cleideChatFallbackBanner"></div>
+        <div class="alert alert-info mt-2 mb-0 py-2 px-3 small d-none" id="cleideChatScopeDetails"></div>
+      </div>
+      <div class="cleide-chat-messages" id="cleideChatMessages" aria-live="polite">
+        <div class="cleide-chat-msg cleide-chat-msg--cleide">
+          <div class="cleide-chat-msg__inner">Aguardando pergunta para iniciar o chat operacional.</div>
+        </div>
+      </div>
+      <div class="cleide-chat-panel__footer">
+        <form id="cleideChatForm" class="d-flex flex-column gap-2" autocomplete="off">
+          <label for="cleideChatQuestion" class="form-label text-muted mb-0">Pergunta</label>
+          <textarea
+            class="form-control"
+            id="cleideChatQuestion"
+            rows="3"
+            maxlength="320"
+            placeholder="Ex.: Qual a principal concentração operacional com os filtros atuais?"
+          ></textarea>
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-primary" type="submit" id="cleideChatSendBtn">Enviar para Cleide</button>
+            <span class="small text-muted align-self-center" id="cleideChatLoading" aria-live="polite"></span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/cleide_auditoria_frete.js') }}"></script>
+{% endblock %}

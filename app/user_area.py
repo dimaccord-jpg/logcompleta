@@ -411,5 +411,6 @@ def encerrar_contrato_route():
         return redirect(url_for("user.perfil"))
     encerrar_contrato(user)
     logout_user()
+    session.clear()
     return redirect(url_for("index"))
 

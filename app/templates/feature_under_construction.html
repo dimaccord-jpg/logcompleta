@@ -13,6 +13,11 @@
             <p class="mb-0">
               Cadastre-se e seja o primeiro a receber novidades!
             </p>
+            {% if mensagem_bloqueio %}
+            <div class="alert alert-warning text-start mt-3 mb-0" role="alert">
+              {{ mensagem_bloqueio }}
+            </div>
+            {% endif %}
             {% if origem %}
             <p class="text-muted small mt-2 mb-0">
               Interesse informado: <strong>{{ origem }}</strong>

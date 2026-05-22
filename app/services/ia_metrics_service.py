@@ -82,18 +82,23 @@ def aggregate_month_metrics(year: int, month: int) -> dict[str, Any]:
     }
 
 
-def aggregate_processing_metrics_month(year: int, month: int) -> dict[str, Any]:
+def _aggregate_processing_metrics_month_by_agent_flow(
+    year: int,
+    month: int,
+    *,
+    agent: str,
+    flow_type: str,
+) -> dict[str, Any]:
     """
-    Metricas mensais de processamento analitico (nao-LLM), ex.: upload Roberto + BI.
-    Filtra agent=roberto e flow_type=upload_bi para alinhar ao instrumentado na fase 1.1.
+    Metricas mensais de processamento analitico (nao-LLM) por agente/fluxo.
     """
     start, end = _month_datetime_bounds(year, month)
 
     base_filter = and_(
         ProcessingEvent.occurred_at >= start,
         ProcessingEvent.occurred_at < end,
-        ProcessingEvent.agent == "roberto",
-        ProcessingEvent.flow_type == "upload_bi",
+        ProcessingEvent.agent == agent,
+        ProcessingEvent.flow_type == flow_type,
     )
 
     total_events = (
@@ -134,6 +139,32 @@ def aggregate_processing_metrics_month(year: int, month: int) -> dict[str, Any]:
     }
 
 
+def aggregate_processing_metrics_month(year: int, month: int) -> dict[str, Any]:
+    """
+    Metricas mensais de processamento analitico do Roberto.
+    Mantem compatibilidade com o bloco historico: agent=roberto e flow_type=upload_bi.
+    """
+    return _aggregate_processing_metrics_month_by_agent_flow(
+        year,
+        month,
+        agent="roberto",
+        flow_type="upload_bi",
+    )
+
+
+def aggregate_cleide_processing_metrics_month(year: int, month: int) -> dict[str, Any]:
+    """
+    Metricas mensais de processamento analitico da Cleide.
+    Filtra isoladamente agent=cleide e flow_type=upload_fretes.
+    """
+    return _aggregate_processing_metrics_month_by_agent_flow(
+        year,
+        month,
+        agent="cleide",
+        flow_type="upload_fretes",
+    )
+
+
 def cost_per_token(cost: Decimal | None, total_tokens: int) -> float | None:
     if cost is None or total_tokens <= 0:
         return None
@@ -158,9 +189,16 @@ def get_ia_dashboard_payload(year: int, month: int) -> dict[str, Any]:
     total_tok = agg["total_tokens_month"]
     cpt = cost_per_token(cost, total_tok) if cost is not None else None
     proc = aggregate_processing_metrics_month(year, month)
+    cleide_proc = aggregate_cleide_processing_metrics_month(year, month)
     from app.services.cleiton_cost_service import total_processing_estimated_cost_month
 
     proc_cost = total_processing_estimated_cost_month(year, month)
+    cleide_proc_cost = total_processing_estimated_cost_month(
+        year,
+        month,
+        agent="cleide",
+        flow_type="upload_fretes",
+    )
     return {
         **agg,
         "cost_total_month": float(cost) if cost is not None else None,
@@ -169,4 +207,8 @@ def get_ia_dashboard_payload(year: int, month: int) -> dict[str, Any]:
         "cost_per_token": cpt,
         **proc,
         **proc_cost,
+        "cleide_processing": {
+            **cleide_proc,
+            **cleide_proc_cost,
+        },
     }

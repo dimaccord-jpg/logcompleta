@@ -61,9 +61,16 @@ def _month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
     return start, end
 
 
-def total_processing_estimated_cost_month(year: int, month: int) -> dict[str, Any]:
+def total_processing_estimated_cost_month(
+    year: int,
+    month: int,
+    *,
+    agent: str = "roberto",
+    flow_type: str = "upload_bi",
+) -> dict[str, Any]:
     """
-    Soma (processing_time_ms / 1000) * custo_por_segundo para eventos roberto/upload_bi no mês.
+    Soma (processing_time_ms / 1000) * custo_por_segundo para eventos de processamento
+    do agente/fluxo informado no mês.
     """
     cfg = get_or_create_config()
     cps = compute_cost_per_second(cfg)
@@ -78,8 +85,8 @@ def total_processing_estimated_cost_month(year: int, month: int) -> dict[str, An
     filt = and_(
         ProcessingEvent.occurred_at >= start,
         ProcessingEvent.occurred_at <= end,
-        ProcessingEvent.agent == "roberto",
-        ProcessingEvent.flow_type == "upload_bi",
+        ProcessingEvent.agent == agent,
+        ProcessingEvent.flow_type == flow_type,
     )
     events = ProcessingEvent.query.filter(filt).all()
     total = 0.0

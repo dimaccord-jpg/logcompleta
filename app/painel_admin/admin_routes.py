@@ -459,6 +459,45 @@ def agentes_roberto():
     )
 
 
+@admin_bp.route("/agentes/cleide", methods=["GET", "POST"])
+@login_required
+def agentes_cleide():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services import cleide_config_service
+
+    if request.method == "POST":
+        campos = {
+            "upload_total_max": (request.form.get("upload_total_max") or "").strip(),
+            "chat_context_max_items_per_table": (request.form.get("chat_context_max_items_per_table") or "").strip(),
+            "chat_context_max_text_len": (request.form.get("chat_context_max_text_len") or "").strip(),
+            "chat_context_rankings_limit": (request.form.get("chat_context_rankings_limit") or "").strip(),
+            "chat_context_include_transportadora": "1" if request.form.get("chat_context_include_transportadora") else "0",
+            "chat_context_include_uf_origem": "1" if request.form.get("chat_context_include_uf_origem") else "0",
+            "chat_context_include_uf_destino": "1" if request.form.get("chat_context_include_uf_destino") else "0",
+            "chat_context_include_temporal": "1" if request.form.get("chat_context_include_temporal") else "0",
+            "chat_context_include_paretos": "1" if request.form.get("chat_context_include_paretos") else "0",
+            "chat_context_mode": (request.form.get("chat_context_mode") or "").strip(),
+            "chat_context_max_chars": (request.form.get("chat_context_max_chars") or "").strip(),
+        }
+        try:
+            cleide_config_service.salvar_cleide_config(campos)
+            flash("Parâmetros da Cleide salvos com sucesso.", "success")
+        except ValueError as e:
+            flash(str(e), "warning")
+        except Exception as e:
+            _log.exception("Erro ao salvar parâmetros da Cleide: %s", e)
+            flash("Não foi possível salvar os parâmetros da Cleide.", "danger")
+        return redirect(url_for("admin.agentes_cleide"))
+
+    cfg = cleide_config_service.get_cleide_config()
+    return render_template(
+        "agentes_cleide.html",
+        cfg=cfg,
+        defaults=cleide_config_service.DEFAULTS,
+    )
+
+
 @admin_bp.route("/agentes/cleiton", methods=["GET", "POST"])
 @login_required
 def agentes_cleiton():
