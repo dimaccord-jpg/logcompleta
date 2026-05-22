@@ -286,6 +286,12 @@ def test_cleide_phase7_css_sem_nth_child_layout():
     assert ".cleide-dashboard-grid.cleide-dashboard-grid--has-hidden .cleide-chart-card--wide {" in source
     assert "grid-column: auto;" in source
     assert ".cleide-chat-floating {" in source
+    assert "pointer-events: none;" in source
     assert ".cleide-chat-toggle {" in source
     assert ".cleide-chat-panel {" in source
+    assert "position: absolute;" in source
+    assert "bottom: calc(100% + 0.65rem);" in source
+    assert "visibility: hidden;" in source
+    assert ".cleide-chat-panel {" in source
     assert ".cleide-chat-panel.cleide-chat-panel--open {" in source
+    assert "visibility: visible;" in source
