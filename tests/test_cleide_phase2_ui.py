@@ -281,6 +281,18 @@ def test_cleide_chat_sequencial_fluxo_basico_estatico():
     assert "const loadingRef = appendLoadingMessage();" in source
     assert "replaceLoading(loadingRef," in source
     assert "chatMessages.appendChild(msg);" in source
+    assert "const renderSafeStructuredText = (text) => {" in source
+    assert "const applyInlineMarkdown = (escapedText) => {" in source
+    assert 'replace(/\\*\\*([^*\\n][^*\\n]*?)\\*\\*/g, "<strong>$1</strong>")' in source
+    assert 'replace(/(^|[^\\*])\\*([^*\\n]+)\\*(?!\\*)/g, "$1<em>$2</em>")' in source
+    assert "const bulletMatch = /^[-*]\\s+(.+)$/.exec(trimmed);" in source
+    assert "out.push(`<li>${applyInlineMarkdown(esc(bulletMatch[1]))}</li>`);" in source
+    assert "out.push(applyInlineMarkdown(esc(trimmed)));" in source
+    assert 'replace(/</g, "&lt;")' in source
+    assert 'replace(/>/g, "&gt;")' in source
+    assert "inner.innerHTML = renderSafeStructuredText(cleanText);" in source
+    assert "const content = String(inner?.textContent || \"\").trim();" in source
+    assert "const text = String(msgNode?.querySelector(\".cleide-chat-msg__inner\")?.textContent || \"\").trim();" in source
 
 
 def test_cleide_phase7_css_sem_nth_child_layout():

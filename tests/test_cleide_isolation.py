@@ -105,6 +105,11 @@ def test_js_cleide_sem_ia_recomendacoes_billing_ou_chat_funcional():
     assert "cleidechattoggle" in source.lower()
     assert "cleidechatpanel" in source.lower()
     assert "setcleidechatopen" in source.lower()
+    assert "const applyinlinemarkdown = (escapedtext) => {" in source.lower()
+    assert "<strong>$1</strong>" in source
+    assert "const bulletmatch = /^[-*]\\s+(.+)$/.exec(trimmed);" in source.lower()
+    assert "inner.innerhtml = rendersafestructuredtext(cleantext);" in source.lower()
+    assert "const content = string(inner?.textcontent || \"\").trim();" in source.lower()
 
 
 def test_js_cleide_sem_endpoint_roberto_flow_parser_payload():

@@ -919,6 +919,13 @@
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
 
+  const applyInlineMarkdown = (escapedText) => {
+    let rendered = String(escapedText || "");
+    rendered = rendered.replace(/\*\*([^*\n][^*\n]*?)\*\*/g, "<strong>$1</strong>");
+    rendered = rendered.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+    return rendered;
+  };
+
   const renderSafeStructuredText = (text) => {
     const value = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const lines = value.split("\n");
@@ -941,7 +948,7 @@
           out.push("</ul>");
           inList = false;
         }
-        out.push(`<strong>${esc(headingMatch[1])}:</strong> ${esc(headingMatch[2])}`);
+        out.push(`<strong>${esc(headingMatch[1])}:</strong> ${applyInlineMarkdown(esc(headingMatch[2]))}`);
         continue;
       }
       const bulletMatch = /^[-*]\s+(.+)$/.exec(trimmed);
@@ -950,14 +957,14 @@
           out.push("<ul>");
           inList = true;
         }
-        out.push(`<li>${esc(bulletMatch[1])}</li>`);
+        out.push(`<li>${applyInlineMarkdown(esc(bulletMatch[1]))}</li>`);
         continue;
       }
       if (inList) {
         out.push("</ul>");
         inList = false;
       }
-      out.push(esc(trimmed));
+      out.push(applyInlineMarkdown(esc(trimmed)));
     }
     if (inList) out.push("</ul>");
     return out.join("<br>");
