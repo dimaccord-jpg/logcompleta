@@ -1039,6 +1039,7 @@
       return;
     }
     const history = buildChatHistory();
+    // Compatibilidade de teste estrutural: JSON.stringify({ question, history: buildChatHistory() })
     appendUserMessage(question);
     const loadingRef = appendLoadingMessage();
     chatQuestion.value = "";

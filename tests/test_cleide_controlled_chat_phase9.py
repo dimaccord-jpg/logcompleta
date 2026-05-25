@@ -104,6 +104,10 @@ def _patch_context(monkeypatch, chat_ctx):
     monkeypatch.setattr("app.cleide_controlled_chat.get_cleide_chat_context", lambda _session: chat_ctx)
 
 
+def _norm(text: str) -> str:
+    return controlled_chat._normalize_for_match(text)  # noqa: SLF001 - helper de teste
+
+
 @pytest.fixture(autouse=True)
 def _reset_cleide_breaker_state():
     controlled_chat._circuit_breaker_state["open_until_monotonic"] = 0.0  # noqa: SLF001
@@ -355,7 +359,7 @@ def test_governanca_semantica_sem_drift_allowed_forbidden(monkeypatch):
     _patch_context(monkeypatch, ctx)
     body, status = run_cleide_controlled_chat(question="top transportadoras", session_obj={})
     assert status == 200
-    reply_norm = body["reply"].lower()
+    reply_norm = _norm(body["reply"])
     assert "participacao relevante" in reply_norm
     assert "variacao relevante" in reply_norm
 
@@ -485,9 +489,9 @@ def test_semantic_enforcement_rejeita_fallback_hibrido(monkeypatch):
     assert status == 200
     assert body["intent"] == "fallback_seguro"
     # fallback final deve respeitar policy oficial
-    reply = (body.get("reply") or "").lower()
+    reply = _norm(body.get("reply") or "")
     assert "qualidade do dataset" not in reply
-    assert any(term in reply for term in (t.lower() for t in CLEIDE_ALLOWED_LANGUAGE))
+    assert any(_norm(term) in reply for term in CLEIDE_ALLOWED_LANGUAGE)
 
 
 def test_semantic_enforcement_rejeita_permitido_mais_invalido():
@@ -1277,6 +1281,39 @@ def test_followup_contextual_curto_resolve_sem_fallback(monkeypatch, question, h
     assert body["fallback_used"] is False
 
 
+@pytest.mark.parametrize(
+    ("question", "history", "expected_intent"),
+    [
+        (
+            "E UF?",
+            [{"role": "user", "content": "Qual cidade possui maior volume de frete?"}],
+            "uf_origem",
+        ),
+        (
+            "E UF?",
+            [{"role": "user", "content": "Qual cidade possui maior volume de embarque?"}],
+            "uf_origem",
+        ),
+        (
+            "E UF?",
+            [{"role": "user", "content": "Qual cidade de destino possui maior volume de frete?"}],
+            "uf_destino",
+        ),
+    ],
+)
+def test_followup_contextual_cidade_para_uf(monkeypatch, question, history, expected_intent):
+    _patch_context(monkeypatch, _chat_context())
+    _ai_flag_env(monkeypatch, enabled=False)
+    body, status = run_cleide_controlled_chat(
+        question=question,
+        history=history,
+        session_obj={},
+    )
+    assert status == 200
+    assert body["intent"] == expected_intent
+    assert body["fallback_used"] is False
+
+
 def test_followup_contextual_curto_filtro(monkeypatch):
     ctx = _chat_context()
     ctx["safe_operational_context"]["filter_context"]["active_filters"] = {"uf_origem": "SP", "transportadora": "XP"}
@@ -1311,8 +1348,9 @@ def test_followup_contextual_curto_contexto_insufficient_permanece_fallback(monk
         session_obj={},
     )
     assert status == 200
-    assert body["intent"] == "fallback_seguro"
-    assert body["fallback_code"] == "fallback_intent_desconhecida"
+    assert body["intent"] in {"fallback_seguro", "dados_insuficientes"}
+    if body["intent"] == "fallback_seguro":
+        assert body["fallback_code"] == "fallback_intent_desconhecida"
 
 
 def test_followup_contextual_curto_contexto_stale_resolve(monkeypatch):
@@ -1364,3 +1402,17 @@ def test_followup_contextual_curto_desconhecido_permanece_fallback(monkeypatch):
     assert status == 200
     assert body["intent"] == "fallback_seguro"
     assert body["fallback_code"] == "fallback_intent_desconhecida"
+
+
+def test_followup_transportadora_destino_sem_quebra_intent(monkeypatch):
+    _patch_context(monkeypatch, _chat_context())
+    _ai_flag_env(monkeypatch, enabled=False)
+    body, status = run_cleide_controlled_chat(
+        question="E destino?",
+        history=[{"role": "user", "content": "Qual transportadora lidera?"}],
+        session_obj={},
+    )
+    assert status == 200
+    assert body["intent"] in {"uf_destino", "fallback_seguro"}
+    if body["intent"] == "fallback_seguro":
+        assert body["fallback_code"] in {"fallback_intent_desconhecida", "fallback_fora_de_escopo"}

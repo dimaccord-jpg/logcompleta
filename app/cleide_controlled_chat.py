@@ -36,7 +36,7 @@ MAX_RESPONSE_LEN = 420
 TOP_LIST_LIMIT = 3
 HISTORY_MAX_MESSAGES = 6
 HISTORY_MAX_CHARS = 300
-POLICY_SAFE_FALLBACK_REPLY = "Dados insuficientes. Oportunidade de investigacao. Concentracao operacional."
+POLICY_SAFE_FALLBACK_REPLY = "Dados insuficientes. Oportunidade de investigação. Concentração operacional."
 
 CONVERSATIONAL_CONTRACT_VERSION = "cleide_chat_controlled.v1"
 CONVERSATIONAL_PHASE = "9.1_hardening_semantic_governance"
@@ -81,10 +81,15 @@ CONTEXTUAL_FOLLOWUP_SHORT_TERMS = {
     "e o uf": "uf",
     "estado": "uf",
     "e estado": "uf",
+    "e o estado": "uf",
+    "e por uf": "uf",
+    "por uf": "uf",
     "origem": "origem",
     "e origem": "origem",
+    "e a origem": "origem",
     "destino": "destino",
     "e destino": "destino",
+    "e o destino": "destino",
     "segunda": "ranking_2",
     "e a segunda": "ranking_2",
     "segunda colocada": "ranking_2",
@@ -148,7 +153,7 @@ def run_cleide_controlled_chat(
         logger.info("Cleide chat: pergunta invalida (vazia).")
         return _fallback(
             "fallback_pergunta_invalida",
-            "Nao consegui interpretar a pergunta. Reescreva de forma objetiva com foco em oportunidade de investigacao.",
+            "Não consegui interpretar a pergunta. Reescreva de forma objetiva com foco em oportunidade de investigação.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -177,7 +182,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: bloqueio semantico por linguagem proibida.")
         return _fallback(
             "fallback_bloqueio_semantico",
-            "Nao posso responder nessa formulacao. Posso ajudar com concentracao operacional, variacao relevante e oportunidade de investigacao.",
+            "Não posso responder nessa formulação. Posso ajudar com concentração operacional, variação relevante e oportunidade de investigação.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -190,7 +195,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: referencia bloqueada a outro agente.")
         return _fallback(
             "fallback_fora_de_escopo",
-            "Estou limitada ao contexto operacional seguro da Cleide e nao respondo por Roberto ou Julia. Posso seguir com concentracao operacional.",
+            "Estou limitada ao contexto operacional seguro da Cleide e não respondo por Roberto ou Julia. Posso seguir com concentração operacional.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -203,7 +208,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: pergunta fora de escopo (juridico/financeiro acusatorio).")
         return _fallback(
             "fallback_fora_de_escopo",
-            "Estou limitada a contexto operacional seguro e nao respondo perguntas juridicas ou acusatorias. Posso seguir com concentracao operacional.",
+            "Estou limitada a contexto operacional seguro e não respondo perguntas jurídicas ou acusatórias. Posso seguir com concentração operacional.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -219,7 +224,7 @@ def run_cleide_controlled_chat(
     if intent != "unknown" and _is_dataset_insufficient(safe_context):
         return _build_success(
             intent="dados_insuficientes",
-            reply="Dados insuficientes para leitura operacional consistente neste momento e oportunidade de investigacao.",
+            reply="Dados insuficientes para leitura operacional consistente neste momento e oportunidade de investigação.",
             chat_ctx=chat_ctx,
             observability=_observability(
                 flags=flags,
@@ -277,7 +282,7 @@ def run_cleide_controlled_chat(
         logger.info("Cleide chat: intent desconhecida sem elegibilidade para IA supervisionada.")
         return _fallback(
             "fallback_intent_desconhecida",
-            "Nao reconheci essa intent. Posso ajudar com concentracao operacional, variacao relevante, tendencia operacional e dados insuficientes.",
+            "Não reconheci essa intent. Posso ajudar com concentração operacional, variação relevante, tendência operacional e dados insuficientes.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -376,7 +381,7 @@ def run_cleide_controlled_chat(
         logger.info("Cleide chat: fallback por intent desconhecida apos tentativa de IA.")
         return _fallback(
             "fallback_intent_desconhecida",
-            "Nao reconheci essa intent. Posso ajudar com concentracao operacional, variacao relevante, tendencia operacional e dados insuficientes.",
+            "Não reconheci essa intent. Posso ajudar com concentração operacional, variação relevante, tendência operacional e dados insuficientes.",
             observability=(
                 ai_failure_observability
                 if isinstance(ai_failure_observability, dict)
@@ -395,7 +400,7 @@ def run_cleide_controlled_chat(
         logger.info("Cleide chat: fallback por intent sem dados suficientes (%s).", intent)
         return _build_success(
             intent="dados_insuficientes",
-            reply="Dados insuficientes para responder essa pergunta com seguranca e oportunidade de investigacao.",
+            reply="Dados insuficientes para responder essa pergunta com segurança e oportunidade de investigação.",
             chat_ctx=chat_ctx,
             observability=_observability(
                 flags=flags,
@@ -411,7 +416,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: resposta bloqueada por linguagem proibida.")
         return _fallback(
             "fallback_bloqueio_semantico",
-            "Resposta bloqueada por politica de linguagem. Reformule para concentracao operacional.",
+            "Resposta bloqueada por política de linguagem. Reformule para concentração operacional.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -432,7 +437,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: resposta bloqueada por drift de policy permitida (%s).", reason_code)
         return _fallback(
             "fallback_bloqueio_semantico",
-            "Resposta bloqueada por politica de linguagem. Reformule para oportunidade de investigacao.",
+            "Resposta bloqueada por política de linguagem. Reformule para oportunidade de investigação.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -507,7 +512,7 @@ def _classify_intent(normalized: str) -> str:
         ),
     ):
         return "uf_origem"
-    if normalized in {"uf", "e uf", "ufs", "estado", "estados"}:
+    if normalized in {"uf", "ufs", "estado", "estados"}:
         return "uf_origem"
     if _contains_any(normalized, ("uf origem", "origem", "estado de origem", "ufs origem")):
         return "uf_origem"
@@ -537,82 +542,82 @@ def _reply_for_intent(intent: str, safe_context: dict[str, Any]) -> str:
     tables = safe_context.get("aggregate_tables") if isinstance(safe_context.get("aggregate_tables"), dict) else {}
 
     if intent == "dados_insuficientes":
-        return "Dados insuficientes. Oportunidade de investigacao. Concentracao operacional."
+        return "Dados insuficientes. Oportunidade de investigação. Concentração operacional."
     if intent == "resumo_operacional":
         return (
-            f"Concentracao operacional em {format_integer(kpis.get('total_documentos'))} documentos, "
+            f"Concentração operacional em {format_integer(kpis.get('total_documentos'))} documentos, "
             f"valor total {format_brl(kpis.get('valor_total_frete'))}, peso total {format_weight(kpis.get('peso_total'))} "
-            f"e ticket medio {format_brl(kpis.get('ticket_medio_frete'))}. "
-            "Variacao relevante. Tendencia operacional. Oportunidade de investigacao."
+            f"e ticket médio {format_brl(kpis.get('ticket_medio_frete'))}. "
+            "Variação relevante. Tendência operacional. Oportunidade de investigação."
         )
     if intent == "top_transportadoras":
         return _build_top_reply(
             rows=tables.get("transportadora"),
             label="transportadoras",
-            fallback="Nao ha dados suficientes para top transportadoras.",
+            fallback="Não há dados suficientes para top transportadoras.",
         )
     if intent == "uf_origem":
         return _build_top_reply(
             rows=tables.get("uf_origem"),
             label="UFs de origem",
-            fallback="Nao ha dados suficientes para UFs de origem.",
+            fallback="Não há dados suficientes para UFs de origem.",
         )
     if intent == "uf_destino":
         return _build_top_reply(
             rows=tables.get("uf_destino"),
             label="UFs de destino",
-            fallback="Nao ha dados suficientes para UFs de destino.",
+            fallback="Não há dados suficientes para UFs de destino.",
         )
     if intent == "periodo_dataset":
         periodo = kpis.get("periodo_dataset") if isinstance(kpis.get("periodo_dataset"), dict) else {}
-        inicio = format_date_ptbr(periodo.get("inicio")) if periodo.get("inicio") else "nao informado"
-        fim = format_date_ptbr(periodo.get("fim")) if periodo.get("fim") else "nao informado"
+        inicio = format_date_ptbr(periodo.get("inicio")) if periodo.get("inicio") else "não informado"
+        fim = format_date_ptbr(periodo.get("fim")) if periodo.get("fim") else "não informado"
         return (
-            f"Tendencia operacional {inicio} {fim}. Variacao relevante. Oportunidade de investigacao."
+            f"Tendência operacional {inicio} {fim}. Variação relevante. Oportunidade de investigação."
         )
     if intent == "modal_operacional":
         return _build_top_reply(
             rows=tables.get("modal"),
             label="modal",
-            fallback="Dados insuficientes. Oportunidade de investigacao. Concentracao operacional.",
+            fallback="Dados insuficientes. Oportunidade de investigação. Concentração operacional.",
         )
     if intent == "filtro_operacional":
         filter_context = safe_context.get("filter_context") if isinstance(safe_context.get("filter_context"), dict) else {}
         active_filters = _safe_active_filters(filter_context.get("active_filters"))
         if active_filters:
             return (
-                f"Concentracao operacional com {format_integer(len(active_filters))} filtros ativos. "
-                "Variacao relevante. Oportunidade de investigacao."
+                f"Concentração operacional com {format_integer(len(active_filters))} filtros ativos. "
+                "Variação relevante. Oportunidade de investigação."
             )
-        return "Concentracao operacional em visao global sem filtro ativo. Variacao relevante. Oportunidade de investigacao."
+        return "Concentração operacional em visão global sem filtro ativo. Variação relevante. Oportunidade de investigação."
     if intent == "qualidade_dataset":
         invalid_numeric = format_integer(dataset_summary.get("invalid_numeric_rows"))
         invalid_date = format_integer(dataset_summary.get("invalid_date_rows"))
         negative = format_integer(dataset_summary.get("negative_value_rows"))
         sparse = "1" if bool(quality_flags.get("has_sparse_aggregates")) else "0"
         return (
-            f"Oportunidade de investigacao {invalid_numeric} {invalid_date} {negative} {sparse}. "
-            "Variacao relevante. Concentracao operacional."
+            f"Oportunidade de investigação {invalid_numeric} {invalid_date} {negative} {sparse}. "
+            "Variação relevante. Concentração operacional."
         )
     if intent == "quantidade_documentos":
         return (
-            f"Tendencia operacional {format_integer(kpis.get('total_documentos'))}. "
-            "Concentracao operacional. Oportunidade de investigacao."
+            f"Tendência operacional {format_integer(kpis.get('total_documentos'))}. "
+            "Concentração operacional. Oportunidade de investigação."
         )
     if intent == "ticket_medio":
         return (
-            f"Tendencia operacional {format_brl(kpis.get('ticket_medio_frete'))}. "
-            "Concentracao operacional. Oportunidade de investigacao."
+            f"Tendência operacional {format_brl(kpis.get('ticket_medio_frete'))}. "
+            "Concentração operacional. Oportunidade de investigação."
         )
     if intent == "peso_total":
         return (
-            f"Tendencia operacional {format_weight(kpis.get('peso_total'))}. "
-            "Concentracao operacional. Oportunidade de investigacao."
+            f"Tendência operacional {format_weight(kpis.get('peso_total'))}. "
+            "Concentração operacional. Oportunidade de investigação."
         )
     if intent == "fretes_zerados":
         return (
-            f"Tendencia operacional {format_percent(kpis.get('percentual_fretes_zerados'))}. "
-            "Variacao relevante. Oportunidade de investigacao."
+            f"Tendência operacional {format_percent(kpis.get('percentual_fretes_zerados'))}. "
+            "Variação relevante. Oportunidade de investigação."
         )
     return ""
 
@@ -629,8 +634,8 @@ def _build_top_reply(*, rows: Any, label: str, fallback: str) -> str:
     if not parts:
         return fallback
     return (
-        f"Participacao relevante {' '.join(parts)}. "
-        "Variacao relevante. Concentracao operacional. Oportunidade de investigacao."
+        f"Participação relevante {' '.join(parts)}. "
+        "Variação relevante. Concentração operacional. Oportunidade de investigação."
     )
 
 
@@ -908,15 +913,26 @@ def _resolve_contextual_followup(
     followup_kind = CONTEXTUAL_FOLLOWUP_SHORT_TERMS.get(semantic_question)
     if not followup_kind:
         return None
-    recent_topic = _resolve_recent_history_topic(history)
-    if not recent_topic:
+    conversation_state = _derive_conversation_state(history)
+    recent_topic = str(conversation_state.get("last_topic") or "")
+    recent_intent = str(conversation_state.get("last_intent") or "")
+    recent_scope = str(conversation_state.get("last_scope") or "")
+    recent_dimension = str(conversation_state.get("last_dimension") or "")
+    if not recent_topic and not recent_intent:
         return None
     if followup_kind == "uf":
-        if recent_topic == "uf_origem":
+        if recent_intent == "uf_origem" or recent_topic == "uf_origem":
             return {"intent": "uf_origem"}
-        if recent_topic == "uf_destino":
+        if recent_intent == "uf_destino" or recent_topic == "uf_destino":
             return {"intent": "uf_destino"}
-        if recent_topic in {"embarque_origem", "cidade_embarque"}:
+        if recent_topic in {"embarque_origem", "cidade_embarque", "cidade_operacional"}:
+            if recent_scope == "destino":
+                return {"intent": "uf_destino"}
+            return {"intent": "uf_origem"}
+        if recent_dimension == "cidade" and recent_topic == "frete_operacional":
+            if recent_scope == "destino":
+                return {"intent": "uf_destino"}
+            # Regra segura para ambiguidade cidade+frete: assumir origem.
             return {"intent": "uf_origem"}
         return None
     if followup_kind == "origem":
@@ -941,7 +957,8 @@ def _resolve_contextual_followup(
             "uf_destino": "uf_destino",
             "modal_operacional": "modal",
         }
-        table_key = rank_map.get(recent_topic)
+        topic_or_intent = recent_topic or recent_intent
+        table_key = rank_map.get(topic_or_intent) or rank_map.get(recent_intent)
         if not table_key:
             return None
         tables = (
@@ -952,7 +969,7 @@ def _resolve_contextual_followup(
         reply = _build_rank_position_reply(rows=tables.get(table_key), position=rank_position)
         if not reply:
             return {"intent": "dados_insuficientes"}
-        return {"intent": recent_topic, "reply": reply}
+        return {"intent": topic_or_intent or "unknown", "reply": reply}
     return None
 
 
@@ -974,11 +991,58 @@ def _resolve_recent_history_topic(history: list[dict[str, str]] | None) -> str:
     return ""
 
 
+def _derive_conversation_state(history: list[dict[str, str]] | None) -> dict[str, str]:
+    state = {"last_intent": "", "last_topic": "", "last_dimension": "", "last_scope": ""}
+    if not isinstance(history, list) or not history:
+        return state
+    items = [item for item in history[-HISTORY_MAX_MESSAGES:] if isinstance(item, dict)]
+    if not items:
+        return state
+    for preferred_role in ("user", "assistant"):
+        for item in reversed(items):
+            role = _normalize_for_match(str(item.get("role") or ""))
+            if role != preferred_role:
+                continue
+            content = _normalize_whitespace(str(item.get("content") or ""))
+            if not content:
+                continue
+            normalized_content = _normalize_for_match(content)
+            semantic = _semantic_text(normalized_content)
+            if not semantic:
+                continue
+            inferred_topic = _topic_from_semantic_text(semantic)
+            inferred_intent = _classify_intent(normalized_content)
+            inferred_dimension = _dimension_from_semantic_text(semantic)
+            inferred_scope = _scope_from_semantic_text(semantic)
+            if inferred_intent == "unknown":
+                inferred_intent = ""
+            if inferred_topic or inferred_intent or inferred_dimension or inferred_scope:
+                return {
+                    "last_intent": inferred_intent,
+                    "last_topic": inferred_topic,
+                    "last_dimension": inferred_dimension,
+                    "last_scope": inferred_scope,
+                }
+    return state
+
+
 def _topic_from_semantic_text(semantic_text: str) -> str:
+    has_cidade = "cidade" in semantic_text
+    has_frete = "frete" in semantic_text
+    has_embarque = "embarque" in semantic_text
+    has_volume = "volume" in semantic_text
+    has_origem = "origem" in semantic_text
+    has_destino = "destino" in semantic_text
+    if has_cidade and (has_frete or has_embarque or has_volume or has_origem or has_destino):
+        return "cidade_operacional"
+    if "maior volume de frete" in semantic_text:
+        return "cidade_operacional"
     if "cidade" in semantic_text and "embarque" in semantic_text:
         return "cidade_embarque"
     if "embarque" in semantic_text:
         return "embarque_origem"
+    if has_frete:
+        return "frete_operacional"
     if "uf origem" in semantic_text or "origem" in semantic_text:
         return "uf_origem"
     if "uf destino" in semantic_text or "destino" in semantic_text:
@@ -1008,9 +1072,36 @@ def _build_rank_position_reply(*, rows: Any, position: int) -> str:
     if not chave:
         return ""
     return (
-        f"Participacao relevante {chave} {quantidade}. "
-        "Variacao relevante. Concentracao operacional. Oportunidade de investigacao."
+        f"Participação relevante {chave} {quantidade}. "
+        "Variação relevante. Concentração operacional. Oportunidade de investigação."
     )
+
+
+def _dimension_from_semantic_text(semantic_text: str) -> str:
+    if "cidade" in semantic_text:
+        return "cidade"
+    if "uf" in semantic_text or "estado" in semantic_text:
+        return "uf"
+    if "transportadora" in semantic_text:
+        return "transportadora"
+    if "modal" in semantic_text:
+        return "modal"
+    if "periodo" in semantic_text:
+        return "periodo"
+    if "filtro" in semantic_text:
+        return "filtro"
+    return ""
+
+
+def _scope_from_semantic_text(semantic_text: str) -> str:
+    if "destino" in semantic_text:
+        return "destino"
+    if "origem" in semantic_text or "embarque" in semantic_text:
+        return "origem"
+    if "cidade" in semantic_text and ("frete" in semantic_text or "volume" in semantic_text):
+        # Regra segura documentada: cidade+frete sem escopo explicito resolve para origem.
+        return "origem"
+    return ""
 
 
 def _normalize_history_entries(history: Any) -> list[dict[str, str]]:
@@ -1218,7 +1309,8 @@ def _normalize_whitespace(value: str) -> str:
 def _normalize_for_match(value: str) -> str:
     base = _normalize_whitespace(value).lower()
     normalized = unicodedata.normalize("NFD", base)
-    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+    without_accents = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+    return re.sub(r"[\W_]+$", "", without_accents).strip()
 
 
 def _to_int(value: Any) -> int:

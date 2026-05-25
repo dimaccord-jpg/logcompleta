@@ -37,7 +37,7 @@ from app.cleide_upload_store import (
     resolve_cleide_upload_file,
     save_cleide_upload_file,
 )
-from app.services.cleide_config_service import get_cleide_config
+from app.services.cleide_config_service import DEFAULTS as CLEIDE_CONFIG_DEFAULTS, get_cleide_config
 from app.services.cleiton_upload_billing_service import apropriar_billing_upload_cleide
 
 logger = logging.getLogger(__name__)
@@ -304,7 +304,13 @@ def process_cleide_upload() -> tuple[Any, int]:
             extension=ext,
             delimiter_default=cfg.csv_delimiter_default,
         )
-        upload_total_max = int(cfg.upload_total_max)
+        upload_total_max = int(
+            getattr(
+                cfg,
+                "upload_total_max",
+                CLEIDE_CONFIG_DEFAULTS["upload_total_max"],
+            )
+        )
         if linhas_detectadas > upload_total_max:
             error_message = "Arquivo excede o limite máximo de linhas permitido para a Cleide."
             logger.warning(

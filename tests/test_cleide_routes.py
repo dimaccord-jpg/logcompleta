@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import flask_login.utils
 
+from app.cleide_controlled_chat import _normalize_for_match
+
 
 def _load_web_module():
     os.environ.setdefault("APP_ENV", "dev")
@@ -214,8 +216,9 @@ def test_chat_cleide_placeholder_expoe_contexto_seguro_sem_ia(monkeypatch):
     assert body["audit_transition_marker"] == "transition_501_placeholder_to_200_controlled_confirmed"
     assert body["audit_notes"]["legacy_chat_status"] == 501
     assert body["audit_notes"]["current_chat_status"] == 200
-    assert "concentracao operacional" in body["reply"].lower()
-    assert "oportunidade de investigacao" in body["reply"].lower()
+    reply_norm = _normalize_for_match(body["reply"])
+    assert "concentracao operacional" in reply_norm
+    assert "oportunidade de investigacao" in reply_norm
     assert body["chat_context_version"] == "cleide_chat_context.v1"
     assert body["chat_ready_context"] is True
     assert body["semantic_limits"]["kpis_are_global_session_scope"] is True
