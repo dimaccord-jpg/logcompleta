@@ -43,6 +43,7 @@ def test_admin_agentes_cleide_get_ok_para_admin(monkeypatch):
             chat_context_rankings_limit=12,
             chat_context_max_text_len=80,
             chat_context_max_chars=6000,
+            chat_response_max_chars=3000,
             chat_context_mode="executivo",
             chat_context_include_transportadora=1,
             chat_context_include_uf_origem=1,
@@ -76,6 +77,7 @@ def test_admin_agentes_cleide_post_salva(monkeypatch):
         assert payload["chat_context_mode"] == "conservador"
         assert payload["chat_context_max_items_per_table"] == "7"
         assert payload["upload_total_max"] == "12345"
+        assert payload["chat_response_max_chars"] == "3000"
 
     monkeypatch.setattr("app.services.cleide_config_service.salvar_cleide_config", _save)
 
@@ -87,6 +89,7 @@ def test_admin_agentes_cleide_post_salva(monkeypatch):
             "chat_context_max_items_per_table": "7",
             "chat_context_max_text_len": "90",
             "chat_context_rankings_limit": "5",
+            "chat_response_max_chars": "3000",
             "chat_context_mode": "conservador",
             "chat_context_max_chars": "7000",
             "chat_context_include_transportadora": "on",

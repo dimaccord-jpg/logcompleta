@@ -28,15 +28,19 @@ from app.cleide_language_policy import (
 from app.services.cleiton_operacao_autorizacao_service import (
     avaliar_autorizacao_operacao_por_franquia,
 )
+from app.services.cleide_config_service import get_cleide_config
 
 logger = logging.getLogger(__name__)
 
 MAX_QUESTION_LEN = 320
-MAX_RESPONSE_LEN = 1600
+DEFAULT_RESPONSE_MAX_LEN = 3000
+MIN_RESPONSE_MAX_LEN = 1200
+MAX_RESPONSE_MAX_LEN = 6000
+MAX_RESPONSE_LEN = DEFAULT_RESPONSE_MAX_LEN
 TOP_LIST_LIMIT = 3
 HISTORY_MAX_MESSAGES = 10
 HISTORY_MAX_CHARS = 900
-POLICY_SAFE_FALLBACK_REPLY = "Dados insuficientes. Oportunidade de investigação. Concentração operacional."
+POLICY_SAFE_FALLBACK_REPLY = "Dados insuficientes para responder com segurança no recorte atual."
 
 CONVERSATIONAL_CONTRACT_VERSION = "cleide_chat_controlled.v1"
 CONVERSATIONAL_PHASE = "9.1_hardening_semantic_governance"
@@ -56,11 +60,15 @@ REPLY_MIN_DOMAIN_SIGNAL_TOKENS = (
     "origem",
     "destino",
     "concentracao",
+    "concentração",
     "variacao",
+    "variação",
     "ranking",
     "comparacao",
+    "comparação",
     "auditoria",
     "investigacao",
+    "investigação",
     "volume",
     "ticket",
     "periodo",
@@ -153,7 +161,7 @@ def run_cleide_controlled_chat(
         logger.info("Cleide chat: pergunta invalida (vazia).")
         return _fallback(
             "fallback_pergunta_invalida",
-            "Não consegui interpretar a pergunta. Reescreva de forma objetiva com foco em oportunidade de investigação.",
+            "Não consegui interpretar a pergunta. Reescreva de forma objetiva com escopo operacional claro.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -182,7 +190,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: bloqueio semantico por linguagem proibida.")
         return _fallback(
             "fallback_bloqueio_semantico",
-            "Não posso responder nessa formulação. Posso ajudar com concentração operacional, variação relevante e oportunidade de investigação.",
+            "Não posso responder nessa formulação. Posso ajudar com leitura operacional baseada nos agregados disponíveis.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -195,7 +203,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: referencia bloqueada a outro agente.")
         return _fallback(
             "fallback_fora_de_escopo",
-            "Estou limitada ao contexto operacional seguro da Cleide e não respondo por Roberto ou Julia. Posso seguir com concentração operacional.",
+            "Estou limitada ao contexto operacional seguro da Cleide e não respondo por Roberto ou Julia.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -208,7 +216,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: pergunta fora de escopo (juridico/financeiro acusatorio).")
         return _fallback(
             "fallback_fora_de_escopo",
-            "Estou limitada a contexto operacional seguro e não respondo perguntas jurídicas ou acusatórias. Posso seguir com concentração operacional.",
+            "Estou limitada a contexto operacional seguro e não respondo perguntas jurídicas ou acusatórias.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -224,7 +232,7 @@ def run_cleide_controlled_chat(
     if intent != "unknown" and _is_dataset_insufficient(safe_context):
         return _build_success(
             intent="dados_insuficientes",
-            reply="Dados insuficientes para leitura operacional consistente neste momento e oportunidade de investigação.",
+            reply="Dados insuficientes para leitura operacional consistente no recorte atual.",
             chat_ctx=chat_ctx,
             observability=_observability(
                 flags=flags,
@@ -282,7 +290,7 @@ def run_cleide_controlled_chat(
         logger.info("Cleide chat: intent desconhecida sem elegibilidade para IA supervisionada.")
         return _fallback(
             "fallback_intent_desconhecida",
-            "Não reconheci essa intent. Posso ajudar com concentração operacional, variação relevante, tendência operacional e dados insuficientes.",
+            "Não reconheci essa intenção. Posso ajudar com ranking operacional, UF origem/destino, período e dados insuficientes.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -381,7 +389,7 @@ def run_cleide_controlled_chat(
         logger.info("Cleide chat: fallback por intent desconhecida apos tentativa de IA.")
         return _fallback(
             "fallback_intent_desconhecida",
-            "Não reconheci essa intent. Posso ajudar com concentração operacional, variação relevante, tendência operacional e dados insuficientes.",
+            "Não reconheci essa intenção. Posso ajudar com ranking operacional, UF origem/destino, período e dados insuficientes.",
             observability=(
                 ai_failure_observability
                 if isinstance(ai_failure_observability, dict)
@@ -400,7 +408,7 @@ def run_cleide_controlled_chat(
         logger.info("Cleide chat: fallback por intent sem dados suficientes (%s).", intent)
         return _build_success(
             intent="dados_insuficientes",
-            reply="Dados insuficientes para responder essa pergunta com segurança e oportunidade de investigação.",
+            reply="Dados insuficientes para responder essa pergunta com segurança no recorte atual.",
             chat_ctx=chat_ctx,
             observability=_observability(
                 flags=flags,
@@ -416,7 +424,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: resposta bloqueada por linguagem proibida.")
         return _fallback(
             "fallback_bloqueio_semantico",
-            "Resposta bloqueada por política de linguagem. Reformule para concentração operacional.",
+            "Resposta bloqueada por política de linguagem. Reformule a pergunta com foco operacional.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -437,7 +445,7 @@ def run_cleide_controlled_chat(
         logger.warning("Cleide chat: resposta bloqueada por drift de policy permitida (%s).", reason_code)
         return _fallback(
             "fallback_bloqueio_semantico",
-            "Resposta bloqueada por política de linguagem. Reformule para oportunidade de investigação.",
+            "Resposta bloqueada por política de linguagem. Reformule a pergunta com foco operacional.",
             observability=_observability(
                 flags=flags,
                 ai_used=False,
@@ -542,7 +550,7 @@ def _reply_for_intent(intent: str, safe_context: dict[str, Any]) -> str:
     tables = safe_context.get("aggregate_tables") if isinstance(safe_context.get("aggregate_tables"), dict) else {}
 
     if intent == "dados_insuficientes":
-        return "Dados insuficientes. Oportunidade de investigação. Concentração operacional."
+        return "Dados insuficientes para responder com segurança no recorte atual."
     if intent == "resumo_operacional":
         top_origem = _top_row_label(tables.get("uf_origem"))
         top_destino = _top_row_label(tables.get("uf_destino"))
@@ -552,8 +560,7 @@ def _reply_for_intent(intent: str, safe_context: dict[str, Any]) -> str:
             f"- Volume processado: {format_integer(kpis.get('total_documentos'))} documentos e {format_weight(kpis.get('peso_total'))}.\n"
             f"- Ticket medio: {format_brl(kpis.get('ticket_medio_frete'))}.\n"
             f"- UF origem com maior custo: {top_origem}.\n"
-            f"- UF destino com maior custo: {top_destino}.\n\n"
-            "Concentracao operacional com variacao relevante e oportunidade de investigacao."
+            f"- UF destino com maior custo: {top_destino}."
         )
     if intent == "top_transportadoras":
         return _build_top_reply(
@@ -578,51 +585,44 @@ def _reply_for_intent(intent: str, safe_context: dict[str, Any]) -> str:
         inicio = format_date_ptbr(periodo.get("inicio")) if periodo.get("inicio") else "não informado"
         fim = format_date_ptbr(periodo.get("fim")) if periodo.get("fim") else "não informado"
         return (
-            f"Tendência operacional {inicio} {fim}. Variação relevante. Oportunidade de investigação."
+            f"Período do dataset no recorte analisado: início em {inicio} e fim em {fim}."
         )
     if intent == "modal_operacional":
         return _build_top_reply(
             rows=tables.get("modal"),
             label="modal",
-            fallback="Dados insuficientes. Oportunidade de investigação. Concentração operacional.",
+            fallback="Dados insuficientes para leitura de modal no recorte atual.",
         )
     if intent == "filtro_operacional":
         filter_context = safe_context.get("filter_context") if isinstance(safe_context.get("filter_context"), dict) else {}
         active_filters = _safe_active_filters(filter_context.get("active_filters"))
         if active_filters:
             return (
-                f"Concentração operacional com {format_integer(len(active_filters))} filtros ativos. "
-                "Variação relevante. Oportunidade de investigação."
+                f"Escopo filtrado com {format_integer(len(active_filters))} filtros ativos no recorte atual."
             )
-        return "Concentração operacional em visão global sem filtro ativo. Variação relevante. Oportunidade de investigação."
+        return "Escopo global sem filtros ativos no recorte atual."
     if intent == "qualidade_dataset":
         invalid_numeric = format_integer(dataset_summary.get("invalid_numeric_rows"))
         invalid_date = format_integer(dataset_summary.get("invalid_date_rows"))
         negative = format_integer(dataset_summary.get("negative_value_rows"))
         sparse = "1" if bool(quality_flags.get("has_sparse_aggregates")) else "0"
         return (
-            f"Oportunidade de investigação {invalid_numeric} {invalid_date} {negative} {sparse}. "
-            "Variação relevante. Concentração operacional."
+            "Qualidade do dataset no recorte analisado: "
+            f"{invalid_numeric} linhas com campo numérico inválido; "
+            f"{invalid_date} linhas com data inválida; "
+            f"{negative} linhas com valor negativo; "
+            f"sinal de agregados esparsos={sparse}."
         )
     if intent == "quantidade_documentos":
-        return (
-            f"Tendência operacional {format_integer(kpis.get('total_documentos'))}. "
-            "Concentração operacional. Oportunidade de investigação."
-        )
+        return f"Total de documentos no recorte analisado: {format_integer(kpis.get('total_documentos'))} documentos."
     if intent == "ticket_medio":
-        return (
-            f"Tendência operacional {format_brl(kpis.get('ticket_medio_frete'))}. "
-            "Concentração operacional. Oportunidade de investigação."
-        )
+        return f"Ticket médio de frete no recorte analisado: {format_brl(kpis.get('ticket_medio_frete'))}."
     if intent == "peso_total":
-        return (
-            f"Tendência operacional {format_weight(kpis.get('peso_total'))}. "
-            "Concentração operacional. Oportunidade de investigação."
-        )
+        return f"Peso total no recorte analisado: {format_weight(kpis.get('peso_total'))}."
     if intent == "fretes_zerados":
         return (
-            f"Tendência operacional {format_percent(kpis.get('percentual_fretes_zerados'))}. "
-            "Variação relevante. Oportunidade de investigação."
+            "Percentual de fretes zerados no recorte analisado: "
+            f"{format_percent(kpis.get('percentual_fretes_zerados'))}."
         )
     return ""
 
@@ -640,7 +640,7 @@ def _build_top_reply(*, rows: Any, label: str, fallback: str) -> str:
             parts.append(item)
     if not parts:
         return fallback
-    return "\n".join(parts) + "\n\nConcentracao operacional com variacao relevante e oportunidade de investigacao."
+    return "\n".join(parts)
 
 
 def _build_uf_scope_reply(
@@ -667,7 +667,7 @@ def _build_uf_scope_reply(
     else:
         ordered = [top_origem, top_destino]
     body = [item for item in ordered if item]
-    return f"{intro}\n" + "\n".join(body) + "\n\nConcentracao operacional com variacao relevante e oportunidade de investigacao."
+    return f"{intro}\n" + "\n".join(body)
 
 
 def _is_dataset_insufficient(safe_context: dict[str, Any]) -> bool:
@@ -747,13 +747,23 @@ def _fallback(code: str, reply: str, *, observability: dict[str, Any] | None = N
 
 
 def _safe_reply(reply: str) -> tuple[str, bool]:
+    max_response_len = _resolve_response_max_len()
     clean = _normalize_reply_text(reply)
-    if len(clean) <= MAX_RESPONSE_LEN:
+    if len(clean) <= max_response_len:
         return clean, False
-    truncated = clean[: MAX_RESPONSE_LEN - 3].rstrip()
+    truncated = clean[: max_response_len - 3].rstrip()
     if not truncated:
         return "...", True
     return truncated + "...", True
+
+
+def _resolve_response_max_len() -> int:
+    try:
+        cfg = get_cleide_config()
+        configured = int(getattr(cfg, "chat_response_max_chars", DEFAULT_RESPONSE_MAX_LEN))
+    except Exception:
+        configured = DEFAULT_RESPONSE_MAX_LEN
+    return max(MIN_RESPONSE_MAX_LEN, min(configured, MAX_RESPONSE_MAX_LEN))
 
 
 def _contains_forbidden(normalized: str, forbidden_terms: set[str]) -> bool:
@@ -1104,7 +1114,7 @@ def _build_rank_position_reply(*, rows: Any, position: int) -> str:
     rank_item = _format_rank_item(row=row, dimension_label=_infer_dimension_from_row(row), position=position)
     if not rank_item:
         return ""
-    return f"{rank_item}\n\nConcentracao operacional com variacao relevante e oportunidade de investigacao."
+    return rank_item
 
 
 def _normalize_reply_text(value: str) -> str:

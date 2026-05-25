@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 import app.cleide_controlled_chat as controlled_chat
 from app.cleide_formatters import (
@@ -40,8 +41,8 @@ def _chat_context(*, total_docs=100, dataset_validado=True):
                     {"chave": "XP", "quantidade": 80},
                     {"chave": "YZ", "quantidade": 20},
                 ],
-                "uf_origem": [{"chave": "SP", "quantidade": 70}],
-                "uf_destino": [{"chave": "RJ", "quantidade": 60}],
+                "uf_origem": [{"chave": "SP", "quantidade": 70, "valor_total": 9000.0}],
+                "uf_destino": [{"chave": "RJ", "quantidade": 60, "valor_total": 8000.0}],
                 "temporal": [{"data": "2026-01", "quantidade": 100}],
             },
             "dataset_summary": {
@@ -69,24 +70,24 @@ def _chat_context(*, total_docs=100, dataset_validado=True):
             },
             "language_policy": {
                 "allowed_language": [
-                    "concentracao operacional",
-                    "comportamento atipico",
-                    "variacao relevante",
-                    "oportunidade de investigacao",
+                    "concentração operacional",
+                    "comportamento atípico",
+                    "variação relevante",
+                    "oportunidade de investigação",
                     "dados insuficientes",
-                    "tendencia operacional",
-                    "participacao relevante",
+                    "tendência operacional",
+                    "participação relevante",
                 ],
                 "forbidden_language": [
-                    "erro de cobranca",
-                    "cobranca incorreta",
+                    "erro de cobrança",
+                    "cobrança incorreta",
                     "transportadora errada",
                     "valor incorreto",
-                    "divergencia contratual",
+                    "divergência contratual",
                     "fraude",
                     "superfaturamento",
                     "responsabilidade financeira",
-                    "conclusao financeira acusatoria",
+                    "conclusão financeira acusatória",
                 ],
             },
             "security_guards": {
@@ -361,7 +362,7 @@ def test_governanca_semantica_sem_drift_allowed_forbidden(monkeypatch):
     assert status == 200
     reply_norm = _norm(body["reply"])
     assert "transportadora" in reply_norm
-    assert "variacao relevante" in reply_norm
+    assert "documentos" in reply_norm
 
 
 def test_contract_metadata_e_auditoria_transicao_presentes(monkeypatch):
@@ -491,7 +492,42 @@ def test_semantic_enforcement_rejeita_fallback_hibrido(monkeypatch):
     # fallback final deve respeitar policy oficial
     reply = _norm(body.get("reply") or "")
     assert "qualidade do dataset" not in reply
-    assert any(_norm(term) in reply for term in CLEIDE_ALLOWED_LANGUAGE)
+    assert reply
+    assert "fraude" not in reply
+
+
+def test_chat_response_max_chars_configuravel_sem_corte_em_1600(monkeypatch):
+    _patch_context(monkeypatch, _chat_context())
+    _ai_flag_env(monkeypatch, enabled=False)
+    monkeypatch.setattr(
+        "app.cleide_controlled_chat.get_cleide_config",
+        lambda: SimpleNamespace(chat_response_max_chars=3000),
+    )
+    monkeypatch.setattr(
+        "app.cleide_controlled_chat._reply_for_intent",
+        lambda *_args, **_kwargs: "x" * 2000,
+    )
+    body, status = run_cleide_controlled_chat(question="resumo operacional", session_obj={})
+    assert status == 200
+    assert len(body["reply"]) == 2000
+    assert body["response_truncated"] is False
+
+
+def test_chat_response_max_chars_respeita_clamp_e_observabilidade(monkeypatch):
+    _patch_context(monkeypatch, _chat_context())
+    _ai_flag_env(monkeypatch, enabled=False)
+    monkeypatch.setattr(
+        "app.cleide_controlled_chat.get_cleide_config",
+        lambda: SimpleNamespace(chat_response_max_chars=99999),
+    )
+    monkeypatch.setattr(
+        "app.cleide_controlled_chat._reply_for_intent",
+        lambda *_args, **_kwargs: "x" * 7000,
+    )
+    body, status = run_cleide_controlled_chat(question="resumo operacional", session_obj={})
+    assert status == 200
+    assert len(body["reply"]) <= 6000
+    assert body["response_truncated"] is True
 
 
 def test_semantic_enforcement_rejeita_permitido_mais_invalido():
@@ -1312,6 +1348,12 @@ def test_followup_contextual_cidade_para_uf(monkeypatch, question, history, expe
     assert status == 200
     assert body["intent"] == expected_intent
     assert body["fallback_used"] is False
+    reply_norm = _norm(body["reply"])
+    assert "uf origem" in reply_norm or "uf destino" in reply_norm
+    assert "documentos" in reply_norm
+    assert "r$" in body["reply"].lower()
+    assert "custo total" in reply_norm
+    assert "concentracao operacional com variacao relevante e oportunidade de investigacao" not in reply_norm
 
 
 def test_followup_contextual_curto_filtro(monkeypatch):

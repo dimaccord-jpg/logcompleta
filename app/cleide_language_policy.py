@@ -4,33 +4,33 @@ import unicodedata
 
 # Fonte oficial de verdade de linguagem da Cleide (Fase 9.1).
 CLEIDE_ALLOWED_LANGUAGE: tuple[str, ...] = (
-    "concentracao operacional",
-    "comportamento atipico",
-    "variacao relevante",
-    "oportunidade de investigacao",
+    "concentração operacional",
+    "comportamento atípico",
+    "variação relevante",
+    "oportunidade de investigação",
     "dados insuficientes",
-    "tendencia operacional",
-    "participacao relevante",
+    "tendência operacional",
+    "participação relevante",
 )
 
 CLEIDE_FORBIDDEN_LANGUAGE: tuple[str, ...] = (
-    "erro de cobranca",
-    "cobranca incorreta",
+    "erro de cobrança",
+    "cobrança incorreta",
     "transportadora errada",
     "valor incorreto",
-    "divergencia contratual",
+    "divergência contratual",
     "fraude",
     "superfaturamento",
     "responsabilidade financeira",
-    "conclusao financeira acusatoria",
+    "conclusão financeira acusatória",
 )
 
 # Bloqueios adicionais de escopo juridico/acusatorio.
 CLEIDE_OUT_OF_SCOPE_LANGUAGE: tuple[str, ...] = (
-    "acusacao",
+    "acusação",
     "culpa",
     "culpado",
-    "juridico",
+    "jurídico",
     "processo judicial",
 )
 

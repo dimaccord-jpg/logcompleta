@@ -22,7 +22,7 @@ def test_adapter_recebe_apenas_safe_operational_context(monkeypatch):
     captured = {}
 
     class _Resp:
-        text = "concentracao operacional variacao relevante oportunidade de investigacao"
+        text = "concentração operacional, variação relevante e oportunidade de investigação."
         usage_metadata = type("U", (), {"prompt_token_count": 1, "candidates_token_count": 1, "total_token_count": 2})()
 
     def _fake_governed(_client, *, model, contents, agent, flow_type, api_key_label):
@@ -86,7 +86,7 @@ def test_adapter_usa_fallback_gemini_api_key_2_quando_anteriores_ausentes(monkey
     captured = {}
 
     class _Resp:
-        text = "concentracao operacional variacao relevante oportunidade de investigacao"
+        text = "concentração operacional, variação relevante e oportunidade de investigação."
         usage_metadata = type("U", (), {"prompt_token_count": 1, "candidates_token_count": 1, "total_token_count": 2})()
 
     def _fake_governed(_client, *, model, contents, agent, flow_type, api_key_label):

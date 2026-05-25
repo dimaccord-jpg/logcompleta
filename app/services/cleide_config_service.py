@@ -42,6 +42,7 @@ DEFAULTS: dict[str, int | str] = {
     "chat_context_include_paretos": 1,
     "chat_context_mode": "executivo",
     "chat_context_max_chars": 6000,
+    "chat_response_max_chars": 3000,
 }
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class CleideConfig:
     chat_context_include_paretos: int
     chat_context_mode: str
     chat_context_max_chars: int
+    chat_response_max_chars: int
 
 
 def _coerce_mode(value: Any, default: str) -> str:
@@ -186,6 +188,7 @@ def get_cleide_config() -> CleideConfig:
         chat_context_include_paretos=1 if _parse_int(cfg_map, "chat_context_include_paretos", allow_zero=True) > 0 else 0,
         chat_context_mode=_parse_str(cfg_map, "chat_context_mode"),
         chat_context_max_chars=min(max(1500, _parse_int(cfg_map, "chat_context_max_chars")), 12000),
+        chat_response_max_chars=min(max(1200, _parse_int(cfg_map, "chat_response_max_chars")), 6000),
     )
     if has_request_context():
         g._cleide_cfg = cfg
@@ -249,6 +252,10 @@ def salvar_cleide_config(campos: dict[str, Any]) -> None:
         chat_context_max_chars=min(
             max(1500, _coerce_positive_int(_raw("chat_context_max_chars"), cfg_atual.chat_context_max_chars)),
             12000,
+        ),
+        chat_response_max_chars=min(
+            max(1200, _coerce_positive_int(_raw("chat_response_max_chars"), cfg_atual.chat_response_max_chars)),
+            6000,
         ),
     )
 

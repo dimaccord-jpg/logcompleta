@@ -130,6 +130,7 @@ def test_salvar_cleide_config_persiste_campos_novos(app, monkeypatch):
                 "chat_context_max_items_per_table": "7",
                 "chat_context_max_text_len": "90",
                 "chat_context_rankings_limit": "5",
+                "chat_response_max_chars": "5000",
                 "chat_context_include_transportadora": "1",
                 "chat_context_include_uf_origem": "0",
                 "chat_context_include_uf_destino": "1",
@@ -148,4 +149,5 @@ def test_salvar_cleide_config_persiste_campos_novos(app, monkeypatch):
         assert loaded.chat_context_include_temporal == 0
         assert loaded.chat_context_mode == "conservador"
         assert loaded.chat_context_max_chars == 7000
+        assert loaded.chat_response_max_chars == 5000
         assert "cleide_cfg_upload_total_max" in staged

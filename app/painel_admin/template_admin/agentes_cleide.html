@@ -40,6 +40,12 @@
                     <small class="text-muted">Teto de caracteres do safe context para evitar explosão de tokens.</small>
                 </div>
                 <div class="col-md-4">
+                    <label class="form-label">chat_response_max_chars</label>
+                    <input type="number" min="1200" max="6000" step="100" name="chat_response_max_chars" class="form-control"
+                           value="{{ cfg.chat_response_max_chars }}">
+                    <small class="text-muted">Limite máximo de caracteres por resposta do chat da Cleide.</small>
+                </div>
+                <div class="col-md-4">
                     <label class="form-label">chat_context_mode</label>
                     <select name="chat_context_mode" class="form-select">
                         <option value="executivo" {{ 'selected' if cfg.chat_context_mode == 'executivo' else '' }}>executivo</option>

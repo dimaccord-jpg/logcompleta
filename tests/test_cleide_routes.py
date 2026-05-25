@@ -217,8 +217,8 @@ def test_chat_cleide_placeholder_expoe_contexto_seguro_sem_ia(monkeypatch):
     assert body["audit_notes"]["legacy_chat_status"] == 501
     assert body["audit_notes"]["current_chat_status"] == 200
     reply_norm = _normalize_for_match(body["reply"])
-    assert "concentracao operacional" in reply_norm
-    assert "oportunidade de investigacao" in reply_norm
+    assert "resumo operacional da sessao" in reply_norm
+    assert "ticket medio" in reply_norm
     assert body["chat_context_version"] == "cleide_chat_context.v1"
     assert body["chat_ready_context"] is True
     assert body["semantic_limits"]["kpis_are_global_session_scope"] is True

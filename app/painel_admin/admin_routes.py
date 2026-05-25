@@ -472,6 +472,7 @@ def agentes_cleide():
             "chat_context_max_items_per_table": (request.form.get("chat_context_max_items_per_table") or "").strip(),
             "chat_context_max_text_len": (request.form.get("chat_context_max_text_len") or "").strip(),
             "chat_context_rankings_limit": (request.form.get("chat_context_rankings_limit") or "").strip(),
+            "chat_response_max_chars": (request.form.get("chat_response_max_chars") or "").strip(),
             "chat_context_include_transportadora": "1" if request.form.get("chat_context_include_transportadora") else "0",
             "chat_context_include_uf_origem": "1" if request.form.get("chat_context_include_uf_origem") else "0",
             "chat_context_include_uf_destino": "1" if request.form.get("chat_context_include_uf_destino") else "0",
