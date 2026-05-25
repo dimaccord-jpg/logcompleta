@@ -508,6 +508,13 @@ def _classify_intent(normalized: str) -> str:
         return "dados_insuficientes"
     if _contains_any(normalized, ("resumo operacional", "resumo", "visao geral", "geral da operacao")):
         return "resumo_operacional"
+    if "transportadora" in normalized and _semantic_indicates_total_value(normalized):
+        return "top_transportadoras"
+    if (
+        _semantic_indicates_total_value(normalized)
+        and ("frete" in normalized or "transportadora" in normalized)
+    ):
+        return "top_transportadoras"
     if _contains_any(normalized, ("top transportadoras", "maiores transportadoras", "ranking transportadoras", "transportadoras")):
         return "top_transportadoras"
     if _contains_any(
@@ -969,6 +976,23 @@ def _resolve_contextual_followup(
             return {"intent": "uf_origem"}
         if recent_intent == "uf_destino" or recent_topic == "uf_destino":
             return {"intent": "uf_destino"}
+        if (
+            recent_dimension == "transportadora"
+            and recent_topic == "frete_operacional"
+        ):
+            tables = (
+                safe_operational_context.get("aggregate_tables")
+                if isinstance(safe_operational_context.get("aggregate_tables"), dict)
+                else {}
+            )
+            return {
+                "intent": "top_transportadoras",
+                "reply": _build_uf_scope_reply(
+                    origem_rows=tables.get("uf_origem"),
+                    destino_rows=tables.get("uf_destino"),
+                    primary_axis="origem",
+                ),
+            }
         if recent_topic in {"embarque_origem", "cidade_embarque", "cidade_operacional"}:
             if recent_scope == "destino":
                 return {"intent": "uf_destino"}
@@ -1036,7 +1060,7 @@ def _resolve_recent_history_topic(history: list[dict[str, str]] | None) -> str:
 
 
 def _derive_conversation_state(history: list[dict[str, str]] | None) -> dict[str, str]:
-    state = {"last_intent": "", "last_topic": "", "last_dimension": "", "last_scope": ""}
+    state = {"last_intent": "", "last_topic": "", "last_dimension": "", "last_scope": "", "last_metric": ""}
     if not isinstance(history, list) or not history:
         return state
     items = [item for item in history[-HISTORY_MAX_MESSAGES:] if isinstance(item, dict)]
@@ -1058,14 +1082,16 @@ def _derive_conversation_state(history: list[dict[str, str]] | None) -> dict[str
             inferred_intent = _classify_intent(normalized_content)
             inferred_dimension = _dimension_from_semantic_text(semantic)
             inferred_scope = _scope_from_semantic_text(semantic)
+            inferred_metric = _metric_from_semantic_text(semantic)
             if inferred_intent == "unknown":
                 inferred_intent = ""
-            if inferred_topic or inferred_intent or inferred_dimension or inferred_scope:
+            if inferred_topic or inferred_intent or inferred_dimension or inferred_scope or inferred_metric:
                 return {
                     "last_intent": inferred_intent,
                     "last_topic": inferred_topic,
                     "last_dimension": inferred_dimension,
                     "last_scope": inferred_scope,
+                    "last_metric": inferred_metric,
                 }
     return state
 
@@ -1077,6 +1103,7 @@ def _topic_from_semantic_text(semantic_text: str) -> str:
     has_volume = "volume" in semantic_text
     has_origem = "origem" in semantic_text
     has_destino = "destino" in semantic_text
+    has_transportadora = "transportadora" in semantic_text
     if has_cidade and (has_frete or has_embarque or has_volume or has_origem or has_destino):
         return "cidade_operacional"
     if "maior volume de frete" in semantic_text:
@@ -1085,6 +1112,8 @@ def _topic_from_semantic_text(semantic_text: str) -> str:
         return "cidade_embarque"
     if "embarque" in semantic_text:
         return "embarque_origem"
+    if has_transportadora and _semantic_indicates_total_value(semantic_text):
+        return "frete_operacional"
     if has_frete:
         return "frete_operacional"
     if "uf origem" in semantic_text or "origem" in semantic_text:
@@ -1225,6 +1254,27 @@ def _scope_from_semantic_text(semantic_text: str) -> str:
         # Regra segura documentada: cidade+frete sem escopo explicito resolve para origem.
         return "origem"
     return ""
+
+
+def _metric_from_semantic_text(semantic_text: str) -> str:
+    if _semantic_indicates_total_value(semantic_text):
+        return "valor_total"
+    return ""
+
+
+def _semantic_indicates_total_value(semantic_text: str) -> bool:
+    return _contains_any(
+        semantic_text,
+        (
+            "maior custo",
+            "custo",
+            "maior valor",
+            "valor total",
+            "valor",
+            "lider custo",
+            "lidera custo",
+        ),
+    )
 
 
 def _normalize_history_entries(history: Any) -> list[dict[str, str]]:

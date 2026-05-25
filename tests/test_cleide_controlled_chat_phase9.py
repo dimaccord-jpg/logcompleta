@@ -1458,3 +1458,97 @@ def test_followup_transportadora_destino_sem_quebra_intent(monkeypatch):
     assert body["intent"] in {"uf_destino", "fallback_seguro"}
     if body["intent"] == "fallback_seguro":
         assert body["fallback_code"] in {"fallback_intent_desconhecida", "fallback_fora_de_escopo"}
+
+
+def test_followup_transportadora_maior_custo_para_uf_combina_origem_destino_sem_fallback(monkeypatch):
+    ctx = _chat_context()
+    ctx["safe_operational_context"]["aggregate_tables"]["transportadora"] = [
+        {"chave": "Aquila - Matriz", "quantidade": 4718, "valor_total": 141030.83},
+        {"chave": "Brisa", "quantidade": 3772, "valor_total": 138617.16},
+    ]
+    ctx["safe_operational_context"]["aggregate_tables"]["uf_origem"] = [
+        {"chave": "DF", "quantidade": 4718, "valor_total": 141030.83},
+    ]
+    ctx["safe_operational_context"]["aggregate_tables"]["uf_destino"] = [
+        {"chave": "BA", "quantidade": 3772, "valor_total": 138617.16},
+    ]
+    _patch_context(monkeypatch, ctx)
+    _ai_flag_env(monkeypatch, enabled=False)
+
+    body, status = run_cleide_controlled_chat(
+        question="E UF?",
+        history=[{"role": "user", "content": "Qual transportadora tem maior custo de frete?"}],
+        session_obj={},
+    )
+    assert status == 200
+    assert body["intent"] == "top_transportadoras"
+    assert body["fallback_used"] is False
+    reply_norm = _norm(body["reply"])
+    assert "uf origem" in reply_norm
+    assert "uf destino" in reply_norm
+    assert "df" in reply_norm
+    assert "ba" in reply_norm
+    assert "documentos" in reply_norm
+    assert "custo total" in reply_norm
+
+
+def test_followup_transportadora_maior_custo_para_uf_com_historico_ia_sem_fallback(monkeypatch):
+    ctx = _chat_context()
+    ctx["safe_operational_context"]["aggregate_tables"]["uf_origem"] = [
+        {"chave": "DF", "quantidade": 4718, "valor_total": 141030.83},
+    ]
+    ctx["safe_operational_context"]["aggregate_tables"]["uf_destino"] = [
+        {"chave": "BA", "quantidade": 3772, "valor_total": 138617.16},
+    ]
+    _patch_context(monkeypatch, ctx)
+    _ai_flag_env(monkeypatch, enabled=False)
+
+    body, status = run_cleide_controlled_chat(
+        question="E UF?",
+        history=[
+            {"role": "user", "content": "Qual transportadora tem maior custo de frete?"},
+            {
+                "role": "assistant",
+                "content": "A transportadora Aquila - Matriz apresenta o maior valor total de frete, com R$ 141.030,83.",
+            },
+        ],
+        session_obj={},
+    )
+    assert status == 200
+    assert body["intent"] == "top_transportadoras"
+    assert body["fallback_used"] is False
+    reply_norm = _norm(body["reply"])
+    assert "uf origem" in reply_norm
+    assert "uf destino" in reply_norm
+    assert "df" in reply_norm
+    assert "ba" in reply_norm
+
+
+def test_derive_conversation_state_transportadora_maior_custo_define_metric_valor_total():
+    state = controlled_chat._derive_conversation_state(  # noqa: SLF001
+        [{"role": "user", "content": "Qual transportadora tem o maior custo de frete?"}]
+    )
+    assert state["last_topic"] == "frete_operacional"
+    assert state["last_dimension"] == "transportadora"
+    assert state["last_metric"] == "valor_total"
+    assert state["last_scope"] == ""
+    assert state["last_intent"] == "top_transportadoras"
+
+
+def test_resolve_contextual_followup_transportadora_frete_uf_retorna_resposta_combinada():
+    ctx = _chat_context()["safe_operational_context"]
+    ctx["aggregate_tables"]["uf_origem"] = [{"chave": "DF", "quantidade": 4718, "valor_total": 141030.83}]
+    ctx["aggregate_tables"]["uf_destino"] = [{"chave": "BA", "quantidade": 3772, "valor_total": 138617.16}]
+    resolved = controlled_chat._resolve_contextual_followup(  # noqa: SLF001
+        normalized_question="E UF?",
+        history=[{"role": "user", "content": "Qual transportadora tem maior custo de frete?"}],
+        safe_operational_context=ctx,
+    )
+    assert resolved is not None
+    assert resolved["intent"] == "top_transportadoras"
+    reply = resolved.get("reply") or ""
+    reply_norm = _norm(reply)
+    assert "uf origem" in reply_norm
+    assert "uf destino" in reply_norm
+    assert "df" in reply_norm
+    assert "ba" in reply_norm
