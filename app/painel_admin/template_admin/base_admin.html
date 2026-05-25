@@ -49,7 +49,7 @@
                     </a>
                 </li>
                 <li>
-                    <a href="{{ url_for('admin.agentes_home') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.agentes_home', 'admin.agentes_julia', 'admin.agentes_roberto', 'admin.agentes_cleiton'] }}">
+                    <a href="{{ url_for('admin.agentes_home') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.agentes_home', 'admin.agentes_julia', 'admin.agentes_roberto', 'admin.agentes_cleiton', 'admin.agentes_cleide'] }}">
                         <i class="bi bi-diagram-3 me-2"></i> Agentes
                     </a>
                     <ul class="nav flex-column ms-4 mt-1">
@@ -61,6 +61,11 @@
                         <li>
                             <a href="{{ url_for('admin.agentes_roberto') }}" class="nav-link py-1 {{ 'active' if request.endpoint == 'admin.agentes_roberto' }}">
                                 <i class="bi bi-graph-up-arrow me-2"></i> Roberto
+                            </a>
+                        </li>
+                        <li>
+                            <a href="{{ url_for('admin.agentes_cleide') }}" class="nav-link py-1 {{ 'active' if request.endpoint == 'admin.agentes_cleide' }}">
+                                <i class="bi bi-chat-left-text me-2"></i> Cleide
                             </a>
                         </li>
                         <li>

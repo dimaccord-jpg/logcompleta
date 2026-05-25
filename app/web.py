@@ -35,6 +35,7 @@ from app.extensions import db, login_manager
 from app.painel_admin.admin_routes import admin_bp
 from app.ops_routes import ops_bp
 from app.user_area import user_bp
+from app.cleide_routes import cleide_bp
 from app.infra import (
     get_user_by_id,
     admin_required,
@@ -222,6 +223,7 @@ REDIRECT_URI = settings.google_redirect_uri
 app.register_blueprint(admin_bp)
 app.register_blueprint(ops_bp)
 app.register_blueprint(user_bp)
+app.register_blueprint(cleide_bp)
 
 @app.context_processor
 def inject_facebook_pixel_context():
@@ -231,6 +233,13 @@ def inject_facebook_pixel_context():
             session.pop(_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION, False)
         ),
         "pixel_event_lead": bool(session.pop(_SESSION_PIXEL_EVENT_LEAD, False)),
+    }
+
+
+@app.context_processor
+def inject_template_endpoint_helpers():
+    return {
+        "has_endpoint": lambda endpoint_name: endpoint_name in app.view_functions,
     }
 
 
@@ -252,6 +261,29 @@ with app.app_context():
 @login_manager.user_loader
 def load_user(user_id):
     return get_user_by_id(user_id)
+
+
+@login_manager.unauthorized_handler
+def _handle_unauthorized_access():
+    logging.warning(
+        "Unauthorized access blocked | path=%s method=%s host=%s referer=%s origin=%s",
+        request.path,
+        request.method,
+        request.host,
+        request.headers.get("Referer", ""),
+        request.headers.get("Origin", ""),
+    )
+    # APIs devem responder em JSON/401 para consumo via fetch,
+    # evitando redirecionamento HTML silencioso.
+    if (request.path or "").startswith("/api/"):
+        return jsonify(
+            {
+                "success": False,
+                "error": "É necessário estar logado para acessar este recurso.",
+                "require_login": True,
+            }
+        ), 401
+    return redirect(url_for("login"))
 
 # --- ROTAS PÚBLICAS E ACESSO ---
 @app.route('/')
@@ -411,6 +443,10 @@ def robots_txt():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     logging.info("=== Acessando /login (método: %s) ===", request.method)
+    if current_user.is_authenticated:
+        if user_is_admin(current_user):
+            return redirect(url_for('admin.admin_dashboard'))
+        return redirect(url_for('index'))
     if request.method == 'POST':
         email_input = request.form.get('email')
         password = request.form.get('password')
@@ -659,18 +695,21 @@ def register():
 @app.route('/logout')
 def logout():
     logout_user()
+    session.clear()
     return redirect(url_for('index'))
 
 # --- ROTAS DE INTELIGÊNCIA (CONECTADAS AO BRAIN) ---
 
 @app.route('/fretes', methods=['GET', 'POST'])
-@login_required
 def fretes():
     indices = _load_indices_payload()
 
     resultado = None
-    
+    is_authenticated = bool(getattr(current_user, 'is_authenticated', False))
+
     if request.method == 'POST':
+        if not is_authenticated:
+            return redirect(url_for('login'))
         # CAPTURA DOS DADOS DO FORMULÁRIO
         origem = request.form.get('origem')
         destino = request.form.get('destino')
@@ -687,7 +726,14 @@ def fretes():
         else:
             resultado = resultado_calculo
 
-    roberto_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
+    if is_authenticated:
+        roberto_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
+    else:
+        roberto_chat_limits = {
+            'permitido': False,
+            'modo_operacao': 'login_required',
+            'mensagem_usuario': 'Faca login para enviar planilhas, abrir o BI completo e conversar com o Roberto.',
+        }
     try:
         from app.services.roberto_config_service import get_roberto_config
 
@@ -703,6 +749,7 @@ def fretes():
         resultado=resultado,
         roberto_chat_limits=roberto_chat_limits,
         roberto_chat_max_history=roberto_chat_max_history,
+        roberto_login_url=url_for('login'),
     )
 
 
@@ -719,40 +766,6 @@ def fretes_template_download():
         download_name='template_fretes.xlsx',
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
-
-
-@app.route('/auditoria-frete', methods=['GET', 'POST'])
-def auditoria_frete():
-    # Medida provisória: rota ainda em construção; somente administradores
-    # verão a versão final quando estiver pronta. Demais usuários caem na
-    # página de aviso padronizada.
-    origem = "Auditoria de Frete"
-    if (not current_user.is_authenticated) or (not user_is_admin(current_user)):
-        enviado = False
-        email_informado = ""
-        if request.method == "POST":
-            email_informado = (request.form.get("email") or "").strip()
-            if email_informado:
-                subject = f"Interesse em {origem} - página em construção"
-                html = f"""
-                <p>Um usuário preencheu o formulário de interesse em funcionalidades em construção.</p>
-                <p><strong>E-mail informado:</strong> {email_informado}</p>
-                <p><strong>Página de origem:</strong> {origem}</p>
-                """.strip()
-                send_email(
-                    to_email="contato@agentefrete.com.br",
-                    subject=subject,
-                    html=html,
-                    text=f"E-mail informado: {email_informado}\nPágina de origem: {origem}",
-                )
-                enviado = True
-        return render_template(
-            'feature_under_construction.html',
-            origem=origem,
-            enviado=enviado,
-            email_informado=email_informado,
-        )
-    return render_template('feature_under_construction.html', origem=origem)
 
 
 @app.route('/controle-estoque', methods=['GET', 'POST'])

@@ -46,6 +46,10 @@ app/indices_manual_log.json
 logs_fallback/
 tests/.tmp_roberto/
 *.xlsx
+!app/protected_files/templates/template_cleide_auditoria_frete.xlsx
 
 # === Storage persistente operacional de documentos legais ===
 app/legal/
+
+# Cleide - uploads temporarios locais
+app/cleide_upload_tmp/

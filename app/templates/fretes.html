@@ -416,6 +416,8 @@
   window.ROBERTO_CHAT_AUTHENTICATED = {{ 'true' if current_user.is_authenticated else 'false' }};
   window.ROBERTO_CHAT_LIMITS = {{ (roberto_chat_limits or {})|tojson }};
   window.ROBERTO_CHAT_MAX_HISTORY = {{ roberto_chat_max_history|default(10)|int }};
+  window.ROBERTO_LOGIN_URL = {{ roberto_login_url|tojson }};
+  window.ROBERTO_BI_AUTHENTICATED = {{ 'true' if current_user.is_authenticated else 'false' }};
 </script>
 {% include 'chat_roberto_fretes.html' %}
 <script src="{{ url_for('static', filename='js/chat_roberto_fretes.js') }}"></script>

@@ -23,6 +23,11 @@
     </div>
     <div class="card-body p-3">
       <p class="text-muted small mb-2">Use esta área para transformar sua planilha de fretes em análises visuais e receber orientações práticas sobre sua operação.</p>
+      {% if not current_user.is_authenticated %}
+      <div class="alert alert-info py-2 px-3 small" data-testid="roberto-login-cta">
+        Faca <a href="{{ roberto_login_url }}">login</a> para enviar planilhas, abrir o BI privado e conversar com o Roberto.
+      </div>
+      {% endif %}
       <div class="bi-usage-guide mb-3" aria-label="Guia rápido de uso do BI">
         <div class="bi-usage-step">
           <strong>1. Baixe e preencha o modelo</strong>
@@ -184,6 +189,9 @@
   const BASE = "{{ request.url_root.rstrip('/') }}";
   const API_BI = BASE + "/api/roberto_bi";
   const HEATMAP_SVG_URL = "{{ url_for('static', filename='img/brasil-ufs.svg') }}";
+  const isAuthenticated = {{ 'true' if current_user.is_authenticated else 'false' }};
+  const redirectUnauthenticatedPrivateAction = {{ 'true' if not current_user.is_authenticated else 'false' }};
+  const loginUrl = typeof window.ROBERTO_LOGIN_URL === 'string' && window.ROBERTO_LOGIN_URL ? window.ROBERTO_LOGIN_URL : '/login';
   let heatmapBrasilSvgTemplate = null;
   const API_UPLOAD = BASE + "/api/roberto/upload";
   const API_CLEAR = BASE + "/api/roberto/clear_upload";
@@ -194,6 +202,19 @@
   function biUrl(path) {
     const q = biOrigemParam ? ('?' + biOrigemParam) : '';
     return API_BI + path + q;
+  }
+
+  function showLoginRequired(message) {
+    var statusEl = document.getElementById('roberto-upload-status');
+    if (statusEl) {
+      var loginCta = ' <a class="btn btn-sm btn-outline-primary ms-2" href="' + loginUrl + '">Fazer login</a>';
+      statusEl.innerHTML = '<span class="text-warning">' + renderInlineMessage(message || 'Faca login para usar upload, BI e recursos privados do Roberto.') + '</span>' + loginCta;
+    }
+  }
+
+  function redirectToLoginIfUnauthenticatedPage() {
+    if (!redirectUnauthenticatedPrivateAction) return;
+    window.location.href = loginUrl;
   }
 
   function loadBiMeta() {
@@ -237,7 +258,11 @@
     options = options || {};
     options.headers = options.headers || {};
     if (!options.headers['Accept']) options.headers['Accept'] = 'application/json';
+    if (!options.credentials) options.credentials = 'same-origin';
     return fetch(url, options).then(r => {
+      if (r.status === 401) {
+        throw new Error('LOGIN_REQUIRED');
+      }
       if (!r.ok) throw new Error(r.statusText);
       return r.json();
     });
@@ -248,8 +273,12 @@
     return fetch(url, {
       method: 'POST',
       body: formData,
+      credentials: 'same-origin',
       headers: { 'Accept': 'application/json' }
     }).then(async r => {
+      if (r.status === 401) {
+        throw new Error('LOGIN_REQUIRED');
+      }
       if (!r.ok) {
         let backendError = '';
         try {
@@ -716,6 +745,11 @@
     const block = document.getElementById('roberto-bi-charts');
     const btn = document.getElementById('roberto-toggle-bi');
     if (!block || !btn) return;
+    if (!isAuthenticated) {
+      showLoginRequired('Faca login para abrir o BI completo e carregar dados privados do Roberto.');
+      redirectToLoginIfUnauthenticatedPage();
+      return;
+    }
     if (block.style.display === 'none') {
       block.style.display = '';
       btn.innerHTML = '<i class="bi bi-bar-chart-line me-1"></i>Ocultar análises';
@@ -733,6 +767,12 @@
   document.getElementById('roberto-upload-excel').addEventListener('change', function() {
     const file = this.files && this.files[0];
     const statusEl = document.getElementById('roberto-upload-status');
+    if (!isAuthenticated) {
+      this.value = '';
+      showLoginRequired('Faca login para enviar sua planilha e iniciar o processamento privado do Roberto.');
+      redirectToLoginIfUnauthenticatedPage();
+      return;
+    }
     if (!file) return;
     const fd = new FormData();
     fd.append('file', file);
@@ -753,6 +793,10 @@
       statusEl.innerHTML = msg;
       showBiChartsAndLoad();
     }).catch((err) => {
+      if (err && err.message === 'LOGIN_REQUIRED') {
+        showLoginRequired('Sua sessão não foi reconhecida para upload. Faça login para continuar.');
+        return;
+      }
       const msg = (err && typeof err.message === 'string' && err.message.trim()) ? err.message : 'Falha no envio.';
       statusEl.innerHTML = '<span class="text-danger">' + renderInlineMessage(msg) + '</span>';
     });
@@ -760,7 +804,12 @@
   });
 
   document.getElementById('roberto-clear-upload').addEventListener('click', function() {
-    fetch(API_CLEAR, { method: 'POST', headers: { 'Accept': 'application/json' } }).then(() => {
+    if (!isAuthenticated) {
+      showLoginRequired('Faca login para limpar uploads privados do Roberto.');
+      redirectToLoginIfUnauthenticatedPage();
+      return;
+    }
+    fetch(API_CLEAR, { method: 'POST', credentials: 'same-origin', headers: { 'Accept': 'application/json' } }).then(() => {
       document.getElementById('roberto-upload-status').textContent = 'Dados temporários removidos.';
       var block = document.getElementById('roberto-bi-charts');
       if (block && block.style.display !== 'none') refreshAll();
@@ -768,7 +817,8 @@
   });
 
   window.addEventListener('beforeunload', function() {
-    try { fetch(API_CLEAR, { method: 'POST', keepalive: true }); } catch (_) {}
+    if (!isAuthenticated) return;
+    try { fetch(API_CLEAR, { method: 'POST', credentials: 'same-origin', keepalive: true }); } catch (_) {}
   });
 })();
 </script>

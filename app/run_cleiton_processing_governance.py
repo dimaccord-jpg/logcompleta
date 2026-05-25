@@ -37,6 +37,7 @@ def cleiton_register_processing_event(
     status: str,
     error_summary: str | None = None,
     execution_id: str | None = None,
+    apply_operational_motor: bool = True,
 ) -> dict:
     """
     Persiste um único evento de processamento (append-only).
@@ -73,22 +74,23 @@ def cleiton_register_processing_event(
         db.session.add(row)
         db.session.commit()
         motor_result = None
-        try:
-            from app.services.cleiton_franquia_operacional_service import (
-                aplicar_motor_apos_processing_event,
-            )
-
-            motor_result = aplicar_motor_apos_processing_event(row.id)
-        except Exception as ex:
-            logger.warning(
-                "Governança processamento: motor operacional Cleiton após evento falhou (id=%s): %s",
-                getattr(row, "id", None),
-                ex,
-            )
+        if apply_operational_motor:
             try:
-                db.session.rollback()
-            except Exception:
-                pass
+                from app.services.cleiton_franquia_operacional_service import (
+                    aplicar_motor_apos_processing_event,
+                )
+
+                motor_result = aplicar_motor_apos_processing_event(row.id)
+            except Exception as ex:
+                logger.warning(
+                    "Governança processamento: motor operacional Cleiton após evento falhou (id=%s): %s",
+                    getattr(row, "id", None),
+                    ex,
+                )
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
         return {
             "persisted": True,
             "processing_event_id": row.id,

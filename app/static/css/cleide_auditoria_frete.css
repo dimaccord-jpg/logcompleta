@@ -1,0 +1,750 @@
+.cleide-page {
+  color: var(--af-text-secondary);
+}
+
+.cleide-page h1,
+.cleide-page h2,
+.cleide-page h3 {
+  letter-spacing: -0.015em;
+}
+
+.cleide-page .ri-card {
+  border-radius: 1.1rem !important;
+}
+
+.cleide-section {
+  position: relative;
+}
+
+/* Mantem camadas puramente visuais fora da cadeia de clique. */
+.cleide-section::before,
+.cleide-section::after,
+.cleide-hero::before,
+.cleide-hero::after,
+.cleide-upload-card::before,
+.cleide-upload-card::after,
+.cleide-upload-dropzone::before,
+.cleide-upload-dropzone::after {
+  pointer-events: none;
+}
+
+.cleide-display-title {
+  font-size: clamp(1.9rem, 2vw + 1rem, 2.7rem);
+  line-height: 1.15;
+}
+
+.cleide-subtitle {
+  font-size: 1.02rem;
+  max-width: 56ch;
+}
+
+.cleide-hero {
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(0, 191, 255, 0.16) 0%, rgba(0, 191, 255, 0) 55%),
+    linear-gradient(180deg, rgba(17, 25, 39, 0.9) 0%, rgba(15, 22, 34, 0.92) 100%);
+  border: 1px solid rgba(0, 191, 255, 0.2) !important;
+}
+
+.cleide-hero-actions {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.cleide-upload-actions,
+.cleide-upload-card,
+.cleide-upload-dropzone {
+  position: relative;
+  z-index: 2;
+}
+
+.cleide-hero-actions a,
+.cleide-upload-dropzone a,
+.cleide-upload-actions a,
+.cleide-upload-actions button,
+.cleide-upload-card a,
+.cleide-upload-card button {
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.cleide-step {
+  border: 1px solid rgba(0, 191, 255, 0.24);
+  border-radius: 1rem;
+  padding: 1.1rem;
+  background: linear-gradient(180deg, rgba(23, 32, 48, 0.86) 0%, rgba(20, 27, 41, 0.84) 100%);
+  min-height: 170px;
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+}
+
+.cleide-step-number {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.83rem;
+  font-weight: 700;
+  color: #dff4ff;
+  background: rgba(0, 191, 255, 0.25);
+  margin-bottom: 0.3rem;
+}
+
+.cleide-upload-dropzone {
+  border: 1px dashed rgba(0, 191, 255, 0.42);
+  border-radius: 1.15rem;
+  padding: 2.3rem 1.2rem;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(20, 31, 49, 0.88) 0%, rgba(16, 25, 40, 0.88) 100%);
+}
+
+.cleide-upload-dropzone.is-hover {
+  border-color: rgba(0, 212, 255, 0.9);
+  box-shadow: 0 0 0 3px rgba(0, 191, 255, 0.16), 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.cleide-upload-dropzone.is-uploading {
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+/* Oculta badges informativos transitórios da UX final (somente visual). */
+.cleide-upload-dropzone > .d-flex.flex-wrap.gap-2.justify-content-center.mt-2,
+#cleideChatScopeBadge {
+  display: none !important;
+}
+
+.cleide-kpi-card,
+.cleide-quality-card {
+  background: linear-gradient(180deg, rgba(24, 33, 51, 0.84) 0%, rgba(19, 27, 42, 0.88) 100%) !important;
+}
+
+.cleide-kpi-value {
+  font-size: clamp(1.15rem, 1.1vw + 0.8rem, 1.65rem);
+  line-height: 1.12;
+  color: var(--af-text-primary);
+}
+
+.cleide-kpi-value-sm {
+  font-size: 0.95rem;
+}
+
+.cleide-quality-value {
+  font-size: clamp(1.1rem, 0.8vw + 0.85rem, 1.35rem);
+  color: var(--af-text-primary);
+}
+
+.cleide-analytic-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: linear-gradient(180deg, rgba(19, 29, 45, 0.84) 0%, rgba(15, 23, 37, 0.9) 100%);
+  height: 100%;
+}
+
+.cleide-chart-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.cleide-chart-hide-btn {
+  white-space: nowrap;
+}
+
+.cleide-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.cleide-chart-card {
+  min-width: 0;
+}
+
+.cleide-chart-card.is-hidden {
+  display: none;
+}
+
+.cleide-chart-card--wide {
+  grid-column: 1 / -1;
+}
+
+.cleide-dashboard-grid.cleide-dashboard-grid--has-hidden .cleide-chart-card--wide {
+  grid-column: auto;
+}
+
+.cleide-hidden-charts-wrap {
+  border: 1px solid rgba(116, 143, 185, 0.22);
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.7rem;
+  background: rgba(20, 29, 43, 0.42);
+}
+
+.cleide-hidden-chart-chip {
+  border: 1px solid rgba(37, 176, 255, 0.34);
+  background: rgba(37, 176, 255, 0.14);
+  color: #d5e8ff;
+}
+
+.cleide-all-hidden-message {
+  border: 1px dashed rgba(140, 161, 195, 0.45);
+  border-radius: 0.8rem;
+  padding: 0.75rem 0.9rem;
+  color: var(--af-text-secondary);
+  background: rgba(20, 28, 43, 0.7);
+}
+
+.cleide-chart-wrap {
+  min-height: 260px;
+  border: 1px solid rgba(116, 143, 185, 0.24);
+  border-radius: 0.9rem;
+  background: linear-gradient(180deg, rgba(17, 25, 39, 0.78) 0%, rgba(13, 20, 31, 0.86) 100%);
+  padding: 0.65rem;
+}
+
+.cleide-chart-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 290px;
+}
+
+.cleide-skeleton-line {
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(65, 76, 98, 0.7) 0%, rgba(106, 120, 148, 0.52) 50%, rgba(65, 76, 98, 0.7) 100%);
+  background-size: 200% 100%;
+  animation: cleide-skeleton-shimmer 1.4s ease infinite;
+}
+
+.cleide-panel-placeholder {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.95rem;
+  background: rgba(20, 28, 42, 0.88);
+  min-height: 130px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-weight: 600;
+  color: var(--af-text-secondary);
+  padding: 0.75rem;
+}
+
+.cleide-bar-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.cleide-bar-row {
+  display: grid;
+  grid-template-columns: minmax(82px, 1fr) minmax(120px, 2fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.cleide-bar-label {
+  font-size: 0.78rem;
+  color: #c7d8f4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cleide-bar-track {
+  height: 0.52rem;
+  background: rgba(0, 191, 255, 0.15);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.cleide-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #25b0ff 0%, #00d4ff 100%);
+  border-radius: 999px;
+}
+
+.cleide-bar-value {
+  font-size: 0.78rem;
+  color: #9eb2d6;
+  text-align: right;
+  min-width: 78px;
+}
+
+.cleide-empty-box {
+  border: 1px dashed rgba(140, 161, 195, 0.45);
+  border-radius: 0.9rem;
+  background: rgba(20, 28, 43, 0.88);
+  color: var(--af-text-secondary);
+  text-align: center;
+  padding: 0.9rem;
+}
+
+.cleide-chat-messages {
+  border: 1px solid rgba(116, 143, 185, 0.24);
+  border-radius: 0.9rem;
+  background: linear-gradient(180deg, rgba(17, 25, 39, 0.78) 0%, rgba(13, 20, 31, 0.86) 100%);
+  color: var(--af-text-primary);
+  padding: 0.85rem 0.95rem;
+  margin: 0.75rem 0.85rem 0.85rem;
+  min-height: 148px;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  flex: 1 1 auto;
+}
+
+.cleide-chat-msg {
+  display: flex;
+}
+
+.cleide-chat-msg__inner {
+  border-radius: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  max-width: 92%;
+  line-height: 1.4;
+}
+
+.cleide-chat-msg__inner ul {
+  margin: 0.3rem 0 0.3rem 1rem;
+  padding: 0;
+}
+
+.cleide-chat-msg__inner li {
+  margin: 0.15rem 0;
+}
+
+.cleide-chat-actions {
+  margin-left: 0.45rem;
+  display: flex;
+  align-items: flex-end;
+}
+
+.cleide-chat-copy-btn {
+  border: 1px solid rgba(124, 148, 189, 0.38);
+  border-radius: 999px;
+  background: rgba(17, 25, 39, 0.78);
+  color: #d8e8ff;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.55rem;
+}
+
+.cleide-chat-copy-btn.is-copied {
+  border-color: rgba(37, 176, 255, 0.65);
+  color: #9fe4ff;
+}
+
+.cleide-chat-msg--user {
+  justify-content: flex-end;
+}
+
+.cleide-chat-msg--user .cleide-chat-msg__inner {
+  background: rgba(37, 176, 255, 0.2);
+  border: 1px solid rgba(37, 176, 255, 0.42);
+}
+
+.cleide-chat-msg--cleide .cleide-chat-msg__inner {
+  background: rgba(124, 148, 189, 0.16);
+  border: 1px solid rgba(124, 148, 189, 0.34);
+}
+
+.cleide-chat-msg--loading .cleide-chat-msg__inner {
+  background: rgba(244, 180, 0, 0.1);
+  border: 1px dashed rgba(244, 180, 0, 0.45);
+}
+
+.cleide-chat-floating {
+  --cleide-chat-edge: clamp(0.75rem, 1.8vw, 1.5rem);
+  --cleide-chat-bottom: clamp(0.75rem, 2.2vh, 1.25rem);
+  position: fixed;
+  right: var(--cleide-chat-edge);
+  bottom: max(var(--cleide-chat-bottom), env(safe-area-inset-bottom));
+  z-index: 1080;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.65rem;
+  max-width: calc(100vw - (var(--cleide-chat-edge) * 2));
+}
+
+.cleide-chat-toggle {
+  border: 1px solid rgba(0, 191, 255, 0.42);
+  border-radius: 999px;
+  padding: 0.62rem 1rem;
+  background: linear-gradient(180deg, rgba(17, 25, 39, 0.96) 0%, rgba(13, 20, 31, 0.96) 100%);
+  color: #d8e8ff;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  pointer-events: auto;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.42);
+}
+
+.cleide-chat-toggle:hover,
+.cleide-chat-toggle:focus-visible {
+  border-color: rgba(0, 212, 255, 0.9);
+  box-shadow: 0 0 0 3px rgba(0, 191, 255, 0.14), 0 12px 30px rgba(0, 0, 0, 0.46);
+  color: #ecf5ff;
+}
+
+.cleide-chat-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.65rem);
+  width: clamp(340px, 34vw, 460px);
+  max-width: calc(100vw - (var(--cleide-chat-edge) * 2));
+  height: clamp(540px, 74dvh, 680px);
+  min-height: 540px;
+  max-height: min(78dvh, calc(100dvh - 5.6rem));
+  border: 1px solid rgba(116, 143, 185, 0.24);
+  border-radius: 1rem;
+  background: linear-gradient(180deg, rgba(17, 25, 39, 0.97) 0%, rgba(13, 20, 31, 0.97) 100%);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(8px) scale(0.98);
+  transition: opacity 140ms ease, transform 140ms ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.cleide-chat-panel.cleide-chat-panel--open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.cleide-chat-panel__header,
+.cleide-chat-panel__footer {
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid rgba(116, 143, 185, 0.22);
+}
+
+.cleide-chat-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.cleide-chat-panel__header > .d-flex {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
+}
+
+.cleide-chat-panel__header .h6 {
+  margin-right: 0.25rem;
+}
+
+#cleideChatScopeBadge {
+  font-size: 0.72rem;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+.cleide-chat-panel__intro {
+  padding: 0.6rem 0.85rem 0;
+  overflow: visible;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-rows: auto auto auto;
+  row-gap: 0.4rem;
+}
+
+.cleide-chat-panel .text-muted,
+.cleide-chat-panel__intro .small.text-muted {
+  color: rgba(214, 230, 252, 0.82) !important;
+}
+
+#cleideChatHint {
+  margin: 0 !important;
+}
+
+#cleideChatFallbackBanner,
+#cleideChatScopeDetails {
+  margin: 0 !important;
+}
+
+#cleideChatQuestion::placeholder {
+  color: rgba(194, 213, 240, 0.68);
+}
+
+.cleide-chat-panel__footer {
+  border-bottom: 0;
+  border-top: 1px solid rgba(116, 143, 185, 0.22);
+  flex: 0 0 auto;
+}
+
+.cleide-chat-panel__footer form {
+  margin: 0;
+  gap: 0.65rem !important;
+}
+
+#cleideChatQuestion {
+  resize: none;
+  min-height: 56px;
+  max-height: 88px;
+  overflow-y: auto;
+}
+
+.cleide-chat-panel__footer .d-flex {
+  align-items: center;
+  justify-content: space-between;
+  row-gap: 0.5rem;
+}
+
+#cleideChatSendBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.cleide-dashboard-disabled {
+  opacity: 0.72;
+}
+
+.cleide-table-controls {
+  display: grid;
+  grid-template-columns: 1.4fr 0.9fr 0.8fr;
+  gap: 0.55rem;
+}
+
+.cleide-pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.cleide-dashboard-filter-top {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.95rem;
+  padding: 0.85rem 0.95rem;
+  background: linear-gradient(180deg, rgba(18, 27, 41, 0.78) 0%, rgba(14, 22, 35, 0.82) 100%);
+}
+
+.cleide-dashboard-filter-row {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.55rem;
+}
+
+.cleide-date-range-controls {
+  min-width: min(100%, 500px);
+}
+
+.cleide-date-range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.cleide-date-range-inputs input {
+  width: 155px;
+}
+
+.cleide-date-range-separator {
+  font-size: 0.8rem;
+}
+
+.cleide-active-filter-chips-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.cleide-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(37, 176, 255, 0.16);
+  border: 1px solid rgba(37, 176, 255, 0.34);
+  border-radius: 999px;
+  color: #cfe8ff;
+  padding: 0.18rem 0.52rem;
+  font-size: 0.73rem;
+}
+
+.cleide-filter-chip button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.74rem;
+  line-height: 1;
+  opacity: 0.88;
+}
+
+.cleide-filter-chip button:hover,
+.cleide-filter-chip button:focus-visible {
+  opacity: 1;
+}
+
+#cleideTableTransportadora,
+#cleideTableUfOrigem,
+#cleideTableUfDestino,
+#cleideTableTemporal,
+.cleide-pagination-controls {
+  display: none !important;
+}
+
+@media (max-width: 1199.98px) {
+  .cleide-hero-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 991.98px) {
+  .cleide-page {
+    padding-bottom: 4rem;
+  }
+
+  .cleide-step {
+    min-height: 152px;
+  }
+
+  .cleide-upload-dropzone {
+    padding: 2rem 1rem;
+  }
+
+  .cleide-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cleide-chart-card--wide {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .cleide-hero-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .cleide-table-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .cleide-pagination-controls {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .cleide-kpi-value {
+    font-size: 1.25rem;
+  }
+
+  .cleide-analytic-panel {
+    padding: 0.85rem;
+  }
+
+  .cleide-chart-wrap {
+    min-height: 235px;
+  }
+
+  .cleide-dashboard-filter-top {
+    padding: 0.75rem;
+  }
+
+  .cleide-chat-floating {
+    --cleide-chat-edge: 0.6rem;
+    --cleide-chat-bottom: 0.6rem;
+  }
+
+  .cleide-chat-panel {
+    width: min(460px, calc(100vw - 1.2rem));
+    max-width: calc(100vw - 1.2rem);
+    height: clamp(500px, 78dvh, 640px);
+    min-height: 500px;
+    max-height: min(82dvh, calc(100dvh - 5.1rem));
+  }
+
+  .cleide-chat-panel__header .h6 {
+    font-size: 1rem;
+  }
+
+  .cleide-chat-panel__intro {
+    min-height: 0;
+  }
+
+  .cleide-date-range-inputs {
+    align-items: stretch;
+  }
+
+  .cleide-date-range-inputs input {
+    width: 100%;
+    min-width: 0;
+  }
+
+}
+
+@media (max-height: 860px) {
+  .cleide-chat-panel {
+    height: clamp(480px, 82dvh, 600px);
+    min-height: 480px;
+    max-height: min(84dvh, calc(100dvh - 4.75rem));
+  }
+
+  .cleide-chat-panel__header,
+  .cleide-chat-panel__footer,
+  .cleide-chat-panel__intro {
+    padding-left: 0.8rem;
+    padding-right: 0.8rem;
+  }
+
+  .cleide-chat-messages {
+    min-height: 132px;
+    margin-left: 0.8rem;
+    margin-right: 0.8rem;
+    margin-bottom: 0.8rem;
+  }
+
+  .cleide-chat-panel__header .btn-sm {
+    padding: 0.25rem 0.55rem;
+  }
+
+  #cleideChatQuestion {
+    min-height: 52px;
+    max-height: 84px;
+  }
+}
+
+@keyframes cleide-skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
