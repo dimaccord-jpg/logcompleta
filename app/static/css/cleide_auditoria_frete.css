@@ -481,6 +481,16 @@
 
 .cleide-chat-panel__footer .d-flex {
   align-items: center;
+  justify-content: space-between;
+  row-gap: 0.5rem;
+}
+
+#cleideChatSendBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: max-content;
 }
 
 .cleide-dashboard-disabled {

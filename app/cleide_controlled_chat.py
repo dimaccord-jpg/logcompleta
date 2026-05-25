@@ -77,6 +77,10 @@ REPLY_OUT_OF_DOMAIN_HINTS = (
 CONTEXTUAL_FOLLOWUP_SHORT_TERMS = {
     "uf": "uf",
     "e uf": "uf",
+    "e a uf": "uf",
+    "e o uf": "uf",
+    "estado": "uf",
+    "e estado": "uf",
     "origem": "origem",
     "e origem": "origem",
     "destino": "destino",
@@ -493,6 +497,18 @@ def _classify_intent(normalized: str) -> str:
         return "resumo_operacional"
     if _contains_any(normalized, ("top transportadoras", "maiores transportadoras", "ranking transportadoras", "transportadoras")):
         return "top_transportadoras"
+    if _contains_any(
+        normalized,
+        (
+            "cidade de embarque",
+            "origem do embarque",
+            "uf de embarque",
+            "embarque",
+        ),
+    ):
+        return "uf_origem"
+    if normalized in {"uf", "e uf", "ufs", "estado", "estados"}:
+        return "uf_origem"
     if _contains_any(normalized, ("uf origem", "origem", "estado de origem", "ufs origem")):
         return "uf_origem"
     if _contains_any(normalized, ("uf destino", "destino", "estado de destino", "ufs destino")):
@@ -900,6 +916,8 @@ def _resolve_contextual_followup(
             return {"intent": "uf_origem"}
         if recent_topic == "uf_destino":
             return {"intent": "uf_destino"}
+        if recent_topic in {"embarque_origem", "cidade_embarque"}:
+            return {"intent": "uf_origem"}
         return None
     if followup_kind == "origem":
         return {"intent": "uf_origem"}
@@ -957,6 +975,10 @@ def _resolve_recent_history_topic(history: list[dict[str, str]] | None) -> str:
 
 
 def _topic_from_semantic_text(semantic_text: str) -> str:
+    if "cidade" in semantic_text and "embarque" in semantic_text:
+        return "cidade_embarque"
+    if "embarque" in semantic_text:
+        return "embarque_origem"
     if "uf origem" in semantic_text or "origem" in semantic_text:
         return "uf_origem"
     if "uf destino" in semantic_text or "destino" in semantic_text:
