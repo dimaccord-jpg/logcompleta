@@ -20,8 +20,8 @@ from app.cleide_upload_pipeline import (
 
 cleide_bp = Blueprint("cleide", __name__)
 _CLEIDE_TEMPLATE_NAME = "template_cleide_auditoria_frete.xlsx"
-_CHAT_HISTORY_MAX_MESSAGES = 6
-_CHAT_HISTORY_MAX_CHARS = 300
+_CHAT_HISTORY_MAX_MESSAGES = 10
+_CHAT_HISTORY_MAX_CHARS = 900
 
 
 def _authorize_cleide_upload_api():

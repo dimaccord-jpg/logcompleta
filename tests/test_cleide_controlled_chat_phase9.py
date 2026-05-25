@@ -360,7 +360,7 @@ def test_governanca_semantica_sem_drift_allowed_forbidden(monkeypatch):
     body, status = run_cleide_controlled_chat(question="top transportadoras", session_obj={})
     assert status == 200
     reply_norm = _norm(body["reply"])
-    assert "participacao relevante" in reply_norm
+    assert "transportadora" in reply_norm
     assert "variacao relevante" in reply_norm
 
 

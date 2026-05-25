@@ -261,7 +261,7 @@ def test_chat_cleide_sanitiza_history_e_preserva_question(monkeypatch):
     assert len(captured["history"]) == 4
     assert captured["history"][0] == {"role": "user", "content": "Qual transportadora lidera?"}
     assert captured["history"][2]["role"] == "assistant"
-    assert len(captured["history"][-1]["content"]) == 300
+    assert len(captured["history"][-1]["content"]) == 900
 
 
 def test_cleide_template_download_publico_sem_login(monkeypatch):

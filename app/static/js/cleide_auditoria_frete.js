@@ -88,6 +88,7 @@
   const chatSendBtn = document.getElementById("cleideChatSendBtn");
   const chatLoading = document.getElementById("cleideChatLoading");
   const chatMessages = document.getElementById("cleideChatMessages");
+  const chatCopyLastBtn = document.getElementById("cleideChatCopyLastBtn");
   const chatScopeBadge = document.getElementById("cleideChatScopeBadge");
   const chatScopeDetails = document.getElementById("cleideChatScopeDetails");
   const chatFallbackBanner = document.getElementById("cleideChatFallbackBanner");
@@ -177,6 +178,7 @@
     !chatSendBtn ||
     !chatLoading ||
     !chatMessages ||
+    !chatCopyLastBtn ||
     !chatScopeBadge ||
     !chatScopeDetails ||
     !chatFallbackBanner ||
@@ -199,6 +201,8 @@
   let currentData = null;
   let chatRequestRunning = false;
   let cleideChatOpen = false;
+  let maxChatHistory = Number(window.CLEIDE_CHAT_MAX_HISTORY || 10);
+  if (!Number.isInteger(maxChatHistory) || maxChatHistory < 1) maxChatHistory = 10;
 
   const activeFilters = {
     transportadora: null,
@@ -907,16 +911,128 @@
     chatMessages.scrollTop = chatMessages.scrollHeight;
   };
 
+  const esc = (text) =>
+    String(text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+  const renderSafeStructuredText = (text) => {
+    const value = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const lines = value.split("\n");
+    const out = [];
+    let inList = false;
+    for (const rawLine of lines) {
+      const line = rawLine.trimEnd();
+      const trimmed = line.trim();
+      if (!trimmed) {
+        if (inList) {
+          out.push("</ul>");
+          inList = false;
+        }
+        out.push("<br>");
+        continue;
+      }
+      const headingMatch = /^(Assunto|Resumo executivo|Principais pontos|Riscos|Recomendações|Recomendacoes|Encerramento)\s*:\s*(.*)$/i.exec(trimmed);
+      if (headingMatch) {
+        if (inList) {
+          out.push("</ul>");
+          inList = false;
+        }
+        out.push(`<strong>${esc(headingMatch[1])}:</strong> ${esc(headingMatch[2])}`);
+        continue;
+      }
+      const bulletMatch = /^[-*]\s+(.+)$/.exec(trimmed);
+      if (bulletMatch) {
+        if (!inList) {
+          out.push("<ul>");
+          inList = true;
+        }
+        out.push(`<li>${esc(bulletMatch[1])}</li>`);
+        continue;
+      }
+      if (inList) {
+        out.push("</ul>");
+        inList = false;
+      }
+      out.push(esc(trimmed));
+    }
+    if (inList) out.push("</ul>");
+    return out.join("<br>");
+  };
+
   const appendChatMessage = (role, text) => {
     const msg = document.createElement("div");
     msg.className = `cleide-chat-msg cleide-chat-msg--${role === "user" ? "user" : role === "loading" ? "loading" : "cleide"}`;
     const inner = document.createElement("div");
     inner.className = "cleide-chat-msg__inner";
-    inner.textContent = String(text || "").trim() || "Sem conteúdo.";
+    const cleanText = String(text || "").trim() || "Sem conteúdo.";
+    if (role === "cleide") {
+      inner.innerHTML = renderSafeStructuredText(cleanText);
+    } else {
+      inner.textContent = cleanText;
+    }
     msg.appendChild(inner);
+    if (role === "cleide") {
+      msg.appendChild(buildCopyAction());
+    }
     chatMessages.appendChild(msg);
     scrollChatToBottom();
     return msg;
+  };
+
+  const buildCopyAction = () => {
+    const actions = document.createElement("div");
+    actions.className = "cleide-chat-actions";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cleide-chat-copy-btn";
+    btn.setAttribute("data-cleide-copy", "1");
+    btn.textContent = "Copiar";
+    actions.appendChild(btn);
+    return actions;
+  };
+
+  const copyTextToClipboard = (text) => {
+    const value = String(text || "").trim();
+    if (!value) return Promise.reject(new Error("empty"));
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      return navigator.clipboard.writeText(value);
+    }
+    return new Promise((resolve, reject) => {
+      const area = document.createElement("textarea");
+      area.value = value;
+      area.setAttribute("readonly", "readonly");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      area.style.left = "-9999px";
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (_err) {
+        ok = false;
+      }
+      document.body.removeChild(area);
+      if (ok) resolve();
+      else reject(new Error("copy-failed"));
+    });
+  };
+
+  const markCopied = (button) => {
+    if (!button) return;
+    const original = button.getAttribute("data-copy-label") || "Copiar";
+    button.setAttribute("data-copy-label", original);
+    button.textContent = "Copiado";
+    button.classList.add("is-copied");
+    window.setTimeout(() => {
+      button.textContent = original;
+      button.classList.remove("is-copied");
+    }, 1200);
   };
 
   const appendUserMessage = (text) => appendChatMessage("user", text);
@@ -927,7 +1043,7 @@
     return normalized.startsWith("aguardando pergunta");
   };
   const buildChatHistory = () => {
-    const MAX_HISTORY = 6;
+    const MAX_HISTORY = maxChatHistory;
     const history = [];
     const nodes = Array.from(chatMessages.querySelectorAll(".cleide-chat-msg"));
     nodes.forEach((node) => {
@@ -957,7 +1073,11 @@
     loadingEl.classList.add("cleide-chat-msg--cleide");
     const inner = loadingEl.querySelector(".cleide-chat-msg__inner");
     if (inner) {
-      inner.textContent = String(text || "").trim() || "Sem resposta disponível no momento.";
+      const safeReply = String(text || "").trim() || "Sem resposta disponível no momento.";
+      inner.innerHTML = renderSafeStructuredText(safeReply);
+    }
+    if (!loadingEl.querySelector(".cleide-chat-copy-btn")) {
+      loadingEl.appendChild(buildCopyAction());
     }
     scrollChatToBottom();
   };
@@ -1060,6 +1180,9 @@
         return;
       }
       replaceLoading(loadingRef, String(data?.reply || "Sem resposta disponível no momento."));
+      if (data.max_history && data.max_history > 0) {
+        maxChatHistory = Number(data.max_history);
+      }
       updateChatScopeFromResponse(data);
       updateChatFallbackBanner(data);
       if (chatFallbackBanner.textContent.trim()) {
@@ -1848,6 +1971,55 @@
   chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     await submitChatQuestion();
+  });
+
+  const getLastCleideMessageText = () => {
+    const nodes = Array.from(chatMessages.querySelectorAll(".cleide-chat-msg--cleide .cleide-chat-msg__inner"));
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const text = String(nodes[i]?.textContent || "").trim();
+      if (!text || isInitialChatPlaceholder(text)) continue;
+      return text;
+    }
+    return "";
+  };
+
+  chatMessages.addEventListener("click", (event) => {
+    const target = event.target?.closest?.(".cleide-chat-copy-btn");
+    if (!target) return;
+    const msgNode = target.closest(".cleide-chat-msg--cleide");
+    const text = String(msgNode?.querySelector(".cleide-chat-msg__inner")?.textContent || "").trim();
+    copyTextToClipboard(text)
+      .then(() => markCopied(target))
+      .catch(() => {
+        target.textContent = "Falha";
+        window.setTimeout(() => {
+          target.textContent = "Copiar";
+        }, 1200);
+      });
+  });
+
+  chatCopyLastBtn.addEventListener("click", () => {
+    const text = getLastCleideMessageText();
+    if (!text) {
+      chatLoading.textContent = "Sem resposta para copiar.";
+      window.setTimeout(() => {
+        if (!chatRequestRunning) chatLoading.textContent = "";
+      }, 1200);
+      return;
+    }
+    copyTextToClipboard(text)
+      .then(() => {
+        chatCopyLastBtn.textContent = "Copiado";
+        window.setTimeout(() => {
+          chatCopyLastBtn.textContent = "Copiar última resposta";
+        }, 1200);
+      })
+      .catch(() => {
+        chatCopyLastBtn.textContent = "Falha";
+        window.setTimeout(() => {
+          chatCopyLastBtn.textContent = "Copiar última resposta";
+        }, 1200);
+      });
   });
 
   chatToggle.addEventListener("click", () => {

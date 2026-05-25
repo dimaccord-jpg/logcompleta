@@ -309,10 +309,40 @@
 }
 
 .cleide-chat-msg__inner {
-  white-space: pre-wrap;
   border-radius: 0.75rem;
   padding: 0.55rem 0.7rem;
   max-width: 92%;
+  line-height: 1.4;
+}
+
+.cleide-chat-msg__inner ul {
+  margin: 0.3rem 0 0.3rem 1rem;
+  padding: 0;
+}
+
+.cleide-chat-msg__inner li {
+  margin: 0.15rem 0;
+}
+
+.cleide-chat-actions {
+  margin-left: 0.45rem;
+  display: flex;
+  align-items: flex-end;
+}
+
+.cleide-chat-copy-btn {
+  border: 1px solid rgba(124, 148, 189, 0.38);
+  border-radius: 999px;
+  background: rgba(17, 25, 39, 0.78);
+  color: #d8e8ff;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.28rem 0.55rem;
+}
+
+.cleide-chat-copy-btn.is-copied {
+  border-color: rgba(37, 176, 255, 0.65);
+  color: #9fe4ff;
 }
 
 .cleide-chat-msg--user {

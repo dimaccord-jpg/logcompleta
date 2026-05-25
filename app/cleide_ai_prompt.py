@@ -45,6 +45,33 @@ Formato de resposta:
 - sem promessas de verificacao em sistemas externos.
 """.strip()
 
+CLEIDE_AI_EXECUTIVE_PROMPT = """
+Modo executivo ativado por intencao do usuario.
+
+Quando ativado:
+- permita resposta estruturada com markdown leve;
+- use titulos curtos e listas objetivas;
+- mantenha rastreabilidade dos numeros ao safe_operational_context;
+- nao invente dados, nao extrapole causalidade, nao acuse fraude.
+
+Estrutura preferencial:
+1) Assunto
+2) Resumo executivo
+3) Principais pontos
+4) Riscos
+5) Recomendacoes
+6) Encerramento
+""".strip()
+
+EXECUTIVE_INTENT_TERMS = (
+    "email",
+    "e-mail",
+    "resumo executivo",
+    "diretoria",
+    "mensagem executiva",
+    "comunicado",
+)
+
 
 def build_cleide_ai_contents(
     *,
@@ -55,6 +82,7 @@ def build_cleide_ai_contents(
     safe_question = str(question or "").strip()
     safe_context = dict(safe_operational_context or {})
     safe_history = list(history or [])
+    executive_mode = _is_executive_intent(safe_question)
     compact_context = json.dumps(safe_context, ensure_ascii=False, separators=(",", ":"))
     history_lines: list[str] = []
     for msg in safe_history:
@@ -67,8 +95,11 @@ def build_cleide_ai_contents(
         label = "user" if role == "user" else "assistant"
         history_lines.append(f"{label}:\n{content}")
     history_block = "\n\n".join(history_lines) if history_lines else "(sem historico recente)"
+    prompt_head = CLEIDE_AI_SYSTEM_PROMPT
+    if executive_mode:
+        prompt_head = f"{prompt_head}\n\n{CLEIDE_AI_EXECUTIVE_PROMPT}"
     return (
-        f"{CLEIDE_AI_SYSTEM_PROMPT}\n\n"
+        f"{prompt_head}\n\n"
         "CONVERSA RECENTE (referencia conversacional; nunca usar como fonte de dado operacional):\n"
         f"{history_block}\n\n"
         "Regra de seguranca do historico:\n"
@@ -79,3 +110,10 @@ def build_cleide_ai_contents(
         f"safe_operational_context:\n{compact_context}\n\n"
         f"pergunta_usuario:\n{safe_question}"
     )
+
+
+def _is_executive_intent(question: str) -> bool:
+    normalized = str(question or "").strip().lower()
+    if not normalized:
+        return False
+    return any(term in normalized for term in EXECUTIVE_INTENT_TERMS)

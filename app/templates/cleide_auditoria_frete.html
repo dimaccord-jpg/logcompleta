@@ -14,6 +14,7 @@
     window.CLEIDE_AUTHENTICATED = {{ 'true' if cleide_is_authenticated else 'false' }};
     window.CLEIDE_LOGIN_URL = {{ cleide_login_url|tojson }};
     window.CLEIDE_UPLOAD_AUTHORIZATION = {{ (cleide_upload_authorization or {})|tojson }};
+    window.CLEIDE_CHAT_MAX_HISTORY = {{ cleide_cfg.chat_max_history|default(10) }};
   </script>
   <section class="ri-card shadow-sm mb-4 mb-xl-5 cleide-hero" data-testid="cleide-hero">
     <div class="card-body p-4 p-lg-5 p-xxl-6">
@@ -608,6 +609,7 @@
           ></textarea>
           <div class="d-flex flex-wrap gap-2">
             <button class="btn btn-primary" type="submit" id="cleideChatSendBtn">Enviar para Cleide</button>
+            <button class="btn btn-outline-secondary" type="button" id="cleideChatCopyLastBtn">Copiar última resposta</button>
             <span class="small text-muted align-self-center" id="cleideChatLoading" aria-live="polite"></span>
           </div>
         </form>

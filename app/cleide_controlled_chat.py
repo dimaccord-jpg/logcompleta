@@ -32,10 +32,10 @@ from app.services.cleiton_operacao_autorizacao_service import (
 logger = logging.getLogger(__name__)
 
 MAX_QUESTION_LEN = 320
-MAX_RESPONSE_LEN = 420
+MAX_RESPONSE_LEN = 1600
 TOP_LIST_LIMIT = 3
-HISTORY_MAX_MESSAGES = 6
-HISTORY_MAX_CHARS = 300
+HISTORY_MAX_MESSAGES = 10
+HISTORY_MAX_CHARS = 900
 POLICY_SAFE_FALLBACK_REPLY = "Dados insuficientes. Oportunidade de investigação. Concentração operacional."
 
 CONVERSATIONAL_CONTRACT_VERSION = "cleide_chat_controlled.v1"
@@ -544,11 +544,16 @@ def _reply_for_intent(intent: str, safe_context: dict[str, Any]) -> str:
     if intent == "dados_insuficientes":
         return "Dados insuficientes. Oportunidade de investigação. Concentração operacional."
     if intent == "resumo_operacional":
+        top_origem = _top_row_label(tables.get("uf_origem"))
+        top_destino = _top_row_label(tables.get("uf_destino"))
         return (
-            f"Concentração operacional em {format_integer(kpis.get('total_documentos'))} documentos, "
-            f"valor total {format_brl(kpis.get('valor_total_frete'))}, peso total {format_weight(kpis.get('peso_total'))} "
-            f"e ticket médio {format_brl(kpis.get('ticket_medio_frete'))}. "
-            "Variação relevante. Tendência operacional. Oportunidade de investigação."
+            "Resumo operacional da sessao:\n"
+            f"- Valor total de frete: {format_brl(kpis.get('valor_total_frete'))}.\n"
+            f"- Volume processado: {format_integer(kpis.get('total_documentos'))} documentos e {format_weight(kpis.get('peso_total'))}.\n"
+            f"- Ticket medio: {format_brl(kpis.get('ticket_medio_frete'))}.\n"
+            f"- UF origem com maior custo: {top_origem}.\n"
+            f"- UF destino com maior custo: {top_destino}.\n\n"
+            "Concentracao operacional com variacao relevante e oportunidade de investigacao."
         )
     if intent == "top_transportadoras":
         return _build_top_reply(
@@ -557,16 +562,16 @@ def _reply_for_intent(intent: str, safe_context: dict[str, Any]) -> str:
             fallback="Não há dados suficientes para top transportadoras.",
         )
     if intent == "uf_origem":
-        return _build_top_reply(
-            rows=tables.get("uf_origem"),
-            label="UFs de origem",
-            fallback="Não há dados suficientes para UFs de origem.",
+        return _build_uf_scope_reply(
+            origem_rows=tables.get("uf_origem"),
+            destino_rows=tables.get("uf_destino"),
+            primary_axis="origem",
         )
     if intent == "uf_destino":
-        return _build_top_reply(
-            rows=tables.get("uf_destino"),
-            label="UFs de destino",
-            fallback="Não há dados suficientes para UFs de destino.",
+        return _build_uf_scope_reply(
+            origem_rows=tables.get("uf_origem"),
+            destino_rows=tables.get("uf_destino"),
+            primary_axis="destino",
         )
     if intent == "periodo_dataset":
         periodo = kpis.get("periodo_dataset") if isinstance(kpis.get("periodo_dataset"), dict) else {}
@@ -625,18 +630,44 @@ def _reply_for_intent(intent: str, safe_context: dict[str, Any]) -> str:
 def _build_top_reply(*, rows: Any, label: str, fallback: str) -> str:
     if not isinstance(rows, list) or not rows:
         return fallback
+    dim_label = _dimension_label_from_table(label)
     parts: list[str] = []
-    for row in rows[:TOP_LIST_LIMIT]:
+    for idx, row in enumerate(rows[:TOP_LIST_LIMIT], start=1):
         if not isinstance(row, dict):
             continue
-        qtd = format_integer(row.get("quantidade"))
-        parts.append(qtd)
+        item = _format_rank_item(row=row, dimension_label=dim_label, position=idx)
+        if item:
+            parts.append(item)
     if not parts:
         return fallback
-    return (
-        f"Participação relevante {' '.join(parts)}. "
-        "Variação relevante. Concentração operacional. Oportunidade de investigação."
+    return "\n".join(parts) + "\n\nConcentracao operacional com variacao relevante e oportunidade de investigacao."
+
+
+def _build_uf_scope_reply(
+    *,
+    origem_rows: Any,
+    destino_rows: Any,
+    primary_axis: str,
+) -> str:
+    top_origem = _format_rank_item(
+        row=_safe_row_at(origem_rows, 0),
+        dimension_label="UF origem",
+        position=1,
     )
+    top_destino = _format_rank_item(
+        row=_safe_row_at(destino_rows, 0),
+        dimension_label="UF destino",
+        position=1,
+    )
+    if not top_origem and not top_destino:
+        return "Dados insuficientes para leitura de UF origem e UF destino neste momento."
+    intro = "Leitura de UFs com foco em custo total do dashboard:"
+    if primary_axis == "destino":
+        ordered = [top_destino, top_origem]
+    else:
+        ordered = [top_origem, top_destino]
+    body = [item for item in ordered if item]
+    return f"{intro}\n" + "\n".join(body) + "\n\nConcentracao operacional com variacao relevante e oportunidade de investigacao."
 
 
 def _is_dataset_insufficient(safe_context: dict[str, Any]) -> bool:
@@ -716,10 +747,13 @@ def _fallback(code: str, reply: str, *, observability: dict[str, Any] | None = N
 
 
 def _safe_reply(reply: str) -> tuple[str, bool]:
-    clean = _normalize_whitespace(reply)
+    clean = _normalize_reply_text(reply)
     if len(clean) <= MAX_RESPONSE_LEN:
         return clean, False
-    return clean[: MAX_RESPONSE_LEN - 3].rstrip() + "...", True
+    truncated = clean[: MAX_RESPONSE_LEN - 3].rstrip()
+    if not truncated:
+        return "...", True
+    return truncated + "...", True
 
 
 def _contains_forbidden(normalized: str, forbidden_terms: set[str]) -> bool:
@@ -1067,14 +1101,93 @@ def _build_rank_position_reply(*, rows: Any, position: int) -> str:
     row = rows[idx]
     if not isinstance(row, dict):
         return ""
+    rank_item = _format_rank_item(row=row, dimension_label=_infer_dimension_from_row(row), position=position)
+    if not rank_item:
+        return ""
+    return f"{rank_item}\n\nConcentracao operacional com variacao relevante e oportunidade de investigacao."
+
+
+def _normalize_reply_text(value: str) -> str:
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines: list[str] = []
+    previous_blank = False
+    for line in raw.split("\n"):
+        normalized = _normalize_whitespace(line)
+        if not normalized:
+            if not previous_blank:
+                lines.append("")
+            previous_blank = True
+            continue
+        lines.append(normalized)
+        previous_blank = False
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _safe_row_at(rows: Any, idx: int) -> dict[str, Any] | None:
+    if not isinstance(rows, list):
+        return None
+    if idx < 0 or idx >= len(rows):
+        return None
+    row = rows[idx]
+    return row if isinstance(row, dict) else None
+
+
+def _top_row_label(rows: Any) -> str:
+    row = _safe_row_at(rows, 0)
+    if not row:
+        return "dados insuficientes"
     chave = _normalize_whitespace(str(row.get("chave") or ""))
-    quantidade = format_integer(row.get("quantidade"))
+    if not chave:
+        return "dados insuficientes"
+    valor = _to_float(row.get("valor_total"))
+    if valor > 0:
+        return f"{chave} ({format_brl(valor)})"
+    quantidade = _to_int(row.get("quantidade"))
+    return f"{chave} ({format_integer(quantidade)} documentos)"
+
+
+def _dimension_label_from_table(label: str) -> str:
+    normalized = _normalize_for_match(label)
+    if "uf de origem" in normalized or "ufs de origem" in normalized or "uf origem" in normalized:
+        return "UF origem"
+    if "uf de destino" in normalized or "ufs de destino" in normalized or "uf destino" in normalized:
+        return "UF destino"
+    if "transportadora" in normalized:
+        return "transportadora"
+    if "modal" in normalized:
+        return "modal"
+    return "categoria"
+
+
+def _infer_dimension_from_row(row: dict[str, Any]) -> str:
+    chave = _normalize_whitespace(str(row.get("chave") or ""))
+    if len(chave) == 2 and chave.isalpha():
+        return "UF"
+    return "categoria"
+
+
+def _format_rank_item(*, row: dict[str, Any] | None, dimension_label: str, position: int) -> str:
+    if not isinstance(row, dict):
+        return ""
+    chave = _normalize_whitespace(str(row.get("chave") or ""))
     if not chave:
         return ""
-    return (
-        f"Participação relevante {chave} {quantidade}. "
-        "Variação relevante. Concentração operacional. Oportunidade de investigação."
-    )
+    metrics: list[str] = []
+    quantidade = _to_int(row.get("quantidade"))
+    if quantidade > 0:
+        metrics.append(f"{format_integer(quantidade)} documentos")
+    valor_total = _to_float(row.get("valor_total"))
+    if valor_total > 0:
+        metrics.append(f"{format_brl(valor_total)} em custo total")
+    peso_total = _to_float(row.get("peso_total"))
+    if peso_total > 0:
+        metrics.append(format_weight(peso_total))
+    metrics_text = "; ".join(metrics) if metrics else "sem metricas suficientes"
+    return f"{position}o lugar em {dimension_label}: {chave} - {metrics_text}."
 
 
 def _dimension_from_semantic_text(semantic_text: str) -> str:

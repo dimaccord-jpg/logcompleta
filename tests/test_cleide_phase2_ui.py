@@ -140,11 +140,13 @@ def test_cleide_phase7_upload_controls_present(monkeypatch):
     assert "id=\"cleideChatForm\"" in html
     assert "id=\"cleideChatQuestion\"" in html
     assert "id=\"cleideChatSendBtn\"" in html
+    assert "id=\"cleideChatCopyLastBtn\"" in html
     assert "id=\"cleideChatLoading\"" in html
     assert "id=\"cleideChatMessages\"" in html
     assert "id=\"cleideChatScopeBadge\"" in html
     assert "id=\"cleideChatScopeDetails\"" in html
     assert "id=\"cleideChatFallbackBanner\"" in html
+    assert "window.CLEIDE_CHAT_MAX_HISTORY" in html
     assert "Chat operacional da Cleide" in html
     assert "Aguardando upload para validação estrutural." in html
     assert "Colunas detectadas: - | Colunas faltantes: - | Linhas: 0 | Sheet: n/a" in html
@@ -219,6 +221,10 @@ def test_cleide_phase7_js_filtros_paginacao_ordenacao():
     assert "data-cleide-remove-filter" in source
     assert "bindTableControls" in source
     assert "submitChatQuestion" in source
+    assert "chatCopyLastBtn" in source
+    assert "renderSafeStructuredText" in source
+    assert "data-cleide-copy" in source
+    assert "navigator.clipboard" in source
     assert "appendUserMessage" in source
     assert "appendCleideMessage" in source
     assert "appendLoadingMessage" in source
@@ -231,6 +237,7 @@ def test_cleide_phase7_js_filtros_paginacao_ordenacao():
     assert "event.key === \"Escape\"" in source
     assert "fetch(\"/api/chat_cleide\"" in source
     assert "buildChatHistory" in source
+    assert "MAX_HISTORY = maxChatHistory" in source
     assert "const history = buildChatHistory();" in source
     assert "appendUserMessage(question);" in source
     assert "body: JSON.stringify({ question, history })" in source
