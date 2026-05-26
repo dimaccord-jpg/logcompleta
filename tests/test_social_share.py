@@ -71,13 +71,16 @@ def _assert_common_share_contract(html: str, *, share_url_abs: str, share_title:
     assert f"https://www.linkedin.com/sharing/share-offsite/?url={url_encoded}" in block
     assert f"https://twitter.com/intent/tweet?url={url_encoded}&amp;text={title_encoded}" in block
     assert f"https://www.threads.net/intent/post?text={title_encoded}%20{url_encoded}" in block
+    assert f"https://api.whatsapp.com/send?text={title_encoded}%20{url_encoded}" in block
 
-    assert block.count('target="_blank"') >= 4
-    assert block.count('rel="noopener noreferrer"') >= 4
+    assert block.count('target="_blank"') >= 5
+    assert block.count('rel="noopener noreferrer"') >= 5
     assert 'aria-label="Compartilhar no Facebook"' in block
     assert 'aria-label="Compartilhar no Threads"' in block
     assert 'aria-label="Compartilhar no X"' in block
     assert 'aria-label="Compartilhar no LinkedIn"' in block
+    assert 'aria-label="Compartilhar no WhatsApp"' in block
+    assert 'title="Compartilhar no WhatsApp"' in block
 
     assert "https://example.com/fonte-externa-nao-usar-no-share" not in block
 
@@ -125,7 +128,7 @@ def test_homolog_canonical_og_url_e_share_url_abs_iguais(monkeypatch):
 
 
 @pytest.mark.parametrize("tipo", ["artigo", "noticia"])
-def test_conteudo_publico_renderiza_quatro_links_sociais(tipo):
+def test_conteudo_publico_renderiza_cinco_links_sociais(tipo):
     web = _load_web_module()
     fake = _fake_noticia(tipo=tipo)
     web.NoticiaPortal = SimpleNamespace(query=_FakeQuery(fake))
@@ -191,7 +194,7 @@ def test_render_noticia_nao_aciona_pipeline_nem_consumo_ia(monkeypatch):
     assert pipeline_calls["count"] == 0
 
 
-def test_exemplo_html_dos_quatro_botoes():
+def test_exemplo_html_dos_cinco_botoes():
     web = _load_web_module()
     fake = _fake_noticia(tipo="artigo", noticia_id=7)
     web.NoticiaPortal = SimpleNamespace(query=_FakeQuery(fake))
@@ -202,3 +205,5 @@ def test_exemplo_html_dos_quatro_botoes():
     assert "Threads" in block
     assert "bi-twitter-x" in block
     assert "LinkedIn" in block
+    assert "WhatsApp" in block
+    assert "bi-whatsapp" in block
