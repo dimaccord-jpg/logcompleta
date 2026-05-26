@@ -63,6 +63,7 @@ from app.auth_services import (
 
 from app.news_ai import registrar_lead_newsletter
 from app.services import user_admin_control_service
+from app.run_julia_agente_imagem import FALLBACK_ASSET_LOCAL, log_image_runtime_config
 
 # Model used by the home route to list portal news/articles.
 from app.models import NoticiaPortal
@@ -100,6 +101,7 @@ logging.basicConfig(
 app = Flask(__name__)
 migrate = Migrate()
 logger = logging.getLogger(__name__)
+log_image_runtime_config()
 
 _diretorio_dados = settings.data_dir
 app.config["DATA_DIR"] = settings.data_dir  # usado pelo Admin para persistir última execução manual
@@ -1131,9 +1133,33 @@ def detalhe_noticia(noticia_id):
         if local.startswith("generated/"):
             return url_for("static", filename=local)
         if local.startswith("/media/generated/"):
-            return url_for("media_generated", filename=local[len("/media/generated/"):])
+            nome = local[len("/media/generated/"):]
+            path = Path(settings.data_dir) / "generated" / nome
+            if path.exists():
+                return url_for("media_generated", filename=nome)
+            logger.warning("Arquivo de imagem publicado ausente em storage persistente: %s", nome)
+            return url_for("static", filename=FALLBACK_ASSET_LOCAL[len("/static/"):])
         if local.startswith("media/generated/"):
-            return url_for("media_generated", filename=local[len("media/generated/"):])
+            nome = local[len("media/generated/"):]
+            path = Path(settings.data_dir) / "generated" / nome
+            if path.exists():
+                return url_for("media_generated", filename=nome)
+            logger.warning("Arquivo de imagem publicado ausente em storage persistente: %s", nome)
+            return url_for("static", filename=FALLBACK_ASSET_LOCAL[len("/static/"):])
+        if local.startswith("/static/generated/"):
+            rel = local[len("/static/"):]
+            path = Path(_diretorio_app) / "static" / "generated" / rel[len("generated/"):]
+            if path.exists():
+                return url_for("static", filename=rel)
+            logger.warning("Arquivo de imagem publicado ausente em static/generated: %s", rel)
+            return url_for("static", filename=FALLBACK_ASSET_LOCAL[len("/static/"):])
+        if local.startswith("static/generated/"):
+            rel = local[len("static/"):]
+            path = Path(_diretorio_app) / "static" / "generated" / rel[len("generated/"):]
+            if path.exists():
+                return url_for("static", filename=rel)
+            logger.warning("Arquivo de imagem publicado ausente em static/generated: %s", rel)
+            return url_for("static", filename=FALLBACK_ASSET_LOCAL[len("/static/"):])
         return val
 
     url_imagem_resolvida = _resolver_url_imagem(noticia.url_imagem)

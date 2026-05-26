@@ -71,5 +71,5 @@ def test_retencao_imagem_nao_deixa_noticia_publica_sem_capa(app):
         recente_db = db.session.get(NoticiaPortal, recente.id)
 
         assert total >= 1
-        assert antiga_db.url_imagem == "/static/img/fallback-capa-v1.svg"
+        assert antiga_db.url_imagem == "/media/generated/antiga.png"
         assert recente_db.url_imagem == "/media/generated/recente.png"

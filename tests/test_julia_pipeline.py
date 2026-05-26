@@ -274,6 +274,58 @@ def test_pipeline_publica_artigo_com_fallback_imagem_sem_bloquear(app, monkeypat
         assert assets_meta.get("imagem_provider") == "fallback"
 
 
+def test_runtime_imagem_reflete_env_sem_expor_segredo(monkeypatch):
+    from app.run_julia_agente_imagem import get_image_runtime_config
+
+    monkeypatch.setenv("IMAGE_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_MODEL_IMAGE", "model-principal")
+    monkeypatch.setenv("GEMINI_MODEL_IMAGE_FALLBACK", "model-fallback")
+    monkeypatch.setenv("GEMINI_HTTP_TIMEOUT_MS", "31000")
+    monkeypatch.setenv("GEMINI_IMAGE_HTTP_TIMEOUT_MS", "12000")
+    monkeypatch.setenv("GEMINI_API_KEY_2", "secret")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    cfg = get_image_runtime_config()
+
+    assert cfg["image_provider"] == "gemini"
+    assert cfg["gemini_model_image"] == "model-principal"
+    assert cfg["gemini_model_image_fallback"] == "model-fallback"
+    assert cfg["gemini_http_timeout_ms"] == "31000"
+    assert cfg["gemini_image_http_timeout_ms"] == "12000"
+    assert cfg["provider_efetivo"] == "gemini"
+    assert cfg["modelo_efetivo_principal"] == "model-principal"
+    assert cfg["modelo_efetivo_fallback"] == "model-fallback"
+    assert cfg["timeout_efetivo_ms"] == 12000
+    assert cfg["gemini_api_key_present"] is True
+    assert cfg["google_api_key_present"] is False
+
+
+def test_modelo_multimodal_configurado_vira_caminho_principal_sem_chamar_imagen(monkeypatch):
+    from app.run_julia_agente_imagem import _gerar_via_gemini
+
+    monkeypatch.setenv("GEMINI_API_KEY_2", "secret")
+    monkeypatch.setenv("GEMINI_MODEL_IMAGE", "gemini-3.1-flash-image-preview")
+    called = {"imagen": 0, "multi": 0}
+
+    def _imagen(*_args, **_kwargs):
+        called["imagen"] += 1
+        return None
+
+    def _multi(*_args, **kwargs):
+        called["multi"] += 1
+        assert kwargs.get("model_override") == "gemini-3.1-flash-image-preview"
+        return "/media/generated/principal.png"
+
+    monkeypatch.setattr("app.run_julia_agente_imagem._gerar_via_gemini_imagen", _imagen)
+    monkeypatch.setattr("app.run_julia_agente_imagem._gerar_via_gemini_multimodal", _multi)
+
+    out = _gerar_via_gemini("porto logistico")
+
+    assert out == "/media/generated/principal.png"
+    assert called["imagen"] == 0
+    assert called["multi"] == 1
+
+
 def test_prompt_imagem_contextual_inclui_campos_essenciais(app):
     with app.app_context():
         pauta = _criar_pauta(tipo="artigo", suffix="prompt")

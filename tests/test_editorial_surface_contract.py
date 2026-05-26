@@ -202,3 +202,51 @@ def test_busca_noticias_portal_exclui_despublicado(app):
         ids = {n.id for n in out}
         assert publicado.id in ids
         assert despublicado.id not in ids
+
+
+def test_abrir_noticia_20x_nao_altera_estado_publicado(app):
+    web = _load_web_module()
+    fake_noticia = SimpleNamespace(
+        id=420,
+        tipo="noticia",
+        titulo_julia="Imutavel",
+        titulo_original="Original imutavel",
+        link="https://example.com/noticia-imutavel",
+        fonte="Fonte",
+        status_publicacao="publicado",
+        publicado_em=datetime.now(timezone.utc).replace(tzinfo=None),
+        data_publicacao=datetime.now(timezone.utc).replace(tzinfo=None),
+        resumo_julia="Resumo estavel",
+        conteudo_completo="<p>Conteudo</p>",
+        subtitulo=None,
+        referencias=None,
+        cta=None,
+        objetivo_lead=None,
+        url_imagem="/media/generated/imutavel.png",
+        url_imagem_master="/media/generated/imutavel.png",
+        assets_canais_json='{"imagem_status":"sucesso","imagem_provider":"gemini","imagem_url_final":"/media/generated/imutavel.png"}',
+    )
+    before = (
+        fake_noticia.url_imagem,
+        fake_noticia.assets_canais_json,
+        fake_noticia.url_imagem_master,
+    )
+    class _FakeQueryImutavel:
+        def get_or_404(self, _id):
+            return fake_noticia
+
+    web.NoticiaPortal = SimpleNamespace(query=_FakeQueryImutavel())
+    client = web.app.test_client()
+    for _ in range(20):
+        resp = client.get("/noticia/420")
+        assert resp.status_code == 200
+    after = (
+        fake_noticia.url_imagem,
+        fake_noticia.assets_canais_json,
+        fake_noticia.url_imagem_master,
+    )
+    assert before == after
+    assert fake_noticia.url_imagem == "/media/generated/imutavel.png"
+    assert '"imagem_status":"sucesso"' in fake_noticia.assets_canais_json
+    assert '"imagem_provider":"gemini"' in fake_noticia.assets_canais_json
+    assert '"imagem_url_final":"/media/generated/imutavel.png"' in fake_noticia.assets_canais_json

@@ -40,6 +40,49 @@ FALLBACK_ASSET_LOCAL = "/static/img/fallback-capa-v1.svg"
 FALLBACK_ASSET_SECUNDARIO = "/static/img/logo.png"
 
 
+def get_image_runtime_config() -> dict[str, str | int | bool]:
+    """Expoe configuracao efetiva de runtime de imagem sem vazar segredos."""
+    provider = (os.getenv("IMAGE_PROVIDER", "").strip() or "auto").lower()
+    return {
+        "image_provider": provider or "auto",
+        "gemini_model_image": _get_model_image(),
+        "gemini_model_image_fallback": _get_model_image_fallback() or "<disabled>",
+        "gemini_http_timeout_ms": os.getenv("GEMINI_HTTP_TIMEOUT_MS", "").strip() or "<default:20000>",
+        "gemini_image_http_timeout_ms": (
+            os.getenv("GEMINI_IMAGE_HTTP_TIMEOUT_MS", "").strip() or "<inherits GEMINI_HTTP_TIMEOUT_MS/default>"
+        ),
+        "provider_efetivo": "gemini" if provider in ("auto", "gemini") else "fallback",
+        "modelo_efetivo_principal": _get_model_image(),
+        "modelo_efetivo_fallback": _get_model_image_fallback() or "<disabled>",
+        "timeout_efetivo_ms": _get_gemini_timeout_ms(),
+        "gemini_api_key_present": bool(
+            os.getenv("GEMINI_API_KEY_2") or os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
+        ),
+        "google_api_key_present": bool(os.getenv("GOOGLE_API_KEY")),
+    }
+
+
+def log_image_runtime_config() -> None:
+    cfg = get_image_runtime_config()
+    logger.info(
+        "Julia imagem runtime | IMAGE_PROVIDER=%s | GEMINI_MODEL_IMAGE=%s | "
+        "GEMINI_MODEL_IMAGE_FALLBACK=%s | GEMINI_HTTP_TIMEOUT_MS=%s | "
+        "GEMINI_IMAGE_HTTP_TIMEOUT_MS=%s | provider_efetivo=%s | modelo_efetivo=%s | "
+        "fallback_modelo_efetivo=%s | timeout_efetivo_ms=%s | GEMINI_API_KEY=%s | GOOGLE_API_KEY=%s",
+        cfg["image_provider"],
+        cfg["gemini_model_image"],
+        cfg["gemini_model_image_fallback"],
+        cfg["gemini_http_timeout_ms"],
+        cfg["gemini_image_http_timeout_ms"],
+        cfg["provider_efetivo"],
+        cfg["modelo_efetivo_principal"],
+        cfg["modelo_efetivo_fallback"],
+        cfg["timeout_efetivo_ms"],
+        "present" if cfg["gemini_api_key_present"] else "absent",
+        "present" if cfg["google_api_key_present"] else "absent",
+    )
+
+
 def _allow_remote_fallback() -> bool:
     """Permite fallback remoto apenas quando explicitamente habilitado por ambiente."""
     return (os.getenv("IMAGE_ALLOW_REMOTE_FALLBACK", "false") or "false").strip().lower() in (
@@ -105,6 +148,31 @@ def _get_model_image_fallback() -> str:
     return (os.getenv("GEMINI_MODEL_IMAGE_FALLBACK", "").strip() or "").strip()
 
 
+def _modelo_imagem_usa_generate_images(model: str) -> bool:
+    return (model or "").strip().lower().startswith("imagen")
+
+
+def _log_image_attempt_failure(
+    *,
+    provider: str,
+    model: str,
+    operation: str,
+    attempt: int,
+    duration_ms: int,
+    error_summary: str,
+) -> None:
+    logger.warning(
+        "Julia imagem falhou | provider=%s | model=%s | operation=%s | timeout_ms=%s | tentativa=%s | duracao_ms=%s | error_summary=%s",
+        provider,
+        model,
+        operation,
+        _get_gemini_timeout_ms(),
+        attempt,
+        duration_ms,
+        error_summary,
+    )
+
+
 def gerar_url_imagem(prompt_imagem: str) -> str | None:
     """
     Gera url_imagem a partir do prompt. Retorna URL string ou fallback; nunca list/dict.
@@ -162,13 +230,13 @@ def _gerar_via_gemini(prompt_imagem: str) -> str | None:
     if not key:
         return None
 
-    # 1) Imagen endpoint (prioridade)
-    url = _gerar_via_gemini_imagen(prompt_imagem, key)
-    if url:
-        return url
-
-    # 2) Fallback Gemini multimodal (ainda Gemini)
-    return _gerar_via_gemini_multimodal(prompt_imagem, key)
+    model_principal = _get_model_image()
+    if _modelo_imagem_usa_generate_images(model_principal):
+        url = _gerar_via_gemini_imagen(prompt_imagem, key)
+        if url:
+            return url
+        return _gerar_via_gemini_multimodal(prompt_imagem, key)
+    return _gerar_via_gemini_multimodal(prompt_imagem, key, model_override=model_principal)
 
 
 def _gerar_via_gemini_imagen(prompt_imagem: str, key: str) -> str | None:
@@ -176,6 +244,7 @@ def _gerar_via_gemini_imagen(prompt_imagem: str, key: str) -> str | None:
     tentativas = _image_retry_attempts()
     backoff_ms = _image_retry_backoff_ms()
     for tentativa in range(1, tentativas + 1):
+        started = time.monotonic()
         try:
             from google.genai import types
             client = _build_gemini_client(key)
@@ -214,6 +283,14 @@ def _gerar_via_gemini_imagen(prompt_imagem: str, key: str) -> str | None:
                         return local_url
             return None
         except Exception as e:
+            _log_image_attempt_failure(
+                provider="gemini",
+                model=_get_model_image(),
+                operation="generate_images",
+                attempt=tentativa,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_summary=str(e),
+            )
             logger.warning(
                 "Imagen indisponivel (%s) tentativa %d/%d: %s",
                 _get_model_image(),
@@ -226,14 +303,15 @@ def _gerar_via_gemini_imagen(prompt_imagem: str, key: str) -> str | None:
     return None
 
 
-def _gerar_via_gemini_multimodal(prompt_imagem: str, key: str) -> str | None:
+def _gerar_via_gemini_multimodal(prompt_imagem: str, key: str, model_override: str | None = None) -> str | None:
     """Fallback Gemini multimodal para extrair inline_data de imagem em bytes."""
-    model = _get_model_image_fallback()
+    model = (model_override or _get_model_image_fallback()).strip()
     if not model:
         return None
     tentativas = _image_retry_attempts()
     backoff_ms = _image_retry_backoff_ms()
     for tentativa in range(1, tentativas + 1):
+        started = time.monotonic()
         try:
             client = _build_gemini_client(key)
             prompt_final = (
@@ -254,6 +332,14 @@ def _gerar_via_gemini_multimodal(prompt_imagem: str, key: str) -> str | None:
                 return _salvar_imagem_local(raw_bytes)
             return None
         except Exception as e:
+            _log_image_attempt_failure(
+                provider="gemini",
+                model=_get_model_image_fallback() or "<disabled>",
+                operation="generate_content",
+                attempt=tentativa,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_summary=str(e),
+            )
             logger.warning(
                 "Gemini multimodal imagem indisponivel (%s) tentativa %d/%d: %s",
                 _get_model_image_fallback(),
