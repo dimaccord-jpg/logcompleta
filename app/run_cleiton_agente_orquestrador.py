@@ -39,6 +39,44 @@ from app.run_cleiton_agente_dispatcher import (
 logger = logging.getLogger(__name__)
 
 
+def _detalhe_falha_dispatch_julia(mission_id: str | None) -> str | None:
+    if not mission_id:
+        return None
+    try:
+        rows = (
+            AuditoriaGerencial.query.filter(
+                AuditoriaGerencial.tipo_decisao == "julia",
+                AuditoriaGerencial.contexto_json.like(f'%"{mission_id}"%'),
+            )
+            .order_by(AuditoriaGerencial.id.desc())
+            .limit(10)
+            .all()
+        )
+        for row in rows:
+            contexto = {}
+            if row.contexto_json:
+                try:
+                    contexto = json.loads(row.contexto_json)
+                except Exception:
+                    contexto = {}
+            if row.decisao == "Fallback de redação bloqueado antes da publicação":
+                motivo = (contexto.get("redacao_motivo") or "unknown").strip() or "unknown"
+                return f"Falha de redação Júlia: {motivo}."
+            if row.decisao == "Falha na redação":
+                tipo_retorno = (contexto.get("tipo_retorno") or "").strip()
+                if tipo_retorno:
+                    return f"Falha de redação Júlia: retorno inválido ({tipo_retorno})."
+                return "Falha de redação Júlia: conteúdo vazio ou inválido."
+            if row.decisao == "Erro inesperado no pipeline":
+                detalhe = (row.detalhe or "").strip()
+                if detalhe:
+                    return f"Erro inesperado no pipeline da Júlia: {detalhe}"
+                return "Erro inesperado no pipeline da Júlia."
+    except Exception:
+        logger.exception("Falha ao enriquecer motivo da missão %s", mission_id)
+    return None
+
+
 def _contexto_indica_bypass_frequencia(contexto_json: str | None) -> bool:
     """Retorna True quando o contexto da auditoria indica bypass manual da frequência."""
     if not contexto_json:
@@ -510,7 +548,10 @@ def executar_ciclo_gerencial(
                 resultado="falha",
             )
             resultado["status"] = "falha"
-            resultado["motivo"] = "Despacho para agente operacional falhou ou não houve publicação."
+            resultado["motivo"] = (
+                _detalhe_falha_dispatch_julia(payload.get("mission_id"))
+                or "Despacho para agente operacional falhou ou não houve publicação."
+            )
         else:
             resultado["status"] = "sucesso"
             resultado["motivo"] = "Missão despachada com sucesso e agente operacional publicou conteúdo."

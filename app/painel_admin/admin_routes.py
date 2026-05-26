@@ -42,6 +42,7 @@ from app.finance import (
 )
 from app.run_julia_regras import status_verificacao_permitidos
 
+from app.extensions import db
 from app.services import agent_service
 from app.services import pauta_service
 from app.services import serie_service
@@ -1527,3 +1528,62 @@ def pautas_marcar_revisao(pauta_id):
     else:
         flash("Pauta marcada para revisão manual.", "success")
     return redirect(url_for("admin.pautas_admin"))
+
+
+@admin_bp.route("/noticias/<int:noticia_id>/despublicar", methods=["POST"])
+@login_required
+def despublicar_noticia_editorial(noticia_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.models import NoticiaPortal
+
+    motivo = (request.form.get("motivo") or "").strip()
+    noticia = db.session.get(NoticiaPortal, noticia_id)
+    if not noticia:
+        flash("Conteúdo não encontrado para despublicação.", "warning")
+        return redirect(url_for("admin.pautas_admin", status="publicada"))
+
+    estado_antes = {
+        "status_publicacao": noticia.status_publicacao,
+        "publicado_em": noticia.publicado_em.isoformat() if noticia.publicado_em else None,
+        "tipo": noticia.tipo,
+    }
+    try:
+        noticia.publicado_em = None
+        noticia.status_publicacao = "despublicado"
+        db.session.add(noticia)
+        db.session.commit()
+        estado_depois = {
+            "status_publicacao": noticia.status_publicacao,
+            "publicado_em": None,
+            "tipo": noticia.tipo,
+        }
+        auditoria_service.registrar_auditoria_admin(
+            actor_email=getattr(current_user, "email", None),
+            tipo_decisao="admin_operacao",
+            decisao="despublicacao_editorial",
+            entidade="noticia_portal",
+            entidade_id=noticia.id,
+            estado_antes=estado_antes,
+            estado_depois=estado_depois,
+            motivo=motivo or "despublicacao_editorial_manual",
+            resultado="sucesso",
+            detalhe=f"Despublicação editorial executada por admin_id={getattr(current_user, 'id', None)}.",
+        )
+        flash("Conteúdo despublicado com sucesso.", "success")
+    except Exception as e:
+        db.session.rollback()
+        auditoria_service.registrar_auditoria_admin(
+            actor_email=getattr(current_user, "email", None),
+            tipo_decisao="admin_operacao",
+            decisao="despublicacao_editorial",
+            entidade="noticia_portal",
+            entidade_id=noticia.id,
+            estado_antes=estado_antes,
+            estado_depois=None,
+            motivo=motivo or "despublicacao_editorial_manual",
+            resultado="falha",
+            detalhe=f"Falha ao despublicar notícia: {e}",
+        )
+        flash("Falha ao despublicar conteúdo.", "danger")
+    return redirect(url_for("admin.pautas_admin", status="publicada"))

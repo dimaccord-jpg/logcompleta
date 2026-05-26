@@ -197,6 +197,40 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
                 )
                 return False
 
+            if tipo_missao == "artigo":
+                redacao_status = (conteudo.get("redacao_status") or "").strip().lower()
+                redacao_fallback = bool(conteudo.get("redacao_fallback"))
+                redacao_motivo = (conteudo.get("redacao_motivo") or "unknown").strip() or "unknown"
+                fallback_bloqueado = (redacao_status != "sucesso") or redacao_fallback
+
+                if fallback_bloqueado:
+                    logger.error(
+                        "Júlia pipeline: bloqueio de publicação de artigo em fallback "
+                        "(mission_id=%s pauta_id=%s motivo=%s status=%s fallback=%s)",
+                        mission_id,
+                        pauta.id,
+                        redacao_motivo,
+                        redacao_status or "indefinido",
+                        redacao_fallback,
+                    )
+                    marcar_pauta_falha(pauta.id)
+                    _atualizar_item_serie_por_pauta(pauta.id, "falha")
+                    auditoria_registrar(
+                        tipo_decisao="julia",
+                        decisao="Fallback de redação bloqueado antes da publicação",
+                        contexto={
+                            "mission_id": mission_id,
+                            "tipo_missao": tipo_missao,
+                            "pauta_id": pauta.id,
+                            "redacao_status": redacao_status or "indefinido",
+                            "redacao_fallback": redacao_fallback,
+                            "redacao_motivo": redacao_motivo,
+                        },
+                        resultado="falha",
+                        detalhe="Pipeline bloqueou contingência de redação para impedir publicação de artigo genérico.",
+                    )
+                    return False
+
             auditoria_registrar(
                 tipo_decisao="julia",
                 decisao="Redação concluída",
