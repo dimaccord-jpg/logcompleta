@@ -1,7 +1,8 @@
 from app.extensions import db
 from app.models import AuditoriaGerencial, NoticiaPortal, Pauta
-from app.run_julia_agente_pipeline import executar_pipeline
+from app.run_julia_agente_pipeline import executar_pipeline, _montar_prompt_imagem_contextual
 from app.run_cleiton_agente_orquestrador import _detalhe_falha_dispatch_julia
+import json
 
 
 def _criar_pauta(tipo: str = "noticia", suffix: str = "1") -> Pauta:
@@ -125,8 +126,14 @@ def test_pipeline_noticia_curta_permanece_publicando(app, monkeypatch):
             lambda *args, **kwargs: conteudo_ok,
         )
         monkeypatch.setattr(
-            "app.run_julia_agente_pipeline.gerar_url_imagem",
-            lambda _prompt: "https://example.com/img.png",
+            "app.run_julia_agente_pipeline.gerar_imagem_publicavel",
+            lambda _prompt: {
+                "url": "https://example.com/img.png",
+                "status": "sucesso",
+                "origem": "url_remota",
+                "motivo": "gemini_ok",
+                "provider": "gemini",
+            },
         )
         monkeypatch.setattr(
             "app.run_julia_agente_pipeline.classificar_origem_url_imagem",
@@ -158,6 +165,7 @@ def test_pipeline_noticia_curta_permanece_publicando(app, monkeypatch):
                 fonte=kwargs.get("fonte", ""),
                 resumo_julia=kwargs.get("resumo_julia"),
                 conteudo_completo=kwargs.get("conteudo_completo"),
+                    assets_canais_json=kwargs.get("assets_canais_json"),
                 status_publicacao=kwargs.get("status_publicacao", "pendente"),
             )
             db.session.add(noticia)
@@ -180,6 +188,74 @@ def test_pipeline_noticia_curta_permanece_publicando(app, monkeypatch):
         assert ok is True
         assert pauta_atualizada.status == "publicada"
         assert noticia is not None
+        assets_meta = json.loads(noticia.assets_canais_json or "{}")
+        assert assets_meta.get("imagem_status") == "sucesso"
+        assert assets_meta.get("imagem_provider") == "gemini"
+        assert assets_meta.get("imagem_url_final") == "https://example.com/img.png"
+
+
+def test_pipeline_publica_artigo_com_fallback_imagem_sem_bloquear(app, monkeypatch):
+    with app.app_context():
+        pauta = _criar_pauta(tipo="artigo", suffix="img-fallback")
+        monkeypatch.setattr(
+            "app.run_julia_agente_pipeline.gerar_conteudo",
+            lambda *args, **kwargs: {
+                "titulo_julia": "Artigo com fallback de imagem",
+                "resumo_julia": "Resumo",
+                "conteudo_completo": "<p>Corpo completo para artigo.</p>",
+                "redacao_status": "sucesso",
+                "redacao_fallback": False,
+            },
+        )
+        monkeypatch.setattr(
+            "app.run_julia_agente_pipeline.gerar_imagem_publicavel",
+            lambda _prompt: {
+                "url": "/static/img/fallback-capa-v1.svg",
+                "status": "fallback",
+                "origem": "contingencia_fixa",
+                "motivo": "gemini_sem_resultado",
+                "provider": "fallback",
+            },
+        )
+        monkeypatch.setattr("app.run_julia_agente_pipeline.validar_conteudo", lambda *_: (True, []))
+        monkeypatch.setattr(
+            "app.run_julia_agente_pipeline.gerar_assets_por_canal",
+            lambda *_args, **_kwargs: {
+                "url_imagem_master": "/static/img/fallback-capa-v1.svg",
+                "assets_por_canal": {},
+                "provider_utilizado": "mock",
+            },
+        )
+        monkeypatch.setattr("app.run_julia_agente_pipeline.normalizar_assets_json", lambda _assets: "{}")
+        monkeypatch.setattr(
+            "app.run_julia_agente_pipeline.publicar_multicanal",
+            lambda noticia, mission_id, assets_por_canal=None: {"resultado": "sucesso_total"},
+        )
+        ok = executar_pipeline({"mission_id": "mission-fallback-img", "tipo_missao": "artigo"}, app)
+        noticia = NoticiaPortal.query.filter_by(link=pauta.link).first()
+        assert ok is True
+        assert noticia is not None
+        assert noticia.url_imagem == "/static/img/fallback-capa-v1.svg"
+        assets_meta = json.loads(noticia.assets_canais_json or "{}")
+        assert assets_meta.get("imagem_status") == "fallback"
+        assert assets_meta.get("imagem_origem") == "contingencia_fixa"
+        assert assets_meta.get("imagem_provider") == "fallback"
+
+
+def test_prompt_imagem_contextual_inclui_campos_essenciais(app):
+    with app.app_context():
+        pauta = _criar_pauta(tipo="artigo", suffix="prompt")
+        conteudo = {
+            "titulo_julia": "Título de teste",
+            "subtitulo": "Subtítulo de teste",
+            "resumo_julia": "Resumo de teste",
+            "conteudo_completo": "Trecho relevante do conteúdo completo para compor contexto visual.",
+        }
+        prompt = _montar_prompt_imagem_contextual(conteudo, pauta, "artigo")
+        assert "Título de teste" in prompt
+        assert "Resumo de teste" in prompt
+        assert "Trecho relevante do conteúdo completo" in prompt
+        assert "Source:" in prompt
 
 
 def test_orquestrador_exibe_motivo_tecnico_da_falha_para_admin(app):

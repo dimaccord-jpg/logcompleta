@@ -5,13 +5,14 @@ Saída: True apenas quando publicação concluída no formato correto; falhas au
 """
 import logging
 import re
+import json
 from typing import Any
 
 from app.extensions import db
 from app.models import Pauta, SerieItemEditorial
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
 from app.run_julia_agente_designer import gerar_assets_por_canal, normalizar_assets_json
-from app.run_julia_agente_imagem import gerar_url_imagem, classificar_origem_url_imagem
+from app.run_julia_agente_imagem import gerar_imagem_publicavel, classificar_origem_url_imagem
 from app.run_julia_agente_publicacao import publicar
 from app.run_julia_agente_publisher import publicar_multicanal, RESULTADO_FALHA_TOTAL
 from app.run_julia_agente_qualidade import validar_conteudo
@@ -37,19 +38,58 @@ def _montar_prompt_imagem_contextual(conteudo: dict[str, Any], pauta: Pauta, tip
     subtitulo = _limpar_texto_prompt(conteudo.get("subtitulo"), 160)
     resumo = _limpar_texto_prompt(conteudo.get("resumo_julia"), 220)
     fonte = _limpar_texto_prompt(pauta.fonte, 80)
+    conteudo_texto = _limpar_texto_prompt(conteudo.get("conteudo_completo"), 450)
+    tema_logistico = _limpar_texto_prompt(pauta.titulo_original, 120)
 
     if prompt_base and len(prompt_base) >= 30:
-        return prompt_base
-
-    contexto = " | ".join([x for x in [titulo, subtitulo, resumo] if x])
+        contexto_base = prompt_base
+    else:
+        contexto_base = " | ".join([x for x in [titulo, subtitulo, resumo, conteudo_texto] if x])
     tipo_desc = "strategic long-form article" if (tipo_missao or "noticia") == "artigo" else "fast logistics insight"
     prompt_final = (
-        "Create a professional editorial cover image, realistic photography style, "
-        "no text overlay, no watermark, logistics and supply chain theme. "
+        "Create a unique professional editorial cover image for a Brazilian logistics publication. "
+        "No written text in the image, no watermark, no real brand logos, "
+        "realistic high-quality photography style with editorial framing. "
+        "The scene must be specific to the article context and avoid generic visuals. "
         f"Content type: {tipo_desc}. Source: {fonte or 'logistics portal'}. "
-        f"Context: {contexto or 'global supply chain operations'}"
+        f"Logistics theme: {tema_logistico or 'global supply chain operations'}. "
+        f"Context: {contexto_base or 'global supply chain operations'}"
     )
     return prompt_final[:500]
+
+
+def _normalizar_assets_observabilidade(
+    assets_json: str | None,
+    *,
+    imagem_status: str,
+    imagem_origem: str,
+    imagem_motivo: str,
+    prompt_imagem_usado: str,
+    imagem_url_final: str | None,
+    imagem_provider: str,
+) -> str | None:
+    payload: dict[str, Any] = {}
+    if assets_json:
+        try:
+            parsed = json.loads(assets_json)
+            if isinstance(parsed, dict):
+                payload = parsed
+            else:
+                payload = {"assets_raw": parsed}
+        except Exception:
+            payload = {"assets_raw": assets_json}
+
+    payload.update(
+        {
+            "imagem_status": imagem_status,
+            "imagem_origem": imagem_origem,
+            "imagem_motivo": imagem_motivo,
+            "prompt_imagem_usado": prompt_imagem_usado,
+            "imagem_url_final": imagem_url_final,
+            "imagem_provider": imagem_provider,
+        }
+    )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _status_verificacao_permitidos() -> list[str]:
@@ -245,16 +285,10 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
             )
 
             prompt_imagem = _montar_prompt_imagem_contextual(conteudo, pauta, tipo_missao)
-            fallback_usado = False
-            try:
-                url_imagem = gerar_url_imagem(prompt_imagem)
-            except Exception as e:
-                logger.exception("Júlia pipeline: falha inesperada na geração de imagem, usando fallback: %s", e)
-                url_imagem = gerar_url_imagem(prompt_imagem)
-                fallback_usado = True
-            origem_imagem = classificar_origem_url_imagem(url_imagem)
-            if origem_imagem in ("contingencia_fixa", "placeholder_remoto"):
-                fallback_usado = True
+            imagem_info = gerar_imagem_publicavel(prompt_imagem)
+            url_imagem = imagem_info.get("url")
+            origem_imagem = imagem_info.get("origem") or classificar_origem_url_imagem(url_imagem)
+            fallback_usado = (imagem_info.get("status") == "fallback")
             conteudo["url_imagem"] = url_imagem
             conteudo["prompt_imagem"] = prompt_imagem
             conteudo["link"] = pauta.link
@@ -272,6 +306,9 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
                     "prompt_imagem_vazio": not bool(_limpar_texto_prompt(conteudo.get("prompt_imagem"), 500)),
                     "prompt_imagem_len": len(prompt_imagem or ""),
                     "origem_imagem": origem_imagem,
+                    "imagem_status": imagem_info.get("status"),
+                    "imagem_provider": imagem_info.get("provider"),
+                    "imagem_motivo": imagem_info.get("motivo"),
                     "fallback_usado": fallback_usado,
                 },
                 resultado="sucesso",
@@ -314,6 +351,15 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
             url_master = design.get("url_imagem_master") or conteudo.get("url_imagem")
             assets_por_canal = design.get("assets_por_canal") or {}
             assets_json = normalizar_assets_json(assets_por_canal)
+            assets_json = _normalizar_assets_observabilidade(
+                assets_json,
+                imagem_status=imagem_info.get("status") or "desconhecido",
+                imagem_origem=origem_imagem,
+                imagem_motivo=imagem_info.get("motivo") or "",
+                prompt_imagem_usado=prompt_imagem,
+                imagem_url_final=url_master,
+                imagem_provider=imagem_info.get("provider") or "desconhecido",
+            )
             auditoria_registrar(
                 tipo_decisao="designer",
                 decisao=f"Designer: assets para {len(assets_por_canal)} canais | provider={design.get('provider_utilizado')}",

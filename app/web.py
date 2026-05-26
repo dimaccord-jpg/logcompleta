@@ -385,6 +385,24 @@ def terms_of_use():
         return "Termos de Uso nao encontrados.", 404
 
 
+@app.route("/media/generated/<path:filename>", methods=["GET"])
+def media_generated(filename):
+    """
+    Serve imagens geradas em storage persistente (DATA_DIR/generated) sem criar blueprint novo.
+    """
+    generated_dir = Path(settings.data_dir) / "generated"
+    try:
+        return send_from_directory(
+            str(generated_dir),
+            filename,
+            as_attachment=False,
+            conditional=True,
+        )
+    except NotFound:
+        logging.warning("Arquivo de mídia gerada não encontrado: %s", filename)
+        abort(404)
+
+
 _SEO_CANONICAL_ORIGIN = "https://www.agentefrete.com.br"
 
 
@@ -1112,6 +1130,10 @@ def detalhe_noticia(noticia_id):
             return url_for("static", filename=local[len("static/"):])
         if local.startswith("generated/"):
             return url_for("static", filename=local)
+        if local.startswith("/media/generated/"):
+            return url_for("media_generated", filename=local[len("/media/generated/"):])
+        if local.startswith("media/generated/"):
+            return url_for("media_generated", filename=local[len("media/generated/"):])
         return val
 
     url_imagem_resolvida = _resolver_url_imagem(noticia.url_imagem)

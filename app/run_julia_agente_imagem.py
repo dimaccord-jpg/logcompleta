@@ -11,6 +11,7 @@ import base64
 import uuid
 import time
 import hashlib
+from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
@@ -36,6 +37,7 @@ def _api_key_label_imagem() -> str:
 # Se ausente, usamos placeholder contextual para manter aderência ao conteúdo.
 IMAGEM_FALLBACK_URL = (os.getenv("IMAGEM_FALLBACK_URL", "") or "").strip()
 FALLBACK_ASSET_LOCAL = "/static/img/fallback-capa-v1.svg"
+FALLBACK_ASSET_SECUNDARIO = "/static/img/logo.png"
 
 
 def _allow_remote_fallback() -> bool:
@@ -65,7 +67,7 @@ def _image_retry_backoff_ms() -> int:
 
 def _stock_fallback_enabled() -> bool:
     """Habilita fallback fotográfico contextual salvo localmente quando IA falhar."""
-    return (os.getenv("IMAGE_STOCK_FALLBACK_ENABLED", "true") or "true").strip().lower() in (
+    return (os.getenv("IMAGE_STOCK_FALLBACK_ENABLED", "false") or "false").strip().lower() in (
         "1", "true", "t", "yes"
     )
 
@@ -108,21 +110,50 @@ def gerar_url_imagem(prompt_imagem: str) -> str | None:
     Gera url_imagem a partir do prompt. Retorna URL string ou fallback; nunca list/dict.
     Se IMAGE_PROVIDER ou Gemini Imagen não estiver configurado, retorna IMAGEM_FALLBACK_URL.
     """
+    return gerar_imagem_publicavel(prompt_imagem).get("url")
+
+
+def gerar_imagem_publicavel(prompt_imagem: str) -> dict[str, str]:
+    """
+    Gera uma imagem e retorna metadados de observabilidade para a pipeline.
+    Nunca bloqueia a publicação: sempre tenta entregar uma URL final estável.
+    """
     prompt_imagem = (prompt_imagem or "").strip()[:500]
     provider = (os.getenv("IMAGE_PROVIDER", "").strip() or "auto").lower()
 
     if provider in ("gemini", "auto"):
-        gemini_url = _gerar_via_gemini(prompt_imagem)
-        if gemini_url:
-            return gemini_url
+        try:
+            gemini_url = _gerar_via_gemini(prompt_imagem)
+            if gemini_url:
+                return {
+                    "url": gemini_url,
+                    "status": "sucesso",
+                    "origem": classificar_origem_url_imagem(gemini_url),
+                    "motivo": "gemini_ok",
+                    "provider": "gemini",
+                }
+        except Exception as e:
+            logger.exception("Falha inesperada ao gerar imagem Gemini: %s", e)
+            motivo = f"gemini_exception_{e.__class__.__name__.lower()}"
+        else:
+            motivo = "gemini_sem_resultado"
+        fallback_url = _fallback_url(prompt_imagem)
+        return {
+            "url": fallback_url,
+            "status": "fallback",
+            "origem": classificar_origem_url_imagem(fallback_url),
+            "motivo": motivo,
+            "provider": "fallback",
+        }
 
-    if provider == "placeholder":
-        return _placeholder_url(prompt_imagem)
-
-    if provider in ("fallback", "auto", "gemini"):
-        return _fallback_url(prompt_imagem)
-
-    return _fallback_url(prompt_imagem)
+    fallback_url = _fallback_url(prompt_imagem)
+    return {
+        "url": fallback_url,
+        "status": "fallback",
+        "origem": classificar_origem_url_imagem(fallback_url),
+        "motivo": f"provider_{provider}_nao_gemini",
+        "provider": "fallback",
+    }
 
 
 def _gerar_via_gemini(prompt_imagem: str) -> str | None:
@@ -258,13 +289,11 @@ def _fallback_url(prompt_imagem: str) -> str:
         foto_local = _stock_image_local(prompt_imagem)
         if foto_local:
             return foto_local
-    if _fallback_asset_local_existe():
+    if _fallback_asset_local_existe(FALLBACK_ASSET_LOCAL):
         return FALLBACK_ASSET_LOCAL
-    if _allow_remote_fallback():
-        foto = _stock_image_url(prompt_imagem)
-        if foto:
-            return foto
-    return _placeholder_url(prompt_imagem)
+    if _fallback_asset_local_existe(FALLBACK_ASSET_SECUNDARIO):
+        return FALLBACK_ASSET_SECUNDARIO
+    return FALLBACK_ASSET_LOCAL
 
 
 def gerar_fallback_imagem_estatica(prompt_imagem: str | None = None) -> str:
@@ -272,11 +301,11 @@ def gerar_fallback_imagem_estatica(prompt_imagem: str | None = None) -> str:
     return _fallback_url((prompt_imagem or "").strip())
 
 
-def _fallback_asset_local_existe() -> bool:
+def _fallback_asset_local_existe(asset_path: str) -> bool:
     """Verifica se o asset estático versionado existe no diretório app/static/img."""
     try:
         app_dir = os.path.dirname(os.path.abspath(__file__))
-        rel = FALLBACK_ASSET_LOCAL.replace("/static/", "", 1).replace("/", os.sep)
+        rel = asset_path.replace("/static/", "", 1).replace("/", os.sep)
         p = os.path.join(app_dir, "static", rel)
         return os.path.exists(p)
     except Exception:
@@ -301,7 +330,7 @@ def _stock_image_url(prompt_imagem: str) -> str | None:
 
 
 def _stock_image_local(prompt_imagem: str) -> str | None:
-    """Baixa uma imagem de stock contextual e salva em static/generated de forma estável por tema."""
+    """Baixa uma imagem de stock contextual e salva no storage persistente."""
     url = _stock_image_url(prompt_imagem)
     if not url:
         return None
@@ -309,16 +338,9 @@ def _stock_image_local(prompt_imagem: str) -> str | None:
         tema = (prompt_imagem or "logistics supply chain").strip().lower()
         tema = re.sub(r"[^a-z0-9\s]", " ", tema)
         tema = re.sub(r"\s+", " ", tema).strip()[:120] or "logistics supply chain"
-        digest = hashlib.sha1(tema.encode("utf-8")).hexdigest()[:16]
-
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        out_dir = os.path.join(app_dir, "static", "generated")
-        os.makedirs(out_dir, exist_ok=True)
-        nome = f"julia_stock_{digest}.jpg"
-        out_path = os.path.join(out_dir, nome)
-
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-            return f"/static/generated/{nome}"
+        digest = hashlib.sha1(tema.encode("utf-8")).hexdigest()[:8]
+        nome = f"julia_stock_{digest}_{uuid.uuid4().hex[:12]}.jpg"
+        out_path = _path_arquivo_gerado(nome)
 
         req = Request(
             url,
@@ -334,7 +356,7 @@ def _stock_image_local(prompt_imagem: str) -> str | None:
             return None
         with open(out_path, "wb") as f:
             f.write(data)
-        return f"/static/generated/{nome}"
+        return _url_publica_arquivo_gerado(nome)
     except Exception as e:
         logger.warning("Fallback contextual de stock indisponivel: %s", e)
         return None
@@ -361,21 +383,43 @@ def _extrair_bytes_imagem(img) -> bytes | None:
 
 
 def _salvar_imagem_local(raw_bytes: bytes) -> str | None:
-    """Salva imagem gerada localmente em static/generated e retorna URL pública do Flask."""
+    """Salva imagem gerada no storage persistente e retorna URL pública estável."""
     if not raw_bytes:
         return None
     try:
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        out_dir = os.path.join(app_dir, "static", "generated")
-        os.makedirs(out_dir, exist_ok=True)
         nome = f"julia_{uuid.uuid4().hex}.png"
-        out_path = os.path.join(out_dir, nome)
+        out_path = _path_arquivo_gerado(nome)
         with open(out_path, "wb") as f:
             f.write(raw_bytes)
-        return f"/static/generated/{nome}"
+        return _url_publica_arquivo_gerado(nome)
     except Exception as e:
         logger.warning("Falha ao salvar imagem local gerada pela IA: %s", e)
         return None
+
+
+def _dir_imagens_persistente() -> Path:
+    """
+    Diretório persistente para imagens geradas.
+    Usa settings.data_dir quando disponível; fallback local apenas se necessário.
+    """
+    try:
+        from app.settings import settings
+
+        base_dir = Path(settings.data_dir)
+    except Exception:
+        app_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        base_dir = app_dir
+    out_dir = base_dir / "generated"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def _path_arquivo_gerado(nome: str) -> Path:
+    return _dir_imagens_persistente() / nome
+
+
+def _url_publica_arquivo_gerado(nome: str) -> str:
+    return f"/media/generated/{nome}"
 
 
 def _extrair_bytes_response_multimodal(response) -> bytes | None:
@@ -422,10 +466,17 @@ def classificar_origem_url_imagem(url: str | None) -> str:
         return "vazio"
     if val == FALLBACK_ASSET_LOCAL.lower():
         return "contingencia_fixa"
-    if "/static/generated/julia_stock_" in val:
+    if val == FALLBACK_ASSET_SECUNDARIO.lower():
+        return "contingencia_fixa"
+    if "/media/generated/julia_stock_" in val:
         return "fallback_contextual_stock"
-    if "/static/generated/julia_" in val:
+    if "/media/generated/julia_" in val:
         return "gerada_local_gemini"
+    # Compatibilidade retroativa com imagens legadas em static/generated.
+    if "/static/generated/julia_stock_" in val:
+        return "fallback_contextual_stock_legado"
+    if "/static/generated/julia_" in val:
+        return "gerada_local_gemini_legado"
     if "placehold.co" in val:
         return "placeholder_remoto"
     if "loremflickr.com" in val:

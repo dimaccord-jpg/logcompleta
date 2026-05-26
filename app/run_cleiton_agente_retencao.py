@@ -105,8 +105,8 @@ def limpar_dados_antigos(app_flask) -> int:
 
 def limpar_imagens_antigas(app_flask) -> int:
     """
-    Limpa referências a imagens antigas (url_imagem em NoticiaPortal) além do prazo (ex.: 2 meses).
-    Não remove arquivos de disco aqui; apenas zera url_imagem para registros antigos.
+    Limpa imagens antigas sem quebrar página pública.
+    Em vez de zerar URL (que gera imagem quebrada), substitui por asset institucional estável.
     Retorna quantidade de registros atualizados. Registra purge na auditoria.
     """
     total = 0
@@ -120,7 +120,7 @@ def limpar_imagens_antigas(app_flask) -> int:
             )
             rows = q.all()
             for r in rows:
-                r.url_imagem = None
+                r.url_imagem = "/static/img/fallback-capa-v1.svg"
                 total += 1
             if total:
                 db.session.commit()
@@ -129,7 +129,7 @@ def limpar_imagens_antigas(app_flask) -> int:
                     "purge_imagens",
                     f"retencao_{get_retencao_meses_imagens()}meses",
                     total,
-                    detalhe="url_imagem zerado em NoticiaPortal",
+                    detalhe="url_imagem substituido por fallback institucional estavel",
                 )
         except Exception as e:
             logger.exception("Falha na limpeza de imagens: %s", e)
