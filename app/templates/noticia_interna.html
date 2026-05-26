@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% set base_url = "https://www.agentefrete.com.br" %}
+{% set base_url = public_base_url or "https://www.agentefrete.com.br" %}
 {% if url_imagem_resolvida %}
   {% if url_imagem_resolvida.startswith('http') %}
     {% set seo_image = url_imagem_resolvida %}
@@ -19,9 +19,9 @@
 {{ noticia.resumo_julia or noticia.subtitulo or "Notícia sobre logística e transporte rodoviário." }}
 {% endblock %}
 
-{% block canonical %}
-{{ base_url }}{{ request.path }}
-{% endblock %}
+{% block canonical %}{{ share_url_abs }}{% endblock %}
+
+{% block og_url %}{{ share_url_abs }}{% endblock %}
 
 {% block og_type %}article{% endblock %}
 
@@ -94,6 +94,8 @@
                 <span><i class="bi bi-journal-text me-1"></i> Fonte: {{ noticia.fonte }}</span>
             </div>
         </header>
+
+        {% include "partials/social_share.html" %}
 
         {# Imagem de capa dinâmica #}
         {% if url_imagem_resolvida %}

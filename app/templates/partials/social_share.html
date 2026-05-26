@@ -1,0 +1,36 @@
+{% if share_url_encoded and share_title_encoded %}
+<div class="social-share d-flex flex-wrap justify-content-center gap-2 mb-4" role="group" aria-label="Compartilhar este conteúdo">
+    <a href="https://www.facebook.com/sharer/sharer.php?u={{ share_url_encoded }}"
+       target="_blank"
+       rel="noopener noreferrer"
+       class="btn btn-outline-primary btn-sm"
+       aria-label="Compartilhar no Facebook"
+       title="Compartilhar no Facebook">
+        <i class="bi bi-facebook me-1" aria-hidden="true"></i>Facebook
+    </a>
+    <a href="https://www.threads.net/intent/post?text={{ share_title_encoded }}%20{{ share_url_encoded }}"
+       target="_blank"
+       rel="noopener noreferrer"
+       class="btn btn-outline-dark btn-sm"
+       aria-label="Compartilhar no Threads"
+       title="Compartilhar no Threads">
+        <i class="bi bi-at me-1" aria-hidden="true"></i>Threads
+    </a>
+    <a href="https://twitter.com/intent/tweet?url={{ share_url_encoded }}&amp;text={{ share_title_encoded }}"
+       target="_blank"
+       rel="noopener noreferrer"
+       class="btn btn-outline-secondary btn-sm"
+       aria-label="Compartilhar no X"
+       title="Compartilhar no X">
+        <i class="bi bi-twitter-x me-1" aria-hidden="true"></i>X
+    </a>
+    <a href="https://www.linkedin.com/sharing/share-offsite/?url={{ share_url_encoded }}"
+       target="_blank"
+       rel="noopener noreferrer"
+       class="btn btn-outline-primary btn-sm"
+       aria-label="Compartilhar no LinkedIn"
+       title="Compartilhar no LinkedIn">
+        <i class="bi bi-linkedin me-1" aria-hidden="true"></i>LinkedIn
+    </a>
+</div>
+{% endif %}

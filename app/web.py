@@ -20,7 +20,7 @@ except ImportError as exc:
 
 import json
 import logging
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from pathlib import Path
 
 from sqlalchemy import text
@@ -406,6 +406,15 @@ def media_generated(filename):
 
 
 _SEO_CANONICAL_ORIGIN = "https://www.agentefrete.com.br"
+
+
+def _public_base_url() -> str:
+    """Origem pública controlada para URLs absolutas (compartilhamento, SEO auxiliar)."""
+    return (getattr(settings, "public_base_url", None) or _SEO_CANONICAL_ORIGIN).rstrip("/")
+
+
+def _public_noticia_url(noticia_id: int) -> str:
+    return f"{_public_base_url()}/noticia/{int(noticia_id)}"
 
 
 @app.route("/sitemap.xml")
@@ -1163,10 +1172,24 @@ def detalhe_noticia(noticia_id):
         return val
 
     url_imagem_resolvida = _resolver_url_imagem(noticia.url_imagem)
+    public_base_url = _public_base_url()
+    share_url_abs = _public_noticia_url(noticia_id)
+    share_title = noticia.titulo_julia or "Conteúdo AgenteFrete"
+    share_url_encoded = quote(share_url_abs, safe="")
+    share_title_encoded = quote(share_title, safe="")
     
     # Redirecionamos ambos para o mesmo template, 
     # pois ele já gerencia a lógica de exibição interna.
-    return render_template('noticia_interna.html', noticia=noticia, url_imagem_resolvida=url_imagem_resolvida)
+    return render_template(
+        'noticia_interna.html',
+        noticia=noticia,
+        url_imagem_resolvida=url_imagem_resolvida,
+        public_base_url=public_base_url,
+        share_url_abs=share_url_abs,
+        share_title=share_title,
+        share_url_encoded=share_url_encoded,
+        share_title_encoded=share_title_encoded,
+    )
 
 # Criando lazy: importar dentro da função, na hora que você realmente vai usar.
 @app.route("/executar-cleiton", methods=["POST"])

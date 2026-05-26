@@ -9,6 +9,7 @@ def _load_web_module_with_data_dir(data_dir: str):
     os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
     os.environ.setdefault("SECRET_KEY", "test-secret")
     os.environ["APP_DATA_DIR"] = data_dir
+    sys.modules.pop("app.settings", None)
     sys.modules.pop("app.web", None)
     return importlib.import_module("app.web")
 
