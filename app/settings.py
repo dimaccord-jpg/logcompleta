@@ -66,6 +66,7 @@ class Settings:
     # URL da página comercial de planos (CTA operacional)
     planos_upgrade_url: str
     facebook_pixel_id: str
+    public_base_url: str
 
 
 def _build_settings() -> Settings:
@@ -148,6 +149,9 @@ def _build_settings() -> Settings:
         julia_chat_max_history = 10
     planos_upgrade_url = (os.getenv("PLANOS_UPGRADE_URL") or "").strip()
     facebook_pixel_id = (os.getenv("FACEBOOK_PIXEL_ID") or "").strip()
+    public_base_url = (
+        (os.getenv("PUBLIC_BASE_URL") or "https://www.agentefrete.com.br").strip().rstrip("/")
+    )
 
     # 11) Debug: forçamos False em homolog/prod por segurança
     debug = (os.getenv("FLASK_DEBUG", "False") or "False").lower() in ("true", "1", "t")
@@ -184,6 +188,7 @@ def _build_settings() -> Settings:
         julia_chat_max_history=julia_chat_max_history,
         planos_upgrade_url=planos_upgrade_url,
         facebook_pixel_id=facebook_pixel_id,
+        public_base_url=public_base_url,
     )
 
 

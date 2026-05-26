@@ -26,6 +26,10 @@ from app.run_cleiton_agente_regras import (
 )
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
 from app.run_julia_regras import status_verificacao_permitidos
+from app.services.pauta_service import (
+    aplicar_filtro_fila_editorial_elegivel,
+    arquivar_pautas_automaticas_vencidas,
+)
 from app.run_cleiton_agente_serie import (
     selecionar_item_para_missao,
     preparar_pauta_para_item,
@@ -37,6 +41,44 @@ from app.run_cleiton_agente_dispatcher import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _detalhe_falha_dispatch_julia(mission_id: str | None) -> str | None:
+    if not mission_id:
+        return None
+    try:
+        rows = (
+            AuditoriaGerencial.query.filter(
+                AuditoriaGerencial.tipo_decisao == "julia",
+                AuditoriaGerencial.contexto_json.like(f'%"{mission_id}"%'),
+            )
+            .order_by(AuditoriaGerencial.id.desc())
+            .limit(10)
+            .all()
+        )
+        for row in rows:
+            contexto = {}
+            if row.contexto_json:
+                try:
+                    contexto = json.loads(row.contexto_json)
+                except Exception:
+                    contexto = {}
+            if row.decisao == "Fallback de redação bloqueado antes da publicação":
+                motivo = (contexto.get("redacao_motivo") or "unknown").strip() or "unknown"
+                return f"Falha de redação Júlia: {motivo}."
+            if row.decisao == "Falha na redação":
+                tipo_retorno = (contexto.get("tipo_retorno") or "").strip()
+                if tipo_retorno:
+                    return f"Falha de redação Júlia: retorno inválido ({tipo_retorno})."
+                return "Falha de redação Júlia: conteúdo vazio ou inválido."
+            if row.decisao == "Erro inesperado no pipeline":
+                detalhe = (row.detalhe or "").strip()
+                if detalhe:
+                    return f"Erro inesperado no pipeline da Júlia: {detalhe}"
+                return "Erro inesperado no pipeline da Júlia."
+    except Exception:
+        logger.exception("Falha ao enriquecer motivo da missão %s", mission_id)
+    return None
 
 
 def _contexto_indica_bypass_frequencia(contexto_json: str | None) -> bool:
@@ -127,16 +169,14 @@ def _buscar_pauta_manual_artigo() -> Pauta | None:
     """Busca a pauta manual de artigo mais antiga e elegível para execução."""
     try:
         status_permitidos = status_verificacao_permitidos()
-        return (
+        query = (
             Pauta.query.filter(
                 Pauta.tipo == "artigo",
                 Pauta.status == "pendente",
                 Pauta.status_verificacao.in_(status_permitidos),
-                Pauta.arquivada.isnot(True),
             )
-            .order_by(Pauta.created_at.asc())
-            .first()
         )
+        return aplicar_filtro_fila_editorial_elegivel(query).order_by(Pauta.created_at.asc()).first()
     except Exception:
         return None
 
@@ -151,15 +191,16 @@ def decidir_tipo_missao() -> str:
     Deve ser chamada dentro de app_context. Não gera conteúdo; apenas decide o tipo.
     """
     tem_artigo_hoje = _artigo_publicado_hoje()
+    arquivar_pautas_automaticas_vencidas()
 
     status_permitidos = status_verificacao_permitidos()
 
-    tem_artigo_backlog = Pauta.query.filter(
+    tem_artigo_backlog_query = Pauta.query.filter(
         Pauta.tipo == "artigo",
         Pauta.status == "pendente",
         Pauta.status_verificacao.in_(status_permitidos),
-        Pauta.arquivada.isnot(True),
-    ).first()
+    )
+    tem_artigo_backlog = aplicar_filtro_fila_editorial_elegivel(tem_artigo_backlog_query).first()
 
     # Série editorial ativa também conta como fonte elegível para artigo do dia.
     item_serie, _motivo = selecionar_item_para_missao()
@@ -510,7 +551,10 @@ def executar_ciclo_gerencial(
                 resultado="falha",
             )
             resultado["status"] = "falha"
-            resultado["motivo"] = "Despacho para agente operacional falhou ou não houve publicação."
+            resultado["motivo"] = (
+                _detalhe_falha_dispatch_julia(payload.get("mission_id"))
+                or "Despacho para agente operacional falhou ou não houve publicação."
+            )
         else:
             resultado["status"] = "sucesso"
             resultado["motivo"] = "Missão despachada com sucesso e agente operacional publicou conteúdo."

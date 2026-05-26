@@ -1,13 +1,22 @@
 """
-Cleiton - Política de retenção: dados 18 meses, imagens 2 meses.
-Limpeza auditável e idempotente; eventos de purge registrados na auditoria.
+Cleiton - Politica de retencao: dados 18 meses, imagens 2 meses.
+Limpeza auditavel e idempotente; eventos de purge registrados na auditoria.
 """
 import logging
 from datetime import datetime, timedelta, timezone
+
 from app.extensions import db
-from app.models import NoticiaPortal, Lead, Pauta, PublicacaoCanal, AuditoriaGerencial, InsightCanal, RecomendacaoEstrategica
-from app.run_cleiton_agente_regras import get_retencao_meses_dados, get_retencao_meses_imagens
+from app.models import (
+    AuditoriaGerencial,
+    InsightCanal,
+    Lead,
+    NoticiaPortal,
+    Pauta,
+    PublicacaoCanal,
+    RecomendacaoEstrategica,
+)
 from app.run_cleiton_agente_auditoria import registrar_purge
+from app.run_cleiton_agente_regras import get_retencao_meses_dados, get_retencao_meses_imagens
 
 logger = logging.getLogger(__name__)
 
@@ -26,38 +35,38 @@ def _data_limite_imagens() -> datetime:
 
 def limpar_dados_antigos(app_flask) -> int:
     """
-    Remove registros de dados editoriais/coleta mais antigos que a retenção (ex.: 18 meses).
+    Remove registros de dados editoriais/coleta mais antigos que a retencao (ex.: 18 meses).
     Retorna quantidade de itens removidos. Idempotente; registra purge na auditoria.
     """
     total = 0
     with app_flask.app_context():
         limite = _data_limite_dados()
         try:
-            # Noticias (portal): dados editoriais
             q = NoticiaPortal.query.filter(NoticiaPortal.data_publicacao < limite)
             count_noticias = q.count()
             q.delete(synchronize_session=False)
             total += count_noticias
             if count_noticias:
-                logger.info("Retenção: %d notícias/artigos removidos (antes de %s).", count_noticias, limite.date())
-            # Leads: coleta
+                logger.info("Retencao: %d noticias/artigos removidos (antes de %s).", count_noticias, limite.date())
+
             q_lead = Lead.query.filter(Lead.data_inscricao < limite)
             count_leads = q_lead.count()
             q_lead.delete(synchronize_session=False)
             total += count_leads
             if count_leads:
-                logger.info("Retenção: %d leads removidos (antes de %s).", count_leads, limite.date())
-            # Pautas (Fase 3): retenção 18 meses por created_at
+                logger.info("Retencao: %d leads removidos (antes de %s).", count_leads, limite.date())
+
             try:
                 q_pauta = Pauta.query.filter(Pauta.created_at < limite)
                 count_pautas = q_pauta.count()
                 q_pauta.delete(synchronize_session=False)
                 total += count_pautas
                 if count_pautas:
-                    logger.info("Retenção: %d pautas removidas (antes de %s).", count_pautas, limite.date())
+                    logger.info("Retencao: %d pautas removidas (antes de %s).", count_pautas, limite.date())
             except Exception as e:
                 logger.warning("Falha ao remover pautas antigas: %s", e)
                 count_pautas = 0
+
             count_pub = 0
             try:
                 q_pub = PublicacaoCanal.query.filter(PublicacaoCanal.criado_em < limite)
@@ -65,10 +74,10 @@ def limpar_dados_antigos(app_flask) -> int:
                 q_pub.delete(synchronize_session=False)
                 total += count_pub
                 if count_pub:
-                    logger.info("Retenção: %d publicacao_canal removidos (antes de %s).", count_pub, limite.date())
+                    logger.info("Retencao: %d publicacao_canal removidos (antes de %s).", count_pub, limite.date())
             except Exception as e:
                 logger.warning("Falha ao remover publicacao_canal antigos: %s", e)
-            # Fase 5: InsightCanal e RecomendacaoEstrategica (18 meses)
+
             count_insight = 0
             count_rec = 0
             try:
@@ -77,7 +86,7 @@ def limpar_dados_antigos(app_flask) -> int:
                 q_ins.delete(synchronize_session=False)
                 total += count_insight
                 if count_insight:
-                    logger.info("Retenção: %d insight_canal removidos (antes de %s).", count_insight, limite.date())
+                    logger.info("Retencao: %d insight_canal removidos (antes de %s).", count_insight, limite.date())
             except Exception as e:
                 logger.warning("Falha ao remover insight_canal antigos: %s", e)
             try:
@@ -86,16 +95,25 @@ def limpar_dados_antigos(app_flask) -> int:
                 q_rec.delete(synchronize_session=False)
                 total += count_rec
                 if count_rec:
-                    logger.info("Retenção: %d recomendacao_estrategica removidos (antes de %s).", count_rec, limite.date())
+                    logger.info(
+                        "Retencao: %d recomendacao_estrategica removidos (antes de %s).",
+                        count_rec,
+                        limite.date(),
+                    )
             except Exception as e:
                 logger.warning("Falha ao remover recomendacao_estrategica antigos: %s", e)
+
             db.session.commit()
             if total > 0:
                 registrar_purge(
                     "purge_dados",
                     f"retencao_{get_retencao_meses_dados()}meses",
                     total,
-                    detalhe=f"noticias={count_noticias} leads={count_leads} pautas={count_pautas} publicacao_canal={count_pub} insight_canal={count_insight} recomendacao_estrategica={count_rec}",
+                    detalhe=(
+                        f"noticias={count_noticias} leads={count_leads} pautas={count_pautas} "
+                        f"publicacao_canal={count_pub} insight_canal={count_insight} "
+                        f"recomendacao_estrategica={count_rec}"
+                    ),
                 )
         except Exception as e:
             logger.exception("Falha na limpeza de dados: %s", e)
@@ -105,9 +123,9 @@ def limpar_dados_antigos(app_flask) -> int:
 
 def limpar_imagens_antigas(app_flask) -> int:
     """
-    Limpa referências a imagens antigas (url_imagem em NoticiaPortal) além do prazo (ex.: 2 meses).
-    Não remove arquivos de disco aqui; apenas zera url_imagem para registros antigos.
-    Retorna quantidade de registros atualizados. Registra purge na auditoria.
+    Audita imagens antigas sem alterar patrimonio editorial publicado.
+    O fallback deve acontecer apenas na renderizacao read-only, nunca persistindo nova URL.
+    Retorna quantidade de registros elegiveis auditados. Registra purge na auditoria.
     """
     total = 0
     with app_flask.app_context():
@@ -119,17 +137,18 @@ def limpar_imagens_antigas(app_flask) -> int:
                 NoticiaPortal.url_imagem != "",
             )
             rows = q.all()
-            for r in rows:
-                r.url_imagem = None
-                total += 1
+            total = len(rows)
             if total:
-                db.session.commit()
-                logger.info("Retenção imagens: %d referências limpas (antes de %s).", total, limite.date())
+                logger.info(
+                    "Retencao imagens: %d referencias auditadas (antes de %s) sem alterar url_imagem.",
+                    total,
+                    limite.date(),
+                )
                 registrar_purge(
                     "purge_imagens",
                     f"retencao_{get_retencao_meses_imagens()}meses",
                     total,
-                    detalhe="url_imagem zerado em NoticiaPortal",
+                    detalhe="nenhum write em noticia.url_imagem; fallback permitido apenas em renderizacao read-only",
                 )
         except Exception as e:
             logger.exception("Falha na limpeza de imagens: %s", e)
@@ -138,6 +157,6 @@ def limpar_imagens_antigas(app_flask) -> int:
 
 
 def executar_limpeza_retencao(app_flask) -> None:
-    """Executa limpeza de dados e imagens conforme política de retenção (idempotente)."""
+    """Executa limpeza de dados e imagens conforme politica de retencao (idempotente)."""
     limpar_dados_antigos(app_flask)
     limpar_imagens_antigas(app_flask)

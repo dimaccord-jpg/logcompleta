@@ -39,8 +39,16 @@ def buscar_noticias_portal():
     Retorna as 10 notícias mais recentes processadas pela Júlia.
     """
     try:
-        # Buscamos apenas as 10 últimas para manter a performance
-        return NoticiaPortal.query.order_by(NoticiaPortal.data_publicacao.desc()).limit(10).all()
+        # Contrato público: apenas conteúdos efetivamente publicados no portal.
+        return (
+            NoticiaPortal.query.filter(
+                NoticiaPortal.publicado_em.isnot(None),
+                NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+            )
+            .order_by(NoticiaPortal.data_publicacao.desc())
+            .limit(10)
+            .all()
+        )
     except Exception as e:
         logger.error(f"Erro ao buscar notícias para o portal: {e}")
         return []

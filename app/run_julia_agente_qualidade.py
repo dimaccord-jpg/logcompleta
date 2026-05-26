@@ -54,6 +54,8 @@ def _url_imagem_integra(url: Any) -> bool:
         app_dir = os.path.dirname(os.path.abspath(__file__))
         rel = local[len("static/"):]
         return os.path.exists(os.path.join(app_dir, "static", rel.replace("/", os.sep)))
+    if local.startswith("/media/generated/") or local.startswith("media/generated/"):
+        return True
     return False
 
 

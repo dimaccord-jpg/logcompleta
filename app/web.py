@@ -20,7 +20,7 @@ except ImportError as exc:
 
 import json
 import logging
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from pathlib import Path
 
 from sqlalchemy import text
@@ -63,6 +63,7 @@ from app.auth_services import (
 
 from app.news_ai import registrar_lead_newsletter
 from app.services import user_admin_control_service
+from app.run_julia_agente_imagem import FALLBACK_ASSET_LOCAL, log_image_runtime_config
 
 # Model used by the home route to list portal news/articles.
 from app.models import NoticiaPortal
@@ -100,6 +101,7 @@ logging.basicConfig(
 app = Flask(__name__)
 migrate = Migrate()
 logger = logging.getLogger(__name__)
+log_image_runtime_config()
 
 _diretorio_dados = settings.data_dir
 app.config["DATA_DIR"] = settings.data_dir  # usado pelo Admin para persistir última execução manual
@@ -240,6 +242,7 @@ def inject_facebook_pixel_context():
 def inject_template_endpoint_helpers():
     return {
         "has_endpoint": lambda endpoint_name: endpoint_name in app.view_functions,
+        "user_is_admin": user_is_admin,
     }
 
 
@@ -295,7 +298,11 @@ def index():
     limite_artigos = getattr(settings, 'artigos_limite', 5)
     try:
         noticias_reais = (
-            NoticiaPortal.query.filter(NoticiaPortal.tipo == 'noticia')
+            NoticiaPortal.query.filter(
+                NoticiaPortal.tipo == 'noticia',
+                NoticiaPortal.publicado_em.isnot(None),
+                NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+            )
             .order_by(NoticiaPortal.data_publicacao.desc())
             .limit(limite_noticias)
             .all()
@@ -305,7 +312,11 @@ def index():
         noticias_reais = []
     try:
         artigos_reais = (
-            NoticiaPortal.query.filter(NoticiaPortal.tipo == 'artigo')
+            NoticiaPortal.query.filter(
+                NoticiaPortal.tipo == 'artigo',
+                NoticiaPortal.publicado_em.isnot(None),
+                NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+            )
             .order_by(NoticiaPortal.data_publicacao.desc())
             .limit(limite_artigos)
             .all()
@@ -376,13 +387,43 @@ def terms_of_use():
         return "Termos de Uso nao encontrados.", 404
 
 
+@app.route("/media/generated/<path:filename>", methods=["GET"])
+def media_generated(filename):
+    """
+    Serve imagens geradas em storage persistente (DATA_DIR/generated) sem criar blueprint novo.
+    """
+    generated_dir = Path(settings.data_dir) / "generated"
+    try:
+        return send_from_directory(
+            str(generated_dir),
+            filename,
+            as_attachment=False,
+            conditional=True,
+        )
+    except NotFound:
+        logging.warning("Arquivo de mídia gerada não encontrado: %s", filename)
+        abort(404)
+
+
 _SEO_CANONICAL_ORIGIN = "https://www.agentefrete.com.br"
+
+
+def _public_base_url() -> str:
+    """Origem pública controlada para URLs absolutas (compartilhamento, SEO auxiliar)."""
+    return (getattr(settings, "public_base_url", None) or _SEO_CANONICAL_ORIGIN).rstrip("/")
+
+
+def _public_noticia_url(noticia_id: int) -> str:
+    return f"{_public_base_url()}/noticia/{int(noticia_id)}"
 
 
 @app.route("/sitemap.xml")
 def sitemap_xml():
     noticias_publicadas = (
-        NoticiaPortal.query.filter(NoticiaPortal.publicado_em.isnot(None))
+        NoticiaPortal.query.filter(
+            NoticiaPortal.publicado_em.isnot(None),
+            NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+        )
         .order_by(NoticiaPortal.publicado_em.desc())
         .all()
     )
@@ -1100,13 +1141,55 @@ def detalhe_noticia(noticia_id):
             return url_for("static", filename=local[len("static/"):])
         if local.startswith("generated/"):
             return url_for("static", filename=local)
+        if local.startswith("/media/generated/"):
+            nome = local[len("/media/generated/"):]
+            path = Path(settings.data_dir) / "generated" / nome
+            if path.exists():
+                return url_for("media_generated", filename=nome)
+            logger.warning("Arquivo de imagem publicado ausente em storage persistente: %s", nome)
+            return url_for("static", filename=FALLBACK_ASSET_LOCAL[len("/static/"):])
+        if local.startswith("media/generated/"):
+            nome = local[len("media/generated/"):]
+            path = Path(settings.data_dir) / "generated" / nome
+            if path.exists():
+                return url_for("media_generated", filename=nome)
+            logger.warning("Arquivo de imagem publicado ausente em storage persistente: %s", nome)
+            return url_for("static", filename=FALLBACK_ASSET_LOCAL[len("/static/"):])
+        if local.startswith("/static/generated/"):
+            rel = local[len("/static/"):]
+            path = Path(_diretorio_app) / "static" / "generated" / rel[len("generated/"):]
+            if path.exists():
+                return url_for("static", filename=rel)
+            logger.warning("Arquivo de imagem publicado ausente em static/generated: %s", rel)
+            return url_for("static", filename=FALLBACK_ASSET_LOCAL[len("/static/"):])
+        if local.startswith("static/generated/"):
+            rel = local[len("static/"):]
+            path = Path(_diretorio_app) / "static" / "generated" / rel[len("generated/"):]
+            if path.exists():
+                return url_for("static", filename=rel)
+            logger.warning("Arquivo de imagem publicado ausente em static/generated: %s", rel)
+            return url_for("static", filename=FALLBACK_ASSET_LOCAL[len("/static/"):])
         return val
 
     url_imagem_resolvida = _resolver_url_imagem(noticia.url_imagem)
+    public_base_url = _public_base_url()
+    share_url_abs = _public_noticia_url(noticia_id)
+    share_title = noticia.titulo_julia or "Conteúdo AgenteFrete"
+    share_url_encoded = quote(share_url_abs, safe="")
+    share_title_encoded = quote(share_title, safe="")
     
     # Redirecionamos ambos para o mesmo template, 
     # pois ele já gerencia a lógica de exibição interna.
-    return render_template('noticia_interna.html', noticia=noticia, url_imagem_resolvida=url_imagem_resolvida)
+    return render_template(
+        'noticia_interna.html',
+        noticia=noticia,
+        url_imagem_resolvida=url_imagem_resolvida,
+        public_base_url=public_base_url,
+        share_url_abs=share_url_abs,
+        share_title=share_title,
+        share_url_encoded=share_url_encoded,
+        share_title_encoded=share_title_encoded,
+    )
 
 # Criando lazy: importar dentro da função, na hora que você realmente vai usar.
 @app.route("/executar-cleiton", methods=["POST"])

@@ -14,7 +14,7 @@
     <!-- Open Graph -->
     <meta property="og:title" content="{% block og_title %}{{ self.title()|striptags|trim }}{% endblock %}">
     <meta property="og:description" content="{% block og_description %}{{ self.meta_description()|striptags|trim }}{% endblock %}">
-    <meta property="og:url" content="{{ base_url }}{{ request.path }}">
+    <meta property="og:url" content="{% block og_url %}{{ base_url }}{{ request.path }}{% endblock %}">
     <meta property="og:type" content="{% block og_type %}website{% endblock %}">
     <meta property="og:image" content="{% block og_image %}https://www.agentefrete.com.br/static/img/logo.png{% endblock %}">
 

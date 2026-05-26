@@ -13,6 +13,22 @@ from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 
 logger = logging.getLogger(__name__)
 
+ARTICLE_REQUIRED_KEYS = (
+    "titulo_julia",
+    "subtitulo",
+    "resumo_julia",
+    "conteudo_completo",
+    "cta",
+    "objetivo_lead",
+    "referencias",
+)
+
+NEWS_REQUIRED_KEYS = (
+    "titulo_julia",
+    "resumo_julia",
+    "prompt_imagem",
+)
+
 
 def _api_key_label_for_tipo(tipo: str) -> str:
     if (tipo or "").lower() == "artigo":
@@ -82,7 +98,7 @@ def gerar_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict | N
         link=link,
     )
     prompt = f"{PERSONA}\n{instrucao}"
-    data = _chamar_modelo(client, prompt, "noticia")
+    data, _ = _chamar_modelo(client, prompt, "noticia")
     if not data:
         logger.warning("Redação de notícia retornou vazio/inválido. Usando fallback local de redação.")
         return _fallback_noticia_curta(titulo_original, fonte, link)
@@ -99,22 +115,166 @@ def gerar_artigo_completo(titulo_original: str, fonte: str, link: str) -> dict |
     client = _client_for_tipo("artigo")
     if not client:
         logger.error("Nenhuma chave Gemini configurada para artigos. Usando fallback local de redação.")
-        return _fallback_artigo_completo(titulo_original, fonte, link)
+        return _fallback_artigo_completo(
+            titulo_original,
+            fonte,
+            link,
+            motivo="gemini_client_unavailable",
+        )
     instrucao = GERAR_ARTIGO_COMPLETO.format(
         titulo_original=titulo_original,
         fonte=fonte,
         link=link,
     )
     prompt = f"{PERSONA}\n{instrucao}"
-    data = _chamar_modelo(client, prompt, "artigo")
+    data, motivo_falha = _chamar_modelo(client, prompt, "artigo")
     if not data:
         logger.warning("Redação de artigo retornou vazio/inválido. Usando fallback local de redação.")
-        return _fallback_artigo_completo(titulo_original, fonte, link)
+        return _fallback_artigo_completo(
+            titulo_original,
+            fonte,
+            link,
+            motivo=motivo_falha or "unknown",
+        )
+    data["redacao_status"] = "sucesso"
+    data["redacao_fallback"] = False
+    data["redacao_motivo"] = None
     return data
 
 
-def _chamar_modelo(client, prompt: str, tipo: str) -> dict | None:
+def _classificar_motivo_redacao(exc: Exception | None) -> str:
+    if exc is None:
+        return "unknown"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+
+    mensagem = str(exc or "").lower()
+    if "429" in mensagem or "quota" in mensagem or "rate limit" in mensagem or "rate_limit" in mensagem:
+        return "quota_or_rate_limit"
+    if "503" in mensagem or "unavailable" in mensagem or "overloaded" in mensagem:
+        return "provider_unavailable"
+    if "timeout" in mensagem:
+        return "timeout"
+    if "json_parse_error" in mensagem:
+        return "json_parse_error"
+    if "empty_or_invalid_response" in mensagem:
+        return "empty_or_invalid_response"
+    if "missing_required_fields" in mensagem:
+        return "missing_required_fields"
+    if "gemini_client_unavailable" in mensagem:
+        return "gemini_client_unavailable"
+    if isinstance(exc, json.JSONDecodeError):
+        return "json_parse_error"
+    if isinstance(exc, ValueError):
+        return "empty_or_invalid_response"
+    return "provider_error"
+
+
+def _response_config_for_tipo(tipo: str) -> genai_types.GenerateContentConfig:
+    if (tipo or "").lower() == "artigo":
+        required = list(ARTICLE_REQUIRED_KEYS)
+        schema = genai_types.Schema(
+            type="OBJECT",
+            required=required,
+            properties={
+                "titulo_julia": genai_types.Schema(type="STRING"),
+                "subtitulo": genai_types.Schema(type="STRING"),
+                "resumo_julia": genai_types.Schema(type="STRING"),
+                "conteudo_completo": genai_types.Schema(type="STRING"),
+                "prompt_imagem": genai_types.Schema(type="STRING"),
+                "cta": genai_types.Schema(type="STRING"),
+                "objetivo_lead": genai_types.Schema(type="STRING"),
+                "referencias": genai_types.Schema(type="STRING"),
+            },
+        )
+    else:
+        required = list(NEWS_REQUIRED_KEYS)
+        schema = genai_types.Schema(
+            type="OBJECT",
+            required=required,
+            properties={
+                "titulo_julia": genai_types.Schema(type="STRING"),
+                "resumo_julia": genai_types.Schema(type="STRING"),
+                "prompt_imagem": genai_types.Schema(type="STRING"),
+            },
+        )
+    return genai_types.GenerateContentConfig(
+        responseMimeType="application/json",
+        responseSchema=schema,
+    )
+
+
+def _extract_json_payload(txt: str) -> dict:
+    bruto = (txt or "").strip()
+    if not bruto:
+        raise ValueError("empty_or_invalid_response")
+
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", bruto, flags=re.DOTALL | re.IGNORECASE)
+    candidate = fenced.group(1).strip() if fenced else bruto
+
+    try:
+        data = json.loads(candidate)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    inicio = candidate.find("{")
+    if inicio < 0:
+        raise ValueError("empty_or_invalid_response")
+
+    depth = 0
+    in_string = False
+    escape = False
+    fim = None
+    for idx, ch in enumerate(candidate[inicio:], start=inicio):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                fim = idx + 1
+                break
+    if fim is None or fim <= inicio:
+        raise ValueError("empty_or_invalid_response")
+
+    try:
+        data = json.loads(candidate[inicio:fim])
+    except json.JSONDecodeError as e:
+        raise ValueError("json_parse_error") from e
+    if not isinstance(data, dict):
+        raise ValueError("empty_or_invalid_response")
+    return data
+
+
+def _normalizar_payload_modelo(payload: dict, tipo: str) -> dict:
+    required = ARTICLE_REQUIRED_KEYS if (tipo or "").lower() == "artigo" else NEWS_REQUIRED_KEYS
+    missing = []
+    normalized = {}
+    for key, value in (payload or {}).items():
+        normalized[key] = value.strip() if isinstance(value, str) else value
+    for key in required:
+        val = normalized.get(key)
+        if not isinstance(val, str) or not val.strip():
+            missing.append(key)
+    if missing:
+        raise ValueError("missing_required_fields:" + ",".join(missing))
+    return normalized
+
+
+def _chamar_modelo(client, prompt: str, tipo: str) -> tuple[dict | None, str | None]:
     last_error = None
+    last_reason = None
     flow = "julia_redacao_artigo" if (tipo or "").lower() == "artigo" else "julia_redacao_noticia"
     label = _api_key_label_for_tipo(tipo)
     for model in _get_model_text_candidates():
@@ -123,27 +283,28 @@ def _chamar_modelo(client, prompt: str, tipo: str) -> dict | None:
                 client,
                 model=model,
                 contents=prompt,
+                config=_response_config_for_tipo(tipo),
                 agent="julia",
                 flow_type=flow,
                 api_key_label=label,
             )
-            txt = (response.text or "").strip()
-            inicio = txt.find("{")
-            fim = txt.rfind("}") + 1
-            if inicio < 0 or fim <= inicio:
-                raise ValueError("Resposta sem JSON válido")
-            data = json.loads(txt[inicio:fim])
-            if not isinstance(data, dict):
-                raise ValueError("Resposta JSON do modelo não é um objeto.")
-            return data
+            data = getattr(response, "parsed", None)
+            if data is None:
+                txt = (response.text or "").strip()
+                data = _extract_json_payload(txt)
+            elif not isinstance(data, dict):
+                raise ValueError("empty_or_invalid_response")
+            data = _normalizar_payload_modelo(data, tipo)
+            return data, None
         except Exception as e:
             last_error = e
+            last_reason = _classificar_motivo_redacao(e)
             logger.warning("Modelo textual indisponível (%s) para %s: %s", model, tipo, e)
     if last_error is not None:
         logger.exception("Falha na redação Júlia (%s) após fallback: %s", tipo, last_error)
     else:
         logger.error("Falha na redação Júlia (%s): sem erro detalhado retornado pelo cliente Gemini.", tipo)
-    return None
+    return None, last_reason or "unknown"
 
 
 def _garantir_insight_3_5_linhas(texto: str) -> str:
@@ -216,7 +377,12 @@ def _fallback_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict
     }
 
 
-def _fallback_artigo_completo(titulo_original: str, fonte: str, link: str) -> dict:
+def _fallback_artigo_completo(
+    titulo_original: str,
+    fonte: str,
+    link: str,
+    motivo: str = "unknown",
+) -> dict:
     """Fallback determinístico para artigo completo quando o provedor de IA falhar."""
     titulo_base = (titulo_original or "Estratégia logística para ganho operacional").strip()
     titulo_base = re.sub(r"\s+", " ", titulo_base)
@@ -253,4 +419,7 @@ def _fallback_artigo_completo(titulo_original: str, fonte: str, link: str) -> di
         "cta": "Fale com um especialista e receba um plano prático para aumentar previsibilidade operacional.",
         "objetivo_lead": "contato_comercial",
         "referencias": f"Fonte: {fonte_txt} | Link: {link_txt}",
+        "redacao_status": "fallback",
+        "redacao_fallback": True,
+        "redacao_motivo": motivo or "unknown",
     }

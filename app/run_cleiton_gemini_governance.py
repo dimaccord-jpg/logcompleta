@@ -123,6 +123,7 @@ def cleiton_governed_generate_content(
     *,
     model: str,
     contents: Any,
+    config: Any = None,
     agent: str,
     flow_type: str,
     api_key_label: str,
@@ -131,7 +132,11 @@ def cleiton_governed_generate_content(
     Executa client.models.generate_content, registra evento e retorna a resposta do SDK.
     """
     try:
-        response = client.models.generate_content(model=model, contents=contents)
+        response = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
         inp, out, tot = _extract_usage_from_response(response)
         if inp is None and out is None and tot is None:
             status = STATUS_SUCCESS_NO_METRICS
