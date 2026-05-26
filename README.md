@@ -26,6 +26,21 @@ Escopo atual confirmado:
 - Roberto com upload oficial governado, persistencia temporaria dedicada, painel admin de controles e limites operacionais parametrizaveis.
 - ajustes recentes de experiencia visual consolidados sem alterar governanca, billing, autorizacao operacional e observabilidade.
 
+Estado oficial de referencia desta consolidacao:
+
+- data de consolidacao documental: `2026-05-26`;
+- suite automatizada validada localmente: `434 passed` em `81.32s` com `33 warnings`;
+- ambiente canonico de documentacao: este `README.md` + anexos oficiais em `docs/`.
+
+Anexos oficiais desta consolidacao:
+
+- `docs/estado_oficial_consolidado.md`
+- `docs/arquitetura_oficial.md`
+- `docs/onboarding_tecnico.md`
+- `docs/runtime_ia_e_observabilidade.md`
+- `docs/troubleshooting_operacional.md`
+- `docs/changelog_consolidado.md`
+
 ## Regras Criticas do Sistema
 
 Estas regras nao devem ser violadas em ajustes futuros:
@@ -955,10 +970,19 @@ curl -fsS -X POST "$APP_BASE_URL/cron/billing-snapshot" -H "X-Cron-Secret: $CRON
 Use este `README.md` como fonte principal.
 Os demais arquivos devem existir apenas como anexos curtos de apoio operacional:
 
+- `docs/estado_oficial_consolidado.md`: consolidacao funcional, operacional, editorial e arquitetural do estado real;
+- `docs/arquitetura_oficial.md`: arquitetura oficial Roberto -> Cleiton -> Julia + Cleide;
+- `docs/onboarding_tecnico.md`: onboarding tecnico, runtime por ambiente e checklist de entrada;
+- `docs/runtime_ia_e_observabilidade.md`: runtime de IA, consumo, billing tecnico, fallback e observabilidade;
+- `docs/troubleshooting_operacional.md`: troubleshooting operacional homolog/producao;
+- `docs/changelog_consolidado.md`: changelog consolidado do estado promovido;
 - `app/README_RUN.md`: lembrete curto de subida local e comandos;
 - `app/README_DEPLOY.md`: lembrete curto de sequencia de deploy;
 - `app/GUIA_TEMPLATES_HTML.md`: padroes de templates/frontend;
 - `docs/runbooks/documentos_legais_storage_persistente.md`: runbook do incidente e operacao de Termos/Politica em storage persistente;
+- `docs/runbooks/cleide_homologacao_controlada_checklist.md`: checklist operacional de homologacao controlada da Cleide;
+- `docs/guia_de_mkt.md`: resumo institucional e contrato publico de SEO/share;
+- `docs/guia_monetizacao_franquias.md`: guia especializado de monetizacao, franquias e billing tecnico;
 - `migrations/README`: cadeia de migrations.
 
 ## Diretriz de Documentacao
