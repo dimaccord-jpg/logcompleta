@@ -26,6 +26,10 @@ from app.run_cleiton_agente_regras import (
 )
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
 from app.run_julia_regras import status_verificacao_permitidos
+from app.services.pauta_service import (
+    aplicar_filtro_fila_editorial_elegivel,
+    arquivar_pautas_automaticas_vencidas,
+)
 from app.run_cleiton_agente_serie import (
     selecionar_item_para_missao,
     preparar_pauta_para_item,
@@ -165,16 +169,14 @@ def _buscar_pauta_manual_artigo() -> Pauta | None:
     """Busca a pauta manual de artigo mais antiga e elegível para execução."""
     try:
         status_permitidos = status_verificacao_permitidos()
-        return (
+        query = (
             Pauta.query.filter(
                 Pauta.tipo == "artigo",
                 Pauta.status == "pendente",
                 Pauta.status_verificacao.in_(status_permitidos),
-                Pauta.arquivada.isnot(True),
             )
-            .order_by(Pauta.created_at.asc())
-            .first()
         )
+        return aplicar_filtro_fila_editorial_elegivel(query).order_by(Pauta.created_at.asc()).first()
     except Exception:
         return None
 
@@ -189,15 +191,16 @@ def decidir_tipo_missao() -> str:
     Deve ser chamada dentro de app_context. Não gera conteúdo; apenas decide o tipo.
     """
     tem_artigo_hoje = _artigo_publicado_hoje()
+    arquivar_pautas_automaticas_vencidas()
 
     status_permitidos = status_verificacao_permitidos()
 
-    tem_artigo_backlog = Pauta.query.filter(
+    tem_artigo_backlog_query = Pauta.query.filter(
         Pauta.tipo == "artigo",
         Pauta.status == "pendente",
         Pauta.status_verificacao.in_(status_permitidos),
-        Pauta.arquivada.isnot(True),
-    ).first()
+    )
+    tem_artigo_backlog = aplicar_filtro_fila_editorial_elegivel(tem_artigo_backlog_query).first()
 
     # Série editorial ativa também conta como fonte elegível para artigo do dia.
     item_serie, _motivo = selecionar_item_para_missao()

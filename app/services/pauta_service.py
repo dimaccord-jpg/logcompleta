@@ -3,7 +3,9 @@ Serviço de CRUD e fluxo de pautas.
 Listagem com filtros, criação/edição, arquivar, reprocessar e marcar para revisão.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import and_, func, not_
 
 from app.extensions import db
 from app.models import Pauta, SerieItemEditorial
@@ -14,6 +16,121 @@ logger = logging.getLogger(__name__)
 
 TIPOS_VALIDOS = {"noticia", "artigo"}
 STATUS_VALIDOS = {"pendente", "em_processamento", "publicada", "falha"}
+FONTES_AUTOMATICAS_FILA = {"rss", "api", "import_legacy"}
+FILA_EDITORIAL_TTL_DIAS = 5
+MOTIVO_ARQUIVAMENTO_FILA_EXPIRADA = (
+    "arquivamento automático por expiração de fila editorial: mais de 5 dias"
+)
+
+
+def _utcnow_naive() -> datetime:
+    """Retorna UTC naive para comparações consistentes na fila editorial."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _limite_expiracao_fila(agora: datetime | None = None) -> datetime:
+    referencia = agora or _utcnow_naive()
+    if referencia.tzinfo is not None:
+        referencia = referencia.astimezone(timezone.utc).replace(tzinfo=None)
+    return referencia - timedelta(days=FILA_EDITORIAL_TTL_DIAS)
+
+
+def _expr_data_base_fila():
+    """Data base da fila: coletado_em quando existir, senão created_at."""
+    return func.coalesce(Pauta.coletado_em, Pauta.created_at)
+
+
+def _filtro_automaticas_vencidas(limite: datetime):
+    return and_(
+        Pauta.fonte_tipo.in_(tuple(sorted(FONTES_AUTOMATICAS_FILA))),
+        func.date(_expr_data_base_fila()) < limite.date(),
+    )
+
+
+def aplicar_filtro_fila_editorial_elegivel(query, *, agora: datetime | None = None):
+    """
+    Aplica filtro único de elegibilidade da fila editorial da Júlia/Cleiton:
+    - pauta não arquivada;
+    - pautas automáticas vencidas (TTL 5 dias) não são elegíveis.
+    """
+    limite = _limite_expiracao_fila(agora)
+    return query.filter(
+        Pauta.arquivada.isnot(True),
+        not_(_filtro_automaticas_vencidas(limite)),
+    )
+
+
+def arquivar_pautas_automaticas_vencidas(
+    actor_email: str | None = None,
+    motivo: str | None = None,
+    agora: datetime | None = None,
+) -> int:
+    """
+    Arquiva pautas automáticas pendentes vencidas na fila editorial (TTL 5 dias).
+    Mantém status histórico e registra auditoria automática por item.
+    """
+    motivo_auditoria = (motivo or MOTIVO_ARQUIVAMENTO_FILA_EXPIRADA).strip() or MOTIVO_ARQUIVAMENTO_FILA_EXPIRADA
+    limite = _limite_expiracao_fila(agora)
+    try:
+        vencidas = (
+            Pauta.query.filter(
+                Pauta.status == "pendente",
+                Pauta.arquivada.isnot(True),
+                _filtro_automaticas_vencidas(limite),
+            )
+            .order_by(Pauta.created_at.asc())
+            .all()
+        )
+        if not vencidas:
+            return 0
+
+        eventos: list[tuple[int, dict, dict]] = []
+        for pauta in vencidas:
+            estado_antes = {
+                "status": pauta.status,
+                "status_verificacao": pauta.status_verificacao,
+                "arquivada": bool(pauta.arquivada),
+                "fonte_tipo": pauta.fonte_tipo,
+                "coletado_em": pauta.coletado_em.isoformat() if pauta.coletado_em else None,
+                "created_at": pauta.created_at.isoformat() if pauta.created_at else None,
+            }
+            pauta.arquivada = True
+            estado_depois = {
+                **estado_antes,
+                "arquivada": bool(pauta.arquivada),
+            }
+            eventos.append((pauta.id, estado_antes, estado_depois))
+
+        db.session.commit()
+
+        for pauta_id, estado_antes, estado_depois in eventos:
+            registrar_auditoria_admin(
+                actor_email,
+                "admin_operacao",
+                "Arquivar pauta automaticamente por expiração de fila editorial",
+                "pauta",
+                pauta_id,
+                estado_antes,
+                estado_depois,
+                motivo_auditoria,
+                "sucesso",
+            )
+        return len(eventos)
+    except Exception as e:
+        db.session.rollback()
+        registrar_auditoria_admin(
+            actor_email,
+            "admin_operacao",
+            "Erro ao arquivar pautas vencidas automaticamente",
+            "pauta",
+            None,
+            None,
+            None,
+            motivo_auditoria,
+            "falha",
+            detalhe=str(e),
+        )
+        return 0
 
 
 def listar_pautas(
@@ -209,7 +326,7 @@ def arquivar_pauta(
 def reprocessar_pauta(
     actor_email: str | None, pauta_id: int, motivo: str | None
 ) -> tuple[bool, str | None]:
-    """Marca pauta para reprocessamento (status pendente)."""
+    """Marca pauta para reprocessamento (status pendente) e reativa na fila editorial."""
     try:
         pauta = Pauta.query.filter_by(id=pauta_id).first()
         if not pauta:
@@ -217,12 +334,15 @@ def reprocessar_pauta(
         estado_antes = {
             "status": pauta.status,
             "status_verificacao": pauta.status_verificacao,
+            "arquivada": bool(pauta.arquivada),
         }
         pauta.status = "pendente"
+        pauta.arquivada = False
         db.session.commit()
         estado_depois = {
             "status": pauta.status,
             "status_verificacao": pauta.status_verificacao,
+            "arquivada": bool(pauta.arquivada),
         }
         registrar_auditoria_admin(
             actor_email,

@@ -18,6 +18,10 @@ from app.run_julia_agente_publisher import publicar_multicanal, RESULTADO_FALHA_
 from app.run_julia_agente_qualidade import validar_conteudo
 from app.run_julia_agente_redacao import gerar_conteudo
 from app.run_julia_regras import status_verificacao_permitidos
+from app.services.pauta_service import (
+    aplicar_filtro_fila_editorial_elegivel,
+    arquivar_pautas_automaticas_vencidas,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,11 +113,14 @@ def obter_pauta_validada(tipo_missao: str, mission_id: str | None) -> Pauta | No
     tipo = (tipo_missao or "noticia").lower()
     status_permitidos = _status_verificacao_permitidos()
     try:
+        arquivar_pautas_automaticas_vencidas()
         pauta = (
-            Pauta.query.filter(
+            aplicar_filtro_fila_editorial_elegivel(
+                Pauta.query.filter(
                 Pauta.tipo == tipo,
                 Pauta.status == "pendente",
                 Pauta.status_verificacao.in_(status_permitidos),
+            )
             )
             .order_by(Pauta.created_at.asc())
             .first()

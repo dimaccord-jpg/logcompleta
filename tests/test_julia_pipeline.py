@@ -1,7 +1,12 @@
 from app.extensions import db
-from app.models import AuditoriaGerencial, NoticiaPortal, Pauta
+from datetime import timedelta
+from app.models import AuditoriaGerencial, NoticiaPortal, Pauta, utcnow_naive
 from app.run_julia_agente_pipeline import executar_pipeline, _montar_prompt_imagem_contextual
-from app.run_cleiton_agente_orquestrador import _detalhe_falha_dispatch_julia
+from app.run_cleiton_agente_orquestrador import _detalhe_falha_dispatch_julia, decidir_tipo_missao
+from app.services.pauta_service import (
+    arquivar_pautas_automaticas_vencidas,
+    aplicar_filtro_fila_editorial_elegivel,
+)
 import json
 
 
@@ -13,6 +18,33 @@ def _criar_pauta(tipo: str = "noticia", suffix: str = "1") -> Pauta:
         tipo=tipo,
         status="pendente",
         status_verificacao="aprovado",
+    )
+    db.session.add(pauta)
+    db.session.commit()
+    return pauta
+
+
+def _criar_pauta_custom(
+    *,
+    suffix: str,
+    tipo: str = "noticia",
+    fonte_tipo: str = "manual",
+    coletado_em=None,
+    created_at=None,
+    arquivada: bool = False,
+    status: str = "pendente",
+):
+    pauta = Pauta(
+        titulo_original=f"Pauta {suffix}",
+        fonte="Portal Teste",
+        link=f"https://example.com/{tipo}/ttl-{suffix}",
+        tipo=tipo,
+        status=status,
+        status_verificacao="aprovado",
+        fonte_tipo=fonte_tipo,
+        coletado_em=coletado_em,
+        created_at=created_at or utcnow_naive(),
+        arquivada=arquivada,
     )
     db.session.add(pauta)
     db.session.commit()
@@ -272,3 +304,183 @@ def test_orquestrador_exibe_motivo_tecnico_da_falha_para_admin(app):
 
         detalhe = _detalhe_falha_dispatch_julia("mission-admin-msg")
         assert detalhe == "Falha de redação Júlia: json_parse_error."
+
+
+def test_fila_exclui_automatica_com_coletado_em_ha_6_dias(app):
+    with app.app_context():
+        _criar_pauta_custom(
+            suffix="auto-coletado-vencida",
+            fonte_tipo="rss",
+            coletado_em=utcnow_naive() - timedelta(days=6),
+            created_at=utcnow_naive(),
+        )
+        pauta = _criar_pauta_custom(
+            suffix="auto-nova",
+            fonte_tipo="rss",
+            coletado_em=utcnow_naive() - timedelta(days=1),
+        )
+        selecionada = decidir_tipo_missao()
+        assert selecionada == "noticia"
+        elegivel = (
+            aplicar_filtro_fila_editorial_elegivel(
+                Pauta.query.filter(Pauta.status == "pendente", Pauta.tipo == "noticia")
+            )
+            .order_by(Pauta.created_at.asc())
+            .first()
+        )
+        assert elegivel is not None
+        assert elegivel.id == pauta.id
+
+
+def test_fila_exclui_automatica_por_created_at_quando_sem_coletado(app):
+    with app.app_context():
+        _criar_pauta_custom(
+            suffix="auto-created-vencida",
+            fonte_tipo="api",
+            coletado_em=None,
+            created_at=utcnow_naive() - timedelta(days=6),
+        )
+        pauta_ok = _criar_pauta_custom(
+            suffix="auto-created-ok",
+            fonte_tipo="api",
+            coletado_em=None,
+            created_at=utcnow_naive() - timedelta(days=2),
+        )
+        elegivel = (
+            aplicar_filtro_fila_editorial_elegivel(Pauta.query.filter(Pauta.tipo == "noticia"))
+            .order_by(Pauta.created_at.asc())
+            .first()
+        )
+        assert elegivel is not None
+        assert elegivel.id == pauta_ok.id
+
+
+def test_fila_mantem_automatica_com_ate_5_dias_elegivel(app):
+    with app.app_context():
+        pauta = _criar_pauta_custom(
+            suffix="auto-5dias",
+            fonte_tipo="import_legacy",
+            coletado_em=utcnow_naive() - timedelta(days=5),
+        )
+        elegivel = (
+            aplicar_filtro_fila_editorial_elegivel(Pauta.query.filter(Pauta.tipo == "noticia"))
+            .order_by(Pauta.created_at.asc())
+            .first()
+        )
+        assert elegivel is not None
+        assert elegivel.id == pauta.id
+
+
+def test_fila_manual_antiga_permanece_elegivel(app):
+    with app.app_context():
+        pauta_manual = _criar_pauta_custom(
+            suffix="manual-antiga",
+            fonte_tipo="manual",
+            created_at=utcnow_naive() - timedelta(days=9),
+        )
+        elegivel = (
+            aplicar_filtro_fila_editorial_elegivel(Pauta.query.filter(Pauta.tipo == "noticia"))
+            .order_by(Pauta.created_at.asc())
+            .first()
+        )
+        assert elegivel is not None
+        assert elegivel.id == pauta_manual.id
+
+
+def test_fila_nunca_seleciona_pauta_arquivada(app):
+    with app.app_context():
+        _criar_pauta_custom(
+            suffix="arquivada",
+            fonte_tipo="manual",
+            arquivada=True,
+            created_at=utcnow_naive() - timedelta(days=10),
+        )
+        pauta_ativa = _criar_pauta_custom(
+            suffix="ativa",
+            fonte_tipo="manual",
+            created_at=utcnow_naive() - timedelta(days=1),
+        )
+        elegivel = (
+            aplicar_filtro_fila_editorial_elegivel(Pauta.query.filter(Pauta.tipo == "noticia"))
+            .order_by(Pauta.created_at.asc())
+            .first()
+        )
+        assert elegivel is not None
+        assert elegivel.id == pauta_ativa.id
+
+
+def test_orquestrador_nao_conta_backlog_automatico_vencido(app):
+    with app.app_context():
+        _criar_pauta_custom(
+            suffix="artigo-vencido",
+            tipo="artigo",
+            fonte_tipo="rss",
+            coletado_em=utcnow_naive() - timedelta(days=7),
+        )
+        tipo = decidir_tipo_missao()
+        assert tipo == "noticia"
+
+
+def test_arquivamento_automatico_registra_auditoria(app):
+    with app.app_context():
+        pauta = _criar_pauta_custom(
+            suffix="audit-expira",
+            fonte_tipo="rss",
+            coletado_em=utcnow_naive() - timedelta(days=8),
+        )
+        total = arquivar_pautas_automaticas_vencidas()
+        pauta_db = db.session.get(Pauta, pauta.id)
+        auditoria = (
+            AuditoriaGerencial.query.filter_by(
+                tipo_decisao="admin_operacao",
+                decisao="Arquivar pauta automaticamente por expiração de fila editorial",
+            )
+            .order_by(AuditoriaGerencial.id.desc())
+            .first()
+        )
+        assert total == 1
+        assert pauta_db.arquivada is True
+        assert auditoria is not None
+        assert "mais de 5 dias" in ((auditoria.contexto_json or "") + (auditoria.detalhe or ""))
+
+
+def test_reprocessamento_manual_continua_possivel_em_pauta_arquivada(app):
+    from app.services import pauta_service
+    with app.app_context():
+        pauta = _criar_pauta_custom(
+            suffix="reprocesso-arquivada",
+            fonte_tipo="rss",
+            arquivada=True,
+            status="falha",
+        )
+        ok, erro = pauta_service.reprocessar_pauta("admin@test.com", pauta.id, "Teste reprocessamento")
+        pauta_db = db.session.get(Pauta, pauta.id)
+        assert ok is True
+        assert erro is None
+        assert pauta_db.status == "pendente"
+        assert pauta_db.arquivada is False
+
+
+def test_reprocessamento_manual_antiga_arquivada_volta_a_ser_elegivel(app):
+    from app.services import pauta_service
+    with app.app_context():
+        pauta = _criar_pauta_custom(
+            suffix="manual-reprocesso",
+            fonte_tipo="manual",
+            arquivada=True,
+            status="falha",
+            created_at=utcnow_naive() - timedelta(days=9),
+        )
+        ok, erro = pauta_service.reprocessar_pauta("admin@test.com", pauta.id, "Reativar manual")
+        assert ok is True
+        assert erro is None
+
+        elegivel = (
+            aplicar_filtro_fila_editorial_elegivel(
+                Pauta.query.filter(Pauta.id == pauta.id, Pauta.status == "pendente")
+            )
+            .first()
+        )
+        assert elegivel is not None
+        assert elegivel.id == pauta.id
+        assert elegivel.arquivada is False
