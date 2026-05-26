@@ -240,6 +240,7 @@ def inject_facebook_pixel_context():
 def inject_template_endpoint_helpers():
     return {
         "has_endpoint": lambda endpoint_name: endpoint_name in app.view_functions,
+        "user_is_admin": user_is_admin,
     }
 
 
@@ -295,7 +296,11 @@ def index():
     limite_artigos = getattr(settings, 'artigos_limite', 5)
     try:
         noticias_reais = (
-            NoticiaPortal.query.filter(NoticiaPortal.tipo == 'noticia')
+            NoticiaPortal.query.filter(
+                NoticiaPortal.tipo == 'noticia',
+                NoticiaPortal.publicado_em.isnot(None),
+                NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+            )
             .order_by(NoticiaPortal.data_publicacao.desc())
             .limit(limite_noticias)
             .all()
@@ -305,7 +310,11 @@ def index():
         noticias_reais = []
     try:
         artigos_reais = (
-            NoticiaPortal.query.filter(NoticiaPortal.tipo == 'artigo')
+            NoticiaPortal.query.filter(
+                NoticiaPortal.tipo == 'artigo',
+                NoticiaPortal.publicado_em.isnot(None),
+                NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+            )
             .order_by(NoticiaPortal.data_publicacao.desc())
             .limit(limite_artigos)
             .all()
@@ -382,7 +391,10 @@ _SEO_CANONICAL_ORIGIN = "https://www.agentefrete.com.br"
 @app.route("/sitemap.xml")
 def sitemap_xml():
     noticias_publicadas = (
-        NoticiaPortal.query.filter(NoticiaPortal.publicado_em.isnot(None))
+        NoticiaPortal.query.filter(
+            NoticiaPortal.publicado_em.isnot(None),
+            NoticiaPortal.status_publicacao.in_(["publicado", "parcial"]),
+        )
         .order_by(NoticiaPortal.publicado_em.desc())
         .all()
     )

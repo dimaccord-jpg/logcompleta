@@ -52,6 +52,16 @@
 
 {% block content %}
 <div class="container mt-5 mb-5">
+    {% if current_user.is_authenticated and user_is_admin(current_user) and has_endpoint('admin.despublicar_noticia_editorial') %}
+        <div class="mb-3 text-end">
+            <form method="post" action="{{ url_for('admin.despublicar_noticia_editorial', noticia_id=noticia.id) }}" class="d-inline">
+                <input type="hidden" name="motivo" value="despublicacao_editorial_manual">
+                <button type="submit" class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-eye-slash me-1"></i>Despublicar
+                </button>
+            </form>
+        </div>
+    {% endif %}
     {# Adicionada classe condicional no card para destaque visual de Artigos #}
     <article class="ri-card af-readable-surface p-4 p-md-5 shadow-sm bg-white mx-auto {% if noticia.tipo == 'artigo' %}border-top border-primary border-4{% endif %}" style="max-width: 900px; border-radius: 15px;">
         
