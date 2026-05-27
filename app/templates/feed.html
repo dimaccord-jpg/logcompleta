@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Feed editorial: notícias, artigos e newsletter | Agentefrete{% endblock %}
+
+{% block meta_description %}
+Notícias de logística, artigos estratégicos da Júlia e newsletter do Agentefrete sobre transporte e frete no Brasil.
+{% endblock %}
+
+{% block canonical %}https://www.agentefrete.com.br/feed{% endblock %}
+
+{% block og_url %}https://www.agentefrete.com.br/feed{% endblock %}
+
+{% block content %}
+<style>
+  :root{
+    --ri-primary:#0D6EFD;
+    --ri-amber:#FFC107;
+    --ri-dark:#212529;
+    --ri-light:#F8F9FA;
+    --ri-soft:#CCE5FF;
+    --ri-success:#198754;
+  }
+  .ri-page{ color:var(--ri-dark); }
+  .ri-card{
+    background:var(--ri-light);
+    border:1px solid rgba(33,37,41,.08);
+    border-radius:.75rem;
+  }
+  .ri-card .card-header{
+    background:#fff;
+    border-bottom:1px solid rgba(33,37,41,.08);
+  }
+  .card-noticia{ transition:transform .2s; }
+  .card-noticia:hover{ transform:translateY(-5px); }
+</style>
+
+<div class="ri-page">
+  <header class="af-hero-home py-5 mb-4">
+    <div class="container">
+      <div class="text-center my-4 position-relative">
+        <h1 class="fw-bolder mb-2" style="font-size: 2.5rem;">
+          <span class="af-text-gradient">Feed Agentefrete</span>
+        </h1>
+        <p class="lead mb-0" style="color: var(--af-text-secondary); font-size: 1.1rem;">
+          Notícias, artigos estratégicos e newsletter sobre logística e frete
+        </p>
+      </div>
+    </div>
+  </header>
+
+  <div class="container mb-5">
+    <div class="row g-4">
+      <div class="col-lg-8">
+        {% include 'noticias.html' %}
+      </div>
+      <div class="col-lg-4">
+        {% include 'artigos.html' %}
+      </div>
+    </div>
+    <div class="card ri-card border-0 shadow-sm af-glow mt-5">
+      <div class="card-header fw-bold pt-3">
+        <i class="bi bi-rocket-takeoff-fill me-1" style="color: var(--af-cyan);" aria-hidden="true"></i>
+        Newsletter Agentefrete
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-3">Receba análises exclusivas da Julia diretamente no seu e-mail.</p>
+        <form action="/inscrever-newsletter" method="POST">
+          <div class="input-group">
+            <input class="form-control" name="email" type="email" placeholder="Seu melhor e-mail..." required />
+            <button class="btn btn-primary" type="submit">Subscrever</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

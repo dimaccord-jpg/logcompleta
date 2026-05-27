@@ -1,9 +1,51 @@
 import io
 
-from app.models import ProcessingEvent, utcnow_naive
+from app.extensions import db
+from app.models import IaConsumoEvento, ProcessingEvent, utcnow_naive
 from app.run_cleiton_processing_governance import cleiton_register_processing_event
-from app.services.ia_metrics_service import get_ia_dashboard_payload
+from app.services.ia_metrics_service import (
+    FLOW_TYPE_ONBOARDING_DISCOVERY,
+    aggregate_month_metrics,
+    get_ia_dashboard_payload,
+)
 from tests.conftest import seed_conta_franquia_cliente, seed_sistema_interno, seed_usuario
+
+
+def _seed_ia_event(*, flow_type: str, total_tokens: int, agent: str = "julia") -> None:
+    db.session.add(
+        IaConsumoEvento(
+            occurred_at=utcnow_naive(),
+            provider="gemini",
+            operation="generate_content",
+            model="gemini-2.5-flash",
+            agent=agent,
+            flow_type=flow_type,
+            api_key_label="test-key",
+            status="success",
+            input_tokens=total_tokens // 2,
+            output_tokens=total_tokens // 2,
+            total_tokens=total_tokens,
+        )
+    )
+    db.session.commit()
+
+
+def test_aggregate_month_metrics_excludes_onboarding_discovery(app):
+    with app.app_context():
+        _seed_ia_event(flow_type=FLOW_TYPE_ONBOARDING_DISCOVERY, total_tokens=5000, agent="cleiton")
+        _seed_ia_event(flow_type="julia_chat", total_tokens=1200, agent="julia")
+        _seed_ia_event(flow_type="roberto_chat_fretes", total_tokens=800, agent="roberto")
+
+        today = utcnow_naive()
+        payload = aggregate_month_metrics(today.year, today.month)
+
+        assert payload["total_tokens_month"] == 2000
+        assert payload["event_count_month"] == 2
+
+        onboarding_count = IaConsumoEvento.query.filter_by(
+            flow_type=FLOW_TYPE_ONBOARDING_DISCOVERY,
+        ).count()
+        assert onboarding_count == 1
 
 
 def test_get_ia_dashboard_payload_separa_roberto_e_cleide(app):

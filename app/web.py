@@ -288,12 +288,28 @@ def _handle_unauthorized_access():
         ), 401
     return redirect(url_for("login"))
 
-# --- ROTAS PÚBLICAS E ACESSO ---
-@app.route('/')
-def index():
-    indicadores = _load_home_indicadores()
 
-    # Consultas separadas: 5 mais recentes de cada tipo (limites parametrizados em settings)
+def _safe_next_redirect(target: str | None):
+    """Redireciona para path interno seguro após login (handoff onboarding)."""
+    raw = (target or "").strip()
+    if not raw or not raw.startswith("/") or raw.startswith("//"):
+        return None
+    if raw.startswith("/api/") or raw.startswith("/admin"):
+        return None
+    return raw
+
+
+def _post_login_redirect(user):
+    if user_is_admin(user):
+        return redirect(url_for('admin.admin_dashboard'))
+    nxt = _safe_next_redirect(session.pop('post_login_next', None))
+    if nxt:
+        return redirect(nxt)
+    return redirect(url_for('index'))
+
+
+def _load_feed_editorial():
+    """Notícias e artigos publicados/parciais para a superfície editorial (/feed)."""
     limite_noticias = getattr(settings, 'noticias_limite', 5)
     limite_artigos = getattr(settings, 'artigos_limite', 5)
     try:
@@ -308,7 +324,7 @@ def index():
             .all()
         )
     except Exception as e:
-        logging.error("Erro ao buscar notícias para a página inicial: %s", e)
+        logging.error("Erro ao buscar notícias para o feed: %s", e)
         noticias_reais = []
     try:
         artigos_reais = (
@@ -322,19 +338,59 @@ def index():
             .all()
         )
     except Exception as e:
-        logging.error("Erro ao buscar artigos para a página inicial: %s", e)
+        logging.error("Erro ao buscar artigos para o feed: %s", e)
         artigos_reais = []
+    return noticias_reais, artigos_reais
+
+
+# --- ROTAS PÚBLICAS E ACESSO ---
+@app.route('/')
+def index():
+    from app.capability_taxonomy import ONBOARDING_CTAS
+
+    indicadores = _load_home_indicadores()
 
     julia_chat_max_history = get_julia_chat_max_history()
     # Estado operacional do chat (fonte única: autorização operacional por franquia).
     julia_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
     return render_template(
         'index.html',
-        noticias=noticias_reais,
-        artigos=artigos_reais,
         indicadores=indicadores,
         julia_chat_max_history=julia_chat_max_history,
         julia_chat_limits=julia_chat_limits,
+        onboarding_ctas=ONBOARDING_CTAS,
+        julia_chat_surface='discovery',
+    )
+
+
+@app.route('/chat_julia')
+def chat_julia():
+    """
+    Superfície operacional da Júlia (consumo real).
+    Separada da Home (discovery/onboarding). Requer mode=operational.
+    Usa /api/chat_julia existente — sem endpoint IA paralelo.
+    """
+    mode = (request.args.get('mode') or '').strip().lower()
+    if mode != 'operational':
+        return redirect(url_for('index'))
+
+    julia_chat_max_history = get_julia_chat_max_history()
+    julia_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
+    return render_template(
+        'julia_chat_operational.html',
+        julia_chat_max_history=julia_chat_max_history,
+        julia_chat_limits=julia_chat_limits,
+        julia_chat_surface='operational',
+    )
+
+
+@app.route('/feed')
+def feed():
+    noticias_reais, artigos_reais = _load_feed_editorial()
+    return render_template(
+        'feed.html',
+        noticias=noticias_reais,
+        artigos=artigos_reais,
     )
 
 
@@ -433,6 +489,7 @@ def sitemap_xml():
 
     urls = [{"loc": f"{_SEO_CANONICAL_ORIGIN}/", "lastmod": home_lastmod}]
     for path in (
+        "/feed",
         "/fretes",
     ):
         urls.append(
@@ -488,6 +545,9 @@ def login():
         if user_is_admin(current_user):
             return redirect(url_for('admin.admin_dashboard'))
         return redirect(url_for('index'))
+    nxt = _safe_next_redirect(request.args.get('next'))
+    if nxt:
+        session['post_login_next'] = nxt
     if request.method == 'POST':
         email_input = request.form.get('email')
         password = request.form.get('password')
@@ -495,9 +555,7 @@ def login():
         user, error = authenticate_user(email_input or "", password or "")
         if user:
             login_user(user)
-            if user_is_admin(user):
-                return redirect(url_for('admin.admin_dashboard'))
-            return redirect(url_for('index'))
+            return _post_login_redirect(user)
         flash(error or 'Email ou senha incorretos.', 'danger')
     return render_template('login.html', active_term=get_active_term())
 
@@ -671,9 +729,7 @@ def google_callback():
     if needs_profile:
         session['pending_profile_completion'] = True
         return redirect(url_for('complete_profile'))
-    if user_is_admin(user):
-        return redirect(url_for('admin.admin_dashboard'))
-    return redirect(url_for('index'))
+    return _post_login_redirect(user)
 
 @app.route('/complete-profile', methods=['GET', 'POST'])
 @login_required
@@ -978,6 +1034,51 @@ def api_roberto_bi_recomendacoes():
     return api_recomendacoes()
 
 
+# --- API Onboarding Discovery (Cleiton Discovery AI; shell visual Júlia) ---
+@app.route('/api/onboarding_discovery', methods=['POST'])
+def api_onboarding_discovery():
+    """
+    Descoberta inteligente na Home: intenção → capabilities → refinamento → handoff.
+    Não exige login; não consome franquia operacional do cliente (identidade anônima/sistema).
+    Toda chamada LLM passa pelo trilho oficial Cleiton + Gemini governance.
+    """
+    from app.consumo_identidade import (
+        get_consumo_identidade,
+        identidade_http_anonimo,
+        set_consumo_identidade,
+    )
+    from app.run_cleiton_discovery import cleiton_discovery_reply
+
+    orig_identidade = get_consumo_identidade()
+    try:
+        set_consumo_identidade(identidade_http_anonimo())
+        data = request.get_json(silent=True) or {}
+        user_message = (data.get("message") or "").strip()
+        history = data.get("history")
+        if history is None:
+            history = []
+        cta_id = (data.get("cta_id") or "").strip() or None
+        result = cleiton_discovery_reply(
+            user_message,
+            history,
+            cta_id=cta_id,
+        )
+        result["onboarding"] = True
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("Erro em /api/onboarding_discovery: %s", e)
+        return jsonify({
+            "reply": "Ocorreu um erro ao processar sua mensagem. Tente novamente.",
+            "discovery": {"capability_candidates": [], "confidence": "low", "next_action": "refine"},
+            "handoff": None,
+        }), 500
+    finally:
+        if orig_identidade is not None:
+            set_consumo_identidade(orig_identidade)
+        else:
+            set_consumo_identidade(identidade_http_anonimo())
+
+
 # --- API Chat Júlia (backend modular run_julia_chat) ---
 @app.route('/api/chat_julia', methods=['POST'])
 def api_chat_julia():
@@ -1107,7 +1208,7 @@ def inscrever_newsletter():
     sucesso, mensagem = registrar_lead_newsletter(email)
     
     flash(mensagem, "success" if sucesso else "danger")
-    return redirect(url_for('index'))
+    return redirect(url_for('feed'))
 
 # --- OUTROS MÓDULOS (PLACEHOLDERS) ---
 

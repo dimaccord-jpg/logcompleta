@@ -1,186 +1,270 @@
 {% extends "base.html" %}
 
-{% block title %}Inteligência logística e análise de frete em tempo real | Agentefrete{% endblock %}
+
+
+{% block title %}Chat da Júlia: inteligência logística e frete | Agentefrete{% endblock %}
+
+
 
 {% block meta_description %}
-Análise de frete, inteligência logística e tendências do transporte rodoviário no Brasil.
+
+Converse com a Júlia sobre frete, logística e transporte rodoviário. Indicadores econômicos em tempo real no Agentefrete.
+
 {% endblock %}
+
+
 
 {% block canonical %}{{ "https://www.agentefrete.com.br" }}{{ request.path }}{% endblock %}
 
+
+
 {% block content %}
+
 <style>
+
   /* Roberto Intelligence tokens */
+
   :root{
+
     --ri-primary:#0D6EFD;
+
     --ri-amber:#FFC107;
+
     --ri-dark:#212529;
+
     --ri-light:#F8F9FA;
+
     --ri-soft:#CCE5FF;
+
     --ri-success:#198754;
+
   }
+
+
 
   /* Base */
-  .ri-page{ color:var(--ri-dark); }
-  .ri-card{
-    background:var(--ri-light);
-    border:1px solid rgba(33,37,41,.08);
-    border-radius:.75rem;
-  }
-  .ri-card .card-header{
-    background:#fff;
-    border-bottom:1px solid rgba(33,37,41,.08);
-  }
 
-  /* Soft badges */
-  .badge-soft-primary{
-    background:var(--ri-soft);
-    color:var(--ri-dark);
-    border:1px solid rgba(13,110,253,.18);
-    font-weight:600;
-  }
-  .badge-soft-success{
-    background:rgba(25,135,84,.12);
-    color:var(--ri-dark);
-    border:1px solid rgba(25,135,84,.20);
-    font-weight:600;
-  }
-  .badge-soft-danger{
-    background:rgba(220,53,69,.12);
-    color:var(--ri-dark);
-    border:1px solid rgba(220,53,69,.20);
-    font-weight:600;
-  }
+  .ri-page{ color:var(--ri-dark); }
+
+
 
   /* Ticker Tape (Faixa de Indicadores) */
+
   .ticker-wrapper{
+
     background:var(--ri-dark);
+
     color:#fff;
+
     overflow:hidden;
+
     height:40px;
+
     display:flex;
+
     align-items:center;
+
     border-bottom:2px solid var(--ri-primary);
+
   }
+
   .ticker-content{
+
     display:flex;
+
     white-space:nowrap;
+
     animation:ticker 30s linear infinite;
+
   }
+
   .ticker-item{
+
     padding:0 40px;
+
     font-size:.9rem;
+
     display:flex;
+
     align-items:center;
+
   }
+
   .ticker-label{
+
     color:rgba(255,255,255,.75);
+
     font-weight:700;
+
     margin-right:8px;
+
   }
+
   .ticker-value{
+
     color:var(--ri-success);
+
     font-family:'Courier New', monospace;
+
     font-weight:800;
+
   }
+
   @keyframes ticker{
+
     0%{ transform:translateX(0); }
+
     100%{ transform:translateX(-50%); }
+
   }
 
-  /* Ajuste nos cards de notícia */
-  .card-noticia{ transition:transform .2s; }
-  .card-noticia:hover{ transform:translateY(-5px); }
+  .julia-chat-content-hidden { display: none !important; }
 
-  /* Comportamento modular: ocultar seções notícias/artigos quando o chat está em foco — alteração refatoração segura */
-  .julia-home-content.julia-chat-content-hidden { display: none !important; }
 </style>
 
+
+
 <div class="ri-page">
+
   <div class="ticker-wrapper shadow-sm">
+
     <div class="ticker-content">
+
   {# Criamos um loop que repete o conteúdo 2 vezes para o efeito visual #}
+
   {% for i in range(2) %}
+
     <div class="ticker-item">
+
       <span class="ticker-label">DÓLAR:</span>
+
       <span class="ticker-value">
+
         R$ {{ indicadores.dolar|default('0,00') }}
+
       </span>
+
     </div>
+
     <div class="ticker-item">
+
       <span class="ticker-label">PETRÓLEO:</span>
+
       <span class="ticker-value">
+
         US$ {{ indicadores.petroleo|default('0,00') }}
+
       </span>
+
     </div>
+
     <div class="ticker-item">
+
       <span class="ticker-label">BDI:</span>
+
       <span class="ticker-value">
+
         {{ indicadores.bdi|default('-') }}
+
       </span>
+
     </div>
+
     <div class="ticker-item">
+
       <span class="ticker-label">FBX:</span>
+
       <span class="ticker-value">
+
         {{ indicadores.fbx|default('-') }}
+
       </span>
+
     </div>
+
   {% endfor %}
-</div>
 
 </div>
+
+
+
+</div>
+
   </div>
+
+
 
   <header class="af-hero-home py-5 mb-4">
+
     <div class="container">
+
       <div class="text-center my-4 position-relative">
+
         <h1 class="fw-bolder mb-2" style="font-size: 2.5rem;">
+
           <span class="af-text-gradient">Agentefrete</span>
+
         </h1>
+
         <p class="lead mb-4" style="color: var(--af-text-secondary); font-size: 1.1rem;">
-          Inteligência de Dados e Notícias para Logística 4.0
+
+          Descubra o caminho certo para sua operação logística — indicadores em tempo real e orientação inteligente
+
         </p>
+
       </div>
+
     </div>
+
   </header>
 
-  {# Inclusão do componente de chat Júlia (modular) — alteração refatoração segura #}
-  <div class="container mb-3">
+
+
+  <div class="container mb-5">
+
+    {% if onboarding_ctas %}
+    <div class="onboarding-cta-grid mb-4 julia-home-content" id="onboardingCtaGrid">
+      <p class="small text-center mb-3" style="color: var(--af-text-secondary);">
+        Por onde quer começar? Escolha uma intenção — vamos refinar juntos antes de encaminhar.
+      </p>
+      <div class="d-flex flex-wrap justify-content-center gap-2">
+        {% for cta in onboarding_ctas %}
+        <button type="button"
+                class="btn btn-outline-primary btn-sm onboarding-cta-btn"
+                data-cta-id="{{ cta.id }}"
+                data-cta-message="{{ cta.seed_message|e }}">
+          {{ cta.label }}
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
     {% include 'chat_julia.html' %}
+
   </div>
 
-  <div class="container mb-5 julia-home-content">
-    <div class="row g-4">
-      <div class="col-lg-8">
-        {% include 'noticias.html' %}
-      </div>
-      <div class="col-lg-4">
-        {% include 'artigos.html' %}
-      </div>
-    </div>
-    <div class="card ri-card border-0 shadow-sm af-glow mt-5">
-      <div class="card-header fw-bold pt-3">
-        <i class="bi bi-rocket-takeoff-fill me-1" style="color: var(--af-cyan);" aria-hidden="true"></i>
-        Newsletter Agentefrete
-      </div>
-      <div class="card-body">
-        <p class="small text-muted mb-3">Receba análises exclusivas da Julia diretamente no seu e-mail.</p>
-        <form action="/inscrever-newsletter" method="POST">
-          <div class="input-group">
-            <input class="form-control" name="email" type="email" placeholder="Seu melhor e-mail..." required />
-            <button class="btn btn-primary" type="submit">Subscrever</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  </div>
 </div>
 
+
+
 <script>
+
   window.JULIA_CHAT_MAX_HISTORY = {{ julia_chat_max_history|default(10)|int }};
+
   window.JULIA_CHAT_LIMITS = {{ julia_chat_limits|tojson|safe }};
+
   window.JULIA_CHAT_AUTHENTICATED = {{ 'true' if current_user.is_authenticated else 'false' }};
+
   window.JULIA_CHAT_LOGIN_URL = {{ url_for('login')|tojson }};
+
+  window.ONBOARDING_DISCOVERY_MODE = true;
+
+  window.ONBOARDING_DISCOVERY_API = '/api/onboarding_discovery';
+
 </script>
+
 <script src="{{ url_for('static', filename='js/chat_behavior.js') }}"></script>
+
 {% endblock %}
+

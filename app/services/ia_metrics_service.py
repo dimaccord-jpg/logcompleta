@@ -7,10 +7,27 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 
 from app.extensions import db
 from app.models import IaBillingCostSnapshot, IaConsumoEvento, ProcessingEvent
+
+# Excluído do consolidado administrativo mensal de IA produtiva (permanece em IaConsumoEvento).
+FLOW_TYPE_ONBOARDING_DISCOVERY = "onboarding_discovery"
+
+
+def _operational_ia_month_scope(*conditions):
+    """
+    Escopo analítico do painel admin mensal: todos os eventos do mês,
+    exceto onboarding discovery (separação analítica, mesma persistência).
+    """
+    return and_(
+        or_(
+            IaConsumoEvento.flow_type.is_(None),
+            IaConsumoEvento.flow_type != FLOW_TYPE_ONBOARDING_DISCOVERY,
+        ),
+        *conditions,
+    )
 
 
 def _month_datetime_bounds(year: int, month: int) -> tuple[datetime, datetime]:
@@ -26,15 +43,19 @@ def _month_datetime_bounds(year: int, month: int) -> tuple[datetime, datetime]:
 def aggregate_month_metrics(year: int, month: int) -> dict[str, Any]:
     """
     Retorna totais de tokens no mes, por api_key_label, e totais parciais por status.
+    Consolidação operacional produtiva: exclui flow_type=onboarding_discovery.
     """
     start, end = _month_datetime_bounds(year, month)
+    month_bounds = and_(
+        IaConsumoEvento.occurred_at >= start,
+        IaConsumoEvento.occurred_at < end,
+    )
 
     q_sum_total = (
         db.session.query(func.coalesce(func.sum(IaConsumoEvento.total_tokens), 0))
         .filter(
-            and_(
-                IaConsumoEvento.occurred_at >= start,
-                IaConsumoEvento.occurred_at < end,
+            _operational_ia_month_scope(
+                month_bounds,
                 IaConsumoEvento.total_tokens.isnot(None),
             )
         )
@@ -48,9 +69,8 @@ def aggregate_month_metrics(year: int, month: int) -> dict[str, Any]:
             func.coalesce(func.sum(IaConsumoEvento.total_tokens), 0),
         )
         .filter(
-            and_(
-                IaConsumoEvento.occurred_at >= start,
-                IaConsumoEvento.occurred_at < end,
+            _operational_ia_month_scope(
+                month_bounds,
                 IaConsumoEvento.total_tokens.isnot(None),
             )
         )
@@ -61,12 +81,7 @@ def aggregate_month_metrics(year: int, month: int) -> dict[str, Any]:
 
     event_count = (
         db.session.query(func.count(IaConsumoEvento.id))
-        .filter(
-            and_(
-                IaConsumoEvento.occurred_at >= start,
-                IaConsumoEvento.occurred_at < end,
-            )
-        )
+        .filter(_operational_ia_month_scope(month_bounds))
         .scalar()
     )
 
