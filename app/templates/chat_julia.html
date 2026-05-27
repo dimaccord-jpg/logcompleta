@@ -1,4 +1,4 @@
-{# Componente de chat Júlia — discovery (Home) ou operacional (/chat_julia?mode=operational) #}
+{# Componente de chat Júlia - discovery (Home) ou operacional (/chat_julia?mode=operational) #}
 {% set julia_surface = julia_chat_surface|default('discovery') %}
 <div class="julia-chat-wrapper" id="juliaChatWrapper">
   <div class="julia-chat-container">
@@ -14,8 +14,8 @@
           <span class="fw-bold julia-chat-name">Júlia, Editora Virtual de AgenteFrete</span>
           <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Consultoria em logística, supply chain, estratégia e planejamento. Atenção: a Júlia é uma IA e pode cometer erros.</small>
           {% else %}
-          <span class="fw-bold julia-chat-name">Júlia — descoberta inteligente</span>
-          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Interface de descoberta do Agentefrete. A Júlia conduz a conversa; o Cleiton interpreta sua intenção e encaminha ao caminho certo — sem resolver a operação aqui. Login só quando você for consumir a funcionalidade.</small>
+          <span class="fw-bold julia-chat-name">Júlia - descoberta inteligente</span>
+          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Conversa para descobrir o melhor caminho da sua operação. Você descreve o cenário com liberdade e a IA ajuda a refinar o próximo passo.</small>
           {% endif %}
         </div>
       </div>
@@ -25,15 +25,30 @@
         {% if julia_surface == 'operational' %}
         Faça uma pergunta sobre logística, fretes, supply chain, estratégia ou planejamento. Ex.: "Como estruturar um plano de redução de custo logístico?"
         {% else %}
-        Conte o que você quer alcançar em logística ou escolha uma intenção acima. Vamos refinar juntos antes de encaminhar você ao caminho certo.
+        Olá, eu sou a Júlia.<br><br>Posso ajudar você a explorar redução de custos, auditoria operacional, indicadores, planejamento logístico, previsibilidade de frete e movimentos do mercado.<br><br>Me conte o que você quer resolver.
         {% endif %}
       </div>
+      {% if julia_surface != 'operational' and onboarding_ctas %}
+      <div class="julia-chat-discovery-suggestions px-2 pb-2" id="juliaChatDiscoverySuggestions" aria-label="Sugestões de conversa">
+        <div class="julia-chat-discovery-label">Se quiser, você pode começar por uma destas ideias:</div>
+        <div class="julia-chat-discovery-pills">
+          {% for cta in onboarding_ctas[:4] %}
+          <button type="button"
+                  class="julia-chat-discovery-pill onboarding-cta-btn"
+                  data-cta-id="{{ cta.id }}"
+                  data-cta-message="{{ cta.seed_message|e }}">
+            {{ cta.label }}
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
     </div>
     <div class="julia-chat-input-area">
       <form class="julia-chat-form" id="juliaChatForm" role="form">
         <div class="input-group">
           <textarea class="form-control julia-chat-input" id="juliaChatInput"
-                    placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Descreva sua intenção em logística...{% endif %}" rows="2" autocomplete="off"></textarea>
+                    placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Ex.: Quero reduzir meu custo operacional{% endif %}" rows="2" autocomplete="off"></textarea>
           <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
             <i class="bi bi-send-fill"></i>
           </button>
@@ -45,7 +60,6 @@
 </div>
 
 <style>
-  /* Chat Júlia — identidade visual Agentefrete (tema escuro, bordas cyan) */
   .julia-chat-wrapper {
     --julia-chat-bg: var(--af-bg-card, #111119);
     --julia-chat-border: var(--af-cyan);
@@ -77,9 +91,15 @@
   .julia-chat-role { color: var(--af-text-secondary, #8A8AA3) !important; }
   .julia-chat-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid rgba(0, 191, 255, 0.3); }
   .julia-chat-avatar-placeholder {
-    width: 36px; height: 36px; border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
     background: linear-gradient(135deg, var(--af-cyan, #00BFFF) 0%, #0077CC 100%);
-    color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem;
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
   }
   .julia-chat-messages {
     flex: 1;
@@ -93,6 +113,20 @@
   .julia-chat-welcome {
     color: var(--af-text-secondary, #8A8AA3);
     border-radius: 0.5rem;
+    max-width: 680px;
+    font-size: 0.98rem;
+    line-height: 1.6;
+  }
+  .julia-chat-discovery-suggestions { max-width: 760px; }
+  .julia-chat-discovery-label {
+    color: var(--af-text-muted, #5A5A72);
+    font-size: 0.75rem;
+    margin-bottom: 0.55rem;
+  }
+  .julia-chat-discovery-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
   }
   .julia-chat-msg { margin-bottom: 0.75rem; }
   .julia-chat-msg-inner { max-width: 85%; padding: 0.5rem 0.75rem; border-radius: 0.75rem; white-space: pre-wrap; }
@@ -174,17 +208,31 @@
   .julia-chat-handoff-btn:hover {
     background: rgba(25, 135, 84, 0.3);
   }
+  .julia-chat-discovery-pill,
   .onboarding-cta-btn {
-    border-color: rgba(0, 191, 255, 0.45) !important;
-    color: var(--af-text-primary, #F0F0F5) !important;
-    background: rgba(0, 191, 255, 0.08) !important;
-    font-size: 0.85rem;
+    border: 1px solid rgba(0, 191, 255, 0.24) !important;
+    color: var(--af-text-secondary, #C8CCE5) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    font-size: 0.78rem;
     white-space: normal;
     text-align: left;
-    max-width: 280px;
+    line-height: 1.25;
+    padding: 0.4rem 0.75rem;
+    border-radius: 999px;
   }
+  .julia-chat-discovery-pill:hover,
   .onboarding-cta-btn:hover {
-    background: rgba(0, 191, 255, 0.18) !important;
-    border-color: rgba(0, 191, 255, 0.65) !important;
+    background: rgba(0, 191, 255, 0.1) !important;
+    border-color: rgba(0, 191, 255, 0.4) !important;
+    color: var(--af-text-primary, #F0F0F5) !important;
+  }
+  @media (max-width: 767.98px) {
+    .julia-chat-messages { padding: 0.85rem 0.85rem 0.65rem; }
+    .julia-chat-input-area { padding: 0.75rem 0.85rem; }
+    .julia-chat-discovery-pills { gap: 0.35rem; }
+    .julia-chat-discovery-pill,
+    .onboarding-cta-btn {
+      width: 100%;
+    }
   }
 </style>

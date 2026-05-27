@@ -11,9 +11,14 @@
     ? ((typeof window.ONBOARDING_DISCOVERY_API !== 'undefined' && window.ONBOARDING_DISCOVERY_API) || '/api/onboarding_discovery')
     : '/api/chat_julia';
   var JULIA_PENDING_KEY = 'pending_julia_operational';
+  var DISCOVERY_PLACEHOLDERS = [
+    'Ex.: Quero reduzir meu custo operacional',
+    'Ex.: Minha transportadora está muito cara',
+    'Ex.: Quero prever o comportamento do frete',
+    'Ex.: Preciso melhorar meus indicadores logísticos'
+  ];
 
   function byId(id) { return document.getElementById(id); }
-  function qs(sel) { return document.querySelector(sel); }
   function qsAll(sel) { return document.querySelectorAll(sel); }
 
   var chatLimits = (typeof window.JULIA_CHAT_LIMITS !== 'undefined' && window.JULIA_CHAT_LIMITS)
@@ -21,6 +26,8 @@
     : null;
   var isAuthenticated = (typeof window.JULIA_CHAT_AUTHENTICATED !== 'undefined' && window.JULIA_CHAT_AUTHENTICATED === true);
   var activeCtaId = null;
+  var discoveryPlaceholderIndex = 0;
+  var discoveryPlaceholderTimer = null;
 
   function isBlockedAuthorization(authz) {
     if (DISCOVERY_MODE) return false;
@@ -52,6 +59,24 @@
       sendBtn.disabled = false;
       if (input) input.disabled = false;
     }
+  }
+
+  function setDiscoverySuggestionsVisible(visible) {
+    var suggestions = byId('juliaChatDiscoverySuggestions');
+    if (!suggestions) return;
+    suggestions.style.display = visible ? 'block' : 'none';
+  }
+
+  function startDiscoveryPlaceholderRotation() {
+    var input = byId('juliaChatInput');
+    if (!DISCOVERY_MODE || !input) return;
+    if (discoveryPlaceholderTimer) window.clearInterval(discoveryPlaceholderTimer);
+    input.placeholder = DISCOVERY_PLACEHOLDERS[discoveryPlaceholderIndex];
+    discoveryPlaceholderTimer = window.setInterval(function () {
+      if (document.activeElement === input || (input.value || '').trim()) return;
+      discoveryPlaceholderIndex = (discoveryPlaceholderIndex + 1) % DISCOVERY_PLACEHOLDERS.length;
+      input.placeholder = DISCOVERY_PLACEHOLDERS[discoveryPlaceholderIndex];
+    }, 3200);
   }
 
   function setChatActive(active) {
@@ -167,6 +192,7 @@
       welcome.style.display = 'block';
     }
     if (input) input.placeholder = 'Mensagem para a Júlia...';
+    setDiscoverySuggestionsVisible(false);
     updateLimitUI(isBlockedAuthorization(chatLimits), getBlockedMessage(chatLimits));
   }
 
@@ -193,6 +219,7 @@
     options = options || {};
     var welcome = byId('juliaChatWelcome');
     if (welcome) welcome.style.display = 'none';
+    setDiscoverySuggestionsVisible(false);
     var msg = document.createElement('div');
     msg.className = 'julia-chat-msg julia-chat-msg-' + (role === 'user' ? 'user' : 'bot');
     var inner = document.createElement('div');
@@ -330,6 +357,14 @@
       });
   }
 
+  function submitSuggestion(text, options) {
+    var input = byId('juliaChatInput');
+    if (!text || !text.trim()) return;
+    activeCtaId = options && options.cta_id ? options.cta_id : null;
+    if (input) input.value = text;
+    sendMessage(text, options || {});
+  }
+
   function initCtaButtons() {
     var buttons = qsAll('.onboarding-cta-btn');
     if (!buttons.length) return;
@@ -337,10 +372,7 @@
       btn.addEventListener('click', function () {
         var ctaId = btn.getAttribute('data-cta-id') || '';
         var ctaMessage = btn.getAttribute('data-cta-message') || btn.textContent.trim();
-        activeCtaId = ctaId || null;
-        var input = byId('juliaChatInput');
-        if (input) input.value = ctaMessage;
-        sendMessage(ctaMessage, { cta_id: ctaId });
+        submitSuggestion(ctaMessage, { cta_id: ctaId });
       });
     });
   }
@@ -355,6 +387,8 @@
       isBlockedAuthorization(chatLimits),
       getBlockedMessage(chatLimits)
     );
+    setDiscoverySuggestionsVisible(true);
+    startDiscoveryPlaceholderRotation();
 
     input.addEventListener('focus', function () { setChatActive(true); });
     input.addEventListener('blur', function () {
@@ -375,22 +409,22 @@
     var messagesEl = byId('juliaChatMessages');
     if (messagesEl) {
       messagesEl.addEventListener('click', function (e) {
-        var target = e.target;
-        if (target && target.matches('.julia-chat-handoff-btn')) {
-          var action = target.getAttribute('data-handoff-action') || '';
+        var handoffBtn = e.target && e.target.closest ? e.target.closest('.julia-chat-handoff-btn') : null;
+        if (handoffBtn) {
+          var action = handoffBtn.getAttribute('data-handoff-action') || '';
           if (action === 'start_julia') {
             startJuliaOperationalHandoff();
             return;
           }
-          var url = target.getAttribute('data-handoff-url') || '';
+          var url = handoffBtn.getAttribute('data-handoff-url') || '';
           navigateHandoff(url);
           return;
         }
-        if (!target || !target.matches('.julia-chat-suggestion-btn')) return;
-        var suggestion = target.getAttribute('data-julia-suggestion') || '';
-        if (!suggestion.trim()) return;
-        input.value = suggestion;
-        sendMessage(undefined, { source: 'suggestion_chip' });
+
+        var suggestionBtn = e.target && e.target.closest ? e.target.closest('.julia-chat-suggestion-btn') : null;
+        if (!suggestionBtn) return;
+        var suggestion = suggestionBtn.getAttribute('data-julia-suggestion') || '';
+        submitSuggestion(suggestion, { source: 'suggestion_chip' });
       });
     }
 

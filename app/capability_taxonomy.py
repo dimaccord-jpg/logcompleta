@@ -41,6 +41,33 @@ DOMAIN_LABELS: dict[str, str] = {
     "freight_bi": "BI operacional de fretes e indicadores",
     "operational_audit": "Auditoria operacional de fretes",
     "forecast_planning": "Previsibilidade e planejamento de frete",
+    "future_quotation": "Cotação automatizada de frete",
+    "future_bid": "BID de frete",
+    "future_supply_planning": "Planejamento de supply chain",
+}
+
+# Disponibilidade real no produto (MVP + futuras)
+CAPABILITY_AVAILABILITY: dict[str, dict[str, Any]] = {
+    "editorial_market": {"available": True, "status": "available", "alternatives": []},
+    "strategic_logistics": {"available": True, "status": "available", "alternatives": []},
+    "freight_bi": {"available": True, "status": "available", "alternatives": []},
+    "operational_audit": {"available": True, "status": "available", "alternatives": []},
+    "forecast_planning": {"available": True, "status": "available", "alternatives": []},
+    "future_quotation": {
+        "available": False,
+        "status": "future",
+        "alternatives": ["freight_bi", "forecast_planning", "strategic_logistics"],
+    },
+    "future_bid": {
+        "available": False,
+        "status": "future",
+        "alternatives": ["freight_bi", "forecast_planning", "strategic_logistics"],
+    },
+    "future_supply_planning": {
+        "available": False,
+        "status": "future",
+        "alternatives": ["forecast_planning", "strategic_logistics"],
+    },
 }
 
 MODE_LABELS: dict[str, str] = {
@@ -167,6 +194,188 @@ EDITORIAL_CLEAR_INTENT = re.compile(
     re.IGNORECASE,
 )
 
+FREIGHT_BI_CLEAR_INTENT = re.compile(
+    r"\b("
+    r"bi\b|business\s+intelligence|dashboard|indicadores?|"
+    r"custos?\s+(?:de\s+)?frete|dados?\s+(?:de\s+)?frete|"
+    r"analisar\s+(?:meu\s+|o\s+)?custo|custo\s+de\s+frete|"
+    r"bi\s+(?:de\s+|para\s+)?frete"
+    r")\b",
+    re.IGNORECASE,
+)
+
+FORECAST_CLEAR_INTENT = re.compile(
+    r"\b("
+    r"previs[aã]o|previsibilidade|prever|comportamento\s+(?:do\s+)?frete|"
+    r"proje[cç][aã]o\s+(?:de\s+)?frete|prever\s+(?:o\s+)?frete"
+    r")\b",
+    re.IGNORECASE,
+)
+
+OPERATIONAL_AUDIT_CLEAR_INTENT = re.compile(
+    r"\b("
+    r"auditar|auditoria|investigar|anomali|desvio|concentra[cç][aã]o|"
+    r"transportadora\s+(?:est[aá]|cara|ruim|cara)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+STRATEGIC_CLEAR_INTENT = re.compile(
+    r"\b("
+    r"estrat[eé]gia\s+log[ií]stica|supply\s+chain|consultoria\s+log[ií]stica|"
+    r"planejamento\s+estrat[eé]gico|negocia[cç][aã]o\s+consultiva"
+    r")\b",
+    re.IGNORECASE,
+)
+
+FUTURE_QUOTATION_INTENT = re.compile(
+    r"\b(cota[cç][aã]o|cota[cç]ionar|cotar\s+frete|pre[cç]o\s+de\s+frete)\b",
+    re.IGNORECASE,
+)
+
+FUTURE_BID_INTENT = re.compile(
+    r"\b(\bbid\b|licita[cç][aã]o\s+de\s+frete)\b",
+    re.IGNORECASE,
+)
+
+AMBIGUOUS_LOGISTICS_INTENT = re.compile(
+    r"\b("
+    r"reduzir\s+custo|melhorar\s+(?:minha\s+)?log[ií]stica|otimizar\s+(?:frete|opera[cç][aã]o)|"
+    r"opera[cç][aã]o\s+est[aá]\s+ruim|minha\s+opera[cç][aã]o|"
+    r"transportadora\s+est[aá]\s+cara"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def get_capability_availability(domain: str) -> dict[str, Any]:
+    spec = CAPABILITY_AVAILABILITY.get(domain)
+    if spec:
+        return dict(spec)
+    return {"available": True, "status": "available", "alternatives": []}
+
+
+def is_future_capability_intent(
+    message: str,
+    *,
+    cta_id: str | None = None,
+) -> str | None:
+    """Retorna domínio futuro detectado (ex.: future_quotation) ou None."""
+    text = (message or "").strip()
+    if not text:
+        return None
+    if FUTURE_QUOTATION_INTENT.search(text):
+        return "future_quotation"
+    if FUTURE_BID_INTENT.search(text):
+        return "future_bid"
+    return None
+
+
+def is_clear_freight_bi_intent(
+    message: str,
+    *,
+    cta_id: str | None = None,
+    top_domain: str | None = None,
+) -> bool:
+    if cta_id == "understand_freight":
+        return True
+    text = (message or "").strip()
+    if not text or is_future_capability_intent(text):
+        return False
+    if FREIGHT_BI_CLEAR_INTENT.search(text):
+        return True
+    return top_domain == "freight_bi" and FREIGHT_BI_CLEAR_INTENT.search(text)
+
+
+def is_clear_forecast_planning_intent(
+    message: str,
+    *,
+    cta_id: str | None = None,
+    top_domain: str | None = None,
+) -> bool:
+    if cta_id == "forecast_planning":
+        return True
+    text = (message or "").strip()
+    if not text or is_future_capability_intent(text):
+        return False
+    if FORECAST_CLEAR_INTENT.search(text):
+        return True
+    return top_domain == "forecast_planning" and FORECAST_CLEAR_INTENT.search(text)
+
+
+def is_clear_operational_audit_intent(
+    message: str,
+    *,
+    cta_id: str | None = None,
+    top_domain: str | None = None,
+) -> bool:
+    if cta_id == "operational_audit":
+        return True
+    text = (message or "").strip()
+    if not text:
+        return False
+    if OPERATIONAL_AUDIT_CLEAR_INTENT.search(text):
+        return True
+    return top_domain == "operational_audit" and OPERATIONAL_AUDIT_CLEAR_INTENT.search(text)
+
+
+def is_clear_strategic_logistics_intent(
+    message: str,
+    *,
+    cta_id: str | None = None,
+    top_domain: str | None = None,
+) -> bool:
+    if cta_id == "strategic_support":
+        return True
+    text = (message or "").strip()
+    if not text or is_future_capability_intent(text):
+        return False
+    if STRATEGIC_CLEAR_INTENT.search(text):
+        return True
+    return top_domain == "strategic_logistics" and STRATEGIC_CLEAR_INTENT.search(text)
+
+
+def is_ambiguous_logistics_intent(message: str) -> bool:
+    text = (message or "").strip()
+    if not text:
+        return False
+    if is_future_capability_intent(text):
+        return False
+    if not AMBIGUOUS_LOGISTICS_INTENT.search(text):
+        return False
+    if FREIGHT_BI_CLEAR_INTENT.search(text):
+        return False
+    if FORECAST_CLEAR_INTENT.search(text):
+        return False
+    if OPERATIONAL_AUDIT_CLEAR_INTENT.search(text):
+        return False
+    if STRATEGIC_CLEAR_INTENT.search(text):
+        return False
+    if EDITORIAL_CLEAR_INTENT.search(text):
+        return False
+    return True
+
+
+def is_clear_intent_for_domain(
+    message: str,
+    domain: str | None,
+    *,
+    cta_id: str | None = None,
+) -> bool:
+    if not domain:
+        return False
+    checks = {
+        "editorial_market": is_clear_editorial_market_intent,
+        "freight_bi": is_clear_freight_bi_intent,
+        "forecast_planning": is_clear_forecast_planning_intent,
+        "operational_audit": is_clear_operational_audit_intent,
+        "strategic_logistics": is_clear_strategic_logistics_intent,
+    }
+    checker = checks.get(domain)
+    if not checker:
+        return False
+    return checker(message, cta_id=cta_id, top_domain=domain)
+
 
 def is_clear_editorial_market_intent(
     message: str,
@@ -185,6 +394,8 @@ def is_clear_editorial_market_intent(
     if re.match(r"^quero\s+(not[ií]cias|tend[eê]ncias|acompanhar)", text):
         return True
     if top_domain == "editorial_market" and EDITORIAL_CLEAR_INTENT.search(text):
+        return True
+    if EDITORIAL_CLEAR_INTENT.search(text):
         return True
     return False
 
@@ -252,15 +463,33 @@ def decide_next_action(
 ) -> str:
     """
     refine | handoff
-    Handoff imediato para editorial_market quando intenção for clara.
-    Demais domínios: handoff após refinamento ou confirmação explícita.
+    Handoff imediato quando intenção clara e capability disponível.
+    Capabilities futuras: refine (sem handoff para módulo inexistente).
     """
+    message = user_message or ""
+
+    if is_future_capability_intent(message, cta_id=cta_id):
+        return "refine"
+
     if is_clear_editorial_market_intent(
-        user_message or "",
+        message,
         cta_id=cta_id,
         top_domain=top_capability_domain,
     ):
         return "handoff"
+
+    if (
+        confidence == "high"
+        and top_capability_domain
+        and get_capability_availability(top_capability_domain).get("available", True)
+        and is_clear_intent_for_domain(message, top_capability_domain, cta_id=cta_id)
+    ):
+        return "handoff"
+
+    if is_ambiguous_logistics_intent(message) and not user_confirmed:
+        return "refine"
+
     if confidence == "high" and (user_confirmed or history_turns >= 2):
         return "handoff"
+
     return "refine"

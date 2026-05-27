@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import pathlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -14,10 +15,15 @@ from app.capability_taxonomy import (
     compute_confidence_level,
     decide_next_action,
     get_cta_by_id,
+    is_ambiguous_logistics_intent,
     is_clear_editorial_market_intent,
+    is_clear_forecast_planning_intent,
+    is_clear_freight_bi_intent,
+    is_future_capability_intent,
     rank_destinations_from_capabilities,
 )
 from app.run_cleiton_discovery import (
+    _build_onboarding_audit_context,
     _extract_json_object,
     _normalize_candidates,
     cleiton_discovery_reply,
@@ -81,6 +87,58 @@ class TestCapabilityTaxonomy:
             == "handoff"
         )
 
+    def test_forecast_clear_intent_handoff_first_turn(self):
+        assert is_clear_forecast_planning_intent("Quero previsão de frete.")
+        assert (
+            decide_next_action(
+                "high",
+                user_confirmed=False,
+                history_turns=1,
+                top_capability_domain="forecast_planning",
+                user_message="Quero previsão de frete.",
+            )
+            == "handoff"
+        )
+
+    def test_freight_bi_clear_intent_handoff_first_turn(self):
+        assert is_clear_freight_bi_intent("Preciso de um BI para analisar meu custo de frete.")
+        assert (
+            decide_next_action(
+                "high",
+                user_confirmed=False,
+                history_turns=1,
+                top_capability_domain="freight_bi",
+                user_message="Preciso de um BI para analisar meu custo de frete.",
+            )
+            == "handoff"
+        )
+
+    def test_future_quotation_detected(self):
+        assert is_future_capability_intent("Quero cotação de frete.") == "future_quotation"
+        assert (
+            decide_next_action(
+                "high",
+                user_confirmed=False,
+                history_turns=1,
+                top_capability_domain="freight_bi",
+                user_message="Quero cotação de frete.",
+            )
+            == "refine"
+        )
+
+    def test_ambiguous_intent_refines(self):
+        assert is_ambiguous_logistics_intent("Quero melhorar minha logística.")
+        assert (
+            decide_next_action(
+                "high",
+                user_confirmed=False,
+                history_turns=1,
+                top_capability_domain="strategic_logistics",
+                user_message="Quero melhorar minha logística.",
+            )
+            == "refine"
+        )
+
 
 class TestCleitonDiscoveryParsing:
     def test_extract_json_object_from_markdown_fence(self):
@@ -98,6 +156,25 @@ class TestCleitonDiscoveryParsing:
         assert len(out) == 1
         assert out[0]["domain"] == "freight_bi"
         assert out[0]["mode"] == "analyze"
+
+
+class TestOnboardingAuditContext:
+    def test_build_context_includes_sanitized_fields(self):
+        contexto = _build_onboarding_audit_context(
+            "Quero frete joao@example.com",
+            cta_id="reduce_cost",
+            candidates=[{"domain": "freight_bi", "score": 88}],
+            handoff={"destination": "roberto_bi", "action": "navigate"},
+            next_action="handoff",
+            history_turns=2,
+        )
+        assert contexto["cta_id"] == "reduce_cost"
+        assert contexto["capability_top"] == "freight_bi"
+        assert contexto["handoff_status"] == "handoff"
+        assert contexto["message_length"] == len("Quero frete joao@example.com")
+        assert "joao@example.com" not in contexto["user_message_sanitized"]
+        assert "frete" in contexto["user_terms_normalized"]
+        assert "quero" not in contexto["user_terms_normalized"]
 
 
 class TestCleitonDiscoveryReply:
@@ -119,6 +196,85 @@ class TestCleitonDiscoveryReply:
         assert result["handoff"]["destination"] == "feed"
         assert result["handoff"]["url"] == "/feed"
         assert result["handoff"]["requires_login"] is False
+
+    def test_forecast_handoff_first_turn_without_gemini(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        result = cleiton_discovery_reply("Quero previsão de frete.", [])
+        assert result["discovery"]["capability_candidates"][0]["domain"] == "forecast_planning"
+        assert result["discovery"]["next_action"] == "handoff"
+        assert result["handoff"] is not None
+        assert result["handoff"]["destination"] == "roberto_bi"
+        assert result["handoff"]["url"] == "/fretes"
+        reply = result["reply"].lower()
+        assert "previs" in reply
+        assert "Existem algumas formas de trabalhar esse tema" not in result["reply"]
+
+    def test_freight_bi_handoff_first_turn_without_gemini(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        result = cleiton_discovery_reply("Preciso de um BI para analisar meu custo de frete.", [])
+        assert result["discovery"]["capability_candidates"][0]["domain"] == "freight_bi"
+        assert result["discovery"]["next_action"] == "handoff"
+        assert result["handoff"] is not None
+        assert result["handoff"]["destination"] == "roberto_bi"
+        assert result["handoff"]["url"] == "/fretes"
+        reply = result["reply"].lower()
+        assert "bi" in reply or "custo" in reply or "indicador" in reply
+        assert "Existem algumas formas de trabalhar esse tema" not in result["reply"]
+
+    def test_quotation_unavailable_without_gemini(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        result = cleiton_discovery_reply("Quero cotação de frete.", [])
+        assert result["discovery"]["next_action"] == "refine"
+        assert result["handoff"] is None
+        assert result["discovery"].get("future_capability") == "future_quotation"
+        reply = result["reply"].lower()
+        assert "cota" in reply
+        assert "não" in reply or "nao" in reply or "ainda" in reply
+        assert result["refinement_options"]
+        assert "Existem algumas formas de trabalhar esse tema" not in result["reply"]
+
+    def test_ambiguous_refines_without_gemini(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        result = cleiton_discovery_reply("Quero melhorar minha logística.", [])
+        assert result["discovery"]["next_action"] == "refine"
+        assert result["handoff"] is None
+        assert result["refinement_options"]
+
+    def test_generic_reply_replaced_for_clear_intent_with_gemini(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+        fake_response = MagicMock()
+        fake_response.text = json.dumps({
+            "reply": "Existem algumas formas de trabalhar esse tema no Agentefrete.",
+            "capability_candidates": [
+                {"domain": "forecast_planning", "mode": "forecast", "score": 92},
+                {"domain": "freight_bi", "mode": "analyze", "score": 58},
+            ],
+            "refinement_options": [],
+            "user_confirmed": False,
+        })
+
+        monkeypatch.setattr(
+            "app.run_cleiton_discovery.cleiton_governed_generate_content",
+            lambda *a, **k: fake_response,
+        )
+        monkeypatch.setattr(
+            "app.run_cleiton_discovery._get_client",
+            lambda: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.run_cleiton_discovery.auditoria_registrar",
+            lambda *a, **k: None,
+        )
+
+        result = cleiton_discovery_reply("Quero previsão de frete.", [])
+        assert result["discovery"]["next_action"] == "handoff"
+        assert "Existem algumas formas de trabalhar esse tema" not in result["reply"]
+        assert "previs" in result["reply"].lower()
 
     def test_governed_gemini_path(self, monkeypatch):
         monkeypatch.setenv("GEMINI_API_KEY", "test-key")
@@ -258,6 +414,58 @@ class TestJuliaOperationalRoute:
         assert "ONBOARDING_DISCOVERY_MODE" not in html
         assert "Consultoria logística" in html
         assert "descoberta inteligente" not in html
+
+
+class TestOnboardingHomeUxContract:
+    def test_home_discovery_copy_has_expected_accents(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        web = importlib.import_module("app.web")
+        monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+        monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
+        monkeypatch.setattr(
+            web,
+            "avaliar_autorizacao_operacao_por_franquia",
+            lambda _u: {"permitido": True},
+        )
+        client = web.app.test_client()
+        resp = client.get("/")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "Olá" in html
+        assert "Júlia" in html
+        assert "você" in html
+        assert "redução" in html
+        assert "logístico" in html
+
+    def test_home_cta_buttons_keep_onboarding_payload_contract(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        web = importlib.import_module("app.web")
+        monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+        monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
+        monkeypatch.setattr(
+            web,
+            "avaliar_autorizacao_operacao_por_franquia",
+            lambda _u: {"permitido": True},
+        )
+        client = web.app.test_client()
+        resp = client.get("/")
+        html = resp.get_data(as_text=True)
+        assert 'class="julia-chat-discovery-pill onboarding-cta-btn"' in html
+        assert 'data-cta-id="' in html
+        assert 'data-cta-message="' in html
+
+    def test_frontend_suggestions_submit_through_normal_chat_flow(self):
+        source = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
+        assert "submitSuggestion(ctaMessage, { cta_id: ctaId });" in source
+        assert "appendMessage('user', text, messagesEl);" in source
+        assert "var payload = { message: text, history: history };" in source
+        assert "fetch(API_URL, {" in source
+        assert "target.closest('.julia-chat-suggestion-btn')" in source
+        assert "target.closest('.julia-chat-handoff-btn')" in source
 
 
 class TestOnboardingHandoffDoesNotWeakenApiAuth:

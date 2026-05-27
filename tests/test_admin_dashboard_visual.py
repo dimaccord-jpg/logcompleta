@@ -32,6 +32,10 @@ def test_dashboard_renderiza_sem_bloco_de_insight(monkeypatch):
             "cleide_processing": {},
         },
     )
+    monkeypatch.setattr(
+        "app.services.onboarding_admin_analytics_service.get_onboarding_word_cloud",
+        lambda **kwargs: [{"term": "frete", "count": 5}, {"term": "custo", "count": 2}],
+    )
 
     with web.app.test_request_context("/admin/dashboard"):
         html = admin_routes.admin_dashboard.__wrapped__()
@@ -40,6 +44,8 @@ def test_dashboard_renderiza_sem_bloco_de_insight(monkeypatch):
     assert "Insight Estratégico (Customer Insight)" not in html
     assert "Recomendações recentes" not in html
     assert "Consumo de IA (Cleiton)" in html
+    assert "Onboarding Discovery" in html
+    assert "frete" in html
 
 
 def test_admin_pautas_permanece_acessivel(monkeypatch):
