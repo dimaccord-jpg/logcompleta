@@ -17,7 +17,9 @@ _STOPWORDS = frozenset({
 
 _USEFUL_TERMS = frozenset({
     "frete", "custo", "cotacao", "previsao", "auditoria", "bi", "transportadora",
-    "estoque", "dolar", "prazo", "indicador", "planejamento", "logistica",
+    "estoque", "dolar", "euro", "cambio", "cambial", "inflacao", "juros", "selic",
+    "combustivel", "petroleo", "importacao", "exportacao", "internacional",
+    "prazo", "indicador", "planejamento", "logistica",
 })
 
 _RE_EMAIL = re.compile(

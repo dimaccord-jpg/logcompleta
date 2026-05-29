@@ -20,6 +20,7 @@ except ImportError as exc:
 
 import json
 import logging
+import uuid
 from urllib.parse import urlparse, quote
 from pathlib import Path
 
@@ -75,6 +76,10 @@ from app.env_loader import mask_database_url_for_log, log_database_boot_diagnost
 
 _SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION = "pixel_event_complete_registration_once"
 _SESSION_PIXEL_EVENT_LEAD = "pixel_event_lead_once"
+_SESSION_ONBOARDING_DISCOVERY_COUNT = "onboarding_discovery_count"
+_SESSION_ONBOARDING_DISCOVERY_ANON_ID = "onboarding_discovery_anon_id"
+_SESSION_ONBOARDING_JULIA_CONTEXT = "onboarding_julia_context"
+_ONBOARDING_DISCOVERY_LIMIT = 5
 
 
 # Define diretorio_atual para uso em resolve_indices_file_path
@@ -308,6 +313,117 @@ def _post_login_redirect(user):
     return redirect(url_for('index'))
 
 
+def _get_or_create_onboarding_anon_id() -> str:
+    anon_id = (session.get(_SESSION_ONBOARDING_DISCOVERY_ANON_ID) or "").strip()
+    if anon_id:
+        return anon_id
+    anon_id = uuid.uuid4().hex
+    session[_SESSION_ONBOARDING_DISCOVERY_ANON_ID] = anon_id
+    session.modified = True
+    return anon_id
+
+
+def _get_onboarding_interaction_count() -> int:
+    try:
+        return max(0, int(session.get(_SESSION_ONBOARDING_DISCOVERY_COUNT, 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _increment_onboarding_interaction_count() -> int:
+    next_count = _get_onboarding_interaction_count() + 1
+    session[_SESSION_ONBOARDING_DISCOVERY_COUNT] = next_count
+    session.modified = True
+    return next_count
+
+
+def _reset_onboarding_discovery_state(*, rotate_anon_id: bool = False) -> None:
+    session.pop(_SESSION_ONBOARDING_DISCOVERY_COUNT, None)
+    session.pop(_SESSION_ONBOARDING_JULIA_CONTEXT, None)
+    if rotate_anon_id:
+        session.pop(_SESSION_ONBOARDING_DISCOVERY_ANON_ID, None)
+    session.modified = True
+
+
+def _get_onboarding_discovery_ui_state() -> dict:
+    interaction_count = _get_onboarding_interaction_count()
+    return {
+        "count": interaction_count,
+        "limit": _ONBOARDING_DISCOVERY_LIMIT,
+        "limit_reached": interaction_count >= _ONBOARDING_DISCOVERY_LIMIT,
+        "has_active_session": interaction_count > 0,
+    }
+
+
+def _build_onboarding_login_handoff() -> dict:
+    return {
+        "label": "Continuar gratuitamente",
+        "url": f"{url_for('login')}?next={quote('/chat_julia?mode=operational', safe='')}",
+        "requires_login": True,
+    }
+
+
+def _build_onboarding_limit_payload(*, interaction_count: int | None = None) -> dict:
+    message = "Você pode continuar gratuitamente sua análise no AgenteFrete fazendo login."
+    handoff = _build_onboarding_login_handoff()
+    count = interaction_count if interaction_count is not None else _ONBOARDING_DISCOVERY_LIMIT
+    return {
+        "reply": message,
+        "onboarding": True,
+        "requires_login": True,
+        "limit_reached": True,
+        "anonymous_interaction_count": count,
+        "anonymous_interaction_limit": _ONBOARDING_DISCOVERY_LIMIT,
+        "anonymous_interactions_remaining": 0,
+        "cta_login": handoff,
+        "handoff": handoff,
+        "discovery": {
+            "capability_candidates": [],
+            "confidence": "blocked",
+            "next_action": "login",
+        },
+    }
+
+
+def _attach_anonymous_discovery_counters(result: dict, *, interaction_count: int) -> None:
+    """Expõe contador de sessão anônima em toda resposta OK do Copilot."""
+    result["anonymous_interaction_count"] = interaction_count
+    result["anonymous_interaction_limit"] = _ONBOARDING_DISCOVERY_LIMIT
+    result["anonymous_interactions_remaining"] = max(
+        0, _ONBOARDING_DISCOVERY_LIMIT - interaction_count
+    )
+    result["limit_reached"] = False
+
+
+def _store_onboarding_julia_context(user_message: str, result: dict | None) -> None:
+    clean_message = (user_message or "").strip()
+    if not clean_message:
+        return
+
+    payload = result if isinstance(result, dict) else {}
+    handoff = payload.get("handoff") if isinstance(payload.get("handoff"), dict) else None
+    handoffs = payload.get("handoffs") if isinstance(payload.get("handoffs"), list) else []
+    handoff_items = [item for item in ([handoff] if handoff else []) + handoffs if isinstance(item, dict)]
+    has_julia_handoff = any((item.get("destination") or "") == "julia_operational" for item in handoff_items)
+    if not has_julia_handoff:
+        return
+
+    reply = (payload.get("reply") or "").strip()
+    summary = reply[:420].strip() if reply else ""
+    session[_SESSION_ONBOARDING_JULIA_CONTEXT] = {
+        "source": "onboarding_discovery",
+        "user_message": clean_message[:280],
+        "summary": summary,
+    }
+    session.modified = True
+
+
+def _pop_onboarding_julia_context() -> dict | None:
+    raw = session.pop(_SESSION_ONBOARDING_JULIA_CONTEXT, None)
+    session.modified = True
+    return raw if isinstance(raw, dict) else None
+
+
 def _load_feed_editorial():
     """Notícias e artigos publicados/parciais para a superfície editorial (/feed)."""
     limite_noticias = getattr(settings, 'noticias_limite', 5)
@@ -351,6 +467,7 @@ def index():
     indicadores = _load_home_indicadores()
 
     julia_chat_max_history = get_julia_chat_max_history()
+    is_authenticated = bool(getattr(current_user, "is_authenticated", False))
     # Estado operacional do chat (fonte única: autorização operacional por franquia).
     julia_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
     return render_template(
@@ -359,7 +476,9 @@ def index():
         julia_chat_max_history=julia_chat_max_history,
         julia_chat_limits=julia_chat_limits,
         onboarding_ctas=ONBOARDING_CTAS,
-        julia_chat_surface='discovery',
+        onboarding_discovery_state=_get_onboarding_discovery_ui_state(),
+        julia_chat_surface='operational' if is_authenticated else 'discovery',
+        julia_handoff_context=_pop_onboarding_julia_context() if is_authenticated else None,
     )
 
 
@@ -381,6 +500,7 @@ def chat_julia():
         julia_chat_max_history=julia_chat_max_history,
         julia_chat_limits=julia_chat_limits,
         julia_chat_surface='operational',
+        julia_handoff_context=_pop_onboarding_julia_context(),
     )
 
 
@@ -1047,7 +1167,34 @@ def api_onboarding_discovery():
         identidade_http_anonimo,
         set_consumo_identidade,
     )
+    from app.run_cleiton_agente_auditoria import registrar as registrar_auditoria
     from app.run_cleiton_discovery import cleiton_discovery_reply
+
+    if not current_user.is_authenticated:
+        anon_id = _get_or_create_onboarding_anon_id()
+        interaction_count = _get_onboarding_interaction_count()
+        logger.info(
+            "Onboarding discovery request | anon_client_id=%s | count_before=%s | limit=%s",
+            anon_id,
+            interaction_count,
+            _ONBOARDING_DISCOVERY_LIMIT,
+        )
+        if interaction_count >= _ONBOARDING_DISCOVERY_LIMIT:
+            payload = _build_onboarding_limit_payload(interaction_count=interaction_count)
+            registrar_auditoria(
+                tipo_decisao="onboarding_discovery_limit_block",
+                decisao="bloqueio_anonimo_limite_onboarding",
+                contexto={
+                    "anon_client_id": anon_id,
+                    "interaction_count": interaction_count,
+                    "limit": _ONBOARDING_DISCOVERY_LIMIT,
+                    "authenticated": False,
+                    "path": request.path,
+                },
+                resultado="ignorado",
+                detalhe="Limite anonimo do onboarding atingido; Gemini nao chamado.",
+            )
+            return jsonify(payload)
 
     orig_identidade = get_consumo_identidade()
     try:
@@ -1063,6 +1210,16 @@ def api_onboarding_discovery():
             history,
             cta_id=cta_id,
         )
+        _store_onboarding_julia_context(user_message, result)
+        if not current_user.is_authenticated:
+            next_count = _increment_onboarding_interaction_count()
+            _attach_anonymous_discovery_counters(result, interaction_count=next_count)
+            logger.info(
+                "Onboarding discovery response | anon_client_id=%s | count_after=%s | remaining=%s",
+                _get_or_create_onboarding_anon_id(),
+                next_count,
+                max(0, _ONBOARDING_DISCOVERY_LIMIT - next_count),
+            )
         result["onboarding"] = True
         return jsonify(result)
     except Exception as e:
@@ -1077,6 +1234,29 @@ def api_onboarding_discovery():
             set_consumo_identidade(orig_identidade)
         else:
             set_consumo_identidade(identidade_http_anonimo())
+
+
+@app.route('/api/onboarding_discovery/reset', methods=['POST'])
+def api_onboarding_discovery_reset():
+    anon_id = _get_or_create_onboarding_anon_id() if not current_user.is_authenticated else None
+    previous_count = _get_onboarding_interaction_count()
+    _reset_onboarding_discovery_state(rotate_anon_id=not current_user.is_authenticated)
+    logging.info(
+        "Onboarding discovery reset | authenticated=%s | previous_count=%s | anon_client_id=%s",
+        bool(getattr(current_user, "is_authenticated", False)),
+        previous_count,
+        anon_id,
+    )
+    return jsonify({
+        "ok": True,
+        "onboarding": True,
+        "reset": True,
+        "previous_count": previous_count,
+        "anonymous_interaction_count": 0,
+        "anonymous_interaction_limit": _ONBOARDING_DISCOVERY_LIMIT,
+        "anonymous_interactions_remaining": _ONBOARDING_DISCOVERY_LIMIT,
+        "limit_reached": False,
+    })
 
 
 # --- API Chat Júlia (backend modular run_julia_chat) ---

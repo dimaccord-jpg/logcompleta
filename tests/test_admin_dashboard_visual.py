@@ -27,9 +27,20 @@ def test_dashboard_renderiza_sem_bloco_de_insight(monkeypatch):
         "app.services.ia_metrics_service.get_ia_dashboard_payload",
         lambda _ano, _mes: {
             "month_competence": "2026-05",
-            "total_tokens_month": 0,
+            "total_tokens_month": 1800,
+            "operational_tokens_month": 1800,
+            "onboarding_tokens_month": 4200,
+            "total_internal_tokens_month": 6000,
             "tokens_by_api_key": {},
             "cleide_processing": {},
+            "onboarding_discovery_ia": {
+                "total_tokens_month": 4200,
+                "event_count_month": 3,
+                "event_count_with_metrics_month": 1,
+                "event_count_without_metrics_month": 2,
+                "failure_event_count_month": 1,
+                "tokens_by_api_key": {"GEMINI_API_KEY": 4200},
+            },
         },
     )
     monkeypatch.setattr(
@@ -44,8 +55,18 @@ def test_dashboard_renderiza_sem_bloco_de_insight(monkeypatch):
     assert "Insight Estratégico (Customer Insight)" not in html
     assert "Recomendações recentes" not in html
     assert "Consumo de IA (Cleiton)" in html
-    assert "Onboarding Discovery" in html
+    assert "Visao consolidada do consumo interno de IA" in html
+    assert "Tokens operacionais no mes" in html
+    assert "Tokens onboarding no mes" in html
+    assert "Total interno de IA no mes" in html
+    assert "Consumo IA - Onboarding" in html
+    assert "Conta como consumo interno de IA, mas nao abate franquia do cliente." in html
+    assert "Analise de termos do onboarding" in html
     assert "frete" in html
+    assert "4200" in html.replace(",", "")
+    assert "6000" in html.replace(",", "")
+    assert "2 sem metrica" in html
+    assert "1 falha(s)" in html
 
 
 def test_admin_pautas_permanece_acessivel(monkeypatch):

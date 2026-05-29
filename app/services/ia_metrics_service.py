@@ -14,6 +14,7 @@ from app.models import IaBillingCostSnapshot, IaConsumoEvento, ProcessingEvent
 
 # Excluído do consolidado administrativo mensal de IA produtiva (permanece em IaConsumoEvento).
 FLOW_TYPE_ONBOARDING_DISCOVERY = "onboarding_discovery"
+FAILURE_STATUSES = ("failure", "error")
 
 
 def _operational_ia_month_scope(*conditions):
@@ -38,6 +39,67 @@ def _month_datetime_bounds(year: int, month: int) -> tuple[datetime, datetime]:
     else:
         end = datetime(year, month + 1, 1, 0, 0, 0)
     return start, end
+
+
+def aggregate_onboarding_discovery_metrics(year: int, month: int) -> dict[str, Any]:
+    """
+    Tokens de onboarding discovery (controle interno/admin).
+    Separado do consolidado operacional produtivo do cliente.
+    """
+    start, end = _month_datetime_bounds(year, month)
+    month_bounds = and_(
+        IaConsumoEvento.occurred_at >= start,
+        IaConsumoEvento.occurred_at < end,
+        IaConsumoEvento.flow_type == FLOW_TYPE_ONBOARDING_DISCOVERY,
+    )
+
+    total_tokens = int(
+        db.session.query(func.coalesce(func.sum(IaConsumoEvento.total_tokens), 0))
+        .filter(month_bounds, IaConsumoEvento.total_tokens.isnot(None))
+        .scalar()
+        or 0
+    )
+
+    by_key_rows = (
+        db.session.query(
+            IaConsumoEvento.api_key_label,
+            func.coalesce(func.sum(IaConsumoEvento.total_tokens), 0),
+        )
+        .filter(month_bounds, IaConsumoEvento.total_tokens.isnot(None))
+        .group_by(IaConsumoEvento.api_key_label)
+        .all()
+    )
+    tokens_by_api_key = {str(row[0]): int(row[1] or 0) for row in by_key_rows}
+
+    event_count = (
+        db.session.query(func.count(IaConsumoEvento.id))
+        .filter(month_bounds)
+        .scalar()
+    )
+    success_events = (
+        db.session.query(func.count(IaConsumoEvento.id))
+        .filter(month_bounds, IaConsumoEvento.status == "success")
+        .scalar()
+    )
+    events_without_metrics = (
+        db.session.query(func.count(IaConsumoEvento.id))
+        .filter(month_bounds, IaConsumoEvento.total_tokens.is_(None))
+        .scalar()
+    )
+    failure_events = (
+        db.session.query(func.count(IaConsumoEvento.id))
+        .filter(month_bounds, IaConsumoEvento.status.in_(FAILURE_STATUSES))
+        .scalar()
+    )
+
+    return {
+        "total_tokens_month": total_tokens,
+        "tokens_by_api_key": tokens_by_api_key,
+        "event_count_month": int(event_count or 0),
+        "event_count_with_metrics_month": int(success_events or 0),
+        "event_count_without_metrics_month": int(events_without_metrics or 0),
+        "failure_event_count_month": int(failure_events or 0),
+    }
 
 
 def aggregate_month_metrics(year: int, month: int) -> dict[str, Any]:
@@ -205,6 +267,7 @@ def get_ia_dashboard_payload(year: int, month: int) -> dict[str, Any]:
     cpt = cost_per_token(cost, total_tok) if cost is not None else None
     proc = aggregate_processing_metrics_month(year, month)
     cleide_proc = aggregate_cleide_processing_metrics_month(year, month)
+    onboarding_ia = aggregate_onboarding_discovery_metrics(year, month)
     from app.services.cleiton_cost_service import total_processing_estimated_cost_month
 
     proc_cost = total_processing_estimated_cost_month(year, month)
@@ -214,16 +277,21 @@ def get_ia_dashboard_payload(year: int, month: int) -> dict[str, Any]:
         agent="cleide",
         flow_type="upload_fretes",
     )
+    total_internal_tokens_month = int((agg.get("total_tokens_month") or 0) + (onboarding_ia.get("total_tokens_month") or 0))
     return {
         **agg,
         "cost_total_month": float(cost) if cost is not None else None,
         "currency": cur,
         "cost_snapshot_at": snap_at,
         "cost_per_token": cpt,
+        "operational_tokens_month": int(agg.get("total_tokens_month") or 0),
+        "onboarding_tokens_month": int(onboarding_ia.get("total_tokens_month") or 0),
+        "total_internal_tokens_month": total_internal_tokens_month,
         **proc,
         **proc_cost,
         "cleide_processing": {
             **cleide_proc,
             **cleide_proc_cost,
         },
+        "onboarding_discovery_ia": onboarding_ia,
     }

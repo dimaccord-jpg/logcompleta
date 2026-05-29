@@ -2,13 +2,17 @@
 
 
 
-{% block title %}Chat da Júlia: inteligência logística e frete | Agentefrete{% endblock %}
+{% block title %}{% if julia_chat_surface == 'operational' %}Consultoria logística com a Júlia | Agentefrete{% else %}Copilot do AgenteFrete | Discovery logístico{% endif %}{% endblock %}
 
 
 
 {% block meta_description %}
 
-Converse com a Júlia sobre frete, logística e transporte rodoviário. Indicadores econômicos em tempo real no Agentefrete.
+{% if julia_chat_surface == 'operational' %}
+Converse com a Júlia sobre frete, logística, supply chain e planejamento no Agentefrete.
+{% else %}
+Converse com o Copilot do AgenteFrete para descobrir o melhor caminho para sua operação logística.
+{% endif %}
 
 {% endblock %}
 
@@ -258,9 +262,13 @@ Converse com a Júlia sobre frete, logística e transporte rodoviário. Indicado
 
   window.JULIA_CHAT_LOGIN_URL = {{ url_for('login')|tojson }};
 
+  {% if julia_chat_surface != 'operational' %}
   window.ONBOARDING_DISCOVERY_MODE = true;
 
   window.ONBOARDING_DISCOVERY_API = '/api/onboarding_discovery';
+  window.ONBOARDING_DISCOVERY_RESET_API = '/api/onboarding_discovery/reset';
+  window.ONBOARDING_DISCOVERY_STATE = {{ onboarding_discovery_state|tojson|safe }};
+  {% endif %}
 
 </script>
 

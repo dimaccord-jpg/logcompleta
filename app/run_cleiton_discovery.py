@@ -1,9 +1,8 @@
 """
-Cleiton Discovery AI — descoberta de intenção e handoff para onboarding inteligente.
+Copilot Discovery — motor conversational-first para onboarding na Home.
 
-Fluxo: intenção → capability candidates → ranking → refinamento → destination ranking → handoff.
-Toda chamada LLM passa por run_cleiton_gemini_governance (agent=cleiton, flow_type=onboarding_discovery).
-Cleiton NÃO resolve o problema operacional; apenas descobre, refina e encaminha.
+Fluxo: mensagem + histórico + documento de capacidades → Gemini → resposta natural
+com handoff opcional. Guardrails no backend; sem taxonomia/regex como motor principal.
 """
 from __future__ import annotations
 
@@ -13,27 +12,18 @@ import os
 import re
 from typing import Any
 
-from app.capability_taxonomy import (
-    CAPABILITY_DOMAINS_MVP,
-    CAPABILITY_MODES,
-    CTA_BY_ID,
-    DESTINATIONS,
-    DOMAIN_LABELS,
-    MODE_LABELS,
-    compute_confidence_level,
-    decide_next_action,
-    get_capability_availability,
-    get_cta_by_id,
-    is_ambiguous_logistics_intent,
-    is_clear_editorial_market_intent,
-    is_clear_forecast_planning_intent,
-    is_clear_freight_bi_intent,
-    is_clear_operational_audit_intent,
-    is_future_capability_intent,
-    rank_destinations_from_capabilities,
-)
+from app.capability_taxonomy import CTA_BY_ID, DESTINATIONS
 from app.consumo_identidade import get_consumo_identidade
+from app.copilot_capabilities import (
+    VALID_RECOMMENDED_AGENTS,
+    agent_to_destination,
+    build_local_conversational_reply,
+    load_capabilities_document,
+    should_suppress_handoff_for_unclear_activity,
+)
+from app.run_cleiton_gemini_governance import STATUS_SUCCESS_NO_METRICS
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
+from app.run_cleiton_gemini_governance import register_internal_ia_event
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
 from app.utils.onboarding_text_normalization import (
     extract_user_terms_normalized,
@@ -42,78 +32,54 @@ from app.utils.onboarding_text_normalization import (
 
 logger = logging.getLogger(__name__)
 
-CLEITON_DISCOVERY_SYSTEM_PROMPT = """
-Você é o Cleiton, camada de descoberta inteligente do Agentefrete.
+FLOW_TYPE_ONBOARDING_DISCOVERY = "onboarding_discovery"
+AGENT_CLEITON = "cleiton"
 
-Sua função NÃO é resolver o problema operacional do usuário.
-Você deve interpretar a intenção, reconhecer o caminho mais provável e encaminhar com assertividade quando houver clareza.
+VALID_CONFIDENCE = frozenset({"high", "medium", "low"})
+VALID_DESTINATIONS = frozenset(DESTINATIONS.keys())
 
-REGRAS DE RESPOSTA (obrigatórias):
-- NUNCA use a mesma resposta genérica para intenções diferentes.
-- NUNCA liste todos os caminhos quando a intenção for clara.
-- NUNCA prometa funcionalidade futura como se já existisse.
-- Respostas curtas, contextuais e consultivas em português BR.
-- NUNCA encaminhe diretamente para agentes (Roberto, Cleide, Júlia) na resposta; fale em capabilities e caminhos de trabalho.
+BANNED_REPLY_PATTERNS = (
+    re.compile(r"Existem algumas formas de trabalhar esse tema", re.IGNORECASE),
+    re.compile(
+        r"^(?:📊|🔎|📈|🧠|📰)\s*(?:BI operacional|auditoria operacional|previsibilidade|estratégia|notícias)",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+)
 
-MATRIZ DE CAPABILITIES (MVP):
-- freight_bi (disponível): BI, custo, indicadores, dados de frete, dashboard → caminho Fretes/BI operacional.
-- forecast_planning (disponível): previsão, previsibilidade, comportamento de frete → caminho Fretes/previsibilidade.
-- operational_audit (disponível): auditoria, investigação, anomalia, transportadora, desvio, concentração → caminho Auditoria operacional.
-- strategic_logistics (disponível): estratégia, planejamento amplo, logística, supply chain, negociação consultiva → caminho Consultoria estratégica.
-- editorial_market (disponível): notícias, tendências, mercado, artigos → caminho Feed.
-
-CAPABILITIES FUTURAS (ainda NÃO disponíveis — seja honesto):
-- future_quotation: cotação de frete → informar indisponibilidade e oferecer alternativas reais (freight_bi, forecast_planning, strategic_logistics).
-- future_bid: BID de frete → informar indisponibilidade e oferecer alternativas reais.
-
-QUANDO A INTENÇÃO FOR CLARA E EXISTIR NO PRODUTO:
-- Reconheça a intenção explicitamente.
-- Sugira o caminho mais provável (um principal).
-- Ofereça CTA direto na reply.
-- NÃO liste todas as opções.
-- NÃO peça contexto só para descobrir destino.
-- Exemplos claros: "quero previsão de frete", "preciso de BI de frete", "analisar custo de frete", "quero auditar minha operação", "quero notícias".
-
-QUANDO A INTENÇÃO FOR AMBÍGUA:
-- Ofereça 2 a 4 hipóteses (BI, auditoria, previsibilidade, estratégia).
-- Peça refinamento; não finja certeza.
-- Exemplos ambíguos: "quero reduzir custo", "quero melhorar logística", "minha operação está ruim", "quero otimizar frete".
-
-QUANDO A FUNCIONALIDADE NÃO EXISTIR (ex.: cotação de frete):
-- Diga claramente que ainda não está disponível no AgenteFrete.
-- Ofereça alternativas existentes: BI de frete, análise de custo, previsibilidade ou estratégia logística.
-- NÃO prometa cotação automatizada.
-
-Modos de capability: discover, explain, analyze, audit, forecast, generate_exec_output
-
-Responda SEMPRE com um único JSON válido (sem markdown, sem texto fora do JSON) neste formato:
+COPILOT_JSON_CONTRACT = """
+Responda SEMPRE com um único JSON válido (sem markdown, sem texto fora do JSON):
 {
-  "reply": "texto contextual curto para o usuário",
-  "capability_candidates": [
-    {"domain": "freight_bi", "mode": "analyze", "score": 88, "rationale": "breve"}
-  ],
-  "refinement_options": ["opção curta 1", "opção curta 2"],
-  "user_confirmed": false,
-  "suggested_capability_mode": "analyze"
+  "reply": "resposta natural em português BR",
+  "recommended_agent": "roberto" | "cleide" | "julia" | "feed" | null,
+  "handoff": {
+    "destination": "roberto_bi" | "cleide_audit" | "julia_operational" | "feed",
+    "label": "rótulo curto do botão (opcional)"
+  } | null,
+  "handoffs": [
+    {"destination": "...", "label": "..."}
+  ] | null,
+  "needs_login": false,
+  "confidence": "high" | "medium" | "low",
+  "reason": "breve justificativa interna"
 }
 
 Regras do JSON:
-- capability_candidates: 2 a 5 itens, scores decrescentes; domain deve ser domínio MVP ou future_* quando aplicável.
-- Para intenção clara disponível: top score alto (>= 85), gap claro vs segundo candidato, refinement_options vazio.
-- Para intenção ambígua: scores próximos, refinement_options com 2 a 4 hipóteses.
-- Para future_quotation/future_bid: incluir domínio future_* no topo; refinement_options com alternativas reais.
-- user_confirmed: true apenas se o usuário escolheu explicitamente um caminho na última mensagem.
+- reply: conversacional; nunca menu fixo; nunca começar com "Existem algumas formas de trabalhar esse tema".
+- recommended_agent: só quando fizer sentido; null para cumprimentos, curiosidade genérica ou falta de contexto.
+- handoff / handoffs: opcionais; omita ou null se não houver recomendação real de navegação.
+- handoffs: use para oferecer dois caminhos (ex.: Júlia + Roberto em tema macro+frete), no máximo 2.
+- needs_login: true apenas para continuidade operacional real com Júlia; default false.
+- Não prometa cotação automatizada, BID ou funcionalidades inexistentes.
 """.strip()
 
-GENERIC_DISCOVERY_REPLY_PATTERN = re.compile(
-    r"Existem algumas formas de trabalhar esse tema",
-    re.IGNORECASE,
+FALLBACK_UNAVAILABLE_REPLY = (
+    "Estou com dificuldade para responder agora. "
+    "Tente reformular sua pergunta ou aguarde um instante."
 )
 
-CONFIRMATION_PATTERNS = re.compile(
-    r"\b(sim|confirmo|esse caminho|quero (?:o|a|esse|essa)|pode ser|vamos (?:com|para|de)|"
-    r"prefiro|escolho|bi operacional|auditoria|previsib|estrat[eé]gia|not[ií]cias|feed)\b",
-    re.IGNORECASE,
+EMPTY_MESSAGE_REPLY = (
+    "Olá! Sou o Copilot do AgenteFrete. "
+    "Conte o que você quer entender ou resolver na sua operação logística."
 )
 
 
@@ -123,6 +89,11 @@ def _api_key_label() -> str:
     if os.getenv("GEMINI_API_KEY"):
         return "GEMINI_API_KEY"
     return "unknown"
+
+
+def _gemini_api_key() -> str | None:
+    key = (os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY") or "").strip()
+    return key or None
 
 
 def _get_chat_model_candidates() -> list[str]:
@@ -141,7 +112,7 @@ def _get_chat_model_candidates() -> list[str]:
 
 
 def _get_client():
-    key = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
+    key = _gemini_api_key()
     if not key:
         return None
     try:
@@ -155,9 +126,15 @@ def _get_client():
                 timeout_ms = max(1_000, int(raw))
             except ValueError:
                 pass
-        return genai.Client(api_key=key, http_options=genai_types.HttpOptions(timeout_ms=timeout_ms))
+        try:
+            return genai.Client(
+                api_key=key,
+                http_options=genai_types.HttpOptions(timeout=timeout_ms),
+            )
+        except Exception:
+            return genai.Client(api_key=key)
     except Exception as e:
-        logger.error("Cleiton Discovery: falha ao inicializar cliente Gemini: %s", e)
+        logger.error("Copilot Discovery: falha ao inicializar cliente Gemini: %s", e)
         return None
 
 
@@ -185,248 +162,337 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _normalize_candidates(raw: list | None, seed_domains: list[str] | None = None) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    seen_domains: set[str] = set()
-    for item in raw or []:
-        if not isinstance(item, dict):
-            continue
-        domain = str(item.get("domain") or "").strip()
-        if domain not in CAPABILITY_DOMAINS_MVP:
-            continue
-        mode = str(item.get("mode") or "discover").strip()
-        if mode not in CAPABILITY_MODES:
-            mode = "discover"
+def _parse_gemini_response(raw_text: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Tenta JSON completo, campo reply parcial ou texto puro recuperável."""
+    text = (raw_text or "").strip()
+    if not text:
+        return None, "empty_response"
+
+    parsed = _extract_json_object(text)
+    if parsed and (parsed.get("reply") or parsed.get("recommended_agent") is not None):
+        return parsed, None
+
+    reply_match = re.search(
+        r'"reply"\s*:\s*"((?:\\.|[^"\\])*)"',
+        text,
+        flags=re.DOTALL,
+    )
+    if reply_match:
         try:
-            score = float(item.get("score") or 0)
-        except (TypeError, ValueError):
-            score = 0.0
-        score = max(0.0, min(100.0, score))
-        seen_domains.add(domain)
-        out.append({
-            "domain": domain,
-            "mode": mode,
-            "score": round(score, 1),
-            "label": DOMAIN_LABELS.get(domain, domain),
-            "mode_label": MODE_LABELS.get(mode, mode),
-            "rationale": (item.get("rationale") or "").strip()[:200],
-        })
-    out.sort(key=lambda x: x["score"], reverse=True)
+            reply = json.loads(f'"{reply_match.group(1)}"')
+            if isinstance(reply, str) and reply.strip():
+                recovered = dict(parsed or {})
+                recovered["reply"] = reply.strip()
+                recovered.setdefault("confidence", "medium")
+                recovered.setdefault("reason", "recovered_reply_field")
+                return recovered, "partial_json"
+        except json.JSONDecodeError:
+            pass
 
-    if seed_domains and len(out) < 2:
-        for i, domain in enumerate(seed_domains):
-            if domain in seen_domains or domain not in CAPABILITY_DOMAINS_MVP:
-                continue
-            out.append({
-                "domain": domain,
-                "mode": "discover",
-                "score": round(max(40.0, 65.0 - i * 8), 1),
-                "label": DOMAIN_LABELS.get(domain, domain),
-                "mode_label": MODE_LABELS.get("discover", "discover"),
-                "rationale": "Sugerido pelo contexto inicial",
-            })
-        out.sort(key=lambda x: x["score"], reverse=True)
-    return out[:5]
+    cleaned = text
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+    if cleaned and not cleaned.startswith("{") and not cleaned.startswith("["):
+        if len(cleaned) >= 8 and "Existem algumas formas de trabalhar esse tema" not in cleaned:
+            return {
+                "reply": cleaned,
+                "confidence": "medium",
+                "reason": "plain_text_response",
+            }, "plain_text"
+
+    return None, "json_parse_failed"
 
 
-def _build_discovery_prompt(
+def _build_system_prompt() -> str:
+    capabilities = load_capabilities_document()
+    return (
+        "Você é o Copilot do AgenteFrete — assistente conversacional na Home do produto.\n\n"
+        "Seu papel é conversar de forma natural, explicar o que o produto faz com honestidade "
+        "e sugerir agentes ou navegação apenas quando fizer sentido.\n\n"
+        "--- DOCUMENTO DE CAPACIDADES ---\n"
+        f"{capabilities}\n"
+        "--- FIM DO DOCUMENTO ---\n\n"
+        f"{COPILOT_JSON_CONTRACT}"
+    )
+
+
+def _build_user_prompt(
     user_message: str,
     history: list,
     *,
     cta_id: str | None = None,
-    seed_domains: list[str] | None = None,
 ) -> str:
-    parts = [CLEITON_DISCOVERY_SYSTEM_PROMPT, "\n\n---\n\nContexto da conversa:\n"]
+    parts = ["Histórico recente da conversa:\n"]
     if cta_id and cta_id in CTA_BY_ID:
-        parts.append(f"Entrada via CTA da Home (id={cta_id}) — tratar como hipótese inicial, não como destino final.\n")
-    if seed_domains:
-        parts.append(f"Domínios seed (candidatos iniciais): {', '.join(seed_domains)}\n\n")
+        parts.append(
+            f"(Usuário entrou via pill da Home: {cta_id} — use como contexto, não como destino fixo.)\n\n"
+        )
     for msg in history[-8:]:
         role = (msg.get("role") or "user").lower()
         content = (msg.get("content") or "").strip()
         if not content:
             continue
-        label = "Usuário" if role == "user" else "Cleiton"
+        label = "Usuário" if role == "user" else "Copilot"
         parts.append(f"{label}: {content}\n\n")
     parts.append(f"Usuário: {user_message.strip()}\n\n")
     parts.append("Responda apenas com o JSON especificado.")
     return "".join(parts)
 
 
-def _detect_user_confirmed(user_message: str, llm_confirmed: bool) -> bool:
-    if llm_confirmed:
-        return True
-    return bool(CONFIRMATION_PATTERNS.search(user_message or ""))
+def _is_banned_reply(text: str) -> bool:
+    return any(pattern.search(text or "") for pattern in BANNED_REPLY_PATTERNS)
+
+
+def _normalize_confidence(raw: Any) -> str:
+    value = str(raw or "low").strip().lower()
+    return value if value in VALID_CONFIDENCE else "low"
+
+
+def _normalize_recommended_agent(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if value in ("null", "none", ""):
+        return None
+    return value if value in VALID_RECOMMENDED_AGENTS else None
 
 
 def _build_handoff_payload(
-    top_dest: dict[str, Any],
-    top_cap: dict[str, Any],
+    dest_id: str,
     *,
-    suggested_mode: str | None = None,
-) -> dict[str, Any]:
-    dest_id = top_dest["destination"]
-    spec = DESTINATIONS.get(dest_id)
-    action = top_dest.get("handoff_action") or (spec.handoff_action if spec else None)
-    label = top_dest.get("label") or (spec.label if spec else dest_id)
+    label: str | None = None,
+    capability_domain: str | None = None,
+) -> dict[str, Any] | None:
+    if dest_id not in VALID_DESTINATIONS:
+        return None
+    spec = DESTINATIONS[dest_id]
     payload: dict[str, Any] = {
         "destination": dest_id,
-        "label": label,
+        "label": (label or spec.label).strip(),
         "requires_login": False,
-        "requires_dataset": top_dest.get("requires_dataset", False),
-        "capability_domain": top_cap["domain"],
-        "capability_mode": top_cap.get("mode") or suggested_mode or "discover",
+        "requires_dataset": spec.requires_dataset,
     }
-    if action == "start_julia":
+    if capability_domain:
+        payload["capability_domain"] = capability_domain
+    if spec.handoff_action == "start_julia":
         payload["action"] = "start_julia"
         payload["url"] = None
     else:
-        payload["url"] = top_dest.get("url")
+        payload["url"] = spec.url
+    if spec.agent:
+        payload["agent"] = spec.agent
     return payload
 
 
-def _infer_seed_domains_for_message(
-    user_message: str,
-    seed_domains: list[str] | None,
-    *,
-    cta_id: str | None = None,
-) -> list[str]:
-    future_domain = is_future_capability_intent(user_message, cta_id=cta_id)
-    if future_domain:
-        alts = get_capability_availability(future_domain).get("alternatives") or []
-        return list(alts[:3]) or ["freight_bi", "forecast_planning", "strategic_logistics"]
-    if is_clear_editorial_market_intent(user_message, cta_id=cta_id):
-        return ["editorial_market"]
-    if is_clear_forecast_planning_intent(user_message, cta_id=cta_id):
-        return ["forecast_planning", "freight_bi"]
-    if is_clear_freight_bi_intent(user_message, cta_id=cta_id):
-        return ["freight_bi", "forecast_planning"]
-    if is_clear_operational_audit_intent(user_message, cta_id=cta_id):
-        return ["operational_audit", "freight_bi"]
-    return seed_domains or list(CAPABILITY_DOMAINS_MVP)[:4]
+def _parse_handoff_entry(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    dest_id = str(raw.get("destination") or "").strip()
+    if dest_id not in VALID_DESTINATIONS:
+        mapped = agent_to_destination(str(raw.get("agent") or raw.get("recommended_agent") or ""))
+        dest_id = mapped or dest_id
+    if dest_id not in VALID_DESTINATIONS:
+        return None
+    label = str(raw.get("label") or "").strip() or None
+    return _build_handoff_payload(dest_id, label=label)
 
 
-def _build_contextual_discovery_reply(
-    user_message: str,
-    *,
-    cta_id: str | None = None,
-    next_action: str | None = None,
-    top_domain: str | None = None,
-) -> tuple[str, list[str]]:
-    future_domain = is_future_capability_intent(user_message, cta_id=cta_id)
-    if future_domain == "future_quotation":
-        return (
-            "Ainda não temos cotação automatizada de frete disponível no AgenteFrete. "
-            "Posso, porém, te ajudar a analisar custos atuais, entender comportamento de frete "
-            "ou preparar uma visão estratégica para apoiar negociações.",
-            [
-                "Quero analisar custos e indicadores de frete",
-                "Quero previsibilidade e comportamento de frete",
-                "Busco apoio estratégico para negociação",
-            ],
-        )
-    if future_domain == "future_bid":
-        return (
-            "Ainda não temos módulo de BID de frete disponível no AgenteFrete. "
-            "Posso te orientar com BI de frete, previsibilidade ou estratégia logística "
-            "para preparar sua operação.",
-            [
-                "Quero analisar custos e indicadores de frete",
-                "Quero previsibilidade e comportamento de frete",
-                "Busco apoio estratégico logística",
-            ],
-        )
-    if is_clear_editorial_market_intent(user_message, cta_id=cta_id, top_domain=top_domain):
-        return (
-            "Posso te levar direto ao feed de notícias e tendências do mercado logístico.",
-            [],
-        )
-    if is_clear_forecast_planning_intent(user_message, cta_id=cta_id, top_domain=top_domain):
-        return (
-            "Entendi que você quer trabalhar previsibilidade e comportamento de frete. "
-            "O caminho mais direto é o módulo de Fretes, com indicadores e visão de previsão "
-            "para apoiar seu planejamento.",
-            [],
-        )
-    if is_clear_freight_bi_intent(user_message, cta_id=cta_id, top_domain=top_domain):
-        return (
-            "Pelo que você descreveu, faz sentido começar pelo BI de fretes: custos, indicadores "
-            "e dados operacionais para analisar sua base de frete.",
-            [],
-        )
-    if is_clear_operational_audit_intent(user_message, cta_id=cta_id, top_domain=top_domain):
-        return (
-            "Parece que você precisa investigar a operação — auditoria, anomalias ou desvios "
-            "na base de fretes. Posso te encaminhar para o caminho de auditoria operacional.",
-            [],
-        )
-    if is_ambiguous_logistics_intent(user_message):
-        return (
-            "Esse tema pode ser trabalhado de formas diferentes no Agentefrete.\n\n"
-            "Algumas hipóteses:\n\n"
-            "📊 BI operacional de fretes\n"
-            "🔎 auditoria operacional\n"
-            "📈 previsibilidade e comportamento de frete\n"
-            "🧠 estratégia logística\n\n"
-            "Qual delas se aproxima mais do que você precisa agora?",
-            [
-                "Quero analisar custos e indicadores com dados",
-                "Preciso investigar anomalias na operação",
-                "Busco previsibilidade de frete",
-                "Quero visão estratégica logística",
-            ],
-        )
-    return (
-        "Existem algumas formas de trabalhar esse tema no Agentefrete.\n\n"
-        "Posso ajudar com:\n\n"
-        "📊 BI operacional de fretes\n"
-        "🔎 auditoria operacional\n"
-        "📈 previsibilidade e planejamento\n"
-        "🧠 estratégia logística\n"
-        "📰 notícias e tendências\n\n"
-        "Me conte mais sobre o que você quer analisar.",
-        [
-            "Quero analisar custos e indicadores com dados",
-            "Preciso investigar anomalias na operação",
-            "Busco visão estratégica e planejamento",
-            "Só quero acompanhar o mercado",
-        ],
+def _collect_handoffs(parsed: dict[str, Any], recommended_agent: str | None) -> list[dict[str, Any]]:
+    handoffs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    raw_multi = parsed.get("handoffs")
+    if isinstance(raw_multi, list):
+        for item in raw_multi[:2]:
+            payload = _parse_handoff_entry(item)
+            if payload and payload["destination"] not in seen:
+                seen.add(payload["destination"])
+                handoffs.append(payload)
+
+    if not handoffs:
+        single = _parse_handoff_entry(parsed.get("handoff"))
+        if single:
+            handoffs.append(single)
+
+    if not handoffs and recommended_agent:
+        dest_id = agent_to_destination(recommended_agent)
+        if dest_id:
+            payload = _build_handoff_payload(dest_id)
+            if payload:
+                handoffs.append(payload)
+
+    return handoffs
+
+
+def _should_suppress_handoff(user_message: str, confidence: str) -> bool:
+    """Evita handoff automático em cumprimentos e perguntas exploratórias vagas."""
+    text = (user_message or "").strip().lower()
+    if not text:
+        return True
+    if confidence == "low":
+        return True
+    greeting_only = re.fullmatch(
+        r"(?:ol[aá]|oi|bom\s+dia|boa\s+tarde|boa\s+noite|e\s*a[ií]|hey|hello|hi)[!.?\s]*",
+        text,
+        flags=re.IGNORECASE,
     )
+    if greeting_only:
+        return True
+    product_curiosity = re.search(
+        r"\b(?:voc[eê]s?\s+(?:tem|possui|oferece)|o\s+que\s+voc[eê]s?\s+faz|"
+        r"algum\s+bi\b|possui\s+algum\s+bi|tem\s+bi\b)\b",
+        text,
+    )
+    if product_curiosity and confidence != "high":
+        return True
+    if should_suppress_handoff_for_unclear_activity(user_message):
+        return True
+    return False
 
 
-def _maybe_contextualize_reply(
-    reply: str,
+def _apply_guardrails(
+    parsed: dict[str, Any],
     user_message: str,
     *,
-    cta_id: str | None = None,
-    next_action: str | None = None,
-    top_domain: str | None = None,
-) -> str:
-    if reply and not GENERIC_DISCOVERY_REPLY_PATTERN.search(reply):
-        return reply
-    contextual, _ = _build_contextual_discovery_reply(
-        user_message,
-        cta_id=cta_id,
-        next_action=next_action,
-        top_domain=top_domain,
-    )
-    return contextual
+    pipeline: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pipeline = pipeline or {}
+    reply = (parsed.get("reply") or "").strip()
+    guardrail_notes: list[str] = []
+
+    if _is_banned_reply(reply):
+        guardrail_notes.append("banned_reply_stripped")
+        reply = ""
+
+    confidence = _normalize_confidence(parsed.get("confidence"))
+    recommended_agent = _normalize_recommended_agent(parsed.get("recommended_agent"))
+    reason = str(parsed.get("reason") or "").strip()[:300]
+
+    handoffs = _collect_handoffs(parsed, recommended_agent)
+    if _should_suppress_handoff(user_message, confidence):
+        if handoffs:
+            guardrail_notes.append("handoff_suppressed")
+        handoffs = []
+
+    needs_login = parsed.get("needs_login") is True
+    if needs_login:
+        for h in handoffs:
+            if h.get("destination") == "julia_operational":
+                h["requires_login"] = True
+
+    fallback_reason = None
+    if not reply:
+        local = build_local_conversational_reply(user_message)
+        reply = local["reply"]
+        reason = reason or local.get("reason") or "guardrail_empty_reply_local"
+        fallback_reason = "guardrail_empty_reply_local"
+        if not handoffs and local.get("handoff"):
+            handoffs = _collect_handoffs(local, local.get("recommended_agent"))
+            if _should_suppress_handoff(user_message, _normalize_confidence(local.get("confidence"))):
+                handoffs = []
+            else:
+                guardrail_notes.append("local_handoff_from_capabilities")
+
+    next_action = "converse"
+    if len(handoffs) >= 2:
+        next_action = "multi_handoff"
+    elif len(handoffs) == 1:
+        next_action = "handoff"
+
+    handoff = handoffs[0] if len(handoffs) == 1 else None
+
+    destination_candidates = [
+        {
+            "destination": h["destination"],
+            "label": h["label"],
+            "url": h.get("url"),
+            "agent": h.get("agent"),
+            "score": 90.0,
+        }
+        for h in handoffs
+    ]
+
+    discovery: dict[str, Any] = {
+        "confidence": confidence,
+        "next_action": next_action,
+        "recommended_agent": recommended_agent,
+        "reason": reason,
+        "capability_candidates": [],
+        "needs_login": needs_login,
+        "pipeline": {
+            **pipeline,
+            "guardrail_notes": guardrail_notes,
+            "fallback_reason": fallback_reason,
+        },
+    }
+
+    return {
+        "reply": reply,
+        "recommended_agent": recommended_agent,
+        "handoff": handoff,
+        "handoffs": handoffs,
+        "refinement_options": [],
+        "destination_candidates": destination_candidates,
+        "discovery": discovery,
+    }
+
+
+def _local_fallback_response(user_message: str, *, reason: str) -> dict[str, Any]:
+    local = build_local_conversational_reply(user_message)
+    local.setdefault("needs_login", False)
+    pipeline = {
+        "gemini_called": False,
+        "fallback_reason": reason,
+        "source": "local_capabilities",
+    }
+    result = _apply_guardrails(local, user_message, pipeline=pipeline)
+    discovery = dict(result.get("discovery") or {})
+    merged_pipeline = dict(discovery.get("pipeline") or {})
+    merged_pipeline["fallback_reason"] = reason
+    merged_pipeline.setdefault("source", "local_capabilities")
+    discovery["pipeline"] = merged_pipeline
+    result["discovery"] = discovery
+    return result
+
+
+def _unavailable_response(*, reason: str = "gemini_unavailable", user_message: str = "") -> dict[str, Any]:
+    if user_message.strip():
+        return _local_fallback_response(user_message, reason=reason)
+    return {
+        "reply": FALLBACK_UNAVAILABLE_REPLY,
+        "recommended_agent": None,
+        "handoff": None,
+        "handoffs": [],
+        "refinement_options": [],
+        "destination_candidates": [],
+        "discovery": {
+            "confidence": "low",
+            "next_action": "converse",
+            "recommended_agent": None,
+            "reason": reason,
+            "capability_candidates": [],
+            "needs_login": False,
+            "pipeline": {"fallback_reason": reason, "source": "unavailable"},
+        },
+    }
 
 
 def _build_onboarding_audit_context(
     user_message: str,
     *,
     cta_id: str | None,
-    candidates: list[dict[str, Any]],
+    discovery: dict[str, Any],
     handoff: dict[str, Any] | None,
-    next_action: str,
     history_turns: int,
 ) -> dict[str, Any]:
     clean_message = (user_message or "").strip()
+    next_action = str(discovery.get("next_action") or "converse")
+    pipeline = discovery.get("pipeline") or {}
     contexto: dict[str, Any] = {
         "cta_id": cta_id,
-        "capability_top": candidates[0]["domain"] if candidates else None,
-        "capability_scores": {c["domain"]: c["score"] for c in candidates[:3]},
+        "capability_top": discovery.get("recommended_agent"),
+        "capability_scores": {},
         "destination_top": handoff["destination"] if handoff else None,
         "handoff_status": next_action,
         "handoff_action": handoff.get("action") if handoff else None,
@@ -434,6 +500,11 @@ def _build_onboarding_audit_context(
         "user_message_sanitized": sanitize_user_message(clean_message),
         "user_terms_normalized": extract_user_terms_normalized(clean_message),
         "message_length": len(clean_message),
+        "confidence": discovery.get("confidence"),
+        "reason": discovery.get("reason"),
+        "pipeline_fallback_reason": pipeline.get("fallback_reason"),
+        "pipeline_gemini_called": pipeline.get("gemini_called"),
+        "pipeline_parse_error": pipeline.get("parse_error"),
     }
     ident: dict[str, Any] | None = None
     try:
@@ -445,66 +516,55 @@ def _build_onboarding_audit_context(
     return contexto
 
 
-def _fallback_discovery_reply(
-    user_message: str,
-    seed_domains: list[str] | None,
+def _attach_onboarding_audit(
+    result: dict[str, Any],
     *,
-    cta_id: str | None = None,
+    user_message: str,
+    cta_id: str | None,
+    history_turns: int,
 ) -> dict[str, Any]:
-    domains = _infer_seed_domains_for_message(user_message, seed_domains, cta_id=cta_id)
-    future_domain = is_future_capability_intent(user_message, cta_id=cta_id)
-    if future_domain:
-        candidates = _normalize_candidates(
-            [
-                {"domain": d, "mode": "discover", "score": 82 - i * 6}
-                for i, d in enumerate(domains[:3])
-            ],
-            seed_domains=domains,
+    discovery = dict(result.get("discovery") or {})
+    handoff = result.get("handoff")
+    next_action = str(discovery.get("next_action") or "converse")
+    audit_logged = False
+    try:
+        auditoria_registrar(
+            tipo_decisao="onboarding_discovery",
+            decisao=f"confidence={discovery.get('confidence') or 'low'}; next_action={next_action}",
+            contexto=_build_onboarding_audit_context(
+                user_message,
+                cta_id=cta_id,
+                discovery=discovery,
+                handoff=handoff,
+                history_turns=history_turns,
+            ),
+            resultado="sucesso",
         )
-    else:
-        candidates = _normalize_candidates(
-            [{"domain": d, "mode": "discover", "score": 90 - i * 14} for i, d in enumerate(domains[:2])],
-            seed_domains=domains,
+        audit_logged = True
+    except Exception:
+        logger.warning(
+            "Auditoria onboarding_discovery falhou; observabilidade administrativa pode ficar incompleta.",
+            exc_info=True,
         )
-    confidence = compute_confidence_level(candidates)
-    top_domain = candidates[0]["domain"] if candidates else None
-    history_turns = 1
-    next_action = decide_next_action(
-        confidence,
-        history_turns=history_turns,
-        top_capability_domain=top_domain,
-        user_message=user_message,
-        cta_id=cta_id,
+    discovery["audit_logged"] = audit_logged
+    return {**result, "discovery": discovery}
+
+
+def _log_pipeline_trace(message: str, trace: dict[str, Any]) -> None:
+    logger.info(
+        "Copilot pipeline | msg=%r | capabilities_loaded=%s | doc_len=%s | "
+        "api_key=%s | client=%s | gemini_called=%s | parse_error=%s | "
+        "fallback_reason=%s | reply_preview=%r",
+        message[:80],
+        trace.get("capabilities_doc_loaded"),
+        trace.get("capabilities_doc_len"),
+        trace.get("gemini_api_key_present"),
+        trace.get("gemini_client_present"),
+        trace.get("gemini_called"),
+        trace.get("parse_error"),
+        trace.get("fallback_reason"),
+        (trace.get("reply_preview") or "")[:120],
     )
-    destination_candidates = rank_destinations_from_capabilities(candidates)
-    handoff = None
-    if next_action == "handoff" and destination_candidates and not future_domain:
-        handoff = _build_handoff_payload(destination_candidates[0], candidates[0])
-
-    reply, refinement_options = _build_contextual_discovery_reply(
-        user_message,
-        cta_id=cta_id,
-        next_action=next_action,
-        top_domain=top_domain,
-    )
-
-    discovery_extra: dict[str, Any] = {}
-    if future_domain:
-        discovery_extra["future_capability"] = future_domain
-        discovery_extra["availability"] = get_capability_availability(future_domain)
-
-    return {
-        "reply": reply,
-        "discovery": {
-            "capability_candidates": candidates,
-            "confidence": confidence,
-            "next_action": next_action,
-            **discovery_extra,
-        },
-        "destination_candidates": destination_candidates,
-        "handoff": handoff,
-        "refinement_options": refinement_options,
-    }
 
 
 def cleiton_discovery_reply(
@@ -514,142 +574,137 @@ def cleiton_discovery_reply(
     cta_id: str | None = None,
 ) -> dict[str, Any]:
     """
-    Processa uma mensagem de descoberta via Cleiton + Gemini governado.
-    Retorna reply natural + metadados de discovery/handoff para o frontend.
+    Processa mensagem do Copilot via Gemini governado + guardrails.
+    Retorna reply natural + metadados opcionais de handoff para o frontend.
     """
     history_list = list(history) if isinstance(history, list) else []
     clean_message = (user_message or "").strip()
-    if not clean_message:
-        return _fallback_discovery_reply("", None, cta_id=cta_id)
+    history_turns = len([m for m in history_list if (m.get("role") or "").lower() == "user"]) + 1
 
-    cta = get_cta_by_id(cta_id)
-    seed_domains = list(cta.get("seed_domains") or []) if cta else None
+    capabilities_doc = load_capabilities_document()
+    pipeline_trace: dict[str, Any] = {
+        "capabilities_doc_loaded": bool(capabilities_doc),
+        "capabilities_doc_len": len(capabilities_doc),
+        "gemini_api_key_present": bool(_gemini_api_key()),
+        "gemini_client_present": False,
+        "gemini_called": False,
+        "prompt_len": 0,
+        "raw_response_len": 0,
+        "raw_response_preview": None,
+        "parse_error": None,
+        "parse_mode": None,
+        "fallback_reason": None,
+    }
+
+    if not clean_message:
+        empty = {
+            "reply": EMPTY_MESSAGE_REPLY,
+            "recommended_agent": None,
+            "handoff": None,
+            "handoffs": [],
+            "refinement_options": [],
+            "destination_candidates": [],
+            "discovery": {
+                "confidence": "low",
+                "next_action": "converse",
+                "recommended_agent": None,
+                "reason": "empty_message",
+                "capability_candidates": [],
+                "needs_login": False,
+                "pipeline": pipeline_trace,
+            },
+        }
+        return _attach_onboarding_audit(
+            empty,
+            user_message="",
+            cta_id=cta_id,
+            history_turns=history_turns,
+        )
 
     client = _get_client()
-    if not client:
-        logger.warning("Cleiton Discovery: Gemini não configurado.")
-        return _fallback_discovery_reply(clean_message, seed_domains, cta_id=cta_id)
+    pipeline_trace["gemini_client_present"] = client is not None
 
-    contents = _build_discovery_prompt(
-        clean_message,
-        history_list,
-        cta_id=cta_id,
-        seed_domains=seed_domains,
-    )
+    if not client:
+        fallback_reason = "no_gemini_key" if not _gemini_api_key() else "client_init_failed"
+        pipeline_trace["fallback_reason"] = fallback_reason
+        register_internal_ia_event(
+            operation="onboarding_discovery_fallback",
+            model="",
+            agent=AGENT_CLEITON,
+            flow_type=FLOW_TYPE_ONBOARDING_DISCOVERY,
+            api_key_label="fallback_no_gemini" if fallback_reason == "no_gemini_key" else "client_init_failed",
+            status=STATUS_SUCCESS_NO_METRICS,
+        )
+        logger.warning(
+            "Copilot Discovery: Gemini indisponível (%s). Usando fallback local.",
+            fallback_reason,
+        )
+        result = _local_fallback_response(clean_message, reason=fallback_reason)
+        pipeline_trace["reply_preview"] = result.get("reply")
+        _log_pipeline_trace(clean_message, {**pipeline_trace, **(result.get("discovery", {}).get("pipeline") or {})})
+        return _attach_onboarding_audit(
+            result,
+            user_message=clean_message,
+            cta_id=cta_id,
+            history_turns=history_turns,
+        )
+
+    system_prompt = _build_system_prompt()
+    user_prompt = _build_user_prompt(clean_message, history_list, cta_id=cta_id)
+    contents = f"{system_prompt}\n\n---\n\n{user_prompt}"
+    pipeline_trace["prompt_len"] = len(contents)
 
     parsed: dict[str, Any] | None = None
     last_error: Exception | None = None
+    raw_response_text = ""
     for model in _get_chat_model_candidates():
         try:
+            pipeline_trace["gemini_called"] = True
             response = cleiton_governed_generate_content(
                 client,
                 model=model,
                 contents=contents,
-                agent="cleiton",
-                flow_type="onboarding_discovery",
+                agent=AGENT_CLEITON,
+                flow_type=FLOW_TYPE_ONBOARDING_DISCOVERY,
                 api_key_label=_api_key_label(),
             )
-            parsed = _extract_json_object((response.text or "").strip())
+            raw_response_text = (response.text or "").strip()
+            pipeline_trace["raw_response_len"] = len(raw_response_text)
+            pipeline_trace["raw_response_preview"] = raw_response_text[:240]
+            parsed, parse_error = _parse_gemini_response(raw_response_text)
+            pipeline_trace["parse_error"] = parse_error
             if parsed:
+                pipeline_trace["parse_mode"] = "json" if parse_error is None else parse_error
                 break
-            last_error = ValueError("Resposta JSON vazia ou inválida")
+            last_error = ValueError(parse_error or "Resposta JSON vazia ou inválida")
         except Exception as e:
             last_error = e
-            logger.warning("Cleiton Discovery modelo %s: %s", model, e)
+            pipeline_trace["parse_error"] = str(e)[:200]
+            logger.warning("Copilot Discovery modelo %s: %s", model, e)
 
     if not parsed:
         if last_error:
-            logger.exception("Cleiton Discovery falhou: %s", last_error)
-        return _fallback_discovery_reply(clean_message, seed_domains, cta_id=cta_id)
+            logger.exception("Copilot Discovery falhou: %s", last_error)
+        pipeline_trace["fallback_reason"] = "gemini_parse_failed"
+        result = _local_fallback_response(clean_message, reason="gemini_parse_failed")
+        pipeline_trace["reply_preview"] = result.get("reply")
+        discovery = dict(result.get("discovery") or {})
+        discovery["pipeline"] = {**(discovery.get("pipeline") or {}), **pipeline_trace}
+        result["discovery"] = discovery
+        _log_pipeline_trace(clean_message, pipeline_trace)
+        return _attach_onboarding_audit(
+            result,
+            user_message=clean_message,
+            cta_id=cta_id,
+            history_turns=history_turns,
+        )
 
-    candidates = _normalize_candidates(parsed.get("capability_candidates"), seed_domains=seed_domains)
-    if not candidates:
-        return _fallback_discovery_reply(clean_message, seed_domains, cta_id=cta_id)
-
-    confidence = compute_confidence_level(candidates)
-    user_confirmed = _detect_user_confirmed(
-        clean_message,
-        bool(parsed.get("user_confirmed")),
-    )
-    history_turns = len([m for m in history_list if (m.get("role") or "").lower() == "user"]) + 1
-    top_domain = candidates[0]["domain"] if candidates else None
-    next_action = decide_next_action(
-        confidence,
-        user_confirmed=user_confirmed,
-        history_turns=history_turns,
-        top_capability_domain=top_domain,
+    result = _apply_guardrails(parsed, clean_message, pipeline=pipeline_trace)
+    pipeline_trace["reply_preview"] = result.get("reply")
+    _log_pipeline_trace(clean_message, pipeline_trace)
+    return _attach_onboarding_audit(
+        result,
         user_message=clean_message,
         cta_id=cta_id,
+        history_turns=history_turns,
     )
-
-    destination_candidates = rank_destinations_from_capabilities(candidates)
-    handoff = None
-    future_domain = is_future_capability_intent(clean_message, cta_id=cta_id)
-    if next_action == "handoff" and destination_candidates and not future_domain:
-        handoff = _build_handoff_payload(
-            destination_candidates[0],
-            candidates[0],
-            suggested_mode=parsed.get("suggested_capability_mode"),
-        )
-
-    refinement_options = parsed.get("refinement_options") or []
-    if not isinstance(refinement_options, list):
-        refinement_options = []
-    refinement_options = [str(o).strip() for o in refinement_options if str(o).strip()][:4]
-
-    reply = (parsed.get("reply") or "").strip()
-    if not reply:
-        fallback = _fallback_discovery_reply(clean_message, seed_domains, cta_id=cta_id)
-        reply = fallback["reply"]
-        if not refinement_options:
-            refinement_options = fallback.get("refinement_options") or []
-    else:
-        reply = _maybe_contextualize_reply(
-            reply,
-            clean_message,
-            cta_id=cta_id,
-            next_action=next_action,
-            top_domain=top_domain,
-        )
-
-    if future_domain and not refinement_options:
-        _, refinement_options = _build_contextual_discovery_reply(
-            clean_message,
-            cta_id=cta_id,
-            next_action=next_action,
-            top_domain=top_domain,
-        )
-
-    discovery_payload: dict[str, Any] = {
-        "capability_candidates": candidates,
-        "confidence": confidence,
-        "next_action": next_action,
-    }
-    if future_domain:
-        discovery_payload["future_capability"] = future_domain
-        discovery_payload["availability"] = get_capability_availability(future_domain)
-
-    try:
-        auditoria_registrar(
-            tipo_decisao="onboarding_discovery",
-            decisao=f"confidence={confidence}; next_action={next_action}",
-            contexto=_build_onboarding_audit_context(
-                clean_message,
-                cta_id=cta_id,
-                candidates=candidates,
-                handoff=handoff,
-                next_action=next_action,
-                history_turns=history_turns,
-            ),
-            resultado="sucesso",
-        )
-    except Exception:
-        logger.debug("Auditoria onboarding_discovery ignorada (sem persistência).", exc_info=True)
-
-    return {
-        "reply": reply,
-        "discovery": discovery_payload,
-        "destination_candidates": destination_candidates,
-        "handoff": handoff,
-        "refinement_options": refinement_options,
-    }
