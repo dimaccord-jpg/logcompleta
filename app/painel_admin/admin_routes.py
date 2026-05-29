@@ -151,9 +151,11 @@ def admin_dashboard():
         limite=15
     )
     from app.services.ia_metrics_service import get_ia_dashboard_payload
+    from app.services.onboarding_admin_analytics_service import get_onboarding_word_cloud
 
     _today = date.today()
     ia_metrics = get_ia_dashboard_payload(_today.year, _today.month)
+    onboarding_word_cloud = get_onboarding_word_cloud(limit=40, days=30)
     return render_template(
         "dashboard.html",
         dash_metrics=dash_metrics,
@@ -165,7 +167,49 @@ def admin_dashboard():
         kpis_insight=kpis_insight,
         recomendacoes_recentes=recomendacoes_recentes,
         ia_metrics=ia_metrics,
+        onboarding_word_cloud=onboarding_word_cloud,
     )
+
+
+@admin_bp.route("/onboarding-word-cloud/hidden-terms", methods=["POST"])
+@login_required
+def onboarding_word_cloud_hide_term():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services.onboarding_word_cloud_hidden_terms_service import (
+        InvalidHiddenTermError,
+        hide_term,
+    )
+
+    raw_term = (request.form.get("term") or "").strip()
+    try:
+        row = hide_term(raw_term, hidden_by_user_id=getattr(current_user, "id", None))
+        flash(f'Termo "{row.term_normalized}" ocultado da nuvem do onboarding.', "success")
+    except InvalidHiddenTermError as exc:
+        flash(str(exc), "warning")
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"Erro ao ocultar termo: {exc}", "danger")
+    return redirect(url_for("admin.admin_dashboard"))
+
+
+@admin_bp.route("/onboarding-word-cloud/hidden-terms/<int:term_id>/restore", methods=["POST"])
+@login_required
+def onboarding_word_cloud_restore_term(term_id: int):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services.onboarding_word_cloud_hidden_terms_service import restore_hidden_term
+
+    try:
+        row = restore_hidden_term(term_id)
+        if row is None:
+            flash("Termo oculto nao encontrado ou ja reexibido.", "warning")
+        else:
+            flash(f'Termo "{row.term_normalized}" reexibido na nuvem do onboarding.', "success")
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"Erro ao reexibir termo: {exc}", "danger")
+    return redirect(url_for("admin.admin_dashboard"))
 
 
 @admin_bp.route("/dashboard/auditoria-clientes.csv")

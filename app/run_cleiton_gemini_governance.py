@@ -22,6 +22,7 @@ OP_GENERATE_IMAGES = "generate_images"
 STATUS_SUCCESS = "success"
 STATUS_SUCCESS_NO_METRICS = "success_no_metrics"
 STATUS_FAILURE = "failure"
+PROVIDER_INTERNAL = "internal"
 
 
 def _truncate_err(msg: str | None, limit: int = 2000) -> str | None:
@@ -33,25 +34,30 @@ def _truncate_err(msg: str | None, limit: int = 2000) -> str | None:
     return s[: limit - 3] + "..."
 
 
+def _coerce_usage_value(source: Any, *names: str) -> int | None:
+    for name in names:
+        value = None
+        if isinstance(source, dict):
+            value = source.get(name)
+        else:
+            value = getattr(source, name, None)
+        try:
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _extract_usage_from_response(response: Any) -> tuple[int | None, int | None, int | None]:
     um = getattr(response, "usage_metadata", None)
+    if um is None and isinstance(response, dict):
+        um = response.get("usage_metadata") or response.get("usageMetadata")
     if um is None:
         return None, None, None
-    inp = getattr(um, "prompt_token_count", None)
-    out = getattr(um, "candidates_token_count", None)
-    tot = getattr(um, "total_token_count", None)
-    try:
-        inp_i = int(inp) if inp is not None else None
-    except (TypeError, ValueError):
-        inp_i = None
-    try:
-        out_i = int(out) if out is not None else None
-    except (TypeError, ValueError):
-        out_i = None
-    try:
-        tot_i = int(tot) if tot is not None else None
-    except (TypeError, ValueError):
-        tot_i = None
+    inp_i = _coerce_usage_value(um, "prompt_token_count", "promptTokenCount", "input_tokens", "inputTokens")
+    out_i = _coerce_usage_value(um, "candidates_token_count", "candidatesTokenCount", "output_tokens", "outputTokens")
+    tot_i = _coerce_usage_value(um, "total_token_count", "totalTokenCount", "total_tokens", "totalTokens")
     return inp_i, out_i, tot_i
 
 
@@ -112,6 +118,58 @@ def _persist_event(
                 pass
     except Exception as e:
         logger.warning("Governança Gemini: falha ao persistir evento (%s): %s", flow_type, e)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
+def register_internal_ia_event(
+    *,
+    operation: str,
+    agent: str,
+    flow_type: str,
+    status: str,
+    api_key_label: str = "internal",
+    model: str = "",
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    total_tokens: int | None = None,
+    error_summary: str | None = None,
+) -> None:
+    """
+    Registra evento administrativo sem chamada direta ao SDK.
+    Usado para manter observabilidade quando o fluxo responde sem usage_metadata
+    ou antes de chegar ao provider externo.
+    """
+    if not has_app_context():
+        logger.debug("Governanca Gemini: sem app context; evento interno nao persistido (%s %s).", operation, flow_type)
+        return
+    try:
+        ident = resolve_identidade_para_persistencia()
+        row = IaConsumoEvento(
+            occurred_at=utcnow_naive(),
+            provider=PROVIDER_INTERNAL,
+            operation=operation,
+            model=(model or "")[:255],
+            agent=(agent or "")[:80],
+            flow_type=(flow_type or "")[:80],
+            api_key_label=(api_key_label or "internal")[:80],
+            status=status,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            error_summary=_truncate_err(error_summary, 2000),
+            conta_id=ident.get("conta_id"),
+            franquia_id=ident.get("franquia_id"),
+            usuario_id=ident.get("usuario_id"),
+            tipo_origem=(ident.get("tipo_origem") or "")[:80] or None,
+            origem_sistema=ident.get("origem_sistema"),
+        )
+        db.session.add(row)
+        db.session.commit()
+    except Exception as e:
+        logger.warning("Governanca Gemini: falha ao persistir evento interno (%s): %s", flow_type, e)
         try:
             db.session.rollback()
         except Exception:

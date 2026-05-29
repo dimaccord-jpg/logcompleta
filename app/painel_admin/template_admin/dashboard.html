@@ -70,11 +70,39 @@
         - Snapshot de custo: {{ ia.get('cost_snapshot_at', '')[:19]|replace('T', ' ') }} UTC
         {% endif %}
     </p>
+    {% set onboarding_ia = ia.get('onboarding_discovery_ia') or {} %}
+    <div class="card border-0 shadow-sm p-3 mb-4">
+        <small class="text-muted fw-bold d-block mb-2">Visao consolidada do consumo interno de IA</small>
+        <p class="text-muted small mb-3">
+            Separa o consumo operacional do consumo do onboarding. O onboarding conta como consumo interno de IA,
+            mas nao abate franquia do cliente.
+        </p>
+        <div class="row g-3">
+            <div class="col-md-4">
+                <div class="border rounded p-2 h-100">
+                    <small class="text-muted d-block">Tokens operacionais no mes</small>
+                    <strong class="text-primary">{{ '{:,}'.format((ia.get('operational_tokens_month') or 0)|int) }}</strong>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="border rounded p-2 h-100">
+                    <small class="text-muted d-block">Tokens onboarding no mes</small>
+                    <strong class="text-info">{{ '{:,}'.format((ia.get('onboarding_tokens_month') or 0)|int) }}</strong>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="border rounded p-2 h-100">
+                    <small class="text-muted d-block">Total interno de IA no mes</small>
+                    <strong class="text-dark">{{ '{:,}'.format((ia.get('total_internal_tokens_month') or 0)|int) }}</strong>
+                </div>
+            </div>
+        </div>
+    </div>
     <div class="row g-3 mb-2">
         <div class="col-md-4">
             <div class="card border-0 shadow-sm p-3">
-                <small class="text-muted fw-bold">Total de Tokens no mes</small>
-                <h3 class="text-primary mb-0">{{ '{:,}'.format((ia.get('total_tokens_month') or 0)|int) }}</h3>
+                <small class="text-muted fw-bold">Tokens operacionais no mes</small>
+                <h3 class="text-primary mb-0">{{ '{:,}'.format((ia.get('operational_tokens_month') or 0)|int) }}</h3>
             </div>
         </div>
         <div class="col-md-4">
@@ -126,6 +154,61 @@
         </div>
         {% else %}
         <p class="text-muted mb-0 small">Nenhum token com metrica registrado neste mes (ou ainda sem eventos).</p>
+        {% endif %}
+    </div>
+    <div class="card border-0 shadow-sm p-3 mb-4">
+        <small class="text-muted fw-bold d-block mb-2">Consumo IA - Onboarding</small>
+        <p class="text-muted small mb-2">
+            Tokens do fluxo de descoberta na Home. Conta como consumo interno de IA, mas nao abate franquia do cliente.
+        </p>
+        <div class="row g-3">
+            <div class="col-md-4">
+                <div class="border rounded p-2 h-100">
+                    <small class="text-muted d-block">Tokens no mes</small>
+                    <strong class="text-primary">{{ '{:,}'.format((onboarding_ia.get('total_tokens_month') or 0)|int) }}</strong>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="border rounded p-2 h-100">
+                    <small class="text-muted d-block">Eventos no mes</small>
+                    <strong class="text-dark">{{ (onboarding_ia.get('event_count_month') or 0)|int }}</strong>
+                    <small class="d-block text-muted mt-1">
+                        {{ (onboarding_ia.get('event_count_with_metrics_month') or 0)|int }} com tokens,
+                        {{ (onboarding_ia.get('event_count_without_metrics_month') or 0)|int }} sem metrica,
+                        {{ (onboarding_ia.get('failure_event_count_month') or 0)|int }} falha(s)
+                    </small>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="border rounded p-2 h-100">
+                    <small class="text-muted d-block">Resumo de observabilidade</small>
+                    <strong class="text-dark">{{ (onboarding_ia.get('event_count_without_metrics_month') or 0)|int }}</strong>
+                    <small class="d-block text-muted mt-1">
+                        eventos sem metrica; {{ (onboarding_ia.get('failure_event_count_month') or 0)|int }} falha(s) registradas.
+                    </small>
+                </div>
+            </div>
+        </div>
+        {% set onboarding_by_key = onboarding_ia.get('tokens_by_api_key') or {} %}
+        {% if onboarding_by_key %}
+        <div class="table-responsive mt-3">
+            <table class="table table-sm table-bordered mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>API_KEY (rotulo)</th>
+                        <th class="text-end">Tokens onboarding</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for label, qty in onboarding_by_key|dictsort %}
+                    <tr>
+                        <td><code class="small">{{ label }}</code></td>
+                        <td class="text-end">{{ '{:,}'.format(qty|int) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
         {% endif %}
     </div>
 
@@ -240,6 +323,103 @@
     </div>
     {% if (proc_cleide.get('total_processing_events_month') or 0)|int == 0 %}
     <p class="text-muted small mb-4">Nenhum processamento registrado neste mes.</p>
+    {% endif %}
+
+    {# Analise de termos do onboarding — intencao e termos buscados (AuditoriaGerencial) #}
+    {% set wc_payload = onboarding_word_cloud or {} %}
+    {% set word_cloud = wc_payload.get('terms') or [] %}
+    {% set wc_hidden = wc_payload.get('admin_hidden_terms') or [] %}
+    {% set wc_pareto_pct = ((wc_payload.get('pareto_coverage') or 0) * 100)|round(0, 'floor')|int %}
+    <h5 class="mt-4 mb-3">Analise de termos do onboarding</h5>
+    <p class="text-muted small mb-2">
+        Exibindo termos relevantes apos filtros e ocultacoes do admin.
+        Mensagens sanitizadas — sem conteudo sensivel exposto.
+    </p>
+    {% if word_cloud %}
+    <p class="text-muted small mb-3">
+        Exibindo termos que representam {{ wc_pareto_pct }}% das ocorrencias filtradas dos ultimos
+        {{ wc_payload.get('days', 30) }} dias
+        ({{ wc_payload.get('total_filtered_occurrences', 0)|int }} ocorrencias apos filtros de
+        {{ wc_payload.get('total_raw_occurrences', 0)|int }} brutas).
+    </p>
+    {% else %}
+    <p class="text-muted small mb-3">
+        Termos mais buscados pelos usuarios na descoberta inteligente (ultimos 30 dias).
+    </p>
+    {% endif %}
+    <div class="card border-0 shadow-sm p-3 mb-4">
+        {% if word_cloud %}
+        {% set max_wc_count = word_cloud[0].count %}
+        <div class="d-flex flex-wrap gap-2 align-items-baseline mb-3" style="line-height: 1.6;">
+            {% for item in word_cloud %}
+            {% set wc_size = 0.85 + ((item.count / max_wc_count) * 1.35) %}
+            <span
+                class="badge rounded-pill bg-light text-dark border"
+                style="font-size: {{ '%.2f'|format(wc_size) }}rem; font-weight: {{ 500 + ((item.count / max_wc_count) * 300)|int }};"
+                title="{{ item.count }} ocorrencia(s)"
+            >{{ item.term }}</span>
+            {% endfor %}
+        </div>
+        <small class="text-muted fw-bold d-block mb-2">Detalhamento</small>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Termo</th>
+                        <th class="text-end">Ocorrencias</th>
+                        <th class="text-end">Acao</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in word_cloud %}
+                    <tr>
+                        <td><code class="small">{{ item.term }}</code></td>
+                        <td class="text-end">{{ item.count|int }}</td>
+                        <td class="text-end">
+                            <form method="post" action="{{ url_for('admin.onboarding_word_cloud_hide_term') }}" class="d-inline">
+                                <input type="hidden" name="term" value="{{ item.term }}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">Ocultar</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0 small">Nenhum termo relevante apos filtros nos ultimos 30 dias.</p>
+        {% endif %}
+    </div>
+
+    {% if wc_hidden %}
+    <h6 class="mb-2">Termos ocultos</h6>
+    <div class="card border-0 shadow-sm p-3 mb-4">
+        <p class="text-muted small mb-3">
+            Termos ocultados manualmente pelo admin. Dados brutos em auditoria permanecem intactos.
+        </p>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Termo oculto</th>
+                        <th class="text-end">Acao</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in wc_hidden %}
+                    <tr>
+                        <td><code class="small">{{ item.term }}</code></td>
+                        <td class="text-end">
+                            <form method="post" action="{{ url_for('admin.onboarding_word_cloud_restore_term', term_id=item.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-outline-primary">Reexibir</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
     {% endif %}
 
 </div>

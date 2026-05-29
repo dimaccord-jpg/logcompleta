@@ -1,29 +1,69 @@
-{# Componente de chat Júlia (UI estilo Gemini/ChatGPT) — validação de login ao clicar em Enviar #}
+{# Componente de chat do Copilot (discovery) ou da Júlia (operational). #}
+{% set julia_surface = julia_chat_surface|default('discovery') %}
 <div class="julia-chat-wrapper" id="juliaChatWrapper">
   <div class="julia-chat-container">
     <div class="julia-chat-header">
       <div class="d-flex align-items-center">
-        {% if config.JULIA_AVATAR_URL %}
-        <img src="{{ config.JULIA_AVATAR_URL }}" alt="Júlia" class="julia-chat-avatar me-2" />
+        {% if julia_surface == 'operational' and config.JULIA_AVATAR_URL %}
+        <img src="{{ config.JULIA_AVATAR_URL }}" alt="{% if julia_surface == 'operational' %}Júlia{% else %}Copilot do AgenteFrete{% endif %}" class="julia-chat-avatar me-2" />
         {% else %}
         <span class="julia-chat-avatar-placeholder me-2"><i class="bi bi-robot"></i></span>
         {% endif %}
         <div>
+          {% if julia_surface == 'operational' %}
           <span class="fw-bold julia-chat-name">Júlia, Editora Virtual de AgenteFrete</span>
-          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Personagem digital criada por inteligência artificial para produzir análises estratégicas com base em dados e fontes de mercado. Anteção: A Júlia é uma IA e pode cometer erros.</small>
+          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Consultoria em logística, supply chain, estratégia e planejamento. Atenção: a Júlia é uma IA e pode cometer erros.</small>
+          {% else %}
+          <span class="fw-bold julia-chat-name">Copilot do AgenteFrete</span>
+          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Descubra o melhor caminho para sua operação logística.</small>
+          {% endif %}
         </div>
       </div>
     </div>
     <div class="julia-chat-messages" id="juliaChatMessages">
       <div class="julia-chat-welcome small py-3 px-2" id="juliaChatWelcome">
-        Faça uma pergunta sobre logística, fretes, supply chain ou indicadores. Ex.: "Como o dólar impacta o frete?"
+        {% if julia_surface == 'operational' %}
+        {% if julia_handoff_context %}
+        Você está continuando uma conversa iniciada no Copilot do AgenteFrete.<br><br>
+        <strong>Pergunta anterior:</strong> {{ julia_handoff_context.user_message }}<br>
+        {% if julia_handoff_context.summary %}
+        <strong>Contexto trazido:</strong> {{ julia_handoff_context.summary }}
+        {% endif %}
+        <br><br>Faça uma pergunta sobre logística, fretes, supply chain, estratégia ou planejamento.
+        {% else %}
+        Faça uma pergunta sobre logística, fretes, supply chain, estratégia ou planejamento. Ex.: "Como estruturar um plano de redução de custo logístico?"
+        {% endif %}
+        {% else %}
+        Olá, eu sou o Copilot do AgenteFrete.<br><br>Me conte o que você quer melhorar na sua operação logística e eu te ajudo a encontrar o melhor caminho.
+        {% endif %}
       </div>
+      {% if julia_surface != 'operational' %}
+      <div class="julia-chat-session-state px-2 pb-2" id="juliaChatSessionState" style="display: none;">
+        <div class="julia-chat-session-copy small" id="juliaChatSessionCopy"></div>
+        <button type="button" class="btn btn-sm julia-chat-reset-btn" id="juliaChatResetBtn">Nova conversa</button>
+      </div>
+      {% endif %}
+      {% if julia_surface != 'operational' and onboarding_ctas %}
+      <div class="julia-chat-discovery-suggestions px-2 pb-2" id="juliaChatDiscoverySuggestions" aria-label="Sugestões de conversa">
+        <div class="julia-chat-discovery-label">Se quiser, você pode começar por uma destas ideias:</div>
+        <div class="julia-chat-discovery-pills">
+          {% for cta in onboarding_ctas[:4] %}
+          <button type="button"
+                  class="julia-chat-discovery-pill onboarding-cta-btn"
+                  data-cta-id="{{ cta.id }}"
+                  data-cta-message="{{ cta.seed_message|e }}">
+            {{ cta.label }}
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
     </div>
     <div class="julia-chat-input-area">
       <form class="julia-chat-form" id="juliaChatForm" role="form">
         <div class="input-group">
           <textarea class="form-control julia-chat-input" id="juliaChatInput"
-                    placeholder="Mensagem para a Júlia..." rows="2" autocomplete="off"></textarea>
+                    placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
           <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
             <i class="bi bi-send-fill"></i>
           </button>
@@ -35,7 +75,6 @@
 </div>
 
 <style>
-  /* Chat Júlia — identidade visual Agentefrete (tema escuro, bordas cyan) */
   .julia-chat-wrapper {
     --julia-chat-bg: var(--af-bg-card, #111119);
     --julia-chat-border: var(--af-cyan);
@@ -67,9 +106,15 @@
   .julia-chat-role { color: var(--af-text-secondary, #8A8AA3) !important; }
   .julia-chat-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid rgba(0, 191, 255, 0.3); }
   .julia-chat-avatar-placeholder {
-    width: 36px; height: 36px; border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
     background: linear-gradient(135deg, var(--af-cyan, #00BFFF) 0%, #0077CC 100%);
-    color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem;
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
   }
   .julia-chat-messages {
     flex: 1;
@@ -83,6 +128,44 @@
   .julia-chat-welcome {
     color: var(--af-text-secondary, #8A8AA3);
     border-radius: 0.5rem;
+    max-width: 680px;
+    font-size: 0.98rem;
+    line-height: 1.6;
+  }
+  .julia-chat-discovery-suggestions { max-width: 760px; }
+  .julia-chat-session-state {
+    max-width: 760px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding-top: 0.25rem;
+  }
+  .julia-chat-session-copy {
+    color: var(--af-text-secondary, #C8CCE5);
+    line-height: 1.45;
+  }
+  .julia-chat-reset-btn {
+    border-radius: 999px !important;
+    border: 1px solid rgba(0, 191, 255, 0.35) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    color: var(--af-text-secondary, #C8CCE5) !important;
+    white-space: nowrap;
+  }
+  .julia-chat-reset-btn:hover {
+    background: rgba(0, 191, 255, 0.1) !important;
+    border-color: rgba(0, 191, 255, 0.5) !important;
+    color: var(--af-text-primary, #F0F0F5) !important;
+  }
+  .julia-chat-discovery-label {
+    color: var(--af-text-muted, #5A5A72);
+    font-size: 0.75rem;
+    margin-bottom: 0.55rem;
+  }
+  .julia-chat-discovery-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
   }
   .julia-chat-msg { margin-bottom: 0.75rem; }
   .julia-chat-msg-inner { max-width: 85%; padding: 0.5rem 0.75rem; border-radius: 0.75rem; white-space: pre-wrap; }
@@ -150,5 +233,79 @@
   .julia-chat-suggestion-btn:hover {
     background: rgba(0, 191, 255, 0.2);
     border-color: rgba(0, 191, 255, 0.55);
+  }
+  .julia-chat-response-actions {
+    margin-top: 0.5rem;
+    max-width: 85%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+  }
+  .copilot-suggestion-btn,
+  .copilot-limit-btn {
+    color: var(--af-text-primary, #F0F0F5);
+    border-radius: 999px;
+    font-size: 0.8rem;
+    padding: 0.35rem 0.85rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    white-space: normal;
+    text-align: left;
+  }
+  .copilot-suggestion-btn {
+    border: 1px solid rgba(0, 191, 255, 0.32);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--af-text-secondary, #C8CCE5);
+    font-size: 0.76rem;
+    padding: 0.3rem 0.75rem;
+  }
+  .copilot-suggestion-btn:hover {
+    background: rgba(0, 191, 255, 0.12);
+    border-color: rgba(0, 191, 255, 0.48);
+    color: var(--af-text-primary, #F0F0F5);
+  }
+  .copilot-limit-btn {
+    border: 1px solid rgba(25, 135, 84, 0.9);
+    background: linear-gradient(135deg, rgba(25, 135, 84, 0.95), rgba(12, 104, 64, 0.95));
+    color: #fff;
+    font-weight: 700;
+    box-shadow: 0 10px 24px rgba(25, 135, 84, 0.24);
+  }
+  .copilot-limit-btn:hover {
+    background: rgba(25, 135, 84, 0.3);
+    border-color: rgba(25, 135, 84, 1);
+    color: #fff;
+  }
+  .julia-chat-discovery-pill,
+  .onboarding-cta-btn {
+    border: 1px solid rgba(0, 191, 255, 0.24) !important;
+    color: var(--af-text-secondary, #C8CCE5) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    font-size: 0.78rem;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.25;
+    padding: 0.4rem 0.75rem;
+    border-radius: 999px;
+  }
+  .julia-chat-discovery-pill:hover,
+  .onboarding-cta-btn:hover {
+    background: rgba(0, 191, 255, 0.1) !important;
+    border-color: rgba(0, 191, 255, 0.4) !important;
+    color: var(--af-text-primary, #F0F0F5) !important;
+  }
+  @media (max-width: 767.98px) {
+    .julia-chat-messages { padding: 0.85rem 0.85rem 0.65rem; }
+    .julia-chat-input-area { padding: 0.75rem 0.85rem; }
+    .julia-chat-session-state { flex-direction: column; align-items: stretch; }
+    .julia-chat-discovery-pills { gap: 0.35rem; }
+    .julia-chat-discovery-pill,
+    .onboarding-cta-btn {
+      width: 100%;
+    }
+    .julia-chat-reset-btn { width: 100%; }
   }
 </style>
