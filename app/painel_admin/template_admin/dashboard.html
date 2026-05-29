@@ -326,12 +326,27 @@
     {% endif %}
 
     {# Analise de termos do onboarding — intencao e termos buscados (AuditoriaGerencial) #}
-    {% set word_cloud = onboarding_word_cloud or [] %}
+    {% set wc_payload = onboarding_word_cloud or {} %}
+    {% set word_cloud = wc_payload.get('terms') or [] %}
+    {% set wc_hidden = wc_payload.get('admin_hidden_terms') or [] %}
+    {% set wc_pareto_pct = ((wc_payload.get('pareto_coverage') or 0) * 100)|round(0, 'floor')|int %}
     <h5 class="mt-4 mb-3">Analise de termos do onboarding</h5>
-    <p class="text-muted small mb-3">
-        Termos mais buscados pelos usuarios na descoberta inteligente (ultimos 30 dias).
+    <p class="text-muted small mb-2">
+        Exibindo termos relevantes apos filtros e ocultacoes do admin.
         Mensagens sanitizadas — sem conteudo sensivel exposto.
     </p>
+    {% if word_cloud %}
+    <p class="text-muted small mb-3">
+        Exibindo termos que representam {{ wc_pareto_pct }}% das ocorrencias filtradas dos ultimos
+        {{ wc_payload.get('days', 30) }} dias
+        ({{ wc_payload.get('total_filtered_occurrences', 0)|int }} ocorrencias apos filtros de
+        {{ wc_payload.get('total_raw_occurrences', 0)|int }} brutas).
+    </p>
+    {% else %}
+    <p class="text-muted small mb-3">
+        Termos mais buscados pelos usuarios na descoberta inteligente (ultimos 30 dias).
+    </p>
+    {% endif %}
     <div class="card border-0 shadow-sm p-3 mb-4">
         {% if word_cloud %}
         {% set max_wc_count = word_cloud[0].count %}
@@ -352,6 +367,7 @@
                     <tr>
                         <th>Termo</th>
                         <th class="text-end">Ocorrencias</th>
+                        <th class="text-end">Acao</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -359,15 +375,52 @@
                     <tr>
                         <td><code class="small">{{ item.term }}</code></td>
                         <td class="text-end">{{ item.count|int }}</td>
+                        <td class="text-end">
+                            <form method="post" action="{{ url_for('admin.onboarding_word_cloud_hide_term') }}" class="d-inline">
+                                <input type="hidden" name="term" value="{{ item.term }}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">Ocultar</button>
+                            </form>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
         {% else %}
-        <p class="text-muted mb-0 small">Nenhum evento de onboarding discovery registrado nos ultimos 30 dias.</p>
+        <p class="text-muted mb-0 small">Nenhum termo relevante apos filtros nos ultimos 30 dias.</p>
         {% endif %}
     </div>
+
+    {% if wc_hidden %}
+    <h6 class="mb-2">Termos ocultos</h6>
+    <div class="card border-0 shadow-sm p-3 mb-4">
+        <p class="text-muted small mb-3">
+            Termos ocultados manualmente pelo admin. Dados brutos em auditoria permanecem intactos.
+        </p>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Termo oculto</th>
+                        <th class="text-end">Acao</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in wc_hidden %}
+                    <tr>
+                        <td><code class="small">{{ item.term }}</code></td>
+                        <td class="text-end">
+                            <form method="post" action="{{ url_for('admin.onboarding_word_cloud_restore_term', term_id=item.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-outline-primary">Reexibir</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
 
 </div>
 {% endblock %}

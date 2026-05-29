@@ -45,7 +45,16 @@ def test_dashboard_renderiza_sem_bloco_de_insight(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.onboarding_admin_analytics_service.get_onboarding_word_cloud",
-        lambda **kwargs: [{"term": "frete", "count": 5}, {"term": "custo", "count": 2}],
+        lambda **kwargs: {
+            "terms": [{"term": "frete", "count": 5}, {"term": "custo", "count": 2}],
+            "admin_hidden_terms": [{"id": 1, "term": "ola"}],
+            "total_raw_occurrences": 10,
+            "total_filtered_occurrences": 7,
+            "pareto_coverage": 1.0,
+            "pareto_target": 0.80,
+            "days": 30,
+            "removed_terms": {"stopwords": {}, "admin_hidden": {}},
+        },
     )
 
     with web.app.test_request_context("/admin/dashboard"):
@@ -62,7 +71,12 @@ def test_dashboard_renderiza_sem_bloco_de_insight(monkeypatch):
     assert "Consumo IA - Onboarding" in html
     assert "Conta como consumo interno de IA, mas nao abate franquia do cliente." in html
     assert "Analise de termos do onboarding" in html
+    assert "Exibindo termos relevantes apos filtros e ocultacoes do admin." in html
     assert "frete" in html
+    assert "Ocultar" in html
+    assert "Termos ocultos" in html
+    assert "Reexibir" in html
+    assert "ola" in html
     assert "4200" in html.replace(",", "")
     assert "6000" in html.replace(",", "")
     assert "2 sem metrica" in html

@@ -336,6 +336,22 @@ class AuditoriaGerencial(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow_naive, index=True)
 
 
+class OnboardingWordCloudHiddenTerm(db.Model):
+    """
+    Termos ocultados manualmente pelo admin na nuvem do onboarding.
+    Não altera user_terms_normalized em AuditoriaGerencial — filtro só na agregação.
+    """
+    __tablename__ = 'onboarding_word_cloud_hidden_term'
+
+    id = db.Column(db.Integer, primary_key=True)
+    term_normalized = db.Column(db.String(64), nullable=False, index=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+    hidden_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    notes = db.Column(db.String(255), nullable=True)
+
+
 # --- Fase 5: Customer Insight (métricas por canal, recomendações estratégicas) ---
 
 class InsightCanal(db.Model):

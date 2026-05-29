@@ -672,7 +672,7 @@ class TestOnboardingHandoffDoesNotWeakenApiAuth:
             body = cleiton_discovery_reply("Como a taxa cambial impacta meu frete de importações?", [])
             assert body["discovery"]["audit_logged"] is True
             cloud = get_onboarding_word_cloud(limit=10, days=30)
-            terms = {item["term"] for item in cloud}
+            terms = {item["term"] for item in cloud["terms"]}
             assert {"cambial", "frete"}.issubset(terms)
 
 

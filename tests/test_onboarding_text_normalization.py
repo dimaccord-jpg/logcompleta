@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from app.utils.onboarding_text_normalization import (
     extract_user_terms_normalized,
+    is_onboarding_stopword,
+    normalize_word_cloud_term,
     sanitize_user_message,
 )
 
@@ -48,3 +50,19 @@ class TestExtractUserTermsNormalized:
         terms = extract_user_terms_normalized("frete frete custo custo")
         assert terms.count("frete") == 1
         assert terms.count("custo") == 1
+
+    def test_expanded_stopwords_remove_conversational_noise(self):
+        for word in ("ola", "tem", "quais", "sao", "voces", "outros"):
+            assert is_onboarding_stopword(word)
+            terms = extract_user_terms_normalized(f"{word} frete internacional")
+            assert word not in terms
+            assert "frete" in terms
+
+
+class TestNormalizeWordCloudTerm:
+    def test_normalizes_accents_and_case(self):
+        assert normalize_word_cloud_term("Olá") == "ola"
+
+    def test_rejects_empty_or_short(self):
+        assert normalize_word_cloud_term("") == ""
+        assert normalize_word_cloud_term("a") == ""
