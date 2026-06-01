@@ -117,6 +117,19 @@ a:hover { color: var(--af-cyan-bright); }
 .nav-item:hover i, .nav-item.active i { color: var(--af-cyan) !important; }
 #sidebar.active .menu-text { display: none; }
 
+/* Home: rótulo visual apenas (HTML mantém "Home / Notícias") */
+#sidebar .nav-list > .nav-item:first-child .menu-text,
+#mobileMenu .offcanvas-body > .nav-item:first-child .menu-text {
+  font-size: 0;
+}
+#sidebar .nav-list > .nav-item:first-child .menu-text::after,
+#mobileMenu .offcanvas-body > .nav-item:first-child .menu-text::after {
+  font-size: 1rem;
+  font-weight: 500;
+  content: "Home";
+  color: inherit;
+}
+
 .sidebar-footer {
   padding: 20px;
   border-top: 1px solid var(--af-border) !important;

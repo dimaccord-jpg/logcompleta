@@ -1,64 +1,82 @@
 # Migrations (Alembic)
 
-Este documento concentra cadeia e operação de migrations da Fase 2.
+Data de consolidacao: `2026-05-29`  
+Commit de referencia: `20fa165`
 
-## 1) Estado atual em homolog
+Este documento concentra a cadeia atual de migrations relevantes para o estado promovido em producao.
 
-- Cadeia de migrations da Fase 2 está versionada no repositório.
-- Execução em homolog ainda pendente de validação final.
-- Bloqueio observado no Render:
-  - `alembic` ausente no `PATH`
-  - `python -m alembic current` -> `No module named alembic`
-  - `requirements.txt` atual sem Alembic
+## 1. Estado atual
 
-Sem resolver esse ponto, homolog não deve ser marcada como publicada.
+O commit `20fa165` inclui a migration nova do onboarding:
 
-## 2) Cadeia de revisões da Fase 2
+- `r2s3t4u5v6w7` - cria `onboarding_word_cloud_hidden_term`
 
-1. `g4h5i6j7k8l9` — identidade de negócio em `ia_consumo_evento` e `processing_events`.
-2. `h1i2j3k4l5m6` — criação de `conta`/`franquia`, vínculo em `user`, backfill e estrutura interna.
-3. `i2j3k4l5m6n7` — régua de créditos em `cleiton_cost_config`.
-4. `j3k4l5m6n7o8` — franquia operacional (`limite_total`, `consumo_acumulado`, ciclo, status).
-5. `k4l5m6n7o8p9` — `bloqueio_manual` em franquia.
-6. `l5m6n7o8p9q0` — remoção de campos legados de chat freemium diário.
-7. `m6n7o8p9q0r1` — `multiuser_franquia_codigo`.
-8. `n7o8p9q0r1s2` — `cleiton_billing_apropriacao` (idempotência billing upload Roberto).
+Essa revisao passa a fazer parte da cadeia obrigatoria para homolog e producao.
 
-## 3) Execução padrão
+## 2. Cadeia relevante
 
-Na raiz do repositório:
+1. `g4h5i6j7k8l9` - identidade de negocio em eventos de consumo e processamento
+2. `h1i2j3k4l5m6` - conta / franquia / vinculos
+3. `i2j3k4l5m6n7` - regua de creditos
+4. `j3k4l5m6n7o8` - franquia operacional
+5. `k4l5m6n7o8p9` - bloqueio manual de franquia
+6. `l5m6n7o8p9q0` - remocao de campos legados de chat freemium diario
+7. `m6n7o8p9q0r1` - multiuser de franquia
+8. `n7o8p9q0r1s2` - billing idempotente de upload Roberto
+9. `o8p9q0r1s2t3` - preparo Stripe/monetizacao
+10. `p9q0r1s2t3u4` - constraints Stripe
+11. `q1r2s3t4u5v6` - tabela de privacy policy
+12. `r2s3t4u5v6w7` - hidden terms da word cloud do onboarding
 
-```bash
+## 3. Nova tabela de onboarding
+
+Tabela criada:
+
+- `onboarding_word_cloud_hidden_term`
+
+Finalidade:
+
+- persistir termos ocultados manualmente pelo admin;
+- permitir reexibicao individual;
+- manter historico bruto da nuvem de palavras sem alteracao destrutiva.
+
+Campos:
+
+- `id`
+- `term_normalized`
+- `is_active`
+- `created_at`
+- `updated_at`
+- `hidden_by_user_id`
+- `notes`
+
+Indices:
+
+- `is_active`
+- `term_normalized`
+- `hidden_by_user_id`
+
+## 4. Execucao padrao
+
+```powershell
 alembic -c migrations/alembic.ini upgrade head
 ```
 
-Verificação:
+Verificacao:
 
-```bash
+```powershell
 alembic -c migrations/alembic.ini current
 ```
 
-## 4) Premissas para executar com segurança
+## 5. Premissas para homolog e producao
 
-- `DATABASE_URL` deve apontar para o banco alvo correto.
-- `APP_ENV` deve estar coerente com o ambiente.
-- Backup/snapshot recomendado antes de aplicar em homolog/prod.
-- Não validar fluxo Fase 2 sem banco migrado até `head`.
+- `DATABASE_URL` no banco alvo correto
+- backup/snapshot antes de aplicar em ambiente compartilhado
+- validacao do dashboard admin apos a migration
+- validacao do fluxo de hidden terms apos a migration
 
-## 5) Ordem segura para homolog
+## 6. Sensibilidades de regressao
 
-1. Resolver estratégia de disponibilidade do Alembic no runtime.
-2. Executar `upgrade head`.
-3. Confirmar `current`.
-4. Executar validações operacionais (health, cron, dashboard/admin, upload/chat).
-
-## 6) Sensibilidades de regressão
-
-- Quebrar `h1i2j3k4l5m6` impacta toda identidade conta/franquia/usuário.
-- Pular revisões de franquia operacional (`j`/`k`) invalida autorização e status de operação.
-- Sem `n7o8p9q0r1s2`, billing idempotente de upload Roberto fica incompleto.
-
-Referências:
-
-- Status/go-no-go: `../DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`.
-- Runbook de deploy: `../app/README_DEPLOY.md`.
+- quebrar a cadeia de conta/franquia invalida governanca operacional
+- pular revisoes de franquia invalida autorizacao
+- pular `r2s3t4u5v6w7` quebra o controle admin da word cloud do onboarding

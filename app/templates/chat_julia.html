@@ -1,5 +1,6 @@
 {# Componente de chat do Copilot (discovery) ou da Júlia (operational). #}
 {% set julia_surface = julia_chat_surface|default('discovery') %}
+{% set julia_docs_ui = julia_documents_ui|default(false) %}
 <div class="julia-chat-wrapper" id="juliaChatWrapper">
   <div class="julia-chat-container">
     <div class="julia-chat-header">
@@ -59,9 +60,43 @@
       </div>
       {% endif %}
     </div>
+    {% if julia_docs_ui %}
+    <div class="julia-documents-area" id="juliaDocumentsArea" aria-live="polite">
+      <div class="julia-documents-toolbar">
+        <p class="julia-documents-hint small mb-0">
+          Contexto documental temporário — você pode remover quando quiser.
+        </p>
+        <button type="button"
+                class="btn btn-sm julia-documents-clear-btn"
+                id="juliaDocumentsClearBtn"
+                aria-label="Limpar todos os documentos anexados"
+                style="display: none;">
+          Limpar documentos
+        </button>
+      </div>
+      <ul class="julia-documents-list" id="juliaDocumentsList"></ul>
+      <div class="julia-documents-status small" id="juliaDocumentsStatus" role="status" aria-live="polite"></div>
+      <div class="julia-documents-error small" id="juliaDocumentsError" role="alert" style="display: none;"></div>
+    </div>
+    {% endif %}
     <div class="julia-chat-input-area">
-      <form class="julia-chat-form" id="juliaChatForm" role="form">
+      <form class="julia-chat-form{% if julia_docs_ui %} julia-chat-form-with-attach{% endif %}" id="juliaChatForm" role="form">
         <div class="input-group">
+          {% if julia_docs_ui %}
+          <button type="button"
+                  class="btn julia-chat-attach-btn"
+                  id="juliaChatAttachBtn"
+                  aria-label="Anexar documento à conversa"
+                  title="Anexar documento">
+            <i class="bi bi-paperclip" aria-hidden="true"></i>
+          </button>
+          <input type="file"
+                 id="juliaChatFileInput"
+                 class="visually-hidden"
+                 accept=".txt,.xml,.csv,.xlsx,.docx,.pdf,text/plain,text/xml,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
+                 tabindex="-1"
+                 aria-hidden="true">
+          {% endif %}
           <textarea class="form-control julia-chat-input" id="juliaChatInput"
                     placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
           <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
@@ -219,6 +254,127 @@
     border-color: var(--af-cyan-bright) !important;
     box-shadow: 0 0 20px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.3));
   }
+  {% if julia_docs_ui %}
+  .julia-documents-area {
+    padding: 0.55rem 1rem 0;
+    border-top: 1px solid rgba(0, 191, 255, 0.12);
+    background: var(--julia-chat-bg);
+  }
+  .julia-documents-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.35rem;
+  }
+  .julia-documents-hint {
+    color: var(--af-text-muted, #5A5A72);
+    line-height: 1.35;
+  }
+  .julia-documents-clear-btn {
+    border-radius: 999px !important;
+    border: 1px solid rgba(0, 191, 255, 0.28) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    color: var(--af-text-secondary, #C8CCE5) !important;
+    white-space: nowrap;
+  }
+  .julia-documents-clear-btn:hover {
+    background: rgba(0, 191, 255, 0.1) !important;
+    border-color: rgba(0, 191, 255, 0.45) !important;
+    color: var(--af-text-primary, #F0F0F5) !important;
+  }
+  .julia-documents-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .julia-documents-list:empty { display: none; }
+  .julia-doc-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.65rem;
+    padding: 0.45rem 0.65rem;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(0, 191, 255, 0.18);
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .julia-doc-item-main { min-width: 0; flex: 1; }
+  .julia-doc-item-name {
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.82rem;
+    font-weight: 600;
+    word-break: break-word;
+  }
+  .julia-doc-item-meta {
+    color: var(--af-text-secondary, #8A8AA3);
+    font-size: 0.72rem;
+    line-height: 1.35;
+    margin-top: 0.15rem;
+  }
+  .julia-doc-item-badge {
+    display: inline-block;
+    margin-top: 0.2rem;
+    padding: 0.08rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    border: 1px solid rgba(255, 193, 7, 0.35);
+    color: #ffd966;
+    background: rgba(255, 193, 7, 0.08);
+  }
+  .julia-doc-item-remove {
+    border: none;
+    background: transparent;
+    color: var(--af-text-muted, #8A8AA3);
+    padding: 0.15rem 0.35rem;
+    border-radius: 0.35rem;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .julia-doc-item-remove:hover {
+    color: var(--af-danger, #FF4D6A);
+    background: rgba(255, 77, 106, 0.08);
+  }
+  .julia-documents-status {
+    color: var(--af-text-muted, #5A5A72);
+    min-height: 0;
+    margin-top: 0.25rem;
+  }
+  .julia-documents-status:not(:empty) { min-height: 1rem; }
+  .julia-documents-error {
+    color: var(--af-danger, #FF4D6A) !important;
+    margin-top: 0.35rem;
+  }
+  .julia-chat-form-with-attach .julia-chat-input {
+    border-radius: 0 !important;
+  }
+  .julia-chat-attach-btn {
+    border-radius: 1.5rem 0 0 1.5rem !important;
+    background: var(--af-bg-muted, #1E1E2E) !important;
+    border: 1px solid var(--af-cyan) !important;
+    border-right: none !important;
+    color: var(--af-text-secondary, #C8CCE5) !important;
+    box-shadow: none !important;
+    min-width: 44px;
+    padding: 0 0.65rem;
+  }
+  .julia-chat-attach-btn:hover,
+  .julia-chat-attach-btn:focus {
+    background: rgba(0, 191, 255, 0.12) !important;
+    color: var(--af-cyan, #00BFFF) !important;
+    border-color: var(--af-cyan) !important;
+  }
+  .julia-chat-attach-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .julia-chat-form-with-attach .julia-chat-send {
+    border-radius: 0 1.5rem 1.5rem 0 !important;
+  }
+  {% endif %}
   .julia-chat-limit-msg { color: var(--af-danger, #FF4D6A) !important; }
   .julia-chat-suggestions { margin-top: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.35rem; max-width: 85%; }
   .julia-chat-suggestion-btn {

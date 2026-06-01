@@ -31,6 +31,8 @@ Converse com a Júlia sobre estratégia logística, supply chain e planejamento 
   window.JULIA_CHAT_LIMITS = {{ julia_chat_limits|tojson|safe }};
   window.JULIA_CHAT_AUTHENTICATED = {{ 'true' if current_user.is_authenticated else 'false' }};
   window.JULIA_CHAT_LOGIN_URL = {{ url_for('login')|tojson }};
+  window.JULIA_DOCUMENTS_UI = true;
 </script>
 <script src="{{ url_for('static', filename='js/chat_behavior.js') }}"></script>
+<script src="{{ url_for('static', filename='js/julia_documents.js') }}"></script>
 {% endblock %}

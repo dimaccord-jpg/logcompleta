@@ -550,13 +550,54 @@ def agentes_cleiton():
     """Parâmetros operacionais Cleiton: custo (runtime/Google) e régua de conversão de créditos."""
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
+    from app.services.cleiton_doc_config_service import (
+        DEFAULTS as CLEITON_DOC_DEFAULTS,
+        get_cleiton_doc_config,
+        salvar_agentes_cleiton_config,
+    )
     from app.services.cleiton_cost_service import (
         compute_cost_per_second,
         get_or_create_config,
-        save_config,
     )
 
     if request.method == "POST":
+        doc_campos = None
+        if (request.form.get("cleiton_doc_form") or "").strip() == "1":
+            doc_campos = {
+                "upload_enabled": request.form.get("upload_enabled"),
+                "max_files_per_session": request.form.get("max_files_per_session"),
+                "session_max_bytes": request.form.get("session_max_bytes"),
+                "upload_ttl_hours": request.form.get("upload_ttl_hours"),
+                "cleanup_enabled": request.form.get("cleanup_enabled"),
+                "prompt_context_max_chars": request.form.get("prompt_context_max_chars"),
+                "prompt_max_files_considered": request.form.get("prompt_max_files_considered"),
+                "pdf_enabled": request.form.get("pdf_enabled"),
+                "pdf_max_bytes": request.form.get("pdf_max_bytes"),
+                "pdf_max_pages": request.form.get("pdf_max_pages"),
+                "pdf_max_chars": request.form.get("pdf_max_chars"),
+                "excel_enabled": request.form.get("excel_enabled"),
+                "excel_max_bytes": request.form.get("excel_max_bytes"),
+                "excel_max_rows": request.form.get("excel_max_rows"),
+                "excel_max_columns": request.form.get("excel_max_columns"),
+                "excel_max_chars": request.form.get("excel_max_chars"),
+                "docx_enabled": request.form.get("docx_enabled"),
+                "docx_max_bytes": request.form.get("docx_max_bytes"),
+                "docx_max_paragraphs": request.form.get("docx_max_paragraphs"),
+                "docx_max_chars": request.form.get("docx_max_chars"),
+                "txt_enabled": request.form.get("txt_enabled"),
+                "txt_max_bytes": request.form.get("txt_max_bytes"),
+                "txt_max_chars": request.form.get("txt_max_chars"),
+                "xml_enabled": request.form.get("xml_enabled"),
+                "xml_max_bytes": request.form.get("xml_max_bytes"),
+                "xml_max_nodes": request.form.get("xml_max_nodes"),
+                "xml_max_depth": request.form.get("xml_max_depth"),
+                "xml_max_chars": request.form.get("xml_max_chars"),
+                "csv_enabled": request.form.get("csv_enabled"),
+                "csv_max_bytes": request.form.get("csv_max_bytes"),
+                "csv_max_rows": request.form.get("csv_max_rows"),
+                "csv_max_columns": request.form.get("csv_max_columns"),
+                "csv_max_chars": request.form.get("csv_max_chars"),
+            }
         try:
             r_raw = (request.form.get("runtime_monthly_cost") or "").strip()
             runtime = float(r_raw.replace(",", ".")) if r_raw else None
@@ -584,27 +625,36 @@ def agentes_cleiton():
 
             if month_seconds < 1:
                 raise ValueError("month_seconds deve ser >= 1.")
-            save_config(
-                runtime_monthly_cost=runtime,
-                month_seconds=month_seconds,
-                allocation_percent=allocation,
-                overhead_factor=overhead,
-                cost_per_million_tokens=google_ref,
-                credit_tokens_per_credit=credit_tokens,
-                credit_lines_per_credit=credit_lines,
-                credit_ms_per_credit=credit_ms,
+            salvar_agentes_cleiton_config(
+                cost_kwargs={
+                    "runtime_monthly_cost": runtime,
+                    "month_seconds": month_seconds,
+                    "allocation_percent": allocation,
+                    "overhead_factor": overhead,
+                    "cost_per_million_tokens": google_ref,
+                    "credit_tokens_per_credit": credit_tokens,
+                    "credit_lines_per_credit": credit_lines,
+                    "credit_ms_per_credit": credit_ms,
+                },
+                doc_campos=doc_campos,
             )
             flash("Parâmetros operacionais salvos.", "success")
         except (ValueError, TypeError) as e:
-            flash(f"Valores invalidos: {e}", "danger")
+            if doc_campos is not None:
+                flash(f"Configuração documental não salva: {e}", "danger")
+            else:
+                flash(f"Valores invalidos: {e}", "danger")
         return redirect(url_for("admin.agentes_cleiton"))
 
     cfg = get_or_create_config()
     cps = compute_cost_per_second(cfg)
+    doc_cfg = get_cleiton_doc_config()
     return render_template(
         "agentes_cleiton.html",
         cfg=cfg,
         cost_per_second=cps,
+        doc_cfg=doc_cfg,
+        doc_defaults=CLEITON_DOC_DEFAULTS,
     )
 
 

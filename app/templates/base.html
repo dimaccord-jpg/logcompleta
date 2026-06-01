@@ -136,6 +136,19 @@
 
         #sidebar.active .menu-text { display: none; }
 
+        /* Home: rótulo visual apenas (HTML mantém "Home / Notícias") */
+        #sidebar .nav-list > .nav-item:first-child .menu-text,
+        #mobileMenu .offcanvas-body > .nav-item:first-child .menu-text {
+            font-size: 0;
+        }
+        #sidebar .nav-list > .nav-item:first-child .menu-text::after,
+        #mobileMenu .offcanvas-body > .nav-item:first-child .menu-text::after {
+            font-size: 1rem;
+            font-weight: 500;
+            content: "Home";
+            color: inherit;
+        }
+
         /* ALERTAS FLASH */
         .flash-messages {
             position: fixed;

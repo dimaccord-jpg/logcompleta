@@ -33,6 +33,8 @@ def _patch_pytest_tmp_cleanup_for_windows() -> None:
 
 _patch_pytest_tmp_cleanup_for_windows()
 
+pytest_plugins = ("tests.cleiton_doc_fixtures",)
+
 
 @pytest.fixture(scope="function")
 def app():

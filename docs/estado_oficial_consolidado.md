@@ -1,258 +1,215 @@
 # Estado Oficial Consolidado
 
-Data de consolidacao: `2026-05-26`
+Data de consolidacao: `2026-05-29`  
+Commit de referencia: `20fa165`
 
-Suite automatizada validada nesta consolidacao: `434 passed` em `81.32s`.
+Este documento registra o estado funcional promovido apos o onboarding discovery conversational-first e o controle administrativo da nuvem de palavras.
 
-## 1. Escopo homologado e promovido
+## 1. Escopo promovido
 
-Estado funcional confirmado no repositorio:
+Estado confirmado no codigo:
 
-- pipeline editorial da Julia com bloqueio oficial de fallback de redacao para artigos;
-- geracao de imagem com persistencia em `settings.data_dir/generated` e exposicao publica por `/media/generated/`;
-- retencao sem sobrescrita de `NoticiaPortal.url_imagem`;
-- despublicacao editorial por `POST /admin/noticias/<id>/despublicar`;
-- compartilhamento social publico em `app/templates/noticia_interna.html` + `app/templates/partials/social_share.html`;
-- contrato SEO com `canonical == og:url == share_url_abs`;
-- dashboard admin com bloco visual de Customer Insight ocultado, backend preservado;
-- Cleide operacional com upload, template, filtros, analytics e chat controlado;
-- observabilidade de IA e processamento via `IaConsumoEvento` e `ProcessingEvent`.
+- Home publica com Copilot do AgenteFrete;
+- onboarding discovery conversational-first;
+- limite de 5 interacoes anonimas por sessao;
+- CTA de login ao atingir limite;
+- reset de sessao por `Nova conversa`;
+- preservacao de contexto para Julia apenas quando houver handoff para `julia_operational`;
+- separacao entre Copilot e Julia operacional;
+- observabilidade de onboarding em `IaConsumoEvento`;
+- separacao administrativa entre tokens operacionais, tokens onboarding e total interno;
+- dashboard admin com analise de termos do onboarding;
+- Pareto 80/20 para exibicao da nuvem de palavras;
+- ocultacao manual e reexibicao de termos;
+- migration `r2s3t4u5v6w7`.
 
-## 2. Arquitetura oficial resumida
+## 2. Superficies oficiais
 
-- Roberto: estrategia, produto, direcionamento operacional e camada estrategica
-- Cleiton: governanca, missao operacional, retencao, orquestracao, decisao operacional e execucao sistemica
-- Julia: editorial, redacao, imagem, publicacao e conteudo publico
-- Cleide: documentos, upload, perguntas, leitura operacional, extracao contextual e suporte operacional IA
+- `/`: Home publica com Copilot de discovery
+- `/chat_julia?mode=operational`: Julia operacional
+- `/fretes`: Roberto BI e chat preditivo
+- `/auditoria-frete`: Cleide auditoria retrospectiva
+- `/feed`: superficie editorial
+- `/admin/dashboard`: painel administrativo consolidado
 
-Fluxo oficial:
+## 3. Copilot da Home
 
-`Roberto -> Cleiton -> Julia`
+Contrato real:
 
-Camada operacional paralela oficial:
+- o backend oficial e `POST /api/onboarding_discovery`;
+- o reset oficial e `POST /api/onboarding_discovery/reset`;
+- nao exige login para iniciar;
+- usa sessao anonima com contador em servidor;
+- limite anonimo por sessao: `5`;
+- ao atingir o limite, nao chama Gemini e devolve payload de bloqueio com CTA de login;
+- o shell visual esta em `app/static/js/chat_behavior.js`;
+- o documento de capacidades oficial esta em `app/copilot_capabilities.md`;
+- o fallback local conversacional continua disponivel se Gemini falhar ou estiver indisponivel.
 
-`Cleide -> Cleiton`
+## 4. Regra de agente por atividade-fim
 
-## 3. Julia: pipeline editorial oficial
+Regras oficiais:
 
-Contrato de redacao:
+- Roberto = previsao, projecao, tendencias e horizonte futuro;
+- Cleide = auditoria, conferencia, desvios, anomalias e horizonte historico;
+- Julia = estrategia, supply chain, interpretacao executiva, negociacao e plano de acao.
 
-- sucesso: `redacao_status=sucesso` e `redacao_fallback=False`
-- fallback: `redacao_status=fallback` e `redacao_fallback=True`
+Regras negativas:
 
-Motivos confirmados no repositorio:
+- artefato nao define agente;
+- planilha nao define agente;
+- dashboard nao define agente;
+- BI nao define agente;
+- custo nao define agente;
+- transportadora nao define agente.
 
-- `timeout`
-- `json_parse_error`
-- `empty_or_invalid_response`
-- `model_error`
-- `gemini_client_unavailable`
+Quando a atividade-fim e ambigua, o Copilot pede contexto e nao faz handoff automatico.
 
-Regra oficial para artigo:
+## 5. Julia
 
-- se `redacao_status != sucesso`, bloquear;
-- se `redacao_fallback=True`, bloquear;
-- quando bloqueia, nao gera imagem, nao publica, audita e encerra pipeline.
+Julia tem dois papeis documentais distintos:
 
-Imagem Julia:
+- shell visual da Home quando o modo discovery esta ativo;
+- agente operacional real no endpoint `POST /api/chat_julia`.
 
-- persistencia antiga: `app/static/generated`
-- persistencia atual: `settings.data_dir/generated`
-- rota publica atual: `/media/generated/`
+Contrato da Julia operacional:
 
-Observabilidade persistida em `assets_canais_json`:
+- exige login;
+- valida autorizacao operacional por franquia;
+- recebe handoff do Copilot com contexto resumido apenas quando o discovery sinalizou `julia_operational`;
+- nao se confunde com o Copilot.
 
-- `imagem_status`
-- `imagem_provider`
-- `imagem_motivo`
-- `imagem_origem`
-- `imagem_url_final`
-- `prompt_imagem_usado`
+## 6. Roberto
 
-Runtime documentado:
+Roberto continua como superficie quantitativa preditiva:
 
-- provider controlado por `IMAGE_PROVIDER`
-- modelo principal por `GEMINI_MODEL_IMAGE`
-- modelo fallback por `GEMINI_MODEL_IMAGE_FALLBACK`
-- timeout efetivo por `GEMINI_IMAGE_HTTP_TIMEOUT_MS` ou `GEMINI_HTTP_TIMEOUT_MS`
+- BI operacional;
+- dashboards;
+- tendencias;
+- previsoes;
+- chat explicativo;
+- horizonte futuro.
 
-Retencao editorial:
+Contrato tecnico atual:
 
-- a retencao nao altera `NoticiaPortal.url_imagem`;
-- imagem publicada e patrimonio editorial imutavel;
-- fallback visual e permitido apenas em renderizacao read-only quando o arquivo sumiu.
+- pagina oficial: `/fretes`
+- chat oficial: `POST /api/chat_roberto`
+- login obrigatorio
+- autorizacao operacional obrigatoria
+- historico controlado por configuracao admin `chat_max_history`
 
-## 4. Editorial
+## 7. Cleide
 
-Regras confirmadas:
+Cleide continua como superficie quantitativa investigativa:
 
-- TTL oficial: 5 dias para `rss`, `api` e `import_legacy`;
-- pauta manual nao e bloqueada por TTL;
-- serie editorial nao e bloqueada por TTL;
-- reprocessamento elegivel: `status=pendente` e `arquivada=False`.
+- auditoria operacional;
+- conferencia de custos;
+- identificacao de desvios;
+- leitura por transportadora;
+- analise retrospectiva;
+- horizonte historico.
 
-Despublicacao:
+Superficie oficial:
 
-- rota oficial: `POST /admin/noticias/<id>/despublicar`
-- efeitos oficiais: `publicado_em=None` e `status_publicacao=despublicado`
-- conteudo despublicado sai da superficie publica.
+- `/auditoria-frete`
+- `/api/cleide/upload`
+- `/api/cleide/upload/status`
+- `/api/cleide/upload/clear`
+- `/api/cleide/dashboard/filter`
+- `POST /api/chat_cleide`
 
-## 5. Compartilhamento social e SEO
+## 8. Observabilidade e metricas
 
-Escopo:
+Eventos oficiais:
 
-- conteudo publico da Julia: `artigo` e `noticia`/insight na superficie `/noticia/<id>`
+- `IaConsumoEvento`: chamadas LLM reais
+- `ProcessingEvent`: processamento tecnico e snapshots
 
-Templates oficiais:
+Fluxos documentados:
 
-- pagina: `app/templates/noticia_interna.html`
-- partial: `app/templates/partials/social_share.html`
+- `onboarding_discovery`
+- `operacional`
+- `administrativo`
 
-Redes publicas confirmadas:
+Metricas administrativas oficiais:
 
-- Facebook
-- Threads
-- X
-- LinkedIn
-- WhatsApp
+- `operational_tokens_month`
+- `onboarding_tokens_month`
+- `total_internal_tokens_month`
 
-Contrato de WhatsApp:
+Regra vigente:
 
-- `https://api.whatsapp.com/send`
+- onboarding entra no total interno;
+- onboarding nao abate franquia.
 
-Contrato de ambiente:
+## 9. Dashboard admin
 
-- producao usa `https://www.agentefrete.com.br` por padrao;
-- homolog usa o host homolog configurado;
-- `PUBLIC_BASE_URL` e a fonte de verdade da base publica.
+O dashboard administrativo atual consolida:
 
-Contrato publico obrigatório:
+- consumo IA operacional;
+- consumo IA onboarding;
+- total interno de tokens;
+- tokens por chave de API;
+- eventos do onboarding com e sem metrica;
+- processamento analitico Roberto;
+- processamento analitico Cleide;
+- nuvem de termos do onboarding.
 
-- `canonical == og:url == share_url_abs`
+## 10. Nuvem de palavras do onboarding
 
-Limites do recurso:
+Origem:
 
-- nao usa IA;
-- nao gera `IaConsumoEvento`;
-- nao faz billing;
-- nao dispara pipeline.
+- eventos `AuditoriaGerencial` com `tipo_decisao == "onboarding_discovery"`
+- lista `user_terms_normalized` em `contexto_json`
 
-## 6. Cleide: IA operacional
+Pipeline real:
 
-Objetivo oficial:
+1. leitura do historico bruto;
+2. normalizacao do termo;
+3. remocao de stopwords;
+4. remocao de termos ocultos admin;
+5. contagem por frequencia;
+6. corte Pareto 80/20;
+7. exibicao limitada no dashboard.
 
-- documentos
-- upload
-- leitura operacional
-- perguntas e respostas
-- extracao de informacao
-- suporte operacional
+Garantias:
 
-Fluxo oficial:
+- historico bruto e preservado;
+- ocultar termo nao apaga passado;
+- reexibir termo so reativa a agregacao futura/leitura atual;
+- termos ocultos ficam persistidos em tabela dedicada.
 
-`usuario -> upload/pergunta -> Cleide -> processamento IA/controlado -> resposta operacional`
+## 11. Banco de dados
 
-Responsabilidades:
+Novo modelo oficial:
 
-- interpretacao documental
-- perguntas operacionais
-- extracao contextual
-- fallback inteligente
-- observabilidade operacional
+`OnboardingWordCloudHiddenTerm`
 
-Limites de governanca:
+Campos:
 
-- nao substitui Cleiton
-- nao substitui Roberto
-- nao substitui Julia
+- `id`
+- `term_normalized`
+- `is_active`
+- `created_at`
+- `updated_at`
+- `hidden_by_user_id`
+- `notes`
 
-Admin Cleide confirmado:
+Migration associada:
 
-- tela oficial `/admin/agentes/cleide`
-- controles de contexto e upload
-- `chat_context_mode`
-- `upload_total_max`
-- toggles de `transportadora`, `uf_origem`, `uf_destino`, `temporal` e `paretos`
+- `r2s3t4u5v6w7_onboarding_word_cloud_hidden_term.py`
 
-Superficie operacional confirmada:
-
-- upload exige autenticacao e autorizacao operacional;
-- download do template nao exige login;
-- chat exige autenticacao e autorizacao operacional;
-- filtros analiticos passam pelo backend oficial.
-
-Observabilidade e fallback:
-
-- `flow_type`
-- `ai_flow_type`
-- `ai_used`
-- `fallback_used`
-- `policy_blocked`
-- `context_status`
-- `view_scope`
-- `active_filters`
-- `error_code`
-
-Falha IA:
-
-- fallback governado e auditavel;
-- `provider_error` entrega resposta por contingencia controlada.
-
-Falha upload:
-
-- resposta deve expor causa e orientacao operacional;
-- upload continua com metricas e status rastreaveis.
-
-Privacidade historica:
-
-- perguntas historicas nao devem ser armazenadas integralmente;
-- somente nuvem de palavras e agregacoes editoriais/operacionais devem permanecer como contrato documental.
-
-## 7. Consumo IA e governanca
+## 12. Ambientes
 
 Contratos oficiais:
 
-- `IaConsumoEvento`: tentativa real de chamada LLM;
-- `ProcessingEvent`: processamento tecnico nao-LLM e snapshots intermediarios;
-- identidade operacional: `conta_id`, `franquia_id`, `usuario_id`;
-- trilho oficial: Cleiton.
+- `APP_ENV`: `dev`, `homolog`, `prod`
+- `DATABASE_URL`: PostgreSQL
+- `PUBLIC_BASE_URL`: base publica canonica do ambiente
+- `APP_DATA_DIR`: persistencia operacional
 
-Campos de runtime e observabilidade confirmados:
+Promocao esperada:
 
-- `provider`
-- `model`
-- `timeout`
-- `tentativa`
-- `duracao`
-- `error_summary`
-- `status`
-- `flow_type`
-- `agent`
-
-## 8. Dashboard admin
-
-Contrato oficial atual:
-
-- bloco visual `Insight Estratégico (Customer Insight)` ocultado do dashboard;
-- backend e servicos associados permanecem preservados.
-
-## 9. Testes mapeados
-
-Suite atual:
-
-- `434 passed`
-
-Coberturas confirmadas:
-
-- editorial: `tests/test_julia_pipeline.py`, `tests/test_julia_redacao_metadata.py`
-- imagem: `tests/test_julia_imagem_fluxo.py`, `tests/test_web_media_generated.py`
-- pipeline: `tests/test_editorial_surface_contract.py`, `tests/test_julia_pipeline.py`
-- share e SEO: `tests/test_social_share.py`
-- runtime e observabilidade: `tests/test_ia_metrics_service.py`
-- Cleide: `tests/test_cleide_*`
-- upload e documentos: `tests/test_cleide_upload_api.py`, `tests/test_legal_documents_persistent_storage.py`
-- admin/editorial: `tests/test_admin_despublicacao_editorial.py`, `tests/test_admin_dashboard_visual.py`
-
-## 10. Resumo executivo
-
-O estado oficial consolidado do LogCompleta / Agentefrete hoje e um sistema com governanca central do Cleiton, editorial publico da Julia, estrategia e BI do Roberto e IA operacional controlada da Cleide. O projeto preserva contratos claros, runtime rastreavel, superficie publica canonica, fallback auditado e trilha oficial de consumo sem bypasss paralelos.
+- local -> `homolog` -> `producao`
+- migrations aplicadas ate `head`
+- validacao do onboarding, dashboard, Roberto e Cleide antes do promote

@@ -37,6 +37,7 @@ from app.painel_admin.admin_routes import admin_bp
 from app.ops_routes import ops_bp
 from app.user_area import user_bp
 from app.cleide_routes import cleide_bp
+from app.julia_documents_routes import julia_documents_bp
 from app.infra import (
     get_user_by_id,
     admin_required,
@@ -231,6 +232,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(ops_bp)
 app.register_blueprint(user_bp)
 app.register_blueprint(cleide_bp)
+app.register_blueprint(julia_documents_bp)
 
 @app.context_processor
 def inject_facebook_pixel_context():
@@ -500,6 +502,7 @@ def chat_julia():
         julia_chat_max_history=julia_chat_max_history,
         julia_chat_limits=julia_chat_limits,
         julia_chat_surface='operational',
+        julia_documents_ui=True,
         julia_handoff_context=_pop_onboarding_julia_context(),
     )
 
@@ -1283,8 +1286,28 @@ def api_chat_julia():
                 "authorization": authz,
             })
         max_history = get_julia_chat_max_history()
+        from app.cleiton_doc_contracts import FLOW_TYPE_JULIA_CHAT
+        from app.julia_doc_context import build_julia_document_context_for_chat
         from app.run_julia_chat import chat_julia_reply
-        result = chat_julia_reply(user_message, history, max_history=max_history)
+
+        try:
+            doc_ctx = build_julia_document_context_for_chat()
+        except Exception:
+            logging.exception(
+                "Falha ao montar contexto documental da Júlia; degradando para chat textual."
+            )
+            doc_ctx = {
+                "context_block": "",
+                "flow_type": FLOW_TYPE_JULIA_CHAT,
+                "meta": {},
+            }
+        result = chat_julia_reply(
+            user_message,
+            history,
+            max_history=max_history,
+            document_context_block=doc_ctx.get("context_block") or None,
+            flow_type=doc_ctx.get("flow_type"),
+        )
         result["authorization"] = authz
         result["limit_reached"] = not authz.get("permitido", True)
         return jsonify(result)

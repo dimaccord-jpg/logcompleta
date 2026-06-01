@@ -111,6 +111,7 @@ def save_config(
     credit_tokens_per_credit: float | None = None,
     credit_lines_per_credit: float | None = None,
     credit_ms_per_credit: float | None = None,
+    commit: bool = True,
 ) -> CleitonCostConfig:
     row = get_or_create_config()
     row.runtime_monthly_cost = runtime_monthly_cost
@@ -123,5 +124,6 @@ def save_config(
     row.credit_ms_per_credit = credit_ms_per_credit
     row.updated_at = utcnow_naive()
     db.session.add(row)
-    db.session.commit()
+    if commit:
+        db.session.commit()
     return row

@@ -1,24 +1,19 @@
 # Runtime IA e Observabilidade
 
-Data de consolidacao: `2026-05-26`
+Data de consolidacao: `2026-05-29`  
+Commit de referencia: `20fa165`
 
 ## 1. Objetivo
 
-Este documento consolida o runtime oficial de IA, consumo tecnico, fallback e observabilidade do projeto.
+Este documento consolida o runtime oficial de IA, consumo tecnico, fallback, observabilidade e metricas administrativas do estado atual.
 
-## 2. Regras globais
-
-- runtime de IA precisa ser rastreavel;
-- fallback nao pode mascarar erro;
-- erro precisa manter causa resumida e auditavel;
-- consumo de IA so e oficial quando passa pelo trilho do Cleiton;
-- acao visual ou pagina publica nao deve gerar consumo tecnico.
-
-## 3. Eventos oficiais
+## 2. Eventos oficiais
 
 ### `IaConsumoEvento`
 
-Representa tentativa real de chamada LLM, com persistencia de:
+Representa tentativa real de chamada LLM.
+
+Campos de runtime observados no estado atual:
 
 - `provider`
 - `operation`
@@ -26,116 +21,152 @@ Representa tentativa real de chamada LLM, com persistencia de:
 - `agent`
 - `flow_type`
 - `api_key_label`
-- tokens
-- status
-- identidade `conta_id` / `franquia_id` / `usuario_id`
+- `status`
+- `input_tokens`
+- `output_tokens`
+- `total_tokens`
+- `error_summary`
+- `conta_id`
+- `franquia_id`
+- `usuario_id`
 
 ### `ProcessingEvent`
 
-Representa processamento tecnico nao-LLM ou etapa auxiliar auditavel, incluindo:
+Representa processamento tecnico nao-LLM ou etapa auxiliar auditavel.
 
-- upload operacional
-- snapshot de contexto
-- tempo de processamento
-- linhas processadas
-- status
-- `error_summary` quando aplicavel
+Campos relevantes:
 
-## 4. Runtime oficial da Julia
+- `agent`
+- `flow_type`
+- `status`
+- `rows_processed`
+- `processing_time_ms`
+- `error_summary`
+- identidade operacional quando houver
 
-### Redacao
+## 3. Fluxos oficiais
 
-- chamadas de redacao passam pelo trilho governado do Cleiton;
-- artigo exige `redacao_status=sucesso` e `redacao_fallback=False`;
-- fallback de redacao encerra pipeline antes de imagem e publicacao.
+Fluxos atualmente documentados:
 
-### Imagem
+- `onboarding_discovery`
+- `operacional`
+- `administrativo`
 
-Configuracao efetiva exposta por `get_image_runtime_config()`:
+Leitura pratica desses fluxos:
 
-- `IMAGE_PROVIDER`
-- `GEMINI_MODEL_IMAGE`
-- `GEMINI_MODEL_IMAGE_FALLBACK`
-- `GEMINI_HTTP_TIMEOUT_MS`
-- `GEMINI_IMAGE_HTTP_TIMEOUT_MS`
-- provider efetivo
-- modelo efetivo principal
-- modelo efetivo fallback
-- timeout efetivo
+- `onboarding_discovery`: discovery da Home, com consumo interno de IA;
+- `operacional`: chat e processamento dos agentes produtivos;
+- `administrativo`: leituras, agregacoes e controles do painel admin.
+
+## 4. Copilot / onboarding discovery
+
+Contrato real do runtime:
+
+- endpoint: `POST /api/onboarding_discovery`
+- reset: `POST /api/onboarding_discovery/reset`
+- limite anonimo: `5` interacoes por sessao
+- ao atingir limite, o backend devolve bloqueio com CTA de login e nao chama Gemini
+- sessao anonima usa identidade interna/sistema para observabilidade
+
+Observabilidade do onboarding:
+
+- `flow_type = "onboarding_discovery"` em `IaConsumoEvento`
+- auditoria gerencial do discovery
+- contagem anonima por sessao
+- contexto opcional para handoff Julia
+
+Fallback:
+
+- se Gemini nao estiver disponivel, o sistema usa resposta local conversacional baseada no documento de capacidades
+- fallback nao deve inventar funcionalidades nem mudar a regra de handoff por atividade-fim
+
+## 5. Separacao de metricas
+
+O dashboard admin usa tres leituras canonicas:
+
+- `operational_tokens_month`
+- `onboarding_tokens_month`
+- `total_internal_tokens_month`
+
+Regras:
+
+- `operational_tokens_month`: soma mensal de `IaConsumoEvento` excluindo `flow_type=onboarding_discovery`
+- `onboarding_tokens_month`: soma mensal apenas de `flow_type=onboarding_discovery`
+- `total_internal_tokens_month`: soma de operacional + onboarding
+
+Franquia:
+
+- onboarding nao abate franquia;
+- onboarding conta apenas como consumo interno/admin.
+
+## 6. Dashboard admin de IA
+
+O payload consolidado do painel inclui:
+
+- tokens operacionais do mes;
+- tokens onboarding do mes;
+- total interno do mes;
+- tokens por chave de API;
+- contagem de eventos onboarding com e sem metrica;
+- falhas onboarding;
+- processamento Roberto;
+- processamento Cleide.
+
+## 7. Nuvem de palavras do onboarding
+
+Origem dos termos:
+
+- `AuditoriaGerencial.tipo_decisao == "onboarding_discovery"`
+- lista `user_terms_normalized` em `contexto_json`
+
+Pipeline real:
+
+1. ler termos normalizados do historico;
+2. normalizar novamente para visualizacao;
+3. remover stopwords;
+4. remover termos ocultos manualmente pelo admin;
+5. rankear por frequencia;
+6. aplicar Pareto 80/20;
+7. limitar exibicao no dashboard.
+
+Preservacao historica:
+
+- o historico bruto em `AuditoriaGerencial` nao e alterado;
+- ocultar termo age apenas na agregacao;
+- reexibir termo apenas desativa o ocultamento.
+
+## 8. Controles administrativos de hidden terms
 
 Persistencia:
 
-- storage atual: `settings.data_dir/generated`
-- URL publica: `/media/generated/`
+- tabela `onboarding_word_cloud_hidden_term`
+- modelo `OnboardingWordCloudHiddenTerm`
 
-Observabilidade de imagem:
+Operacoes:
 
-- `imagem_status`
-- `imagem_provider`
-- `imagem_motivo`
-- `imagem_origem`
-- `imagem_url_final`
-- `prompt_imagem_usado`
+- ocultar termo: `POST /admin/onboarding-word-cloud/hidden-terms`
+- reexibir termo: `POST /admin/onboarding-word-cloud/hidden-terms/<term_id>/restore`
 
-## 5. Runtime oficial da Cleide
+Campos persistidos:
 
-Fluxos principais:
+- `term_normalized`
+- `is_active`
+- `hidden_by_user_id`
+- `notes`
+- timestamps
 
-- upload `POST /api/cleide/upload`
-- status `GET /api/cleide/upload/status`
-- clear `POST /api/cleide/upload/clear`
-- filtro `POST /api/cleide/dashboard/filter`
-- chat `POST /api/chat_cleide`
+## 9. Ambientes
 
-Indicadores observaveis no payload ou na UI:
+Contratos:
 
-- `flow_type`
-- `ai_flow_type`
-- `ai_used`
-- `fallback_used`
-- `policy_blocked`
-- `context_status`
-- `view_scope`
-- `active_filters`
-- `error_code`
+- `APP_ENV` obrigatorio
+- `DATABASE_URL` em PostgreSQL
+- `PUBLIC_BASE_URL` como base canonica
+- `APP_DATA_DIR` para persistencia operacional
 
-Fallbacks documentados:
+Checklist rapido de observabilidade:
 
-- `provider_error`
-- `fallback_intent_desconhecida`
-- `fallback_fora_de_escopo`
-- `fallback_bloqueio_semantico`
-- `fallback_contexto_indisponivel`
-- `fallback_pergunta_invalida`
-- `fallback_pergunta_muito_longa`
-
-## 6. Regras de compartilhamento social
-
-O bloco de share publico:
-
-- nao usa IA;
-- nao usa `IaConsumoEvento`;
-- nao usa billing;
-- nao dispara pipeline;
-- apenas monta URLs publicas para Facebook, Threads, X, LinkedIn e WhatsApp.
-
-## 7. Homolog e producao
-
-Contrato de ambiente:
-
-- `APP_ENV` obrigatorio;
-- homolog e producao nao aceitam fallback implicito de ambiente;
-- `PUBLIC_BASE_URL` controla canonical, `og:url` e `share_url_abs`;
-- `settings.data_dir` define o storage persistente oficial;
-- `debug=False` em homolog e producao.
-
-## 8. Checklist operacional
-
-- confirmar `APP_ENV`
-- confirmar `DATABASE_URL` PostgreSQL
-- confirmar `PUBLIC_BASE_URL`
-- confirmar `settings.data_dir`
-- confirmar logs de provider/model/timeout/tentativa
-- confirmar `IaConsumoEvento` apenas em chamadas LLM reais
-- confirmar `ProcessingEvent` nos fluxos de upload e processamento
-- confirmar fallback auditado sem write indevido em patrimonio editorial
+- confirmar eventos de onboarding em `IaConsumoEvento`
+- confirmar separacao de tokens no dashboard admin
+- confirmar hidden terms no admin
+- confirmar que onboarding nao abate franquia

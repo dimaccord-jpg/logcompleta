@@ -1,93 +1,87 @@
 # Onboarding Tecnico
 
-Data de consolidacao: `2026-05-26`
+Data de consolidacao: `2026-05-29`  
+Commit de referencia: `20fa165`
 
 ## 1. Objetivo
 
 Acelerar a entrada tecnica no projeto sem criar leituras paralelas da arquitetura.
 
-## 2. Primeiros documentos
-
-Ler nesta ordem:
+## 2. Ordem de leitura
 
 1. `README.md`
-2. `docs/estado_oficial_consolidado.md`
-3. `docs/arquitetura_oficial.md`
-4. `docs/runtime_ia_e_observabilidade.md`
-5. `docs/troubleshooting_operacional.md`
-6. `docs/guia_monetizacao_franquias.md`
+2. `docs/auditoria_documental_2026-05-29.md`
+3. `docs/estado_oficial_consolidado.md`
+4. `docs/arquitetura_oficial.md`
+5. `docs/runtime_ia_e_observabilidade.md`
+6. `docs/runbook_onboarding_copilot.md`
+7. `migrations/README`
 
-## 3. Premissas de runtime
+## 3. Modulos principais para o estado atual
 
-- `APP_ENV` e obrigatorio e aceita apenas `dev`, `homolog`, `prod`
+- `app/web.py`: superficies publicas, onboarding discovery, Julia e Roberto
+- `app/static/js/chat_behavior.js`: shell visual do Copilot e handoff para Julia
+- `app/run_cleiton_discovery.py`: discovery conversational-first
+- `app/copilot_capabilities.md`: documento oficial de capacidades do Copilot
+- `app/copilot_capabilities.py`: guardrails e regra por atividade-fim
+- `app/painel_admin/admin_routes.py`: dashboard admin e hidden terms
+- `app/services/ia_metrics_service.py`: metricas de IA
+- `app/services/onboarding_admin_analytics_service.py`: word cloud do onboarding
+- `app/services/onboarding_word_cloud_hidden_terms_service.py`: ocultacao/reexibicao de termos
+- `app/models.py`: modelos de eventos e hidden terms
+
+## 4. Premissas de runtime
+
+- `APP_ENV` e obrigatorio e aceita `dev`, `homolog`, `prod`
 - `DATABASE_URL` deve ser PostgreSQL
-- `SECRET_KEY` forte e obrigatoria em `homolog` e `prod`
+- `SECRET_KEY` forte em `homolog` e `prod`
 - `PUBLIC_BASE_URL` define a base publica oficial
-- `APP_DATA_DIR` governa storage persistente via `settings.data_dir`
+- `APP_DATA_DIR` governa persistencia operacional
 
-## 4. Modulos principais
+## 5. O que mudou no estado atual
 
-- `app/web.py`: superficie publica e rotas web
-- `app/cleide_routes.py`: namespace oficial da Cleide
-- `app/run_julia_agente_pipeline.py`: pipeline editorial da Julia
-- `app/run_julia_agente_imagem.py`: runtime de imagem da Julia
-- `app/run_cleiton_agente_retencao.py`: retencao oficial
-- `app/services/ia_metrics_service.py`: leitura agregada de metricas de IA
+- a Home publica usa Copilot de discovery, nao Julia operacional;
+- o Copilot aceita sessao anonima;
+- existe limite de 5 interacoes anonimas por sessao;
+- `Nova conversa` reseta o estado do discovery;
+- Julia so entra como agente operacional real com login;
+- onboarding passou a ter observabilidade e contagem de tokens separadas;
+- o dashboard admin passou a mostrar nuvem de palavras do onboarding;
+- termos da nuvem podem ser ocultados e reexibidos sem apagar historico.
 
-## 5. Contratos que nao podem ser quebrados
+## 6. Regras que nao podem ser quebradas
 
-- nao criar rota paralela
-- nao criar blueprint paralelo
-- nao criar bypass operacional
-- nao mascarar erro com fallback silencioso
-- nao tirar consumo do trilho oficial do Cleiton
-- nao alterar `NoticiaPortal.url_imagem` por rotina de retencao
-- nao fazer share publico consumir IA
+- nao confundir Copilot com Julia;
+- nao encaminhar por artefato;
+- nao fazer onboarding abater franquia;
+- nao apagar historico bruto da word cloud;
+- nao criar rota paralela para dashboard ou hidden terms;
+- nao mascarar falha do discovery com comportamento inventado.
 
-## 6. Ambientes
+## 7. Ambientes
 
-### Dev
+### Local
 
-- pode usar fallback de `SECRET_KEY` apenas em dev
-- ainda exige `APP_ENV=dev`
+- usar `APP_ENV=dev`
+- validar Home, onboarding, dashboard e migrations localmente
 
 ### Homolog
 
-- usa host homologico oficial configurado
-- `PUBLIC_BASE_URL` precisa refletir o host de homolog
-- deve validar contratos publicos antes de promover
+- usar branch `homolog`
+- validar onboarding discovery, Julia, Roberto, Cleide, admin e migrations
 
 ### Producao
 
-- base publica oficial: `https://www.agentefrete.com.br`
-- canonical, `og:url` e share devem refletir essa base
+- branch `producao`
+- estado de referencia deste pacote documental: commit `20fa165`
 
-## 7. Testes de entrada
+## 8. Validacao minima de entrada
 
-Comando validado nesta consolidacao:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-Resultado de referencia:
-
-- `434 passed, 33 warnings`
-
-## 8. Onde investigar cada dominio
-
-- editorial e pipeline: `tests/test_julia_pipeline.py`
-- imagem e retencao editorial: `tests/test_julia_imagem_fluxo.py`, `tests/test_web_media_generated.py`
-- share e SEO: `tests/test_social_share.py`
-- Cleide upload/chat/admin: `tests/test_cleide_*`
-- dashboard e despublicacao: `tests/test_admin_dashboard_visual.py`, `tests/test_admin_despublicacao_editorial.py`
-
-## 9. Saida esperada do onboarding
-
-Ao fim do onboarding tecnico, a pessoa precisa conseguir:
-
-- explicar a arquitetura oficial
-- localizar as rotas oficiais de Julia, Roberto e Cleide
-- descrever o trilho de governanca do Cleiton
-- validar o contrato publico de share/SEO
-- reconhecer onde fallback e permitido e onde e proibido
+- abrir `/` e validar Copilot discovery
+- confirmar limite anonimo de 5 interacoes
+- validar CTA de login ao atingir limite
+- validar `Nova conversa`
+- validar handoff para Julia
+- validar `/admin/dashboard`
+- validar hidden terms do onboarding
+- validar Roberto e Cleide

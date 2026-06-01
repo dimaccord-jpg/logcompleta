@@ -6,6 +6,7 @@ Histórico limitado por JULIA_CHAT_MAX_HISTORY (settings ou env).
 import logging
 import os
 
+from app.cleiton_doc_contracts import FLOW_TYPE_JULIA_CHAT, FLOW_TYPE_JULIA_CHAT_DOCUMENTAL
 from app.prompts import JULIA_CHAT_SYSTEM_PROMPT
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.julia_web_search_service import (
@@ -123,9 +124,15 @@ def _build_contents_with_history(
     new_message: str,
     web_links: list[dict] | None = None,
     suggestion_meta: dict | None = None,
+    document_context_block: str | None = None,
 ) -> str:
     """Monta o prompt com system + histórico + nova mensagem (para envio único ao modelo)."""
-    parts = [JULIA_CHAT_SYSTEM_PROMPT.strip(), "\n\n---\n\nConversa recente:\n"]
+    parts = [JULIA_CHAT_SYSTEM_PROMPT.strip(), "\n\n---\n\n"]
+    doc_block = (document_context_block or "").strip()
+    if doc_block:
+        parts.append(doc_block)
+        parts.append("\n\n---\n\n")
+    parts.append("Conversa recente:\n")
     for msg in history_slice:
         role = (msg.get("role") or "user").lower()
         content = (msg.get("content") or "").strip()
@@ -180,11 +187,20 @@ def _extract_suggestion_metadata(user_message: str) -> tuple[str, dict]:
     return clean_message, meta
 
 
-def chat_julia_reply(user_message: str, history: list, max_history: int = 10) -> dict:
+def chat_julia_reply(
+    user_message: str,
+    history: list,
+    max_history: int = 10,
+    *,
+    document_context_block: str | None = None,
+    flow_type: str | None = None,
+) -> dict:
     """
     Envia a mensagem do usuário ao LLM com histórico limitado.
     history: lista de dicts com "role" (user/model) e "content".
     max_history: número máximo de mensagens anteriores a incluir (janela de memória).
+    document_context_block: bloco interno montado pelo Cleiton (Fase 4); não processa arquivos aqui.
+    flow_type: trilho de governança; padrão julia_chat ou julia_chat_documental quando há contexto.
     Retorna {"reply": str} em sucesso ou {"reply": str, "error": str} em fallback.
     """
     reply_fallback = "Desculpe, não consegui processar sua mensagem no momento. Tente de novo em instantes."
@@ -212,7 +228,15 @@ def chat_julia_reply(user_message: str, history: list, max_history: int = 10) ->
         clean_user_message,
         web_links=web_links,
         suggestion_meta=suggestion_meta,
+        document_context_block=document_context_block,
     )
+    resolved_flow_type = (flow_type or "").strip()
+    if not resolved_flow_type:
+        resolved_flow_type = (
+            FLOW_TYPE_JULIA_CHAT_DOCUMENTAL
+            if (document_context_block or "").strip()
+            else FLOW_TYPE_JULIA_CHAT
+        )
     last_error = None
     for model in _get_chat_model_candidates():
         try:
@@ -221,7 +245,7 @@ def chat_julia_reply(user_message: str, history: list, max_history: int = 10) ->
                 model=model,
                 contents=contents,
                 agent="julia",
-                flow_type="julia_chat",
+                flow_type=resolved_flow_type,
                 api_key_label=_api_key_label_chat(),
             )
             text = (response.text or "").strip()

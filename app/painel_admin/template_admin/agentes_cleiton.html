@@ -2,11 +2,10 @@
 
 {% block admin_content %}
 <div class="container-fluid">
-    <h4 class="mb-3">Cleiton — Parâmetros operacionais</h4>
+    <h4 class="mb-3">Cleiton â€” ParÃ¢metros operacionais</h4>
     <p class="text-muted small mb-4">
-        Custo de <strong>runtime</strong> (ex.: Render), referência <strong>Google</strong> (tokens) e
-        <strong>régua de conversão de créditos</strong> (quanto 1 crédito compra em tokens de IA, linhas processadas e milissegundos).
-        O custo estimado do processamento Roberto no dashboard usa o bloco Render abaixo.
+        Custo de <strong>runtime</strong> (ex.: Render), referÃªncia <strong>Google</strong> (tokens),
+        <strong>rÃ©gua de conversÃ£o de crÃ©ditos</strong> e controles administrativos do MVP documental da JÃºlia.
     </p>
 
     <div class="card border-0 shadow-sm mb-4">
@@ -15,7 +14,7 @@
             {% if cost_per_second is not none %}
             <p class="mb-0">
                 <code>custo_por_segundo</code> =
-                (runtime_monthly_cost × allocation_percent × overhead_factor) / month_seconds
+                (runtime_monthly_cost Ã— allocation_percent Ã— overhead_factor) / month_seconds
             </p>
             <p class="fs-4 fw-bold text-primary mt-2 mb-0">
                 R$ {{ '%.8f'|format(cost_per_second) }} / s
@@ -28,20 +27,20 @@
 
     <form method="post" action="{{ url_for('admin.agentes_cleiton') }}" class="card border-0 shadow-sm">
         <div class="card-body">
-            <h6 class="mb-3">Bloco A — Render (runtime)</h6>
+            <h6 class="mb-3">Bloco A â€” Render (runtime)</h6>
             <div class="row g-3 mb-4">
                 <div class="col-md-6">
                     <label class="form-label">Custo mensal do runtime (R$)</label>
                     <input type="text" name="runtime_monthly_cost" class="form-control"
                            value="{{ cfg.runtime_monthly_cost if cfg.runtime_monthly_cost is not none else '' }}"
                            placeholder="ex.: 450.00" inputmode="decimal">
-                    <small class="text-muted">Valor da fatura ou alocação mensal do serviço.</small>
+                    <small class="text-muted">Valor da fatura ou alocaÃ§Ã£o mensal do serviÃ§o.</small>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">month_seconds</label>
                     <input type="number" name="month_seconds" class="form-control" min="1"
                            value="{{ cfg.month_seconds or 2592000 }}">
-                    <small class="text-muted">Padrão: 2.592.000 (30 dias).</small>
+                    <small class="text-muted">PadrÃ£o: 2.592.000 (30 dias).</small>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">allocation_percent (1.0 = 100%)</label>
@@ -57,42 +56,210 @@
                 </div>
             </div>
 
-            <h6 class="mb-3">Bloco C — Google (referência simples)</h6>
+            <h6 class="mb-3">Bloco C â€” Google (referÃªncia simples)</h6>
             <div class="row g-3 mb-4">
                 <div class="col-md-6">
-                    <label class="form-label">Custo por milhão de tokens (referência)</label>
+                    <label class="form-label">Custo por milhÃ£o de tokens (referÃªncia)</label>
                     <input type="text" name="cost_per_million_tokens" class="form-control"
                            value="{{ cfg.cost_per_million_tokens if cfg.cost_per_million_tokens is not none else '' }}"
                            placeholder="opcional">
-                    <small class="text-muted">Apenas cadastro; não entra no cálculo do upload Roberto.</small>
+                    <small class="text-muted">Apenas cadastro; nÃ£o entra no cÃ¡lculo do upload Roberto.</small>
                 </div>
             </div>
 
-            <h6 class="mb-3">Bloco D — Régua de conversão de créditos</h6>
-            <p class="small text-muted mb-3">Quanto <strong>1 crédito</strong> compra de cada recurso (deixe em branco se ainda não definido).</p>
+            <h6 class="mb-3">Bloco D â€” RÃ©gua de conversÃ£o de crÃ©ditos</h6>
+            <p class="small text-muted mb-3">Quanto <strong>1 crÃ©dito</strong> compra de cada recurso (deixe em branco se ainda nÃ£o definido).</p>
             <div class="row g-3 mb-3">
                 <div class="col-md-4">
-                    <label class="form-label">Tokens de IA por 1 crédito</label>
+                    <label class="form-label">Tokens de IA por 1 crÃ©dito</label>
                     <input type="text" name="credit_tokens_per_credit" class="form-control"
                            value="{{ cfg.credit_tokens_per_credit if cfg.credit_tokens_per_credit is not none else '' }}"
                            placeholder="ex.: 1000" inputmode="decimal">
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Linhas processadas por 1 crédito</label>
+                    <label class="form-label">Linhas processadas por 1 crÃ©dito</label>
                     <input type="text" name="credit_lines_per_credit" class="form-control"
                            value="{{ cfg.credit_lines_per_credit if cfg.credit_lines_per_credit is not none else '' }}"
                            placeholder="ex.: 500" inputmode="decimal">
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Milissegundos processados por 1 crédito</label>
+                    <label class="form-label">Milissegundos processados por 1 crÃ©dito</label>
                     <input type="text" name="credit_ms_per_credit" class="form-control"
                            value="{{ cfg.credit_ms_per_credit if cfg.credit_ms_per_credit is not none else '' }}"
                            placeholder="ex.: 60000" inputmode="decimal">
                 </div>
             </div>
 
+            <hr class="my-4">
+
+            <h6 class="mb-3">Bloco E â€” Upload documental governado</h6>
+            <input type="hidden" name="cleiton_doc_form" value="1">
+            <p class="small text-muted mb-3">
+                Controles administrativos do MVP documental da JÃºlia via <code>ConfigRegras</code>
+                com prefixo <code>cleiton_doc_</code>.
+            </p>
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-3 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="upload_enabled" name="upload_enabled" {% if doc_cfg.upload_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="upload_enabled">upload_enabled</label>
+                </div>
+                <div class="col-md-3 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="cleanup_enabled" name="cleanup_enabled" {% if doc_cfg.cleanup_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="cleanup_enabled">cleanup_enabled</label>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">max_files_per_session</label>
+                    <input type="number" min="1" max="20" name="max_files_per_session" class="form-control" value="{{ doc_cfg.max_files_per_session }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">upload_ttl_hours</label>
+                    <input type="number" min="1" max="168" name="upload_ttl_hours" class="form-control" value="{{ doc_cfg.upload_ttl_hours }}">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">session_max_bytes</label>
+                    <input type="number" min="262144" name="session_max_bytes" class="form-control" value="{{ doc_cfg.session_max_bytes }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">prompt_context_max_chars</label>
+                    <input type="number" min="2000" name="prompt_context_max_chars" class="form-control" value="{{ doc_cfg.prompt_context_max_chars }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">prompt_max_files_considered</label>
+                    <input type="number" min="1" max="{{ doc_cfg.max_files_per_session }}" name="prompt_max_files_considered" class="form-control" value="{{ doc_cfg.prompt_max_files_considered }}">
+                </div>
+            </div>
+
+            <h6 class="mb-3">PDF</h6>
+            <div class="row g-3 mb-4">
+                <div class="col-md-3 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="pdf_enabled" name="pdf_enabled" {% if doc_cfg.pdf_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="pdf_enabled">pdf_enabled</label>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">pdf_max_bytes</label>
+                    <input type="number" min="32768" name="pdf_max_bytes" class="form-control" value="{{ doc_cfg.pdf_max_bytes }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">pdf_max_pages</label>
+                    <input type="number" min="1" name="pdf_max_pages" class="form-control" value="{{ doc_cfg.pdf_max_pages }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">pdf_max_chars</label>
+                    <input type="number" min="1000" name="pdf_max_chars" class="form-control" value="{{ doc_cfg.pdf_max_chars }}">
+                </div>
+            </div>
+
+            <h6 class="mb-3">Excel / XLSX</h6>
+            <div class="row g-3 mb-4">
+                <div class="col-md-3 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="excel_enabled" name="excel_enabled" {% if doc_cfg.excel_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="excel_enabled">excel_enabled</label>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">excel_max_bytes</label>
+                    <input type="number" min="32768" name="excel_max_bytes" class="form-control" value="{{ doc_cfg.excel_max_bytes }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">excel_max_rows</label>
+                    <input type="number" min="1" name="excel_max_rows" class="form-control" value="{{ doc_cfg.excel_max_rows }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">excel_max_columns</label>
+                    <input type="number" min="1" name="excel_max_columns" class="form-control" value="{{ doc_cfg.excel_max_columns }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">excel_max_chars</label>
+                    <input type="number" min="1000" name="excel_max_chars" class="form-control" value="{{ doc_cfg.excel_max_chars }}">
+                </div>
+            </div>
+
+            <h6 class="mb-3">DOCX</h6>
+            <div class="row g-3 mb-4">
+                <div class="col-md-3 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="docx_enabled" name="docx_enabled" {% if doc_cfg.docx_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="docx_enabled">docx_enabled</label>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">docx_max_bytes</label>
+                    <input type="number" min="32768" name="docx_max_bytes" class="form-control" value="{{ doc_cfg.docx_max_bytes }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">docx_max_paragraphs</label>
+                    <input type="number" min="1" name="docx_max_paragraphs" class="form-control" value="{{ doc_cfg.docx_max_paragraphs }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">docx_max_chars</label>
+                    <input type="number" min="1000" name="docx_max_chars" class="form-control" value="{{ doc_cfg.docx_max_chars }}">
+                </div>
+            </div>
+
+            <h6 class="mb-3">TXT</h6>
+            <div class="row g-3 mb-4">
+                <div class="col-md-3 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="txt_enabled" name="txt_enabled" {% if doc_cfg.txt_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="txt_enabled">txt_enabled</label>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">txt_max_bytes</label>
+                    <input type="number" min="32768" name="txt_max_bytes" class="form-control" value="{{ doc_cfg.txt_max_bytes }}">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">txt_max_chars</label>
+                    <input type="number" min="1000" name="txt_max_chars" class="form-control" value="{{ doc_cfg.txt_max_chars }}">
+                </div>
+            </div>
+
+            <h6 class="mb-3">XML</h6>
+            <div class="row g-3 mb-4">
+                <div class="col-md-3 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="xml_enabled" name="xml_enabled" {% if doc_cfg.xml_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="xml_enabled">xml_enabled</label>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">xml_max_bytes</label>
+                    <input type="number" min="32768" name="xml_max_bytes" class="form-control" value="{{ doc_cfg.xml_max_bytes }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">xml_max_nodes</label>
+                    <input type="number" min="1" name="xml_max_nodes" class="form-control" value="{{ doc_cfg.xml_max_nodes }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">xml_max_depth</label>
+                    <input type="number" min="1" name="xml_max_depth" class="form-control" value="{{ doc_cfg.xml_max_depth }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">xml_max_chars</label>
+                    <input type="number" min="1000" name="xml_max_chars" class="form-control" value="{{ doc_cfg.xml_max_chars }}">
+                </div>
+            </div>
+
+            <h6 class="mb-3">CSV</h6>
+            <div class="row g-3 mb-4">
+                <div class="col-md-3 form-check ms-2">
+                    <input class="form-check-input" type="checkbox" id="csv_enabled" name="csv_enabled" {% if doc_cfg.csv_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="csv_enabled">csv_enabled</label>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">csv_max_bytes</label>
+                    <input type="number" min="32768" name="csv_max_bytes" class="form-control" value="{{ doc_cfg.csv_max_bytes }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">csv_max_rows</label>
+                    <input type="number" min="1" name="csv_max_rows" class="form-control" value="{{ doc_cfg.csv_max_rows }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">csv_max_columns</label>
+                    <input type="number" min="1" name="csv_max_columns" class="form-control" value="{{ doc_cfg.csv_max_columns }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">csv_max_chars</label>
+                    <input type="number" min="1000" name="csv_max_chars" class="form-control" value="{{ doc_cfg.csv_max_chars }}">
+                </div>
+            </div>
+
             {% if cfg.updated_at %}
-            <p class="small text-muted mb-3">Última atualização: {{ cfg.updated_at.strftime('%d/%m/%Y %H:%M') }}</p>
+            <p class="small text-muted mb-3">Ãšltima atualizaÃ§Ã£o: {{ cfg.updated_at.strftime('%d/%m/%Y %H:%M') }}</p>
             {% endif %}
 
             <button type="submit" class="btn btn-primary">Salvar</button>
