@@ -16,6 +16,14 @@ from app.services.julia_web_search_service import (
 
 logger = logging.getLogger(__name__)
 SUGGESTION_META_PREFIX = "[[JULIA_SUGGESTION::"
+DEFAULT_JULIA_CHAT_MODEL_FALLBACK = "gemini-2.5-flash-lite"
+DOCUMENTAL_DEADLINE_REPLY = (
+    "Consegui acessar os PDFs, mas a comparação completa entre eles excedeu o tempo de processamento. "
+    "Você pode pedir uma comparação mais específica, como preços, prazos, cláusulas ou diferenças por rota."
+)
+GENERIC_REPLY_FALLBACK = (
+    "Desculpe, não consegui processar sua mensagem no momento. Tente de novo em instantes."
+)
 
 
 def _api_key_label_chat() -> str:
@@ -25,20 +33,53 @@ def _api_key_label_chat() -> str:
         return "GEMINI_API_KEY"
     return "unknown"
 
-# Modelos em ordem de fallback (compatível com run_julia_agente_redacao)
-def _get_chat_model_candidates():
+def _get_chat_model_fallback() -> str:
+    for env_key in ("JULIA_CHAT_MODEL_FALLBACK", "GEMINI_MODEL_TEXT_FALLBACK"):
+        val = (os.getenv(env_key) or "").strip()
+        if val:
+            return val
+    return DEFAULT_JULIA_CHAT_MODEL_FALLBACK
+
+
+def _get_chat_model_candidates() -> list[str]:
+    """Modelos em ordem de fallback; nunca inclui gemini-1.5-flash (descontinuado no runtime)."""
     candidates = [
-        os.getenv("GEMINI_MODEL_TEXT", "").strip(),
+        (os.getenv("GEMINI_MODEL_TEXT") or "").strip(),
         "gemini-2.5-flash",
-        "gemini-1.5-flash",
+        _get_chat_model_fallback(),
     ]
-    seen = set()
-    out = []
+    seen: set[str] = set()
+    out: list[str] = []
     for c in candidates:
         if c and c not in seen:
             seen.add(c)
             out.append(c)
     return out
+
+
+def _is_documental_pdf_context(flow_type: str, document_file_parts: list | None) -> bool:
+    if flow_type != FLOW_TYPE_JULIA_CHAT_DOCUMENTAL:
+        return False
+    return bool([p for p in (document_file_parts or []) if p is not None])
+
+
+def _is_provider_deadline_error(exc: Exception | None) -> bool:
+    if exc is None:
+        return False
+    if isinstance(exc, TimeoutError):
+        return True
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "504",
+            "deadline_exceeded",
+            "deadline exceeded",
+            "timed out",
+            "timeout",
+            "time out",
+        )
+    )
 
 
 def _get_client():
@@ -78,6 +119,34 @@ def _format_web_links_markdown(web_links: list[dict]) -> str:
             continue
         lines.append(f"- [{title}]({url})")
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _summarize_contents_for_log(contents: str | list) -> dict:
+    if isinstance(contents, str):
+        return {
+            "contents_type": "str",
+            "contents_items": 1,
+            "item_types": ["text"],
+            "file_parts": 0,
+            "text_items": 1,
+        }
+    summary = {
+        "contents_type": type(contents).__name__,
+        "contents_items": len(contents),
+        "item_types": [],
+        "file_parts": 0,
+        "text_items": 0,
+    }
+    for item in contents:
+        if isinstance(item, str):
+            summary["item_types"].append("text")
+            summary["text_items"] += 1
+        elif getattr(item, "file_data", None) is not None:
+            summary["item_types"].append("file_part")
+            summary["file_parts"] += 1
+        else:
+            summary["item_types"].append(type(item).__name__)
+    return summary
 
 
 def _build_follow_up_suggestions(user_message: str) -> list[str]:
@@ -125,8 +194,9 @@ def _build_contents_with_history(
     web_links: list[dict] | None = None,
     suggestion_meta: dict | None = None,
     document_context_block: str | None = None,
-) -> str:
-    """Monta o prompt com system + histórico + nova mensagem (para envio único ao modelo)."""
+    document_file_parts: list | None = None,
+) -> str | list:
+    """Monta prompt com system + histórico + nova mensagem (string ou lista com partes de arquivo)."""
     parts = [JULIA_CHAT_SYSTEM_PROMPT.strip(), "\n\n---\n\n"]
     doc_block = (document_context_block or "").strip()
     if doc_block:
@@ -163,7 +233,11 @@ def _build_contents_with_history(
             parts.append("\n")
         parts.append("\n")
     parts.append("Júlia:")
-    return "".join(parts)
+    prompt_text = "".join(parts)
+    file_parts = [p for p in (document_file_parts or []) if p is not None]
+    if file_parts:
+        return file_parts + [prompt_text]
+    return prompt_text
 
 
 def _extract_suggestion_metadata(user_message: str) -> tuple[str, dict]:
@@ -193,6 +267,7 @@ def chat_julia_reply(
     max_history: int = 10,
     *,
     document_context_block: str | None = None,
+    document_file_parts: list | None = None,
     flow_type: str | None = None,
 ) -> dict:
     """
@@ -200,10 +275,10 @@ def chat_julia_reply(
     history: lista de dicts com "role" (user/model) e "content".
     max_history: número máximo de mensagens anteriores a incluir (janela de memória).
     document_context_block: bloco interno montado pelo Cleiton (Fase 4); não processa arquivos aqui.
+    document_file_parts: partes de arquivo Gemini autorizadas pelo Cleiton (PDF real).
     flow_type: trilho de governança; padrão julia_chat ou julia_chat_documental quando há contexto.
     Retorna {"reply": str} em sucesso ou {"reply": str, "error": str} em fallback.
     """
-    reply_fallback = "Desculpe, não consegui processar sua mensagem no momento. Tente de novo em instantes."
     clean_user_message, suggestion_meta = _extract_suggestion_metadata(user_message)
     if not (clean_user_message or "").strip():
         return {
@@ -229,17 +304,46 @@ def chat_julia_reply(
         web_links=web_links,
         suggestion_meta=suggestion_meta,
         document_context_block=document_context_block,
+        document_file_parts=document_file_parts,
     )
     resolved_flow_type = (flow_type or "").strip()
     if not resolved_flow_type:
+        has_doc_context = bool((document_context_block or "").strip()) or bool(document_file_parts)
         resolved_flow_type = (
-            FLOW_TYPE_JULIA_CHAT_DOCUMENTAL
-            if (document_context_block or "").strip()
-            else FLOW_TYPE_JULIA_CHAT
+            FLOW_TYPE_JULIA_CHAT_DOCUMENTAL if has_doc_context else FLOW_TYPE_JULIA_CHAT
         )
+    contents_summary = _summarize_contents_for_log(contents)
+    logger.info(
+        "Chat Julia request: flow_type=%s history_slice=%s web_links=%s doc_block_present=%s doc_file_parts=%s contents=%s",
+        resolved_flow_type,
+        len(history_slice),
+        len(web_links),
+        bool((document_context_block or "").strip()),
+        len([p for p in (document_file_parts or []) if p is not None]),
+        contents_summary,
+    )
     last_error = None
-    for model in _get_chat_model_candidates():
+    failed_models: list[str] = []
+    model_candidates = _get_chat_model_candidates()
+    documental_pdf = _is_documental_pdf_context(resolved_flow_type, document_file_parts)
+
+    for idx, model in enumerate(model_candidates):
+        if idx > 0:
+            logger.warning(
+                "Chat Julia fallback attempt: failed_model=%s fallback_model=%s flow_type=%s",
+                failed_models[-1],
+                model,
+                resolved_flow_type,
+            )
         try:
+            logger.info(
+                "Chat Julia provider attempt: model=%s flow_type=%s contents_type=%s contents_items=%s file_parts=%s",
+                model,
+                resolved_flow_type,
+                contents_summary["contents_type"],
+                contents_summary["contents_items"],
+                contents_summary["file_parts"],
+            )
             response = cleiton_governed_generate_content(
                 client,
                 model=model,
@@ -249,6 +353,12 @@ def chat_julia_reply(
                 api_key_label=_api_key_label_chat(),
             )
             text = (response.text or "").strip()
+            logger.info(
+                "Chat Julia provider success: model=%s response_text_present=%s usage_metadata_present=%s",
+                model,
+                bool(text),
+                getattr(response, "usage_metadata", None) is not None,
+            )
             if text:
                 links_md = _format_web_links_markdown(web_links)
                 if links_md:
@@ -258,13 +368,33 @@ def chat_julia_reply(
                     out["web_links"] = web_links
                 return out
             last_error = ValueError("Resposta vazia do modelo")
+            failed_models.append(model)
         except Exception as e:
             last_error = e
-            logger.warning("Chat Júlia modelo %s: %s", model, e)
+            failed_models.append(model)
+            logger.warning(
+                "Chat Julia provider failure: model=%s exc_type=%s message=%s",
+                model,
+                e.__class__.__name__,
+                e,
+            )
+            if documental_pdf and _is_provider_deadline_error(e):
+                logger.warning(
+                    "Chat Julia documental deadline: model=%s flow_type=%s file_parts=%s; "
+                    "retornando mensagem específica sem fallback adicional",
+                    model,
+                    resolved_flow_type,
+                    contents_summary["file_parts"],
+                )
+                break
 
     if last_error:
         logger.exception("Chat Júlia falhou após fallbacks: %s", last_error)
-    out = {"reply": reply_fallback, "suggestions": _build_follow_up_suggestions(clean_user_message)}
+    if documental_pdf and last_error and _is_provider_deadline_error(last_error):
+        reply_text = DOCUMENTAL_DEADLINE_REPLY
+    else:
+        reply_text = GENERIC_REPLY_FALLBACK
+    out = {"reply": reply_text, "suggestions": _build_follow_up_suggestions(clean_user_message)}
     if web_links:
         out["web_links"] = web_links
     return out

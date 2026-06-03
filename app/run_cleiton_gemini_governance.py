@@ -25,6 +25,42 @@ STATUS_FAILURE = "failure"
 PROVIDER_INTERNAL = "internal"
 
 
+def _summarize_generate_contents(contents: Any) -> dict[str, Any]:
+    if isinstance(contents, str):
+        return {
+            "contents_type": "str",
+            "contents_items": 1,
+            "item_types": ["text"],
+            "file_parts": 0,
+            "text_items": 1,
+        }
+    if not isinstance(contents, list):
+        return {
+            "contents_type": type(contents).__name__,
+            "contents_items": 1,
+            "item_types": [type(contents).__name__],
+            "file_parts": 0,
+            "text_items": 0,
+        }
+    summary = {
+        "contents_type": "list",
+        "contents_items": len(contents),
+        "item_types": [],
+        "file_parts": 0,
+        "text_items": 0,
+    }
+    for item in contents:
+        if isinstance(item, str):
+            summary["item_types"].append("text")
+            summary["text_items"] += 1
+        elif getattr(item, "file_data", None) is not None:
+            summary["item_types"].append("file_part")
+            summary["file_parts"] += 1
+        else:
+            summary["item_types"].append(type(item).__name__)
+    return summary
+
+
 def _truncate_err(msg: str | None, limit: int = 2000) -> str | None:
     if msg is None:
         return None
@@ -189,6 +225,14 @@ def cleiton_governed_generate_content(
     """
     Executa client.models.generate_content, registra evento e retorna a resposta do SDK.
     """
+    contents_summary = _summarize_generate_contents(contents)
+    logger.info(
+        "Governanca Gemini: generate_content start model=%s agent=%s flow_type=%s contents=%s",
+        model,
+        agent,
+        flow_type,
+        contents_summary,
+    )
     try:
         response = client.models.generate_content(
             model=model,
@@ -196,6 +240,15 @@ def cleiton_governed_generate_content(
             config=config,
         )
         inp, out, tot = _extract_usage_from_response(response)
+        logger.info(
+            "Governanca Gemini: generate_content response model=%s flow_type=%s usage_metadata_present=%s input_tokens=%s output_tokens=%s total_tokens=%s",
+            model,
+            flow_type,
+            getattr(response, "usage_metadata", None) is not None,
+            inp,
+            out,
+            tot,
+        )
         if inp is None and out is None and tot is None:
             status = STATUS_SUCCESS_NO_METRICS
         else:
@@ -214,6 +267,13 @@ def cleiton_governed_generate_content(
         )
         return response
     except Exception as e:
+        logger.warning(
+            "Governanca Gemini: generate_content provider failure model=%s flow_type=%s exc_type=%s message=%s",
+            model,
+            flow_type,
+            e.__class__.__name__,
+            e,
+        )
         _persist_event(
             operation=OP_GENERATE_CONTENT,
             model=model,

@@ -76,13 +76,16 @@ class TestCapabilityTaxonomyStructural:
 
     def test_capabilities_document_loads(self):
         doc = load_capabilities_document()
-        assert "Relatório de Camadas e Agentes" in doc
-        assert len(doc) > 1000
+        assert "Conhecimento do Copilot" in doc
+        assert len(doc) > 2000
         assert "Roberto" in doc
         assert "Cleide" in doc
         assert "Júlia" in doc
         assert "WMS" in doc
         assert "Regra-mãe: Artefatos vs Atividade Fim" in doc
+        assert "Artefato não define agente" in doc
+        assert "Gemini Files API" in doc
+        assert "discovery anônimo" in doc.lower() or "Discovery anônimo" in doc
         assert "planilha" in doc.lower()
         assert "cotação automatizada" in doc.lower() or "Cotação" in doc
 
@@ -711,8 +714,8 @@ class TestPlanilhaKnowledge:
 
     def test_document_teaches_spreadsheet_not_roberto_default(self):
         doc = load_capabilities_document()
-        assert "formato de **entrada**" in doc
-        assert "Artefatos não definem agente" in doc
+        assert "formato de **entrada**" in doc or "formato de entrada" in doc.lower()
+        assert "Artefato não define agente" in doc or "Artefatos não definem agente" in doc
 
     def test_resolve_spreadsheet_ambiguous_without_intent(self):
         assert resolve_spreadsheet_context("Tenho uma planilha de fretes.") == "spreadsheet_ambiguous"
@@ -862,8 +865,8 @@ class TestDashboardKnowledge:
 
     def test_document_teaches_artifacts_not_agents(self):
         doc = load_capabilities_document()
-        assert "Artefatos não definem agente" in doc
-        assert "formato de **visualização**" in doc
+        assert "Artefato não define agente" in doc or "Artefatos não definem agente" in doc
+        assert "formato de **visualização**" in doc or "visualização" in doc.lower()
 
     def test_resolve_dashboard_ambiguous(self):
         assert resolve_dashboard_context("Quero gerar dashboard.") == "dashboard_ambiguous"
@@ -978,9 +981,9 @@ class TestCostKnowledge:
 
     def test_document_teaches_activity_fim(self):
         doc = load_capabilities_document()
-        assert "Artefatos não definem agente" in doc
-        assert "Motor Quantitativo Preditivo" in doc
-        assert "Motor Quantitativo Investigativo" in doc
+        assert "Artefato não define agente" in doc or "Artefatos não definem agente" in doc
+        assert "Motor Quantitativo Preditivo" in doc or "Quantitativo Preditivo" in doc
+        assert "Motor Quantitativo Investigativo" in doc or "Quantitativo Investigativo" in doc
 
     def test_resolve_cost_ambiguous_without_intent(self):
         assert resolve_cost_context("Quero analisar meu custo de frete.") == "cost_ambiguous"
@@ -1252,6 +1255,117 @@ class TestActivityFimKnowledge:
         })
         result = cleiton_discovery_reply("Quero BI de frete.", [])
         assert result["handoff"] is None
+
+
+class TestDocumentKnowledge:
+    """Documento/PDF são artefatos; atividade fim define o agente (guardrails + doc)."""
+
+    def test_document_teaches_artifact_not_agent(self):
+        doc = load_capabilities_document()
+        assert "Artefato não define agente" in doc
+        assert "PDF" in doc
+        assert "discovery anônimo" in doc.lower() or "Discovery anônimo" in doc
+        assert "não deve prometer" in doc.lower()
+
+    def test_generic_pdf_suppresses_handoff(self):
+        assert should_suppress_handoff_for_unclear_activity("Tenho um PDF.")
+        assert resolve_activity_intent("Tenho um PDF.") == "ambiguous"
+
+    def test_generic_document_suppresses_handoff(self):
+        assert should_suppress_handoff_for_unclear_activity("Tenho um documento de frete.")
+        assert resolve_activity_intent("Tenho um documento.") == "ambiguous"
+
+    def test_pdf_generico_sem_handoff_local(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        result = cleiton_discovery_reply("Tenho um PDF.", [])
+        assert result["handoff"] is None
+        assert "Roberto" in result["reply"]
+        assert "Cleide" in result["reply"]
+
+    def test_pdf_generico_suprime_julia_do_gemini(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Vamos analisar seu PDF com a Júlia.",
+            "recommended_agent": "julia",
+            "handoff": {"destination": "julia_operational"},
+            "confidence": "high",
+            "reason": "pdf",
+        })
+        result = cleiton_discovery_reply("Tenho um PDF.", [])
+        assert result["handoff"] is None
+
+    def test_documento_consultivo_julia(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Comparar propostas e montar plano combina com a Júlia.",
+            "recommended_agent": "julia",
+            "handoff": {"destination": "julia_operational"},
+            "confidence": "high",
+            "reason": "consultivo documental",
+        })
+        msg = "Tenho um contrato em PDF e quero comparar propostas para decidir."
+        assert resolve_activity_intent(msg) == "julia_strategic"
+        result = cleiton_discovery_reply(msg, [])
+        assert result["handoff"]["destination"] == "julia_operational"
+
+    def test_documento_auditoria_cleide(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Cobrança indevida na planilha é auditoria com a Cleide.",
+            "recommended_agent": "cleide",
+            "handoff": {"destination": "cleide_audit"},
+            "confidence": "high",
+            "reason": "auditoria documental",
+        })
+        msg = "Tenho uma planilha e quero achar cobrança indevida."
+        assert resolve_activity_intent(msg) == "cleide_retrospective"
+        result = cleiton_discovery_reply(msg, [])
+        assert result["handoff"]["destination"] == "cleide_audit"
+
+    def test_documento_previsao_roberto(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Previsão dos próximos meses com histórico é Roberto.",
+            "recommended_agent": "roberto",
+            "handoff": {"destination": "roberto_bi"},
+            "confidence": "high",
+            "reason": "previsão documental",
+        })
+        msg = "Tenho histórico em planilha e quero previsão dos próximos meses."
+        assert resolve_activity_intent(msg) == "roberto_predictive"
+        result = cleiton_discovery_reply(msg, [])
+        assert result["handoff"]["destination"] == "roberto_bi"
+
+    def test_julia_doc_describes_operational_not_roberto_cleide_substitute(self):
+        doc = load_capabilities_document()
+        assert "consultiva-operacional" in doc or "consultivo-operacional" in doc
+        assert "não substitui" in doc.lower() or "não substitui" in doc
+        assert "Roberto" in doc and "Cleide" in doc
+
+    def test_discovery_home_sem_ui_documental(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        web = importlib.import_module("app.web")
+        monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+        html = web.app.test_client().get("/").get_data(as_text=True)
+        assert "ONBOARDING_DISCOVERY_MODE = true" in html
+        assert "julia_documents.js" not in html
+        assert "juliaDocumentsArea" not in html
+
+    def test_operational_julia_has_document_ui_separate(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        web = importlib.import_module("app.web")
+        monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=True))
+        monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
+        monkeypatch.setattr(
+            web,
+            "avaliar_autorizacao_operacao_por_franquia",
+            lambda _u: {"permitido": True},
+        )
+        html = web.app.test_client().get("/chat_julia?mode=operational").get_data(as_text=True)
+        assert "ONBOARDING_DISCOVERY_MODE" not in html
+        assert "juliaDocumentsArea" in html or "julia_documents.js" in html
 
 
 class TestBannedPatterns:

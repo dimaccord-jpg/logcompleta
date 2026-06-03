@@ -284,8 +284,16 @@ def test_listing_never_exposes_prepared_context(session_app):
 
 
 def test_pdf_placeholder_does_not_pretend_content(session_app, monkeypatch):
+    import app.cleiton_doc_gemini_files as gemini_files
     import app.cleiton_doc_service as svc
-    from tests.cleiton_doc_fixtures import make_minimal_pdf
+    from tests.cleiton_doc_fixtures import make_minimal_pdf, patch_gemini_pdf_upload
+
+    patch_gemini_pdf_upload(monkeypatch)
+    monkeypatch.setattr(
+        gemini_files,
+        "build_gemini_file_part_for_generate",
+        lambda _r, **k: SimpleNamespace(uri="https://x", mime_type="application/pdf"),
+    )
 
     with session_app.test_request_context("/"):
         svc.prepare_and_register_document(
@@ -294,7 +302,9 @@ def test_pdf_placeholder_does_not_pretend_content(session_app, monkeypatch):
             mime_type="application/pdf",
         )
         doc_ctx = build_julia_document_context_for_chat()
-    assert "File API pendente" in doc_ctx["context_block"] or "indisponível nesta fase" in doc_ctx["context_block"]
+    assert "File API pendente" not in doc_ctx["context_block"]
+    assert "indisponível nesta fase" not in doc_ctx["context_block"]
+    assert "multimodal" in doc_ctx["context_block"] or "Gemini File API" in doc_ctx["context_block"]
 
 
 def test_api_chat_julia_degrades_when_document_context_fails(app, ctx, monkeypatch, tmp_path):

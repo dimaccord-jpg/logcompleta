@@ -7,6 +7,7 @@ e produz bloco interno de prompt. Não expõe prepared_context ao frontend.
 from __future__ import annotations
 
 import json
+import logging
 
 from flask import has_request_context, session
 
@@ -19,10 +20,16 @@ from app.cleiton_doc_contracts import (
     FIELD_EXTENSION,
     FIELD_MIME_TYPE,
     FIELD_PREPARED_CONTEXT,
+    FIELD_STATUS,
     FIELD_TRUNCATED,
     FLOW_TYPE_JULIA_CHAT,
     FLOW_TYPE_JULIA_CHAT_DOCUMENTAL,
+    STATUS_ERROR,
     get_cleiton_doc_ids,
+)
+from app.cleiton_doc_gemini_files import (
+    build_gemini_file_part_for_generate,
+    pdf_context_ready_from_record,
 )
 from app.cleiton_doc_service import (
     cleanup_expired_documents_for_session,
@@ -33,26 +40,46 @@ from app.prompts import JULIA_CHAT_DOCUMENTAL_GUIDANCE
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
 
 _TRUNCATION_NOTICE = "[... contexto truncado por limite de caracteres ...]"
+logger = logging.getLogger(__name__)
 
 
 def _empty_chat_context() -> dict:
     return {
         "context_block": "",
+        "gemini_file_parts": [],
         "flow_type": FLOW_TYPE_JULIA_CHAT,
         "meta": {
             "files_considered": 0,
             "files_total_active": 0,
             "context_truncated": False,
             "prompt_chars_used": 0,
+            "pdf_files_ready": 0,
         },
     }
 
 
 def _format_gemini_file_block(record: dict) -> str:
+    display = record.get(FIELD_DISPLAY_NAME) or "documento"
+    status = (record.get(FIELD_STATUS) or "").strip().lower()
+    if status == STATUS_ERROR:
+        return (
+            f"- Observações: PDF \"{display}\" não pôde ser preparado para leitura pela IA. "
+            "Informe ao usuário que o arquivo precisa ser reenviado ou substituído.\n"
+            "- Conteúdo preparado:\n"
+            "  (Leitura via Gemini File API indisponível para este anexo.)\n"
+        )
+    if pdf_context_ready_from_record(record):
+        return (
+            f"- Observações: PDF \"{display}\" anexado e disponível como contexto multimodal "
+            "via Gemini File API. Responda com base no documento; cite evidências quando possível. "
+            "Se não encontrar informação no PDF, diga explicitamente.\n"
+            "- Conteúdo preparado:\n"
+            "  (Conteúdo do PDF enviado ao modelo como parte de arquivo — não repetir como texto aqui.)\n"
+        )
     meta_lines = [
-        "- Observações: PDF preparado para Gemini File API; conteúdo textual ainda indisponível nesta fase.",
+        "- Observações: PDF ainda não está pronto para leitura pela IA nesta sessão.",
         "- Conteúdo preparado:",
-        "  (Metadados técnicos do PDF — leitura via File API pendente para fase posterior.)",
+        "  (Aguardando preparação via Gemini File API.)",
     ]
     try:
         payload = json.loads(record.get(FIELD_PREPARED_CONTEXT) or "{}")
@@ -65,7 +92,8 @@ def _format_gemini_file_block(record: dict) -> str:
             "size_bytes",
             "page_count",
             "max_pages_configured",
-            "local_text_extraction",
+            "gemini_file_ready",
+            "gemini_file_error",
         )
         for key in safe_keys:
             if key in payload:
@@ -102,11 +130,24 @@ def _format_document_block(index: int, record: dict) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def _collect_gemini_file_parts(records: list[dict]) -> list:
+    parts: list = []
+    for record in records:
+        if (record.get(FIELD_CONTEXT_KIND) or "").strip() != CONTEXT_KIND_GEMINI_FILE:
+            continue
+        if not pdf_context_ready_from_record(record):
+            continue
+        part = build_gemini_file_part_for_generate(record)
+        if part is not None:
+            parts.append(part)
+    return parts
+
+
 def build_julia_document_context_for_chat() -> dict:
     """
     Monta bloco de contexto documental para injeção no prompt da Júlia.
 
-    Retorna dict com context_block (str), flow_type e meta técnica.
+    Retorna dict com context_block (str), gemini_file_parts, flow_type e meta técnica.
     """
     if not has_request_context():
         return _empty_chat_context()
@@ -151,13 +192,39 @@ def build_julia_document_context_for_chat() -> dict:
         context_block = context_block[: max_chars - len(_TRUNCATION_NOTICE)] + _TRUNCATION_NOTICE
         context_truncated = True
 
+    gemini_file_parts = _collect_gemini_file_parts(considered)
+    pdf_ready_count = sum(1 for r in considered if pdf_context_ready_from_record(r))
+    doc_summary = []
+    for record in considered:
+        doc_summary.append(
+            {
+                "display_name": (record.get(FIELD_DISPLAY_NAME) or "documento")[:120],
+                "doc_type": (record.get(FIELD_DOC_TYPE) or "")[:20],
+                "context_kind": (record.get(FIELD_CONTEXT_KIND) or "")[:40],
+                "status": (record.get(FIELD_STATUS) or "")[:20],
+                "pdf_ready": pdf_context_ready_from_record(record),
+            }
+        )
+    logger.info(
+        "Julia doc context: files_total_active=%s files_considered=%s pdf_files_ready=%s gemini_file_parts=%s context_truncated=%s prompt_chars_used=%s docs=%s",
+        len(active_records),
+        len(considered),
+        pdf_ready_count,
+        len(gemini_file_parts),
+        context_truncated,
+        len(context_block),
+        doc_summary,
+    )
+
     return {
         "context_block": context_block,
+        "gemini_file_parts": gemini_file_parts,
         "flow_type": FLOW_TYPE_JULIA_CHAT_DOCUMENTAL,
         "meta": {
             "files_considered": len(considered),
             "files_total_active": len(active_records),
             "context_truncated": context_truncated,
             "prompt_chars_used": len(context_block),
+            "pdf_files_ready": pdf_ready_count,
         },
     }

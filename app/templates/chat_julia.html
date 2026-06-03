@@ -1,7 +1,9 @@
 {# Componente de chat do Copilot (discovery) ou da Júlia (operational). #}
 {% set julia_surface = julia_chat_surface|default('discovery') %}
-{% set julia_docs_ui = julia_documents_ui|default(false) %}
-<div class="julia-chat-wrapper" id="juliaChatWrapper">
+{% set julia_documents_ui = julia_documents_ui|default(false) %}
+<div class="julia-chat-wrapper{% if julia_documents_ui %} julia-chat-with-documents julia-chat-embedded{% endif %}"
+     id="juliaChatWrapper"
+     {% if julia_documents_ui %}data-julia-documents="true"{% endif %}>
   <div class="julia-chat-container">
     <div class="julia-chat-header">
       <div class="d-flex align-items-center">
@@ -60,11 +62,83 @@
       </div>
       {% endif %}
     </div>
-    {% if julia_docs_ui %}
-    <div class="julia-documents-area" id="juliaDocumentsArea" aria-live="polite">
-      <div class="julia-documents-toolbar">
+    <div class="julia-chat-input-area">
+      <form class="julia-chat-form{% if julia_documents_ui %} julia-chat-form-with-attach{% endif %}" id="juliaChatForm" role="form">
+        {% if julia_documents_ui %}
+        <div class="julia-chat-composer-wrap" id="juliaChatComposerWrap">
+          <div class="julia-chat-composer" id="juliaChatComposer">
+            <button type="button"
+                    class="btn julia-chat-attach-btn"
+                    id="juliaChatAttachBtn"
+                    aria-label="Abrir menu de ações"
+                    aria-expanded="false"
+                    aria-controls="juliaChatActionsMenu"
+                    aria-haspopup="menu"
+                    title="Abrir menu de ações">
+              <span class="julia-chat-attach-icon" aria-hidden="true">+</span>
+            </button>
+            <input type="file"
+                   id="juliaChatFileInput"
+                   class="visually-hidden"
+                   accept=".txt,.xml,.csv,.xlsx,.docx,.pdf"
+                   tabindex="-1"
+                   aria-hidden="true">
+            <textarea class="form-control julia-chat-input" id="juliaChatInput"
+                      placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
+            <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
+              <i class="bi bi-send-fill"></i>
+            </button>
+          </div>
+          <div class="julia-chat-actions-menu"
+               id="juliaChatActionsMenu"
+               role="menu"
+               aria-label="Menu de ações da Júlia"
+               hidden>
+            <button type="button"
+                    class="julia-actions-item"
+                    id="juliaChatUploadItem"
+                    role="menuitem">
+              <i class="bi bi-paperclip" aria-hidden="true"></i>
+              <span>Enviar arquivos</span>
+            </button>
+            <div class="julia-actions-divider" role="separator" aria-hidden="true"></div>
+            {% set _composer_cleide_href = cleide_auditoria_href if cleide_auditoria_href is defined else (url_for('cleide.auditoria_frete') if has_endpoint('cleide.auditoria_frete') else url_for('index')) %}
+            {% set _composer_feed_href = feed_href if feed_href is defined else (url_for('feed') if has_endpoint('feed') else '/feed') %}
+            <a href="{{ url_for('fretes') }}" class="julia-actions-item" role="menuitem">
+              <i class="bi bi-graph-up" aria-hidden="true"></i>
+              <span>Previsibilidade Frete</span>
+            </a>
+            <a href="{{ _composer_cleide_href }}" class="julia-actions-item" role="menuitem">
+              <i class="bi bi-bar-chart" aria-hidden="true"></i>
+              <span>BI - Fretes</span>
+            </a>
+            <a href="{{ url_for('controle_estoque') }}" class="julia-actions-item" role="menuitem">
+              <i class="bi bi-box-seam" aria-hidden="true"></i>
+              <span>Controle de Estoque</span>
+            </a>
+            <a href="{{ _composer_feed_href }}" class="julia-actions-item" role="menuitem">
+              <i class="bi bi-rss" aria-hidden="true"></i>
+              <span>Feed</span>
+            </a>
+          </div>
+        </div>
+        {% else %}
+        <div class="input-group">
+          <textarea class="form-control julia-chat-input" id="juliaChatInput"
+                    placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
+          <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
+            <i class="bi bi-send-fill"></i>
+          </button>
+        </div>
+        {% endif %}
+      </form>
+      <div class="julia-chat-limit-msg small mt-1" id="juliaChatLimitMsg" style="display: none;"></div>
+    </div>
+    {% if julia_documents_ui %}
+    <div class="julia-documents-area julia-documents-area-empty" id="juliaDocumentsArea" aria-live="polite">
+      <div class="julia-documents-toolbar" id="juliaDocumentsToolbar" style="display: none;">
         <p class="julia-documents-hint small mb-0">
-          Contexto documental temporário — você pode remover quando quiser.
+          Documentos anexados nesta conversa.
         </p>
         <button type="button"
                 class="btn btn-sm julia-documents-clear-btn"
@@ -79,33 +153,6 @@
       <div class="julia-documents-error small" id="juliaDocumentsError" role="alert" style="display: none;"></div>
     </div>
     {% endif %}
-    <div class="julia-chat-input-area">
-      <form class="julia-chat-form{% if julia_docs_ui %} julia-chat-form-with-attach{% endif %}" id="juliaChatForm" role="form">
-        <div class="input-group">
-          {% if julia_docs_ui %}
-          <button type="button"
-                  class="btn julia-chat-attach-btn"
-                  id="juliaChatAttachBtn"
-                  aria-label="Anexar documento à conversa"
-                  title="Anexar documento">
-            <i class="bi bi-paperclip" aria-hidden="true"></i>
-          </button>
-          <input type="file"
-                 id="juliaChatFileInput"
-                 class="visually-hidden"
-                 accept=".txt,.xml,.csv,.xlsx,.docx,.pdf,text/plain,text/xml,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
-                 tabindex="-1"
-                 aria-hidden="true">
-          {% endif %}
-          <textarea class="form-control julia-chat-input" id="juliaChatInput"
-                    placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
-          <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
-            <i class="bi bi-send-fill"></i>
-          </button>
-        </div>
-      </form>
-      <div class="julia-chat-limit-msg small mt-1" id="juliaChatLimitMsg" style="display: none;"></div>
-    </div>
   </div>
 </div>
 
@@ -242,23 +289,216 @@
     box-shadow: 0 0 16px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.25)) !important;
     outline: none;
   }
-  .julia-chat-form .btn {
+  .julia-chat-form .julia-chat-send {
     border-radius: 0 1.5rem 1.5rem 0;
     background: var(--af-cyan, #00BFFF) !important;
     border: 1px solid var(--af-cyan) !important;
     color: #fff !important;
     box-shadow: 0 0 12px var(--af-cyan-glow, rgba(0, 191, 255, 0.15));
   }
-  .julia-chat-form .btn:hover {
+  .julia-chat-form .julia-chat-send:hover {
     background: var(--af-cyan-bright, #00D4FF) !important;
     border-color: var(--af-cyan-bright) !important;
     box-shadow: 0 0 20px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.3));
   }
-  {% if julia_docs_ui %}
+  {% if julia_documents_ui %}
+  .julia-chat-wrapper.julia-chat-embedded {
+    border: none;
+    box-shadow: none;
+    background: transparent;
+    overflow: visible;
+    margin-bottom: 1rem;
+  }
+  .julia-chat-embedded .julia-chat-container {
+    min-height: 0;
+    overflow: visible;
+  }
+  .julia-chat-embedded .julia-chat-header {
+    padding: 0 0 0.85rem;
+    border-bottom: none;
+    background: transparent;
+  }
+  .julia-chat-embedded .julia-chat-messages {
+    background: transparent;
+    padding: 0 0 1rem;
+    max-height: none;
+    min-height: 0;
+    overflow: visible;
+  }
+  .julia-chat-embedded .julia-chat-input-area {
+    padding: 0;
+    border-top: none;
+    background: transparent;
+    overflow: visible;
+  }
+  .julia-chat-embedded .julia-chat-form {
+    overflow: visible;
+  }
+  .julia-chat-composer-wrap {
+    position: relative;
+    width: 100%;
+    overflow: visible;
+  }
+  .julia-chat-composer {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid rgba(0, 191, 255, 0.35);
+    border-radius: 1.75rem;
+    background: var(--af-bg-muted, #1E1E2E);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+  }
+  .julia-chat-composer:focus-within {
+    border-color: var(--af-cyan-bright, #00D4FF);
+    box-shadow: 0 0 16px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.25));
+  }
+  .julia-chat-form-with-attach .julia-chat-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    resize: vertical;
+    height: 44px;
+    min-height: 44px;
+    max-height: 9rem;
+    margin: 0;
+    padding: 0.55rem 0.75rem;
+    line-height: 1.35;
+    overflow-y: auto;
+  }
+  .julia-chat-form-with-attach .julia-chat-input:focus {
+    box-shadow: none !important;
+    outline: none;
+  }
+  .julia-chat-attach-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    width: 48px;
+    height: 48px;
+    border: none !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: var(--af-text-primary, #E8EAF2) !important;
+    box-shadow: none !important;
+    min-width: 48px;
+    padding: 0 0 0 0.35rem;
+  }
+  .julia-chat-attach-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    font-size: 1.65rem;
+    font-weight: 600;
+    line-height: 1;
+    transition: transform 0.22s ease, color 0.15s ease;
+    transform-origin: center center;
+  }
+  .julia-chat-attach-btn[aria-expanded="true"] .julia-chat-attach-icon {
+    transform: rotate(45deg);
+  }
+  .julia-chat-actions-menu {
+    position: fixed;
+    z-index: 2000;
+    min-width: 240px;
+    max-width: min(320px, calc(100vw - 2rem));
+    padding: 0.35rem;
+    border-radius: 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(12, 16, 28, 0.98);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 191, 255, 0.08);
+    backdrop-filter: blur(8px);
+  }
+  .julia-chat-actions-menu[hidden] {
+    display: none !important;
+  }
+  .julia-actions-item {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    border: none;
+    border-radius: 0.55rem;
+    background: transparent;
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.86rem;
+    text-decoration: none;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .julia-actions-item i {
+    width: 1.1rem;
+    flex-shrink: 0;
+    color: var(--af-cyan, #00BFFF);
+    font-size: 1rem;
+  }
+  .julia-actions-item:hover,
+  .julia-actions-item:focus-visible {
+    background: rgba(0, 191, 255, 0.1);
+    color: var(--af-text-primary, #F0F0F5);
+    outline: none;
+  }
+  .julia-actions-item-muted i {
+    color: var(--af-text-muted, #8A8AA3);
+  }
+  .julia-actions-divider {
+    height: 1px;
+    margin: 0.3rem 0.45rem;
+    background: rgba(255, 255, 255, 0.1);
+  }
+  .julia-chat-attach-btn:hover,
+  .julia-chat-attach-btn:focus {
+    background: rgba(0, 191, 255, 0.14) !important;
+    color: var(--af-cyan-bright, #00D4FF) !important;
+    outline: none;
+  }
+  .julia-chat-attach-btn.is-open,
+  .julia-chat-attach-btn[aria-expanded="true"] {
+    color: var(--af-cyan, #00BFFF) !important;
+  }
+  .julia-chat-attach-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .julia-chat-form-with-attach .julia-chat-send {
+    flex: 0 0 auto;
+    align-self: stretch;
+    border-radius: 0 1.75rem 1.75rem 0 !important;
+    border: none !important;
+    min-width: 48px;
+    padding-left: 0.85rem;
+    padding-right: 0.85rem;
+    margin-left: 0;
+  }
+  .julia-chat-embedded .julia-documents-area {
+    background: transparent;
+    padding-left: 0;
+    padding-right: 0;
+  }
   .julia-documents-area {
-    padding: 0.55rem 1rem 0;
-    border-top: 1px solid rgba(0, 191, 255, 0.12);
+    padding: 0.35rem 1rem 0.65rem;
+    border-top: 1px solid rgba(0, 191, 255, 0.08);
     background: var(--julia-chat-bg);
+  }
+  .julia-documents-area-empty {
+    padding-top: 0;
+    padding-bottom: 0.35rem;
+    border-top-color: transparent;
+  }
+  .julia-documents-area:not(.julia-documents-area-empty) {
+    border-top-color: rgba(0, 191, 255, 0.12);
+    padding-top: 0.55rem;
+    padding-bottom: 0.75rem;
   }
   .julia-documents-toolbar {
     display: flex;
@@ -321,9 +561,21 @@
     padding: 0.08rem 0.45rem;
     border-radius: 999px;
     font-size: 0.68rem;
+  }
+  .julia-doc-item-badge-ready {
+    border: 1px solid rgba(0, 196, 140, 0.35);
+    color: #00c48c;
+    background: rgba(0, 196, 140, 0.12);
+  }
+  .julia-doc-item-badge-preparing {
     border: 1px solid rgba(255, 193, 7, 0.35);
     color: #ffd966;
     background: rgba(255, 193, 7, 0.08);
+  }
+  .julia-doc-item-badge-error {
+    border: 1px solid rgba(255, 77, 106, 0.35);
+    color: #ff8a9a;
+    background: rgba(255, 77, 106, 0.12);
   }
   .julia-doc-item-remove {
     border: none;
@@ -348,34 +600,13 @@
     color: var(--af-danger, #FF4D6A) !important;
     margin-top: 0.35rem;
   }
-  .julia-chat-form-with-attach .julia-chat-input {
-    border-radius: 0 !important;
-  }
-  .julia-chat-attach-btn {
-    border-radius: 1.5rem 0 0 1.5rem !important;
-    background: var(--af-bg-muted, #1E1E2E) !important;
-    border: 1px solid var(--af-cyan) !important;
-    border-right: none !important;
-    color: var(--af-text-secondary, #C8CCE5) !important;
-    box-shadow: none !important;
-    min-width: 44px;
-    padding: 0 0.65rem;
-  }
-  .julia-chat-attach-btn:hover,
-  .julia-chat-attach-btn:focus {
-    background: rgba(0, 191, 255, 0.12) !important;
-    color: var(--af-cyan, #00BFFF) !important;
-    border-color: var(--af-cyan) !important;
-  }
-  .julia-chat-attach-btn:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-  .julia-chat-form-with-attach .julia-chat-send {
-    border-radius: 0 1.5rem 1.5rem 0 !important;
-  }
   {% endif %}
   .julia-chat-limit-msg { color: var(--af-danger, #FF4D6A) !important; }
+  .julia-chat-limit-msg a {
+    color: var(--af-cyan, #00BFFF);
+    text-decoration: underline;
+    font-weight: 600;
+  }
   .julia-chat-suggestions { margin-top: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.35rem; max-width: 85%; }
   .julia-chat-suggestion-btn {
     border: 1px solid rgba(0, 191, 255, 0.35);

@@ -65,6 +65,30 @@ def doc_cfg(monkeypatch, ctx):
     return patch_cleiton_doc_cfg(monkeypatch)
 
 
+def patch_gemini_pdf_upload(monkeypatch, *, upload_state: str = "ACTIVE"):
+    """Mock governado de upload Gemini Files API para testes de PDF."""
+    from unittest.mock import MagicMock
+
+    import app.cleiton_doc_gemini_files as gemini_files
+
+    client = MagicMock()
+    uploaded = type(
+        "Uploaded",
+        (),
+        {
+            "name": "files/test-pdf-mock",
+            "uri": "https://generativelanguage.googleapis.com/v1beta/files/test-pdf-mock",
+            "mime_type": "application/pdf",
+            "state": upload_state,
+        },
+    )()
+    client.files.upload.return_value = uploaded
+    client.files.get.return_value = uploaded
+    client.files.delete.return_value = None
+    monkeypatch.setattr(gemini_files, "get_cleiton_gemini_client", lambda: client)
+    return client
+
+
 def make_minimal_pdf(*, pages: int = 1) -> bytes:
     chunks = [b"%PDF-1.4\n"]
     for _ in range(pages):

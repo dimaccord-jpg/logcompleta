@@ -85,7 +85,10 @@ def test_prepare_and_register_stores_prepared_context_not_in_public_record(sessi
         assert full[FIELD_PREPARED_CONTEXT] == "conteudo temporario"
 
 
-def test_prepare_and_register_pdf_gemini_kind(session_app, tmp_path):
+def test_prepare_and_register_pdf_gemini_kind(session_app, tmp_path, monkeypatch):
+    from tests.cleiton_doc_fixtures import patch_gemini_pdf_upload
+
+    patch_gemini_pdf_upload(monkeypatch)
     with session_app.test_request_context("/"):
         doc = svc.prepare_and_register_document(
             display_name="arquivo.pdf",

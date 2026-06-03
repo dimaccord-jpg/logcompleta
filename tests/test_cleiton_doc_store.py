@@ -188,3 +188,79 @@ def test_store_ttl_from_expires_at_field(doc_tmp):
 
     loaded = store.load_document_record("ttl001", ttl_hours=48)
     assert loaded is not None
+
+
+def test_cleanup_expired_document_records_deletes_gemini_remote(doc_tmp, monkeypatch):
+    from unittest.mock import MagicMock
+
+    import app.cleiton_doc_gemini_files as gemini_files
+
+    client = MagicMock()
+    client.files.delete.return_value = None
+    monkeypatch.setattr(gemini_files, "get_cleiton_gemini_client", lambda: client)
+
+    past = (store._utcnow() - timedelta(hours=72)).isoformat()
+    doc_id = "expiredgemini001234567890abcdef12"
+    record = {
+        FIELD_DOC_ID: doc_id,
+        "gemini_file_name": "files/expired-remote",
+        "context_kind": "gemini_file",
+        FIELD_CREATED_AT: past,
+        FIELD_EXPIRES_AT: past,
+    }
+    store.save_document_record(record)
+
+    removed = store.cleanup_expired_document_records(48)
+    assert removed == 1
+    assert not (doc_tmp / f"{doc_id}.json").exists()
+    client.files.delete.assert_called_with(name="files/expired-remote")
+
+
+def test_maybe_cleanup_expired_document_records_deletes_gemini_remote(doc_tmp, monkeypatch):
+    from unittest.mock import MagicMock
+
+    import app.cleiton_doc_gemini_files as gemini_files
+
+    client = MagicMock()
+    client.files.delete.return_value = None
+    monkeypatch.setattr(gemini_files, "get_cleiton_gemini_client", lambda: client)
+
+    past = (store._utcnow() - timedelta(hours=72)).isoformat()
+    doc_id = "maybecleanup001234567890abcdef12"
+    record = {
+        FIELD_DOC_ID: doc_id,
+        "gemini_file_name": "files/maybe-remote",
+        "context_kind": "gemini_file",
+        FIELD_CREATED_AT: past,
+        FIELD_EXPIRES_AT: past,
+    }
+    store.save_document_record(record)
+
+    removed = store.maybe_cleanup_expired_document_records(48, min_interval_seconds=0)
+    assert removed == 1
+    client.files.delete.assert_called_with(name="files/maybe-remote")
+
+
+def test_cleanup_expired_gemini_delete_failure_does_not_break_local(doc_tmp, monkeypatch):
+    from unittest.mock import MagicMock
+
+    import app.cleiton_doc_gemini_files as gemini_files
+
+    client = MagicMock()
+    client.files.delete.side_effect = RuntimeError("already gone")
+    monkeypatch.setattr(gemini_files, "get_cleiton_gemini_client", lambda: client)
+
+    past = (store._utcnow() - timedelta(hours=72)).isoformat()
+    doc_id = "failcleanup001234567890abcdef12"
+    record = {
+        FIELD_DOC_ID: doc_id,
+        "gemini_file_name": "files/missing-remote",
+        "context_kind": "gemini_file",
+        FIELD_CREATED_AT: past,
+        FIELD_EXPIRES_AT: past,
+    }
+    store.save_document_record(record)
+
+    removed = store.cleanup_expired_document_records(48)
+    assert removed == 1
+    assert not (doc_tmp / f"{doc_id}.json").exists()

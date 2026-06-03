@@ -270,9 +270,16 @@ Converse com o Copilot do AgenteFrete para descobrir o melhor caminho para sua o
   window.ONBOARDING_DISCOVERY_STATE = {{ onboarding_discovery_state|tojson|safe }};
   {% endif %}
 
+  {% if julia_documents_ui %}
+  window.JULIA_DOCUMENTS_UI = true;
+  {% endif %}
+
 </script>
 
 <script src="{{ url_for('static', filename='js/chat_behavior.js') }}"></script>
+{% if julia_documents_ui %}
+<script src="{{ url_for('static', filename='js/julia_documents.js') }}"></script>
+{% endif %}
 
 {% endblock %}
 

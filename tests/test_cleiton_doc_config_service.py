@@ -6,6 +6,44 @@ from app.services import cleiton_doc_config_service as svc
 from app.services.cleiton_cost_service import SINGLETON_ID, get_or_create_config, save_config
 
 
+@pytest.mark.parametrize(
+    ("value", "default", "expected"),
+    [
+        (0, True, False),
+        ("0", True, False),
+        (False, True, False),
+        (1, False, True),
+        ("1", False, True),
+        (True, False, True),
+        ("false", True, False),
+        ("off", True, False),
+        ("no", True, False),
+        ("", True, False),
+        ("true", False, True),
+        ("on", False, True),
+        (None, True, True),
+        (None, False, False),
+        ("maybe", True, True),
+    ],
+)
+def test_coerce_bool(value, default, expected):
+    assert svc._coerce_bool(value, default) is expected
+
+
+def test_banco_upload_enabled_zero_recarrega_false(ctx):
+    row = ConfigRegras(
+        chave="cleiton_doc_upload_enabled",
+        descricao="teste",
+        valor_inteiro=0,
+        valor_texto=None,
+    )
+    db.session.add(row)
+    db.session.commit()
+
+    cfg = svc.get_cleiton_doc_config()
+    assert cfg.upload_enabled is False
+
+
 def test_defaults_carregam_corretamente(ctx):
     cfg = svc.get_cleiton_doc_config()
 
@@ -191,6 +229,20 @@ def test_validacao_bytes_invalidos(ctx):
         assert "pdf_max_bytes" in str(exc)
 
 
+def test_checkbox_marcado_persiste_true(ctx):
+    saved = svc.salvar_cleiton_doc_config(
+        {**_payload_valido(), "upload_enabled": "on", "pdf_enabled": "1", "cleanup_enabled": "true"}
+    )
+    assert saved.upload_enabled is True
+    assert saved.pdf_enabled is True
+    assert saved.cleanup_enabled is True
+
+    loaded = svc.get_cleiton_doc_config()
+    assert loaded.upload_enabled is True
+    assert loaded.pdf_enabled is True
+    assert loaded.cleanup_enabled is True
+
+
 def test_checkbox_desmarcado_persiste_como_desligado(ctx):
     svc.salvar_cleiton_doc_config({**_payload_valido(), "upload_enabled": "on", "pdf_enabled": "on"})
     saved = svc.salvar_cleiton_doc_config(
@@ -261,6 +313,112 @@ def test_falha_documental_nao_salva_parcialmente_custo(ctx):
 
     db_row = db.session.get(CleitonCostConfig, SINGLETON_ID)
     assert float(db_row.runtime_monthly_cost) == 111.0
+
+
+def test_payload_completo_do_form_checkbox_desmarcado_persiste_e_recarrega_false(ctx):
+    payload = {
+        "runtime_monthly_cost": "450.0",
+        "month_seconds": "2592000",
+        "allocation_percent": "1.0",
+        "overhead_factor": "1.0",
+        "cost_per_million_tokens": "",
+        "credit_tokens_per_credit": "1000.0",
+        "credit_lines_per_credit": "500.0",
+        "credit_ms_per_credit": "60000.0",
+        "cleiton_doc_form": "1",
+        "cleanup_enabled": "on",
+        "max_files_per_session": "4",
+        "session_max_bytes": str(15 * 1024 * 1024),
+        "upload_ttl_hours": "48",
+        "prompt_context_max_chars": "24000",
+        "prompt_max_files_considered": "3",
+        "pdf_enabled": "on",
+        "pdf_max_bytes": str(5 * 1024 * 1024),
+        "pdf_max_pages": "50",
+        "pdf_max_chars": "120000",
+        "excel_enabled": "on",
+        "excel_max_bytes": str(5 * 1024 * 1024),
+        "excel_max_rows": "5000",
+        "excel_max_columns": "80",
+        "excel_max_chars": "120000",
+        "docx_enabled": "on",
+        "docx_max_bytes": str(5 * 1024 * 1024),
+        "docx_max_paragraphs": "5000",
+        "docx_max_chars": "120000",
+        "txt_enabled": "on",
+        "txt_max_bytes": str(1 * 1024 * 1024),
+        "txt_max_chars": "120000",
+        "xml_enabled": "on",
+        "xml_max_bytes": str(2 * 1024 * 1024),
+        "xml_max_nodes": "20000",
+        "xml_max_depth": "20",
+        "xml_max_chars": "120000",
+        "csv_enabled": "on",
+        "csv_max_bytes": str(2 * 1024 * 1024),
+        "csv_max_rows": "10000",
+        "csv_max_columns": "80",
+        "csv_max_chars": "120000",
+    }
+
+    saved = svc.salvar_agentes_cleiton_config(
+        cost_kwargs={
+            "runtime_monthly_cost": 450.0,
+            "month_seconds": 2592000,
+            "allocation_percent": 1.0,
+            "overhead_factor": 1.0,
+            "cost_per_million_tokens": None,
+            "credit_tokens_per_credit": 1000.0,
+            "credit_lines_per_credit": 500.0,
+            "credit_ms_per_credit": 60000.0,
+        },
+        doc_campos={
+            "upload_enabled": payload.get("upload_enabled"),
+            "max_files_per_session": payload.get("max_files_per_session"),
+            "session_max_bytes": payload.get("session_max_bytes"),
+            "upload_ttl_hours": payload.get("upload_ttl_hours"),
+            "cleanup_enabled": payload.get("cleanup_enabled"),
+            "prompt_context_max_chars": payload.get("prompt_context_max_chars"),
+            "prompt_max_files_considered": payload.get("prompt_max_files_considered"),
+            "pdf_enabled": payload.get("pdf_enabled"),
+            "pdf_max_bytes": payload.get("pdf_max_bytes"),
+            "pdf_max_pages": payload.get("pdf_max_pages"),
+            "pdf_max_chars": payload.get("pdf_max_chars"),
+            "excel_enabled": payload.get("excel_enabled"),
+            "excel_max_bytes": payload.get("excel_max_bytes"),
+            "excel_max_rows": payload.get("excel_max_rows"),
+            "excel_max_columns": payload.get("excel_max_columns"),
+            "excel_max_chars": payload.get("excel_max_chars"),
+            "docx_enabled": payload.get("docx_enabled"),
+            "docx_max_bytes": payload.get("docx_max_bytes"),
+            "docx_max_paragraphs": payload.get("docx_max_paragraphs"),
+            "docx_max_chars": payload.get("docx_max_chars"),
+            "txt_enabled": payload.get("txt_enabled"),
+            "txt_max_bytes": payload.get("txt_max_bytes"),
+            "txt_max_chars": payload.get("txt_max_chars"),
+            "xml_enabled": payload.get("xml_enabled"),
+            "xml_max_bytes": payload.get("xml_max_bytes"),
+            "xml_max_nodes": payload.get("xml_max_nodes"),
+            "xml_max_depth": payload.get("xml_max_depth"),
+            "xml_max_chars": payload.get("xml_max_chars"),
+            "csv_enabled": payload.get("csv_enabled"),
+            "csv_max_bytes": payload.get("csv_max_bytes"),
+            "csv_max_rows": payload.get("csv_max_rows"),
+            "csv_max_columns": payload.get("csv_max_columns"),
+            "csv_max_chars": payload.get("csv_max_chars"),
+        },
+    )
+
+    row_upload = ConfigRegras.query.filter_by(chave="cleiton_doc_upload_enabled").first()
+    row_max = ConfigRegras.query.filter_by(chave="cleiton_doc_max_files_per_session").first()
+    loaded = svc.get_cleiton_doc_config()
+
+    assert saved is not None
+    assert saved.upload_enabled is False
+    assert saved.max_files_per_session == 4
+    assert row_upload is not None and row_upload.valor_inteiro == 0
+    assert row_max is not None and row_max.valor_inteiro == 4
+    assert loaded.upload_enabled is False
+    assert loaded.max_files_per_session == 4
 
 
 def _payload_valido():

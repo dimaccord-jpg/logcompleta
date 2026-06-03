@@ -46,22 +46,118 @@
     return authz.mensagem_usuario || null;
   }
 
-  function updateLimitUI(limitReached, message) {
+  var PLAN_LIMIT_UPGRADE_LABEL = 'Faça o upgrade';
+  var PLAN_LIMIT_UPGRADE_PATH = '/contrate-um-plano';
+
+  function getUpgradeLimitPayload(source) {
+    if (!source || typeof source !== 'object') return null;
+    if (source.upgrade_cta && typeof source.upgrade_cta === 'object') {
+      return source.upgrade_cta;
+    }
+    if (source.error_code === 'plan_limit_reached' && source.upgrade_url) {
+      return source;
+    }
+    return null;
+  }
+
+  function resolvePlanLimitPayload(source) {
+    var cta = getUpgradeLimitPayload(source);
+    if (cta) return cta;
+    if (source && source.authorization) {
+      cta = getUpgradeLimitPayload(source.authorization);
+      if (cta) return cta;
+    }
+    var plain = typeof source === 'string'
+      ? source
+      : (source && source.mensagem_usuario) || (source && source.reply) || '';
+    if (!plain || plain.indexOf(PLAN_LIMIT_UPGRADE_LABEL) < 0) return null;
+    var idx = plain.indexOf(PLAN_LIMIT_UPGRADE_LABEL);
+    return {
+      error_code: 'plan_limit_reached',
+      message: plain.slice(0, idx),
+      upgrade_url: PLAN_LIMIT_UPGRADE_PATH,
+      upgrade_label: PLAN_LIMIT_UPGRADE_LABEL,
+      message_suffix: plain.slice(idx + PLAN_LIMIT_UPGRADE_LABEL.length)
+    };
+  }
+
+  function isJuliaPlanLimitResponse(data) {
+    if (!data || typeof data !== 'object') return false;
+    if (data.limit_reached === true || data.error_code === 'plan_limit_reached') return true;
+    if (data.authorization && isBlockedAuthorization(data.authorization)) {
+      return !!resolvePlanLimitPayload(data.authorization);
+    }
+    return false;
+  }
+
+  function safeUpgradeHref(url) {
+    var raw = String(url || '').trim();
+    if (raw.indexOf('/') === 0 && raw.indexOf('//') !== 0) {
+      return raw.split('?')[0] || PLAN_LIMIT_UPGRADE_PATH;
+    }
+    if (/^https?:\/\//i.test(raw)) return raw;
+    return PLAN_LIMIT_UPGRADE_PATH;
+  }
+
+  function fillLimitMessageElement(el, payloadOrText) {
+    if (!el) return;
+    el.replaceChildren();
+    var cta = resolvePlanLimitPayload(payloadOrText);
+    if (cta) {
+      el.appendChild(document.createTextNode(cta.message || ''));
+      var link = document.createElement('a');
+      link.href = safeUpgradeHref(cta.upgrade_url);
+      link.textContent = cta.upgrade_label || PLAN_LIMIT_UPGRADE_LABEL;
+      link.setAttribute('rel', 'noopener noreferrer');
+      el.appendChild(link);
+      el.appendChild(document.createTextNode(cta.message_suffix || ''));
+      return;
+    }
+    var fallback = typeof payloadOrText === 'string'
+      ? payloadOrText
+      : (payloadOrText && payloadOrText.mensagem_usuario) || '';
+    el.textContent = fallback || 'O chat está temporariamente indisponível para este usuário.';
+  }
+
+  function removePlanLimitBotMessages(messagesEl) {
+    if (!messagesEl) return;
+    var needle = 'Você atingiu o limite de uso do plano';
+    var bots = messagesEl.querySelectorAll('.julia-chat-msg-bot');
+    for (var i = 0; i < bots.length; i++) {
+      var inner = bots[i].querySelector('.julia-chat-msg-inner');
+      if (!inner) continue;
+      var copy = (inner.textContent || '').trim();
+      if (copy.indexOf(needle) >= 0) {
+        bots[i].remove();
+      }
+    }
+  }
+
+  function showPlanLimitBanner(payloadOrText) {
+    if (DISCOVERY_MODE) return;
+    var limitMsgEl = byId('juliaChatLimitMsg');
+    var sendBtn = byId('juliaChatSend');
+    var input = byId('juliaChatInput');
+    var messagesEl = byId('juliaChatMessages');
+    if (!limitMsgEl || !sendBtn) return;
+    limitMsgEl.style.display = 'block';
+    fillLimitMessageElement(limitMsgEl, payloadOrText);
+    sendBtn.disabled = true;
+    if (input) input.disabled = true;
+    removePlanLimitBotMessages(messagesEl);
+  }
+
+  function updateLimitUI(limitReached, payloadOrText) {
     if (DISCOVERY_MODE) return;
     var limitMsgEl = byId('juliaChatLimitMsg');
     var sendBtn = byId('juliaChatSend');
     var input = byId('juliaChatInput');
     if (!limitMsgEl || !sendBtn) return;
     if (limitReached) {
-      limitMsgEl.style.display = 'block';
-      limitMsgEl.innerHTML = renderJuliaMarkdown(
-        message || 'O chat está temporariamente indisponível para este usuário.'
-      );
-      sendBtn.disabled = true;
-      if (input) input.disabled = true;
+      showPlanLimitBanner(payloadOrText);
     } else {
       limitMsgEl.style.display = 'none';
-      limitMsgEl.innerHTML = '';
+      limitMsgEl.replaceChildren();
       sendBtn.disabled = false;
       if (input) input.disabled = false;
     }
@@ -343,7 +439,7 @@
     }
     if (input) input.placeholder = 'Mensagem para a Júlia...';
     setDiscoverySuggestionsVisible(false);
-    updateLimitUI(isBlockedAuthorization(chatLimits), getBlockedMessage(chatLimits));
+    updateLimitUI(isBlockedAuthorization(chatLimits), chatLimits);
   }
 
   function startJuliaOperationalHandoff() {
@@ -447,7 +543,7 @@
       return;
     }
     if (isBlockedAuthorization(chatLimits)) {
-      updateLimitUI(true, getBlockedMessage(chatLimits) || 'Você não pode usar o chat neste momento.');
+      showPlanLimitBanner(chatLimits);
       return;
     }
 
@@ -492,6 +588,30 @@
           appendMessage('bot', data.error || 'É necessário estar logado para conversar com a Júlia.', messagesEl);
           return;
         }
+        if (!DISCOVERY_MODE && isJuliaPlanLimitResponse(data)) {
+          if (data.authorization) {
+            chatLimits = data.authorization;
+          } else {
+            chatLimits = chatLimits || {};
+            chatLimits.permitido = false;
+            chatLimits.modo_operacao = 'blocked';
+          }
+          showPlanLimitBanner(data.authorization || data);
+          return;
+        }
+        if (DISCOVERY_MODE) {
+          applyDiscoveryStateFromPayload(data);
+        }
+        if (!DISCOVERY_MODE && data.authorization) {
+          chatLimits = data.authorization;
+        }
+        if (!DISCOVERY_MODE && data.limit_reached === true) {
+          chatLimits = chatLimits || {};
+          chatLimits.permitido = false;
+          chatLimits.modo_operacao = 'blocked';
+          showPlanLimitBanner(data.authorization || data);
+          return;
+        }
         var suggestions = DISCOVERY_MODE
           ? []
           : (data.refinement_options || data.suggestions || []);
@@ -500,23 +620,6 @@
           suggestions: suggestions,
           actions: actions
         });
-        if (DISCOVERY_MODE) {
-          applyDiscoveryStateFromPayload(data);
-        }
-        if (!DISCOVERY_MODE && data.authorization) {
-          chatLimits = data.authorization;
-        }
-        if (!DISCOVERY_MODE && data.limit_reached !== undefined) {
-          chatLimits = chatLimits || {};
-          chatLimits.permitido = !data.limit_reached;
-          if (data.limit_reached) {
-            chatLimits.modo_operacao = 'blocked';
-          }
-          updateLimitUI(
-            !!data.limit_reached,
-            getBlockedMessage(chatLimits) || data.reply
-          );
-        }
       })
       .catch(function () {
         setLoading(messagesEl, false);
@@ -561,7 +664,7 @@
 
     updateLimitUI(
       isBlockedAuthorization(chatLimits),
-      getBlockedMessage(chatLimits)
+      chatLimits
     );
     updateDiscoveryGateUI(!!(discoveryState && discoveryState.limit_reached));
     setDiscoverySuggestionsVisible(!(discoveryState && discoveryState.limit_reached));

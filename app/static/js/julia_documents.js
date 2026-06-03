@@ -33,6 +33,7 @@
     cleiton_doc_too_many_nodes: 'Não consegui preparar este arquivo com segurança.',
     cleiton_doc_missing_file: 'Nenhum arquivo selecionado.',
     cleiton_doc_upload_failed: 'Não foi possível enviar o documento. Tente novamente.',
+    cleiton_doc_gemini_file_upload_failed: 'Não foi possível preparar este PDF para leitura. Tente novamente ou use outro arquivo.',
     auth_required: 'É necessário estar logado para anexar documentos.',
     franquia_blocked: 'Operação indisponível para este usuário no momento.'
   };
@@ -124,10 +125,26 @@
   }
 
   function pdfPlaceholderNote(doc) {
-    if ((doc.doc_type || '').toLowerCase() === 'pdf' || doc.context_kind === CONTEXT_KIND_GEMINI_FILE) {
-      return 'PDF anexado. A leitura completa via Gemini File API será ativada em etapa posterior.';
+    var isPdf = (doc.doc_type || '').toLowerCase() === 'pdf' || doc.context_kind === CONTEXT_KIND_GEMINI_FILE;
+    if (!isPdf) return '';
+    if ((doc.status || '').toLowerCase() === 'error') {
+      return 'Não foi possível preparar este PDF para leitura. Tente novamente ou use outro arquivo.';
     }
-    return '';
+    if (doc.pdf_context_ready === true) {
+      return 'PDF disponível como contexto da conversa.';
+    }
+    return 'PDF anexado. Preparando leitura pela IA...';
+  }
+
+  function pdfBadgeClass(doc) {
+    var status = (doc.status || '').toLowerCase();
+    if (status === 'error') {
+      return 'julia-doc-item-badge julia-doc-item-badge-error';
+    }
+    if (doc.pdf_context_ready === true) {
+      return 'julia-doc-item-badge julia-doc-item-badge-ready';
+    }
+    return 'julia-doc-item-badge julia-doc-item-badge-preparing';
   }
 
   function renderDocumentItem(doc) {
@@ -159,7 +176,7 @@
     var pdfNote = pdfPlaceholderNote(doc);
     if (pdfNote) {
       var badge = document.createElement('span');
-      badge.className = 'julia-doc-item-badge';
+      badge.className = pdfBadgeClass(doc);
       badge.textContent = pdfNote;
       main.appendChild(badge);
     }
@@ -180,8 +197,83 @@
 
   function updateClearButton(count) {
     var btn = byId('juliaDocumentsClearBtn');
-    if (!btn) return;
-    btn.style.display = count > 0 ? 'inline-flex' : 'none';
+    var toolbar = byId('juliaDocumentsToolbar');
+    var area = byId('juliaDocumentsArea');
+    if (btn) {
+      btn.style.display = count > 0 ? 'inline-flex' : 'none';
+    }
+    if (toolbar) {
+      toolbar.style.display = count > 0 ? 'flex' : 'none';
+    }
+    if (area) {
+      if (count > 0) {
+        area.classList.remove('julia-documents-area-empty');
+      } else {
+        area.classList.add('julia-documents-area-empty');
+      }
+    }
+  }
+
+  function positionActionsMenu() {
+    var attachBtn = byId('juliaChatAttachBtn');
+    var menu = byId('juliaChatActionsMenu');
+    if (!attachBtn || !menu || menu.hidden) return;
+
+    var rect = attachBtn.getBoundingClientRect();
+    var gap = 8;
+    var menuWidth = menu.offsetWidth || 260;
+    var menuHeight = menu.offsetHeight || 220;
+    var left = Math.min(Math.max(8, rect.left), window.innerWidth - menuWidth - 8);
+    var top = rect.top - menuHeight - gap;
+
+    if (top < 8) {
+      top = rect.bottom + gap;
+    }
+
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+  }
+
+  var actionsMenuHomeParent = null;
+
+  function setActionsMenuOpen(open) {
+    var attachBtn = byId('juliaChatAttachBtn');
+    var menu = byId('juliaChatActionsMenu');
+    var composerWrap = byId('juliaChatComposerWrap');
+    if (!attachBtn || !menu) return;
+    var isOpen = !!open;
+
+    if (isOpen) {
+      menu.hidden = false;
+      if (composerWrap && menu.parentNode !== document.body) {
+        actionsMenuHomeParent = composerWrap;
+        document.body.appendChild(menu);
+      }
+      positionActionsMenu();
+    } else {
+      menu.hidden = true;
+      if (actionsMenuHomeParent && menu.parentNode === document.body) {
+        actionsMenuHomeParent.appendChild(menu);
+        actionsMenuHomeParent = null;
+      }
+      menu.style.left = '';
+      menu.style.top = '';
+    }
+
+    attachBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    attachBtn.setAttribute('aria-label', isOpen ? 'Fechar menu de ações' : 'Abrir menu de ações');
+    attachBtn.title = isOpen ? 'Fechar menu de ações' : 'Abrir menu de ações';
+    attachBtn.classList.toggle('is-open', isOpen);
+  }
+
+  function closeActionsMenu() {
+    setActionsMenuOpen(false);
+  }
+
+  function toggleActionsMenu() {
+    var menu = byId('juliaChatActionsMenu');
+    if (!menu) return;
+    setActionsMenuOpen(menu.hidden);
   }
 
   function renderDocuments(documents) {
@@ -203,7 +295,12 @@
       })
       .then(function (res) {
         if (res.status === 401 || res.status === 403) {
-          setError(friendlyError(res.data));
+          var errData = res.data || {};
+          if (errData.error_code === 'franquia_blocked') {
+            setError('');
+          } else {
+            setError(friendlyError(errData));
+          }
           renderDocuments([]);
           return null;
         }
@@ -304,12 +401,15 @@
   function init() {
     var attachBtn = byId('juliaChatAttachBtn');
     var fileInput = byId('juliaChatFileInput');
+    var uploadItem = byId('juliaChatUploadItem');
+    var actionsMenu = byId('juliaChatActionsMenu');
     var clearBtn = byId('juliaDocumentsClearBtn');
     if (!attachBtn || !fileInput) return;
 
-    attachBtn.addEventListener('click', function () {
+    attachBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
       if (uploadInFlight) return;
-      fileInput.click();
+      toggleActionsMenu();
     });
 
     attachBtn.addEventListener('keydown', function (e) {
@@ -318,6 +418,14 @@
         attachBtn.click();
       }
     });
+
+    if (uploadItem) {
+      uploadItem.addEventListener('click', function () {
+        if (uploadInFlight) return;
+        closeActionsMenu();
+        fileInput.click();
+      });
+    }
 
     fileInput.addEventListener('change', function () {
       var file = fileInput.files && fileInput.files[0];
@@ -331,6 +439,29 @@
         clearAllDocuments();
       });
     }
+
+    document.addEventListener('click', function (e) {
+      if (!actionsMenu || actionsMenu.hidden) return;
+      var target = e.target;
+      if (attachBtn && attachBtn.contains(target)) return;
+      if (actionsMenu.contains(target)) return;
+      closeActionsMenu();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && actionsMenu && !actionsMenu.hidden) {
+        closeActionsMenu();
+        attachBtn.focus();
+      }
+    });
+
+    window.addEventListener('resize', function () {
+      if (actionsMenu && !actionsMenu.hidden) positionActionsMenu();
+    });
+
+    window.addEventListener('scroll', function () {
+      if (actionsMenu && !actionsMenu.hidden) positionActionsMenu();
+    }, true);
 
     fetchDocuments();
   }

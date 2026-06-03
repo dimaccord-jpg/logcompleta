@@ -472,6 +472,7 @@ def index():
     is_authenticated = bool(getattr(current_user, "is_authenticated", False))
     # Estado operacional do chat (fonte única: autorização operacional por franquia).
     julia_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
+    julia_chat_surface = 'operational' if is_authenticated else 'discovery'
     return render_template(
         'index.html',
         indicadores=indicadores,
@@ -479,7 +480,8 @@ def index():
         julia_chat_limits=julia_chat_limits,
         onboarding_ctas=ONBOARDING_CTAS,
         onboarding_discovery_state=_get_onboarding_discovery_ui_state(),
-        julia_chat_surface='operational' if is_authenticated else 'discovery',
+        julia_chat_surface=julia_chat_surface,
+        julia_documents_ui=is_authenticated,
         julia_handoff_context=_pop_onboarding_julia_context() if is_authenticated else None,
     )
 
@@ -1280,11 +1282,16 @@ def api_chat_julia():
         authz = avaliar_autorizacao_operacao_por_franquia(current_user)
         if not authz.get("permitido", True):
             msg = authz.get("mensagem_usuario") or "Operação indisponível para este usuário no momento."
-            return jsonify({
+            payload = {
+                "ok": False,
                 "reply": msg,
                 "limit_reached": True,
                 "authorization": authz,
-            })
+            }
+            upgrade_cta = authz.get("upgrade_cta")
+            if isinstance(upgrade_cta, dict):
+                payload.update(upgrade_cta)
+            return jsonify(payload)
         max_history = get_julia_chat_max_history()
         from app.cleiton_doc_contracts import FLOW_TYPE_JULIA_CHAT
         from app.julia_doc_context import build_julia_document_context_for_chat
@@ -1306,6 +1313,7 @@ def api_chat_julia():
             history,
             max_history=max_history,
             document_context_block=doc_ctx.get("context_block") or None,
+            document_file_parts=doc_ctx.get("gemini_file_parts") or None,
             flow_type=doc_ctx.get("flow_type"),
         )
         result["authorization"] = authz

@@ -50,8 +50,11 @@ def test_degraded_permite_operacao_degradada(monkeypatch):
     assert out["sugerir_upgrade"] is True
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
-        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
+        "Faça o upgrade e continue criando sem interrupções."
     )
+    assert out["upgrade_cta"]["error_code"] == "plan_limit_reached"
+    assert out["upgrade_cta"]["upgrade_url"] == "/contrate-um-plano"
+    assert out["upgrade_cta"]["upgrade_label"] == "Faça o upgrade"
 
 
 def test_blocked_bloqueia_antes_da_operacao(monkeypatch):
@@ -65,8 +68,11 @@ def test_blocked_bloqueia_antes_da_operacao(monkeypatch):
     assert out["modo_operacao"] == "blocked"
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
-        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
+        "Faça o upgrade e continue criando sem interrupções."
     )
+    assert out["upgrade_cta"]["error_code"] == "plan_limit_reached"
+    assert out["upgrade_cta"]["upgrade_url"] == "/contrate-um-plano"
+    assert out["upgrade_cta"]["upgrade_label"] == "Faça o upgrade"
 
 
 def test_expired_bloqueia_antes_da_operacao(monkeypatch):
@@ -81,8 +87,11 @@ def test_expired_bloqueia_antes_da_operacao(monkeypatch):
     assert out["status_franquia"] == Franquia.STATUS_EXPIRED
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
-        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
+        "Faça o upgrade e continue criando sem interrupções."
     )
+    assert out["upgrade_cta"]["error_code"] == "plan_limit_reached"
+    assert out["upgrade_cta"]["upgrade_url"] == "/contrate-um-plano"
+    assert out["upgrade_cta"]["upgrade_label"] == "Faça o upgrade"
 
 
 def test_sem_franquia_trata_sem_erro_500():
@@ -105,8 +114,11 @@ def test_bloqueio_manual_nao_sugere_upgrade(monkeypatch):
     assert out["sugerir_upgrade"] is False
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Starter. Não pare agora! "
-        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
+        "Faça o upgrade e continue criando sem interrupções."
     )
+    assert out["upgrade_cta"]["error_code"] == "plan_limit_reached"
+    assert out["upgrade_cta"]["upgrade_url"] == "/contrate-um-plano"
+    assert out["upgrade_cta"]["upgrade_label"] == "Faça o upgrade"
 
 
 def test_avulso_recebe_cta_padrao_mvp(monkeypatch):
@@ -122,5 +134,6 @@ def test_avulso_recebe_cta_padrao_mvp(monkeypatch):
     assert out["permitido"] is False
     assert out["mensagem_usuario"] == (
         "Você atingiu o limite de uso do plano Avulso. Não pare agora! "
-        "[Faça o upgrade](/contrate-um-plano) e continue criando sem interrupções."
+        "Faça o upgrade e continue criando sem interrupções."
     )
+    assert out["upgrade_cta"]["upgrade_url"] == "/contrate-um-plano"

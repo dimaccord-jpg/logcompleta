@@ -25,7 +25,10 @@ AGENT_BLURBS: dict[str, str] = {
         "Cleide olha para trás — investiga custos realizados, desvios, anomalias "
         "e se você pagou certo."
     ),
-    "julia": "Júlia apoia estratégia logística, supply chain, negociação e decisão gerencial.",
+    "julia": (
+        "Júlia é a consultoria operacional logada — estratégia, supply chain, "
+        "planejamento e apoio com documentos no chat quando logado."
+    ),
     "feed": "O Feed reúne notícias e tendências do mercado logístico.",
 }
 
@@ -67,19 +70,25 @@ _JULIA_STRATEGIC_RE = re.compile(
     r"\bplano\s+de\s+a[cç][aã]o|\bsupply\s+chain|\bestoque|\binfla[cç][aã]o|"
     r"\bc[aâ]mbio|\bcambial|\bimporta(?:[cç][aã]o|r)?|\bexporta(?:[cç][aã]o|r)?|\bmacroecon|"
     r"\binterpretar(?:\s+\w+){0,8}\s+(?:para\s+)?tomar\s+decis[aã]o|"
-    r"\btomada\s+de\s+decis[aã]o|\bleitura\s+execut)",
+    r"\btomada\s+de\s+decis[aã]o|\bleitura\s+execut|"
+    r"\bcomparar\s+propostas|\bcomparar\s+alternativas|"
+    r"\bresumir(?:\s+(?:o\s+)?(?:documento|contrato|arquivo))?|"
+    r"\bmontar\s+plano|planejamento\s+log[ií]stico|"
+    r"\bentender\s+(?:o\s+)?cen[aá]rio)",
     re.IGNORECASE,
 )
 
 _ARTIFACT_OR_THEME_RE = re.compile(
     r"\b(?:planilha(?:s)?|dashboard(?:s)?|analytics|\bbi\b|dados|transportadoras?|"
-    r"custos?(?:\s+(?:de\s+)?frete|\s+log[ií]stico)?|gr[aá]ficos?|indicadores?|frete)\b",
+    r"custos?(?:\s+(?:de\s+)?frete|\s+log[ií]stico)?|gr[aá]ficos?|indicadores?|frete|"
+    r"documento(?:s)?|\bpdf(?:s)?\b|\bxml\b|anexo(?:s)?|tabela(?:s)?)\b",
     re.IGNORECASE,
 )
 
 _FORMAT_QUESTION_RE = re.compile(
-    r"\b(?:aceita\s+planilha|aceitam\s+planilha|subir|upload|enviar\s+(?:meus\s+)?dados|"
-    r"posso\s+subir)\b",
+    r"\b(?:aceita\s+planilha|aceitam\s+planilha|aceita\s+pdf|aceitam\s+pdf|"
+    r"aceita\s+documento|subir|upload|enviar\s+(?:meus\s+)?dados|"
+    r"posso\s+subir|anexar\s+(?:arquivo|documento|pdf))\b",
     re.IGNORECASE,
 )
 
@@ -144,9 +153,10 @@ def should_suppress_handoff_for_unclear_activity(message: str) -> bool:
 def resolve_spreadsheet_context(message: str) -> str | None:
     text = (message or "").strip().lower()
     if not re.search(
-        r"\b(?:planilha|planilhas|arquivo|base(?:\s+de)?\s+dados|"
-        r"subir\s+(?:meus\s+)?dados|upload|aceita\s+planilha|aceitam\s+planilha|"
-        r"posso\s+subir|hist[oó]rico\s+de\s+fretes)\b",
+        r"\b(?:planilha|planilhas|arquivo|documento(?:s)?|\bpdf(?:s)?\b|"
+        r"base(?:\s+de)?\s+dados|subir\s+(?:meus\s+)?dados|upload|"
+        r"aceita\s+planilha|aceitam\s+planilha|posso\s+subir|"
+        r"hist[oó]rico\s+de\s+fretes)\b",
         text,
     ):
         return None

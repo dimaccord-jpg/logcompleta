@@ -18,6 +18,7 @@ from app.cleiton_doc_contracts import (
     CONTEXT_KIND_PLACEHOLDER,
     CONTEXT_KIND_TEXT,
     ERROR_DOC_NOT_FOUND,
+    ERROR_GEMINI_FILE_UPLOAD,
     ERROR_INVALID_SIZE,
     ERROR_MAX_FILES,
     ERROR_SESSION_BYTES,
@@ -32,10 +33,16 @@ from app.cleiton_doc_contracts import (
     FIELD_ERROR_CODE,
     FIELD_EXPIRES_AT,
     FIELD_EXTENSION,
+    FIELD_GEMINI_FILE_NAME,
+    FIELD_GEMINI_FILE_STATE,
+    FIELD_GEMINI_FILE_URI,
+    FIELD_GEMINI_MIME_TYPE,
+    FIELD_GEMINI_UPLOADED_AT,
     FIELD_MAX_DEPTH,
     FIELD_MIME_TYPE,
     FIELD_NODE_COUNT,
     FIELD_PAGE_COUNT,
+    FIELD_PDF_CONTEXT_READY,
     FIELD_PREPARED_CONTEXT,
     FIELD_ROW_COUNT,
     FIELD_SAFE_NAME,
@@ -47,10 +54,15 @@ from app.cleiton_doc_contracts import (
     FIELD_WARNINGS,
     SOURCE_AGENT_CLEITON,
     STATUS_ACTIVE,
+    STATUS_ERROR,
     append_cleiton_doc_id,
     clear_cleiton_doc_ids,
     get_cleiton_doc_ids,
     remove_cleiton_doc_id,
+)
+from app.cleiton_doc_gemini_files import (
+    pdf_context_ready_from_record,
+    upload_pdf_to_gemini_files_api,
 )
 from app.cleiton_doc_prepare import prepare_document
 from app.cleiton_doc_store import (
@@ -132,6 +144,7 @@ def _build_safe_display_name(display_name: str, extension: str) -> tuple[str, st
 
 
 def _public_record(record: dict) -> dict:
+    pdf_ready = pdf_context_ready_from_record(record)
     return {
         FIELD_DOC_ID: record.get(FIELD_DOC_ID),
         FIELD_DOC_TYPE: record.get(FIELD_DOC_TYPE),
@@ -156,6 +169,7 @@ def _public_record(record: dict) -> dict:
         FIELD_SOURCE_AGENT: record.get(FIELD_SOURCE_AGENT),
         FIELD_SESSION_KEY: record.get(FIELD_SESSION_KEY),
         FIELD_ERROR_CODE: record.get(FIELD_ERROR_CODE),
+        FIELD_PDF_CONTEXT_READY: pdf_ready,
     }
 
 
@@ -235,6 +249,10 @@ def get_active_documents_for_session() -> list[dict]:
     return active
 
 
+def _remove_document_record_with_cleanup(doc_id: str) -> dict:
+    return remove_document_record(doc_id)
+
+
 def register_document_placeholder(
     *,
     display_name: str,
@@ -254,6 +272,13 @@ def register_document_placeholder(
     node_count: int | None = None,
     max_depth: int | None = None,
     warnings: list[str] | None = None,
+    status: str = STATUS_ACTIVE,
+    error_code: str | None = None,
+    gemini_file_name: str | None = None,
+    gemini_file_uri: str | None = None,
+    gemini_mime_type: str | None = None,
+    gemini_file_state: str | None = None,
+    gemini_uploaded_at: str | None = None,
 ) -> dict:
     _require_session()
     cfg = get_cleiton_doc_config()
@@ -279,7 +304,7 @@ def register_document_placeholder(
         FIELD_SIZE_BYTES: validated_size,
         FIELD_CREATED_AT: created_at.isoformat(),
         FIELD_EXPIRES_AT: expires_at.isoformat(),
-        FIELD_STATUS: STATUS_ACTIVE,
+        FIELD_STATUS: (status or STATUS_ACTIVE).strip() or STATUS_ACTIVE,
         FIELD_TRUNCATED: bool(truncated),
         FIELD_CONTEXT_KIND: resolved_kind,
         FIELD_CONTEXT_REF: context_ref or _context_ref_for_kind(resolved_kind, doc_id),
@@ -293,7 +318,12 @@ def register_document_placeholder(
         FIELD_WARNINGS: list(warnings or []),
         FIELD_SOURCE_AGENT: (source_agent or SOURCE_AGENT_CLEITON).strip() or SOURCE_AGENT_CLEITON,
         FIELD_SESSION_KEY: None,
-        FIELD_ERROR_CODE: None,
+        FIELD_ERROR_CODE: error_code,
+        FIELD_GEMINI_FILE_NAME: gemini_file_name,
+        FIELD_GEMINI_FILE_URI: gemini_file_uri,
+        FIELD_GEMINI_MIME_TYPE: gemini_mime_type,
+        FIELD_GEMINI_FILE_STATE: gemini_file_state,
+        FIELD_GEMINI_UPLOADED_AT: gemini_uploaded_at,
     }
 
     save_document_record(record)
@@ -320,23 +350,64 @@ def prepare_and_register_document(
         mime_type=mime_type,
         extension=extension,
     )
-    return register_document_placeholder(
-        display_name=prepared["display_name"],
-        extension=prepared[FIELD_EXTENSION],
-        mime_type=prepared[FIELD_MIME_TYPE],
-        size_bytes=prepared[FIELD_SIZE_BYTES],
-        context_kind=prepared[FIELD_CONTEXT_KIND],
-        truncated=prepared[FIELD_TRUNCATED],
-        doc_type=prepared[FIELD_DOC_TYPE],
-        prepared_context=prepared[FIELD_PREPARED_CONTEXT],
-        char_count=prepared[FIELD_CHAR_COUNT],
-        row_count=prepared[FIELD_ROW_COUNT],
-        column_count=prepared[FIELD_COLUMN_COUNT],
-        page_count=prepared[FIELD_PAGE_COUNT],
-        node_count=prepared[FIELD_NODE_COUNT],
-        max_depth=prepared[FIELD_MAX_DEPTH],
-        warnings=prepared[FIELD_WARNINGS],
-    )
+
+    register_kwargs = {
+        "display_name": prepared["display_name"],
+        "extension": prepared[FIELD_EXTENSION],
+        "mime_type": prepared[FIELD_MIME_TYPE],
+        "size_bytes": prepared[FIELD_SIZE_BYTES],
+        "context_kind": prepared[FIELD_CONTEXT_KIND],
+        "truncated": prepared[FIELD_TRUNCATED],
+        "doc_type": prepared[FIELD_DOC_TYPE],
+        "prepared_context": prepared[FIELD_PREPARED_CONTEXT],
+        "char_count": prepared[FIELD_CHAR_COUNT],
+        "row_count": prepared[FIELD_ROW_COUNT],
+        "column_count": prepared[FIELD_COLUMN_COUNT],
+        "page_count": prepared[FIELD_PAGE_COUNT],
+        "node_count": prepared[FIELD_NODE_COUNT],
+        "max_depth": prepared[FIELD_MAX_DEPTH],
+        "warnings": prepared[FIELD_WARNINGS],
+    }
+
+    if prepared[FIELD_CONTEXT_KIND] == CONTEXT_KIND_GEMINI_FILE:
+        cfg = get_cleiton_doc_config()
+        upload_result = upload_pdf_to_gemini_files_api(
+            file_bytes=file_bytes,
+            mime_type=prepared[FIELD_MIME_TYPE],
+            display_name=prepared["display_name"],
+            page_count=prepared[FIELD_PAGE_COUNT],
+            max_pages=int(cfg.pdf_max_pages),
+        )
+        register_kwargs["prepared_context"] = upload_result.prepared_context or prepared[FIELD_PREPARED_CONTEXT]
+        register_kwargs["warnings"] = list(prepared[FIELD_WARNINGS]) + list(upload_result.warnings or [])
+        if upload_result.ok:
+            register_kwargs.update(
+                {
+                    "status": STATUS_ACTIVE,
+                    "gemini_file_name": upload_result.gemini_file_name,
+                    "gemini_file_uri": upload_result.gemini_file_uri,
+                    "gemini_mime_type": upload_result.gemini_mime_type,
+                    "gemini_file_state": upload_result.gemini_file_state,
+                    "gemini_uploaded_at": upload_result.gemini_uploaded_at,
+                }
+            )
+        else:
+            register_kwargs.update(
+                {
+                    "status": STATUS_ERROR,
+                    "error_code": ERROR_GEMINI_FILE_UPLOAD,
+                    "gemini_file_name": upload_result.gemini_file_name,
+                    "gemini_file_uri": upload_result.gemini_file_uri,
+                    "gemini_mime_type": upload_result.gemini_mime_type,
+                    "gemini_file_state": upload_result.gemini_file_state,
+                }
+            )
+            logger.warning(
+                "Cleiton doc: upload Gemini Files API falhou para PDF (summary=%s).",
+                upload_result.error_summary,
+            )
+
+    return register_document_placeholder(**register_kwargs)
 
 
 def remove_document_from_session(doc_id: str) -> dict:
@@ -351,7 +422,7 @@ def remove_document_from_session(doc_id: str) -> dict:
             "error_code": ERROR_DOC_NOT_FOUND,
         }
 
-    store_result = remove_document_record(ref)
+    store_result = _remove_document_record_with_cleanup(ref)
     had_session_ref = ref in get_cleiton_doc_ids(session)
     if had_session_ref:
         remove_cleiton_doc_id(session, ref)
@@ -372,7 +443,7 @@ def clear_documents_for_session() -> dict:
     removed_store = 0
     removed_session = 0
     for doc_id in ids:
-        result = remove_document_record(doc_id)
+        result = _remove_document_record_with_cleanup(doc_id)
         if result.get("removed"):
             removed_store += 1
         removed_session += 1
@@ -399,7 +470,7 @@ def cleanup_expired_documents_for_session() -> int:
             removed += 1
 
     for doc_id in stale_ids:
-        remove_document_record(doc_id)
+        _remove_document_record_with_cleanup(doc_id)
         remove_cleiton_doc_id(session, doc_id)
 
     if stale_ids:

@@ -1,11 +1,43 @@
 {% extends "base_admin.html" %}
 
+{% macro doc_checkbox(field_id, field_name, checked, label, description, tech_key) -%}
+<div class="col-md-6">
+    <div class="border rounded-3 p-3 h-100" style="background:#f8f9fa; border-color:#d7dbe0 !important; color:#212529;">
+        <label class="form-check-label fw-semibold d-flex align-items-start gap-2" for="{{ field_id }}" style="color:#212529;">
+            <input class="form-check-input mt-1" type="checkbox" id="{{ field_id }}" name="{{ field_name }}" data-tech-key="{{ tech_key }}" {% if checked %}checked{% endif %}>
+            <span>{{ label }}</span>
+        </label>
+        <div class="form-text mt-2" style="color:#495057;">{{ description }}</div>
+        <div class="small mt-2" style="color:#6c757d;">Chave: <code>{{ tech_key }}</code></div>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro doc_number(field_id, field_name, value, label, description, tech_key, min_value=None, max_value=None, col_class='col-md-4') -%}
+<div class="{{ col_class }}">
+    <div class="border rounded-3 p-3 h-100" style="background:#f8f9fa; border-color:#d7dbe0 !important; color:#212529;">
+        <label for="{{ field_id }}" class="form-label fw-semibold mb-1" style="color:#212529;">{{ label }}</label>
+        <div class="form-text mb-3" style="color:#495057;">{{ description }}</div>
+        <input
+            type="number"
+            id="{{ field_id }}"
+            name="{{ field_name }}"
+            data-tech-key="{{ tech_key }}"
+            class="form-control"
+            value="{{ value }}"
+            {% if min_value is not none %}min="{{ min_value }}"{% endif %}
+            {% if max_value is not none %}max="{{ max_value }}"{% endif %}>
+        <div class="small mt-2" style="color:#6c757d;">Chave: <code>{{ tech_key }}</code></div>
+    </div>
+</div>
+{%- endmacro %}
+
 {% block admin_content %}
 <div class="container-fluid">
-    <h4 class="mb-3">Cleiton â€” ParÃ¢metros operacionais</h4>
+    <h4 class="mb-3">Cleiton - Parâmetros operacionais</h4>
     <p class="text-muted small mb-4">
-        Custo de <strong>runtime</strong> (ex.: Render), referÃªncia <strong>Google</strong> (tokens),
-        <strong>rÃ©gua de conversÃ£o de crÃ©ditos</strong> e controles administrativos do MVP documental da JÃºlia.
+        Custo de <strong>runtime</strong>, referência de <strong>tokens</strong>,
+        <strong>régua de conversão de créditos</strong> e controles administrativos do upload documental da Júlia.
     </p>
 
     <div class="card border-0 shadow-sm mb-4">
@@ -14,7 +46,7 @@
             {% if cost_per_second is not none %}
             <p class="mb-0">
                 <code>custo_por_segundo</code> =
-                (runtime_monthly_cost Ã— allocation_percent Ã— overhead_factor) / month_seconds
+                (runtime_monthly_cost x allocation_percent x overhead_factor) / month_seconds
             </p>
             <p class="fs-4 fw-bold text-primary mt-2 mb-0">
                 R$ {{ '%.8f'|format(cost_per_second) }} / s
@@ -27,20 +59,20 @@
 
     <form method="post" action="{{ url_for('admin.agentes_cleiton') }}" class="card border-0 shadow-sm">
         <div class="card-body">
-            <h6 class="mb-3">Bloco A â€” Render (runtime)</h6>
+            <h6 class="mb-3">Bloco A - Runtime</h6>
             <div class="row g-3 mb-4">
                 <div class="col-md-6">
                     <label class="form-label">Custo mensal do runtime (R$)</label>
                     <input type="text" name="runtime_monthly_cost" class="form-control"
                            value="{{ cfg.runtime_monthly_cost if cfg.runtime_monthly_cost is not none else '' }}"
                            placeholder="ex.: 450.00" inputmode="decimal">
-                    <small class="text-muted">Valor da fatura ou alocaÃ§Ã£o mensal do serviÃ§o.</small>
+                    <small class="text-muted">Valor da fatura ou alocação mensal do serviço.</small>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">month_seconds</label>
                     <input type="number" name="month_seconds" class="form-control" min="1"
                            value="{{ cfg.month_seconds or 2592000 }}">
-                    <small class="text-muted">PadrÃ£o: 2.592.000 (30 dias).</small>
+                    <small class="text-muted">Padrão: 2.592.000 (30 dias).</small>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">allocation_percent (1.0 = 100%)</label>
@@ -56,34 +88,34 @@
                 </div>
             </div>
 
-            <h6 class="mb-3">Bloco C â€” Google (referÃªncia simples)</h6>
+            <h6 class="mb-3">Bloco C - Google (referência simples)</h6>
             <div class="row g-3 mb-4">
                 <div class="col-md-6">
-                    <label class="form-label">Custo por milhÃ£o de tokens (referÃªncia)</label>
+                    <label class="form-label">Custo por milhão de tokens (referência)</label>
                     <input type="text" name="cost_per_million_tokens" class="form-control"
                            value="{{ cfg.cost_per_million_tokens if cfg.cost_per_million_tokens is not none else '' }}"
                            placeholder="opcional">
-                    <small class="text-muted">Apenas cadastro; nÃ£o entra no cÃ¡lculo do upload Roberto.</small>
+                    <small class="text-muted">Apenas cadastro; não entra no cálculo do upload Roberto.</small>
                 </div>
             </div>
 
-            <h6 class="mb-3">Bloco D â€” RÃ©gua de conversÃ£o de crÃ©ditos</h6>
-            <p class="small text-muted mb-3">Quanto <strong>1 crÃ©dito</strong> compra de cada recurso (deixe em branco se ainda nÃ£o definido).</p>
+            <h6 class="mb-3">Bloco D - Régua de conversão de créditos</h6>
+            <p class="small text-muted mb-3">Quanto <strong>1 crédito</strong> compra de cada recurso (deixe em branco se ainda não definido).</p>
             <div class="row g-3 mb-3">
                 <div class="col-md-4">
-                    <label class="form-label">Tokens de IA por 1 crÃ©dito</label>
+                    <label class="form-label">Tokens de IA por 1 crédito</label>
                     <input type="text" name="credit_tokens_per_credit" class="form-control"
                            value="{{ cfg.credit_tokens_per_credit if cfg.credit_tokens_per_credit is not none else '' }}"
                            placeholder="ex.: 1000" inputmode="decimal">
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Linhas processadas por 1 crÃ©dito</label>
+                    <label class="form-label">Linhas processadas por 1 crédito</label>
                     <input type="text" name="credit_lines_per_credit" class="form-control"
                            value="{{ cfg.credit_lines_per_credit if cfg.credit_lines_per_credit is not none else '' }}"
                            placeholder="ex.: 500" inputmode="decimal">
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Milissegundos processados por 1 crÃ©dito</label>
+                    <label class="form-label">Milissegundos processados por 1 crédito</label>
                     <input type="text" name="credit_ms_per_credit" class="form-control"
                            value="{{ cfg.credit_ms_per_credit if cfg.credit_ms_per_credit is not none else '' }}"
                            placeholder="ex.: 60000" inputmode="decimal">
@@ -92,174 +124,100 @@
 
             <hr class="my-4">
 
-            <h6 class="mb-3">Bloco E â€” Upload documental governado</h6>
-            <input type="hidden" name="cleiton_doc_form" value="1">
-            <p class="small text-muted mb-3">
-                Controles administrativos do MVP documental da JÃºlia via <code>ConfigRegras</code>
-                com prefixo <code>cleiton_doc_</code>.
-            </p>
+            <section aria-labelledby="cleiton-doc-governance">
+                <h6 id="cleiton-doc-governance" class="mb-2">Bloco E - Upload documental governado</h6>
+                <input type="hidden" name="cleiton_doc_form" value="1">
+                <p class="small text-muted mb-2">
+                    Configurações que controlam o upload documental usado pela Júlia. Os documentos ficam temporariamente disponíveis na conversa e seguem limites de segurança, custo e sessão definidos pelo Cleiton.
+                </p>
+                <p class="small mb-4" style="color:#8a6d1d;">
+                    Atenção: estes limites controlam segurança, custo e experiência. Não alteram a inteligência da Júlia nem exigem layout padrão dos arquivos.
+                </p>
 
-            <div class="row g-3 mb-4">
-                <div class="col-md-3 form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="upload_enabled" name="upload_enabled" {% if doc_cfg.upload_enabled %}checked{% endif %}>
-                    <label class="form-check-label" for="upload_enabled">upload_enabled</label>
+                <div class="border rounded-3 p-3 p-lg-4 mb-4" style="background:#ffffff; border-color:#d7dbe0 !important;">
+                    <h6 class="mb-3" style="color:#212529;">Controles globais</h6>
+                    <div class="row g-3">
+                        {{ doc_checkbox('cleiton_doc_upload_enabled', 'upload_enabled', doc_cfg.upload_enabled, 'Ativar upload documental', 'Liga ou desliga a funcionalidade de anexar documentos no chat operacional da Júlia.', 'cleiton_doc_upload_enabled') }}
+                        {{ doc_checkbox('cleiton_doc_cleanup_enabled', 'cleanup_enabled', doc_cfg.cleanup_enabled, 'Ativar limpeza automática', 'Remove documentos temporários expirados da sessão e do armazenamento temporário.', 'cleiton_doc_cleanup_enabled') }}
+                        {{ doc_number('cleiton_doc_max_files_per_session', 'max_files_per_session', doc_cfg.max_files_per_session, 'Máximo de documentos por sessão', 'Quantidade máxima de arquivos que o usuário pode manter anexados ao mesmo tempo.', 'cleiton_doc_max_files_per_session', 1, 20, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_upload_ttl_hours', 'upload_ttl_hours', doc_cfg.upload_ttl_hours, 'Tempo de validade dos documentos (horas)', 'Define por quanto tempo os documentos ficam disponíveis como contexto temporário.', 'cleiton_doc_upload_ttl_hours', 1, 168, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_session_max_bytes', 'session_max_bytes', doc_cfg.session_max_bytes, 'Tamanho máximo total da sessão (bytes)', 'Soma máxima permitida para todos os documentos anexados na sessão.', 'cleiton_doc_session_max_bytes', 262144, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_prompt_context_max_chars', 'prompt_context_max_chars', doc_cfg.prompt_context_max_chars, 'Limite de contexto enviado à IA (caracteres)', 'Quantidade máxima de texto documental enviada para a Júlia em uma resposta.', 'cleiton_doc_prompt_context_max_chars', 2000, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_prompt_max_files_considered', 'prompt_max_files_considered', doc_cfg.prompt_max_files_considered, 'Máximo de documentos considerados por resposta', 'Número máximo de documentos recentes usados como contexto em cada resposta da Júlia.', 'cleiton_doc_prompt_max_files_considered', 1, doc_cfg.max_files_per_session, 'col-md-6 col-lg-4') }}
+                    </div>
                 </div>
-                <div class="col-md-3 form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="cleanup_enabled" name="cleanup_enabled" {% if doc_cfg.cleanup_enabled %}checked{% endif %}>
-                    <label class="form-check-label" for="cleanup_enabled">cleanup_enabled</label>
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">max_files_per_session</label>
-                    <input type="number" min="1" max="20" name="max_files_per_session" class="form-control" value="{{ doc_cfg.max_files_per_session }}">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">upload_ttl_hours</label>
-                    <input type="number" min="1" max="168" name="upload_ttl_hours" class="form-control" value="{{ doc_cfg.upload_ttl_hours }}">
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">session_max_bytes</label>
-                    <input type="number" min="262144" name="session_max_bytes" class="form-control" value="{{ doc_cfg.session_max_bytes }}">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">prompt_context_max_chars</label>
-                    <input type="number" min="2000" name="prompt_context_max_chars" class="form-control" value="{{ doc_cfg.prompt_context_max_chars }}">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">prompt_max_files_considered</label>
-                    <input type="number" min="1" max="{{ doc_cfg.max_files_per_session }}" name="prompt_max_files_considered" class="form-control" value="{{ doc_cfg.prompt_max_files_considered }}">
-                </div>
-            </div>
 
-            <h6 class="mb-3">PDF</h6>
-            <div class="row g-3 mb-4">
-                <div class="col-md-3 form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="pdf_enabled" name="pdf_enabled" {% if doc_cfg.pdf_enabled %}checked{% endif %}>
-                    <label class="form-check-label" for="pdf_enabled">pdf_enabled</label>
+                <div class="border rounded-3 p-3 p-lg-4 mb-4" style="background:#ffffff; border-color:#d7dbe0 !important;">
+                    <h6 class="mb-2" style="color:#212529;">PDF</h6>
+                    <p class="small text-muted mb-3">PDFs são preparados para leitura real via Gemini Files API, sem parser local pesado e respeitando os limites configurados e o TTL da sessão. O envio é governado pelo Cleiton e fica disponível como contexto da conversa enquanto válido.</p>
+                    <div class="row g-3">
+                        {{ doc_checkbox('cleiton_doc_pdf_enabled', 'pdf_enabled', doc_cfg.pdf_enabled, 'Permitir PDF', 'Autoriza ou bloqueia anexos PDF.', 'cleiton_doc_pdf_enabled') }}
+                        {{ doc_number('cleiton_doc_pdf_max_bytes', 'pdf_max_bytes', doc_cfg.pdf_max_bytes, 'Tamanho máximo do PDF (bytes)', 'Limite individual para cada PDF.', 'cleiton_doc_pdf_max_bytes', 32768, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_pdf_max_pages', 'pdf_max_pages', doc_cfg.pdf_max_pages, 'Máximo de páginas do PDF', 'Limite técnico de páginas quando a contagem local for possível.', 'cleiton_doc_pdf_max_pages', 1, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_pdf_max_chars', 'pdf_max_chars', doc_cfg.pdf_max_chars, 'Limite de caracteres do PDF', 'Reservado; PDF usa Gemini File API para leitura multimodal.', 'cleiton_doc_pdf_max_chars', 1000, None, 'col-md-6 col-lg-4') }}
+                    </div>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">pdf_max_bytes</label>
-                    <input type="number" min="32768" name="pdf_max_bytes" class="form-control" value="{{ doc_cfg.pdf_max_bytes }}">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">pdf_max_pages</label>
-                    <input type="number" min="1" name="pdf_max_pages" class="form-control" value="{{ doc_cfg.pdf_max_pages }}">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">pdf_max_chars</label>
-                    <input type="number" min="1000" name="pdf_max_chars" class="form-control" value="{{ doc_cfg.pdf_max_chars }}">
-                </div>
-            </div>
 
-            <h6 class="mb-3">Excel / XLSX</h6>
-            <div class="row g-3 mb-4">
-                <div class="col-md-3 form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="excel_enabled" name="excel_enabled" {% if doc_cfg.excel_enabled %}checked{% endif %}>
-                    <label class="form-check-label" for="excel_enabled">excel_enabled</label>
+                <div class="border rounded-3 p-3 p-lg-4 mb-4" style="background:#ffffff; border-color:#d7dbe0 !important;">
+                    <h6 class="mb-2" style="color:#212529;">Excel / XLSX</h6>
+                    <p class="small text-muted mb-3">Planilhas são convertidas para texto/CSV controlado, sem exigir cabeçalhos ou colunas padrão.</p>
+                    <div class="row g-3">
+                        {{ doc_checkbox('cleiton_doc_excel_enabled', 'excel_enabled', doc_cfg.excel_enabled, 'Permitir Excel/XLSX', '', 'cleiton_doc_excel_enabled') }}
+                        {{ doc_number('cleiton_doc_excel_max_bytes', 'excel_max_bytes', doc_cfg.excel_max_bytes, 'Tamanho máximo do Excel (bytes)', '', 'cleiton_doc_excel_max_bytes', 32768, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_excel_max_rows', 'excel_max_rows', doc_cfg.excel_max_rows, 'Máximo de linhas do Excel', '', 'cleiton_doc_excel_max_rows', 1, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_excel_max_columns', 'excel_max_columns', doc_cfg.excel_max_columns, 'Máximo de colunas do Excel', '', 'cleiton_doc_excel_max_columns', 1, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_excel_max_chars', 'excel_max_chars', doc_cfg.excel_max_chars, 'Limite de caracteres extraídos do Excel', '', 'cleiton_doc_excel_max_chars', 1000, None, 'col-md-6 col-lg-4') }}
+                    </div>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">excel_max_bytes</label>
-                    <input type="number" min="32768" name="excel_max_bytes" class="form-control" value="{{ doc_cfg.excel_max_bytes }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">excel_max_rows</label>
-                    <input type="number" min="1" name="excel_max_rows" class="form-control" value="{{ doc_cfg.excel_max_rows }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">excel_max_columns</label>
-                    <input type="number" min="1" name="excel_max_columns" class="form-control" value="{{ doc_cfg.excel_max_columns }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">excel_max_chars</label>
-                    <input type="number" min="1000" name="excel_max_chars" class="form-control" value="{{ doc_cfg.excel_max_chars }}">
-                </div>
-            </div>
 
-            <h6 class="mb-3">DOCX</h6>
-            <div class="row g-3 mb-4">
-                <div class="col-md-3 form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="docx_enabled" name="docx_enabled" {% if doc_cfg.docx_enabled %}checked{% endif %}>
-                    <label class="form-check-label" for="docx_enabled">docx_enabled</label>
+                <div class="border rounded-3 p-3 p-lg-4 mb-4" style="background:#ffffff; border-color:#d7dbe0 !important;">
+                    <h6 class="mb-2" style="color:#212529;">DOCX</h6>
+                    <p class="small text-muted mb-3">Arquivos Word são convertidos para texto, sem interpretar cláusulas automaticamente e sem exigir estrutura de contrato.</p>
+                    <div class="row g-3">
+                        {{ doc_checkbox('cleiton_doc_docx_enabled', 'docx_enabled', doc_cfg.docx_enabled, 'Permitir DOCX/Word', '', 'cleiton_doc_docx_enabled') }}
+                        {{ doc_number('cleiton_doc_docx_max_bytes', 'docx_max_bytes', doc_cfg.docx_max_bytes, 'Tamanho máximo do DOCX (bytes)', '', 'cleiton_doc_docx_max_bytes', 32768, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_docx_max_paragraphs', 'docx_max_paragraphs', doc_cfg.docx_max_paragraphs, 'Máximo de parágrafos do DOCX', '', 'cleiton_doc_docx_max_paragraphs', 1, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_docx_max_chars', 'docx_max_chars', doc_cfg.docx_max_chars, 'Limite de caracteres extraídos do DOCX', '', 'cleiton_doc_docx_max_chars', 1000, None, 'col-md-6 col-lg-4') }}
+                    </div>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">docx_max_bytes</label>
-                    <input type="number" min="32768" name="docx_max_bytes" class="form-control" value="{{ doc_cfg.docx_max_bytes }}">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">docx_max_paragraphs</label>
-                    <input type="number" min="1" name="docx_max_paragraphs" class="form-control" value="{{ doc_cfg.docx_max_paragraphs }}">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">docx_max_chars</label>
-                    <input type="number" min="1000" name="docx_max_chars" class="form-control" value="{{ doc_cfg.docx_max_chars }}">
-                </div>
-            </div>
 
-            <h6 class="mb-3">TXT</h6>
-            <div class="row g-3 mb-4">
-                <div class="col-md-3 form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="txt_enabled" name="txt_enabled" {% if doc_cfg.txt_enabled %}checked{% endif %}>
-                    <label class="form-check-label" for="txt_enabled">txt_enabled</label>
+                <div class="border rounded-3 p-3 p-lg-4 mb-4" style="background:#ffffff; border-color:#d7dbe0 !important;">
+                    <h6 class="mb-2" style="color:#212529;">TXT</h6>
+                    <p class="small text-muted mb-3">Arquivos TXT são lidos como texto simples e podem ser truncados pelo limite de caracteres.</p>
+                    <div class="row g-3">
+                        {{ doc_checkbox('cleiton_doc_txt_enabled', 'txt_enabled', doc_cfg.txt_enabled, 'Permitir TXT', '', 'cleiton_doc_txt_enabled') }}
+                        {{ doc_number('cleiton_doc_txt_max_bytes', 'txt_max_bytes', doc_cfg.txt_max_bytes, 'Tamanho máximo do TXT (bytes)', '', 'cleiton_doc_txt_max_bytes', 32768, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_txt_max_chars', 'txt_max_chars', doc_cfg.txt_max_chars, 'Limite de caracteres extraídos do TXT', '', 'cleiton_doc_txt_max_chars', 1000, None, 'col-md-6 col-lg-4') }}
+                    </div>
                 </div>
-                <div class="col-md-4">
-                    <label class="form-label">txt_max_bytes</label>
-                    <input type="number" min="32768" name="txt_max_bytes" class="form-control" value="{{ doc_cfg.txt_max_bytes }}">
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">txt_max_chars</label>
-                    <input type="number" min="1000" name="txt_max_chars" class="form-control" value="{{ doc_cfg.txt_max_chars }}">
-                </div>
-            </div>
 
-            <h6 class="mb-3">XML</h6>
-            <div class="row g-3 mb-4">
-                <div class="col-md-3 form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="xml_enabled" name="xml_enabled" {% if doc_cfg.xml_enabled %}checked{% endif %}>
-                    <label class="form-check-label" for="xml_enabled">xml_enabled</label>
+                <div class="border rounded-3 p-3 p-lg-4 mb-4" style="background:#ffffff; border-color:#d7dbe0 !important;">
+                    <h6 class="mb-2" style="color:#212529;">XML</h6>
+                    <p class="small text-muted mb-3">Arquivos XML são tratados como texto estruturado seguro, sem regras específicas de CT-e, NF-e ou tags obrigatórias.</p>
+                    <div class="row g-3">
+                        {{ doc_checkbox('cleiton_doc_xml_enabled', 'xml_enabled', doc_cfg.xml_enabled, 'Permitir XML', '', 'cleiton_doc_xml_enabled') }}
+                        {{ doc_number('cleiton_doc_xml_max_bytes', 'xml_max_bytes', doc_cfg.xml_max_bytes, 'Tamanho máximo do XML (bytes)', '', 'cleiton_doc_xml_max_bytes', 32768, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_xml_max_nodes', 'xml_max_nodes', doc_cfg.xml_max_nodes, 'Máximo de nós do XML', '', 'cleiton_doc_xml_max_nodes', 1, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_xml_max_depth', 'xml_max_depth', doc_cfg.xml_max_depth, 'Profundidade máxima do XML', '', 'cleiton_doc_xml_max_depth', 1, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_xml_max_chars', 'xml_max_chars', doc_cfg.xml_max_chars, 'Limite de caracteres extraídos do XML', '', 'cleiton_doc_xml_max_chars', 1000, None, 'col-md-6 col-lg-4') }}
+                    </div>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">xml_max_bytes</label>
-                    <input type="number" min="32768" name="xml_max_bytes" class="form-control" value="{{ doc_cfg.xml_max_bytes }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">xml_max_nodes</label>
-                    <input type="number" min="1" name="xml_max_nodes" class="form-control" value="{{ doc_cfg.xml_max_nodes }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">xml_max_depth</label>
-                    <input type="number" min="1" name="xml_max_depth" class="form-control" value="{{ doc_cfg.xml_max_depth }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">xml_max_chars</label>
-                    <input type="number" min="1000" name="xml_max_chars" class="form-control" value="{{ doc_cfg.xml_max_chars }}">
-                </div>
-            </div>
 
-            <h6 class="mb-3">CSV</h6>
-            <div class="row g-3 mb-4">
-                <div class="col-md-3 form-check ms-2">
-                    <input class="form-check-input" type="checkbox" id="csv_enabled" name="csv_enabled" {% if doc_cfg.csv_enabled %}checked{% endif %}>
-                    <label class="form-check-label" for="csv_enabled">csv_enabled</label>
+                <div class="border rounded-3 p-3 p-lg-4 mb-4" style="background:#ffffff; border-color:#d7dbe0 !important;">
+                    <h6 class="mb-2" style="color:#212529;">CSV</h6>
+                    <p class="small text-muted mb-3">Arquivos CSV são convertidos para texto tabular controlado, sem exigir nomes de colunas.</p>
+                    <div class="row g-3">
+                        {{ doc_checkbox('cleiton_doc_csv_enabled', 'csv_enabled', doc_cfg.csv_enabled, 'Permitir CSV', '', 'cleiton_doc_csv_enabled') }}
+                        {{ doc_number('cleiton_doc_csv_max_bytes', 'csv_max_bytes', doc_cfg.csv_max_bytes, 'Tamanho máximo do CSV (bytes)', '', 'cleiton_doc_csv_max_bytes', 32768, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_csv_max_rows', 'csv_max_rows', doc_cfg.csv_max_rows, 'Máximo de linhas do CSV', '', 'cleiton_doc_csv_max_rows', 1, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_csv_max_columns', 'csv_max_columns', doc_cfg.csv_max_columns, 'Máximo de colunas do CSV', '', 'cleiton_doc_csv_max_columns', 1, None, 'col-md-6 col-lg-4') }}
+                        {{ doc_number('cleiton_doc_csv_max_chars', 'csv_max_chars', doc_cfg.csv_max_chars, 'Limite de caracteres extraídos do CSV', '', 'cleiton_doc_csv_max_chars', 1000, None, 'col-md-6 col-lg-4') }}
+                    </div>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">csv_max_bytes</label>
-                    <input type="number" min="32768" name="csv_max_bytes" class="form-control" value="{{ doc_cfg.csv_max_bytes }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">csv_max_rows</label>
-                    <input type="number" min="1" name="csv_max_rows" class="form-control" value="{{ doc_cfg.csv_max_rows }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">csv_max_columns</label>
-                    <input type="number" min="1" name="csv_max_columns" class="form-control" value="{{ doc_cfg.csv_max_columns }}">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">csv_max_chars</label>
-                    <input type="number" min="1000" name="csv_max_chars" class="form-control" value="{{ doc_cfg.csv_max_chars }}">
-                </div>
-            </div>
+            </section>
 
             {% if cfg.updated_at %}
-            <p class="small text-muted mb-3">Ãšltima atualizaÃ§Ã£o: {{ cfg.updated_at.strftime('%d/%m/%Y %H:%M') }}</p>
+            <p class="small text-muted mb-3">Última atualização: {{ cfg.updated_at.strftime('%d/%m/%Y %H:%M') }}</p>
             {% endif %}
 
             <button type="submit" class="btn btn-primary">Salvar</button>

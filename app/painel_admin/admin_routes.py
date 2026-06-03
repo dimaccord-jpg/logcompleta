@@ -67,6 +67,8 @@ admin_bp = Blueprint(
     url_prefix="/admin",
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _admin_app_env() -> str:
     return (os.getenv("APP_ENV") or "dev").strip().lower()

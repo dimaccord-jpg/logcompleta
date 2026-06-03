@@ -174,6 +174,22 @@ def save_document_record(record: dict) -> None:
     _write_json_atomic(path, record)
 
 
+def peek_document_record(doc_id: str) -> dict | None:
+    """Carrega JSON do documento sem checagem de TTL (uso interno para cleanup)."""
+    try:
+        path = _doc_json_path(doc_id)
+    except ValueError:
+        return None
+    if not path.is_file():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
 def load_document_record(doc_id: str, *, ttl_hours: int) -> dict | None:
     try:
         path = _doc_json_path(doc_id)
@@ -206,6 +222,14 @@ def remove_document_record(doc_id: str) -> dict:
             "removed": False,
             "error_code": str(exc.args[0]) if exc.args else ERROR_DOC_ID_INVALID,
         }
+    record = peek_document_record(doc_id)
+    if record:
+        try:
+            from app.cleiton_doc_gemini_files import cleanup_gemini_file_for_record
+
+            cleanup_gemini_file_for_record(record)
+        except Exception:
+            pass
     removed = _safe_remove_file(path)
     return {
         "ok": True,
@@ -240,16 +264,17 @@ def cleanup_expired_document_records(ttl_hours: int) -> int:
             continue
         if path.name == meta_name:
             continue
+        doc_id = path.stem
         try:
             with open(path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
-            if not isinstance(payload, dict) or _is_expired(payload, ttl_hours):
-                if _safe_remove_file(path):
-                    removed += 1
+            if isinstance(payload, dict) and not _is_expired(payload, ttl_hours):
                 continue
         except Exception:
-            if _safe_remove_file(path):
-                removed += 1
+            pass
+        result = remove_document_record(doc_id)
+        if result.get("removed") or not path.exists():
+            removed += 1
     return removed
 
 

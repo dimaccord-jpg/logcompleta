@@ -53,3 +53,6 @@ app/legal/
 
 # Cleide - uploads temporarios locais
 app/cleide_upload_tmp/
+
+# Arquivos temporarios do upload documental da Julia/Cleiton
+app/cleiton_doc_tmp/

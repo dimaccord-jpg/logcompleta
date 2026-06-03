@@ -9,7 +9,11 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from app.models import Franquia
-from app.services.cleiton_mensageria_operacao_service import montar_mensagem_operacao
+from app.services.cleiton_mensageria_operacao_service import (
+    montar_mensagem_operacao,
+    montar_upgrade_cta_operacao,
+    status_exibe_cta_upgrade,
+)
 from app.services.cleiton_franquia_leitura_service import (
     ler_franquia_operacional_cleiton,
 )
@@ -27,6 +31,7 @@ class DecisaoOperacaoFranquia:
     motivo: str
     mensagem_usuario: str | None
     sugerir_upgrade: bool
+    upgrade_cta: dict[str, Any] | None
     franquia: dict[str, Any] | None
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,6 +77,7 @@ def avaliar_autorizacao_operacao_por_franquia(
       - motivo: código técnico interno
       - mensagem_usuario: mensagem para UI (quando aplicável)
       - sugerir_upgrade: bool
+      - upgrade_cta: CTA estruturado para limite de plano (quando aplicável)
       - franquia: snapshot opcional de contexto operacional
     """
     if user is None or not getattr(user, "is_authenticated", False):
@@ -82,6 +88,7 @@ def avaliar_autorizacao_operacao_por_franquia(
             motivo="usuario_nao_autenticado",
             mensagem_usuario=None,
             sugerir_upgrade=False,
+            upgrade_cta=None,
             franquia=None,
         )
         return decisao.to_dict()
@@ -95,6 +102,7 @@ def avaliar_autorizacao_operacao_por_franquia(
             motivo="usuario_sem_franquia",
             mensagem_usuario="Sua conta não possui franquia operacional vinculada.",
             sugerir_upgrade=False,
+            upgrade_cta=None,
             franquia=None,
         )
         return decisao.to_dict()
@@ -111,6 +119,7 @@ def avaliar_autorizacao_operacao_por_franquia(
             motivo="franquia_nao_encontrada",
             mensagem_usuario="A franquia operacional vinculada não foi encontrada.",
             sugerir_upgrade=False,
+            upgrade_cta=None,
             franquia=None,
         )
         return decisao.to_dict()
@@ -126,6 +135,9 @@ def avaliar_autorizacao_operacao_por_franquia(
         plano_resolvido=leitura.plano_resolvido,
         sugerir_upgrade=sugerir_upgrade,
     )
+    upgrade_cta = None
+    if status_exibe_cta_upgrade(status_franquia):
+        upgrade_cta = montar_upgrade_cta_operacao(leitura.plano_resolvido)
 
     decisao = DecisaoOperacaoFranquia(
         permitido=permitido,
@@ -134,6 +146,7 @@ def avaliar_autorizacao_operacao_por_franquia(
         motivo=motivo,
         mensagem_usuario=mensagem_usuario,
         sugerir_upgrade=sugerir_upgrade,
+        upgrade_cta=upgrade_cta,
         franquia={
             "id": leitura.franquia_id,
             "status": leitura.status,
