@@ -71,7 +71,7 @@ Validar:
 
 ## Roteiro manual minimo
 
-1. Abrir `/auditoria-frete` autenticado com perfil autorizado.
+1. Abrir `/cleide-bi-frete` autenticado com perfil autorizado.
 2. Validar upload pequeno e conversar em sequencia com pelo menos 3 perguntas.
 3. Validar upload grande e observar que a tela continua responsiva.
 4. Alternar `executivo` e `conservador` no admin e confirmar mudanca no contexto exposto ao chat.

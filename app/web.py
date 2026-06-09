@@ -36,6 +36,7 @@ from app.extensions import db, login_manager
 from app.painel_admin.admin_routes import admin_bp
 from app.ops_routes import ops_bp
 from app.user_area import user_bp
+from app.cleide_audit_routes import cleide_audit_bp
 from app.cleide_routes import cleide_bp
 from app.julia_documents_routes import julia_documents_bp
 from app.infra import (
@@ -232,6 +233,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(ops_bp)
 app.register_blueprint(user_bp)
 app.register_blueprint(cleide_bp)
+app.register_blueprint(cleide_audit_bp)
 app.register_blueprint(julia_documents_bp)
 
 @app.context_processor

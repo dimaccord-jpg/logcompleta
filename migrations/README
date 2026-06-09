@@ -1,82 +1,43 @@
 # Migrations (Alembic)
 
-Data de consolidacao: `2026-05-29`  
-Commit de referencia: `20fa165`
+Data de consolidacao: `2026-06-05`
+Commit de referencia: `b5fc444`
 
-Este documento concentra a cadeia atual de migrations relevantes para o estado promovido em producao.
+Este documento resume a cadeia de migrations relevante para o estado atual.
 
-## 1. Estado atual
+## Estado atual
 
-O commit `20fa165` inclui a migration nova do onboarding:
+A entrega do upload documental governado da Julia nao adicionou migration nova em `migrations/versions`.
 
-- `r2s3t4u5v6w7` - cria `onboarding_word_cloud_hidden_term`
+Configuracao documental atual:
 
-Essa revisao passa a fazer parte da cadeia obrigatoria para homolog e producao.
+- usa o mecanismo existente `ConfigRegras`
+- nao criou tabela nova
+- nao exige revisao adicional de schema para o bloco documental do Cleiton
 
-## 2. Cadeia relevante
+## Cadeia relevante ja existente
 
-1. `g4h5i6j7k8l9` - identidade de negocio em eventos de consumo e processamento
+1. `g4h5i6j7k8l9` - identidade de negocio em eventos
 2. `h1i2j3k4l5m6` - conta / franquia / vinculos
 3. `i2j3k4l5m6n7` - regua de creditos
 4. `j3k4l5m6n7o8` - franquia operacional
 5. `k4l5m6n7o8p9` - bloqueio manual de franquia
-6. `l5m6n7o8p9q0` - remocao de campos legados de chat freemium diario
+6. `l5m6n7o8p9q0` - remocao de campos legados de freemium
 7. `m6n7o8p9q0r1` - multiuser de franquia
 8. `n7o8p9q0r1s2` - billing idempotente de upload Roberto
 9. `o8p9q0r1s2t3` - preparo Stripe/monetizacao
 10. `p9q0r1s2t3u4` - constraints Stripe
-11. `q1r2s3t4u5v6` - tabela de privacy policy
-12. `r2s3t4u5v6w7` - hidden terms da word cloud do onboarding
+11. `q1r2s3t4u5v6` - privacy policy
+12. `r2s3t4u5v6w7` - hidden terms do onboarding
 
-## 3. Nova tabela de onboarding
-
-Tabela criada:
-
-- `onboarding_word_cloud_hidden_term`
-
-Finalidade:
-
-- persistir termos ocultados manualmente pelo admin;
-- permitir reexibicao individual;
-- manter historico bruto da nuvem de palavras sem alteracao destrutiva.
-
-Campos:
-
-- `id`
-- `term_normalized`
-- `is_active`
-- `created_at`
-- `updated_at`
-- `hidden_by_user_id`
-- `notes`
-
-Indices:
-
-- `is_active`
-- `term_normalized`
-- `hidden_by_user_id`
-
-## 4. Execucao padrao
+## Execucao padrao
 
 ```powershell
 alembic -c migrations/alembic.ini upgrade head
 ```
 
-Verificacao:
+## Sensibilidades
 
-```powershell
-alembic -c migrations/alembic.ini current
-```
-
-## 5. Premissas para homolog e producao
-
-- `DATABASE_URL` no banco alvo correto
-- backup/snapshot antes de aplicar em ambiente compartilhado
-- validacao do dashboard admin apos a migration
-- validacao do fluxo de hidden terms apos a migration
-
-## 6. Sensibilidades de regressao
-
-- quebrar a cadeia de conta/franquia invalida governanca operacional
-- pular revisoes de franquia invalida autorizacao
-- pular `r2s3t4u5v6w7` quebra o controle admin da word cloud do onboarding
+- nao documentar migration nova para a Julia documental, porque ela nao existe
+- nao documentar tabela nova para configuracao documental, porque ela nao existe
+- manter `r2s3t4u5v6w7` como migration relevante do onboarding, mas separada desta entrega

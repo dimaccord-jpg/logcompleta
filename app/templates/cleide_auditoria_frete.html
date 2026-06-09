@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Cleide | Auditoria de Frete Operacional{% endblock %}
-{% block meta_description %}Cleide: inteligência operacional e gerencial para auditoria contextual de frete.{% endblock %}
+{% block title %}Cleide | BI Cleide — Fretes{% endblock %}
+{% block meta_description %}Cleide: painel de BI operacional e gerencial com indicadores, dashboard, upload e chat contextual de fretes.{% endblock %}
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cleide_auditoria_frete.css') }}">
 {% endblock %}
 
 {% block content %}
+{% include 'partials/app_global_header.html' %}
 <div class="container py-4 py-lg-5 cleide-page">
   <script>
     window.CLEIDE_PUBLIC_PAGE = {{ 'true' if cleide_public_page else 'false' }};
@@ -22,12 +23,12 @@
         <div class="col-12 col-xl-8">
           <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
             <span class="badge text-bg-primary">Agente Cleide</span>
-            <span class="badge text-bg-light border">Auditoria operacional premium</span>
+            <span class="badge text-bg-light border">BI operacional premium</span>
           </div>
-          <h1 class="cleide-display-title fw-bold mb-3">Auditoria de Frete Operacional e Gerencial</h1>
+          <h1 class="cleide-display-title fw-bold mb-3">BI Cleide — Painel operacional e gerencial de fretes</h1>
           <p class="cleide-subtitle text-muted mb-3">
-            A Cleide organiza dados operacionais em contexto analítico para apoiar investigações gerenciais,
-            leitura de variação e identificação de comportamento atípico com visão executiva.
+            A Cleide organiza dados operacionais em indicadores, filtros e dashboard para apoiar leitura de variação,
+            KPIs e identificação de comportamento atípico com visão executiva.
           </p>
           <p class="text-muted mb-0">
             Nesta fase, a Cleide opera com analytics estrutural ativo em cima do dataset da sessão,
@@ -587,7 +588,7 @@
       </div>
       <div class="cleide-chat-panel__intro">
         <p class="small text-muted mb-3" id="cleideChatHint">
-          Faça perguntas executivas com base no contexto seguro da sessão atual da auditoria.
+          Faça perguntas executivas com base no contexto seguro da sessão atual do BI Cleide.
         </p>
         <div class="alert alert-warning mt-2 mb-0 py-2 px-3 small d-none" id="cleideChatFallbackBanner"></div>
         <div class="alert alert-info mt-2 mb-0 py-2 px-3 small d-none" id="cleideChatScopeDetails"></div>

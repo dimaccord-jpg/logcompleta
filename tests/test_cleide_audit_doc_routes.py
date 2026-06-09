@@ -1,0 +1,511 @@
+"""Testes de API documental da Cleide Auditoria (Fase 2)."""
+from __future__ import annotations
+
+import importlib
+import io
+import os
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from app.cleide_audit_doc_service import CLEIDE_AUDIT_DOC_IDS_SESSION_KEY
+from app.cleiton_doc_contracts import (
+    ERROR_INVALID_EXTENSION,
+    FIELD_PREPARED_CONTEXT,
+    SESSION_KEY_CLEITON_DOC_IDS,
+)
+from app.services.cleide_audit_config_service import (
+    CleideAuditConfig,
+    DEFAULT_FALLBACK_MESSAGE,
+)
+from tests.cleiton_doc_fixtures import (
+    make_csv,
+    make_docx,
+    make_minimal_pdf,
+    make_txt,
+    make_xlsx,
+    make_xml,
+    patch_cleiton_doc_cfg,
+    patch_cleiton_doc_store,
+    patch_gemini_pdf_upload,
+)
+
+
+def _default_audit_cfg(**overrides):
+    defaults = {
+        "chat_enabled": True,
+        "upload_enabled": True,
+        "chat_max_history": 10,
+        "document_context_max_chars": 24000,
+        "max_documents_considered": 3,
+        "question_max_chars": 4000,
+        "fallback_message": DEFAULT_FALLBACK_MESSAGE,
+        "no_documents_behavior": "allow_guided",
+        "show_documents_used": True,
+        "no_hallucination_instruction_enabled": True,
+    }
+    defaults.update(overrides)
+    return CleideAuditConfig(**defaults)
+
+
+def _patch_audit_cfg(monkeypatch, **overrides):
+    cfg = _default_audit_cfg(**overrides)
+    targets = [
+        "app.cleide_audit_routes.get_cleide_audit_config",
+        "app.cleide_audit_doc_context.get_cleide_audit_config",
+        "app.run_cleide_audit_chat.get_cleide_audit_config",
+    ]
+    for target in targets:
+        monkeypatch.setattr(target, lambda _cfg=cfg: _cfg)
+    return cfg
+
+
+def _load_web_module():
+    os.environ.setdefault("APP_ENV", "dev")
+    os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+    os.environ.setdefault("SECRET_KEY", "test-secret")
+    return importlib.import_module("app.web")
+
+
+def _setup_doc_env(monkeypatch, tmp_path, **cfg_overrides):
+    patch_cleiton_doc_store(tmp_path, monkeypatch)
+    cfg = patch_cleiton_doc_cfg(monkeypatch, **cfg_overrides)
+    monkeypatch.setattr("app.cleide_audit_doc_service.get_cleiton_doc_config", lambda: cfg)
+    monkeypatch.setattr("app.cleide_audit_routes.get_cleiton_doc_config", lambda: cfg)
+    monkeypatch.setattr("app.cleide_audit_doc_context.get_cleiton_doc_config", lambda: cfg)
+    _patch_audit_cfg(monkeypatch)
+    return cfg
+
+
+def _authorized(monkeypatch, web, *, authz=None):
+    fake_user = SimpleNamespace(is_authenticated=True, conta_id=1, franquia_id=1)
+    monkeypatch.setattr(web, "current_user", fake_user)
+    monkeypatch.setattr("app.cleide_audit_routes.current_user", fake_user)
+    monkeypatch.setattr("app.julia_documents_routes.current_user", fake_user)
+    authz_payload = authz or {"permitido": True, "modo_operacao": "normal"}
+    monkeypatch.setattr(
+        web,
+        "avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: authz_payload,
+    )
+    monkeypatch.setattr(
+        "app.cleide_audit_routes.avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: authz_payload,
+    )
+    monkeypatch.setattr(
+        "app.julia_documents_routes.avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: authz_payload,
+    )
+
+
+def _upload(client, filename: str, content: bytes, mime: str = "text/plain"):
+    return client.post(
+        "/api/cleide-auditoria/documents/upload",
+        data={"file": (io.BytesIO(content), filename, mime)},
+        content_type="multipart/form-data",
+    )
+
+
+@pytest.fixture
+def web_client(app, tmp_path, monkeypatch, ctx):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    _authorized(monkeypatch, web)
+    web.app.config["TESTING"] = True
+    return web.app.test_client()
+
+
+def test_anonymous_receives_401_on_all_endpoints(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    anon = SimpleNamespace(is_authenticated=False)
+    monkeypatch.setattr(web, "current_user", anon)
+    monkeypatch.setattr("app.cleide_audit_routes.current_user", anon)
+    client = web.app.test_client()
+
+    assert client.get("/api/cleide-auditoria/documents/status").status_code == 401
+    assert client.post("/api/cleide-auditoria/documents/clear").status_code == 401
+    assert client.delete("/api/cleide-auditoria/documents/doc-id").status_code == 401
+    assert _upload(client, "a.txt", make_txt("x")).status_code == 401
+    assert client.post(
+        "/api/cleide-auditoria/chat",
+        json={"message": "auditar"},
+        content_type="application/json",
+    ).status_code == 401
+
+    body = client.get("/api/cleide-auditoria/documents/status").get_json()
+    assert body["error_code"] == "auth_required"
+
+
+def test_authorized_user_accesses_status(web_client):
+    resp = web_client.get("/api/cleide-auditoria/documents/status")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["domain"] == "cleide_audit"
+    assert "flow_types" in body
+    assert "upload_enabled" in body
+    assert "cleiton_upload_enabled" in body
+    assert "cleide_audit_upload_enabled" in body
+    assert body["upload_enabled"] is (
+        body["cleiton_upload_enabled"] and body["cleide_audit_upload_enabled"]
+    )
+    assert isinstance(body["allowed_formats"], list)
+
+
+def test_status_exposes_combined_upload_flags(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, upload_enabled=False)
+    body = web_client.get("/api/cleide-auditoria/documents/status").get_json()
+    assert body["cleiton_upload_enabled"] is True
+    assert body["cleide_audit_upload_enabled"] is False
+    assert body["upload_enabled"] is False
+
+
+def test_status_upload_effective_requires_both_flags_enabled(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, upload_enabled=True)
+    body = web_client.get("/api/cleide-auditoria/documents/status").get_json()
+    assert body["cleiton_upload_enabled"] is True
+    assert body["cleide_audit_upload_enabled"] is True
+    assert body["upload_enabled"] is True
+
+
+def test_status_reflects_cleiton_global_upload_disabled(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path, upload_enabled=False)
+    _patch_audit_cfg(monkeypatch, upload_enabled=True)
+    web = _load_web_module()
+    _authorized(monkeypatch, web)
+    body = web.app.test_client().get("/api/cleide-auditoria/documents/status").get_json()
+    assert body["cleiton_upload_enabled"] is False
+    assert body["cleide_audit_upload_enabled"] is True
+    assert body["upload_enabled"] is False
+
+
+def test_blocked_user_receives_403(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    _authorized(
+        monkeypatch,
+        web,
+        authz={"permitido": False, "modo_operacao": "blocked", "mensagem_usuario": "Bloqueado."},
+    )
+    client = web.app.test_client()
+    resp = client.get("/api/cleide-auditoria/documents/status")
+    assert resp.status_code == 403
+    body = resp.get_json()
+    assert body["error_code"] == "franquia_blocked"
+    assert body["message"] == "Bloqueado."
+    assert "authorization" in body
+
+
+def test_expired_user_receives_403(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    _authorized(
+        monkeypatch,
+        web,
+        authz={
+            "permitido": False,
+            "modo_operacao": "blocked",
+            "status_franquia": "expired",
+            "mensagem_usuario": "Plano expirado.",
+        },
+    )
+    client = web.app.test_client()
+    resp = _upload(client, "a.txt", make_txt("x"))
+    assert resp.status_code == 403
+    assert resp.get_json()["error_code"] == "franquia_blocked"
+
+
+def test_degraded_user_allowed_by_current_policy(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    _authorized(
+        monkeypatch,
+        web,
+        authz={"permitido": True, "modo_operacao": "degraded", "status_franquia": "degraded"},
+    )
+    client = web.app.test_client()
+    resp = _upload(client, "a.txt", make_txt("degraded ok"))
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+
+def test_upload_valid_txt(web_client):
+    resp = _upload(web_client, "nota.txt", make_txt("conteudo seguro"))
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["document"]["doc_id"]
+    assert body["session"]["count"] == 1
+    assert isinstance(body["allowed_formats"], list)
+    assert FIELD_PREPARED_CONTEXT not in body["document"]
+
+
+def test_upload_valid_xml(web_client):
+    content = make_xml('<?xml version="1.0"?><root><item>ok</item></root>')
+    resp = _upload(web_client, "dados.xml", content, "application/xml")
+    assert resp.status_code == 200
+    assert resp.get_json()["document"]["doc_type"] == "xml"
+
+
+def test_upload_valid_csv(web_client):
+    content = make_csv([["col_a", "col_b"], ["1", "2"]])
+    resp = _upload(web_client, "dados.csv", content, "text/csv")
+    assert resp.status_code == 200
+    assert resp.get_json()["document"]["doc_type"] == "csv"
+
+
+def test_upload_valid_xlsx(web_client):
+    content = make_xlsx([["a", "b"], ["1", "2"]])
+    resp = _upload(
+        web_client,
+        "planilha.xlsx",
+        content,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["document"]["doc_type"] == "xlsx"
+
+
+def test_upload_valid_docx(web_client):
+    content = make_docx(["paragrafo um", "paragrafo dois"])
+    resp = _upload(
+        web_client,
+        "relatorio.docx",
+        content,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["document"]["doc_type"] == "docx"
+
+
+def test_upload_valid_pdf_with_mock(web_client, monkeypatch):
+    patch_gemini_pdf_upload(monkeypatch)
+    resp = _upload(web_client, "doc.pdf", make_minimal_pdf(), "application/pdf")
+    assert resp.status_code == 200
+    assert resp.get_json()["document"]["doc_type"] == "pdf"
+
+
+def test_upload_rejects_forbidden_extension(web_client):
+    resp = _upload(web_client, "malware.exe", b"payload")
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["ok"] is False
+    assert body["error_code"] == ERROR_INVALID_EXTENSION
+
+
+def test_status_reads_only_cleide_audit_doc_ids(web_client):
+    _upload(web_client, "audit.txt", make_txt("somente audit"))
+    with web_client.session_transaction() as sess:
+        assert len(sess.get(CLEIDE_AUDIT_DOC_IDS_SESSION_KEY) or []) == 1
+        assert sess.get(SESSION_KEY_CLEITON_DOC_IDS) in (None, [])
+
+    resp = web_client.get("/api/cleide-auditoria/documents/status")
+    assert resp.status_code == 200
+    assert len(resp.get_json()["documents"]) == 1
+
+
+def test_status_does_not_read_julia_session(web_client):
+    web_client.post(
+        "/api/julia/documents/upload",
+        data={"file": (io.BytesIO(make_txt("julia")), "julia.txt", "text/plain")},
+        content_type="multipart/form-data",
+    )
+    with web_client.session_transaction() as sess:
+        assert len(sess.get(SESSION_KEY_CLEITON_DOC_IDS) or []) == 1
+        assert sess.get(CLEIDE_AUDIT_DOC_IDS_SESSION_KEY) in (None, [])
+
+    resp = web_client.get("/api/cleide-auditoria/documents/status")
+    assert resp.status_code == 200
+    assert resp.get_json()["session"]["count"] == 0
+    assert resp.get_json()["documents"] == []
+
+
+def test_delete_removes_only_cleide_audit_document(web_client):
+    web_client.post(
+        "/api/julia/documents/upload",
+        data={"file": (io.BytesIO(make_txt("julia")), "julia.txt", "text/plain")},
+        content_type="multipart/form-data",
+    )
+    up = _upload(web_client, "audit.txt", make_txt("audit")).get_json()
+    doc_id = up["document"]["doc_id"]
+
+    resp = web_client.delete(f"/api/cleide-auditoria/documents/{doc_id}")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["removed_from_session"] is True
+    assert body["session"]["count"] == 0
+
+    julia_list = web_client.get("/api/julia/documents").get_json()
+    assert julia_list["session"]["count"] == 1
+
+
+def test_clear_only_cleide_audit_documents(web_client, tmp_path):
+    web_client.post(
+        "/api/julia/documents/upload",
+        data={"file": (io.BytesIO(make_txt("julia")), "julia.txt", "text/plain")},
+        content_type="multipart/form-data",
+    )
+    up = _upload(web_client, "audit.txt", make_txt("audit")).get_json()
+    doc_id = up["document"]["doc_id"]
+
+    resp = web_client.post("/api/cleide-auditoria/documents/clear")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["removed_from_session"] == 1
+    assert body["session"]["count"] == 0
+    assert not (tmp_path / f"{doc_id}.json").exists()
+
+    julia_list = web_client.get("/api/julia/documents").get_json()
+    assert julia_list["session"]["count"] == 1
+
+
+def test_blueprint_exposes_cleide_auditoria_routes():
+    import app.cleide_audit_routes as routes_mod
+
+    assert routes_mod.cleide_audit_documents_upload.__name__ == "cleide_audit_documents_upload"
+    assert routes_mod.cleide_audit_documents_status.__name__ == "cleide_audit_documents_status"
+    assert routes_mod.cleide_audit_documents_delete.__name__ == "cleide_audit_documents_delete"
+    assert routes_mod.cleide_audit_documents_clear.__name__ == "cleide_audit_documents_clear"
+    assert routes_mod.cleide_audit_chat.__name__ == "cleide_audit_chat"
+
+
+def test_registered_routes_use_cleide_auditoria_namespace(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    rules = {rule.rule for rule in web.app.url_map.iter_rules()}
+    assert "/api/cleide-auditoria/documents/upload" in rules
+    assert "/api/cleide-auditoria/documents/status" in rules
+    assert "/api/cleide-auditoria/documents/clear" in rules
+    assert "/api/cleide-auditoria/chat" in rules
+    assert not any(rule.startswith("/api/cleide/documents") for rule in rules)
+
+
+def test_chat_endpoint_registered_in_cleide_auditoria_namespace(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    rules = {rule.rule for rule in web.app.url_map.iter_rules()}
+    assert "/api/cleide-auditoria/chat" in rules
+
+
+def test_no_ia_called_on_upload(web_client, monkeypatch):
+    chat_mock = MagicMock()
+    monkeypatch.setattr("app.run_cleiton_gemini_governance.cleiton_governed_generate_content", chat_mock)
+    resp = _upload(web_client, "nota.txt", make_txt("sem ia"))
+    assert resp.status_code == 200
+    chat_mock.assert_not_called()
+
+
+def test_julia_documents_still_work(web_client):
+    resp = web_client.post(
+        "/api/julia/documents/upload",
+        data={"file": (io.BytesIO(make_txt("julia ok")), "julia.txt", "text/plain")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["session"]["count"] == 1
+
+
+def test_audit_upload_disabled_blocks_upload_only(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, upload_enabled=False)
+    resp = _upload(web_client, "nota.txt", make_txt("bloqueado"))
+    assert resp.status_code == 403
+    assert resp.get_json()["error_code"] == "cleiton_doc_upload_disabled"
+
+
+def test_audit_upload_disabled_does_not_block_status(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, upload_enabled=False)
+    resp = web_client.get("/api/cleide-auditoria/documents/status")
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+
+def test_audit_upload_disabled_does_not_block_delete_and_clear(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, upload_enabled=True)
+    up = _upload(web_client, "audit.txt", make_txt("audit")).get_json()
+    doc_id = up["document"]["doc_id"]
+    _patch_audit_cfg(monkeypatch, upload_enabled=False)
+
+    delete_resp = web_client.delete(f"/api/cleide-auditoria/documents/{doc_id}")
+    assert delete_resp.status_code == 200
+
+    up2 = _upload(web_client, "outro.txt", make_txt("outro"))
+    assert up2.status_code == 403
+
+    _patch_audit_cfg(monkeypatch, upload_enabled=True)
+    up3 = _upload(web_client, "terceiro.txt", make_txt("terceiro"))
+    assert up3.status_code == 200
+    _patch_audit_cfg(monkeypatch, upload_enabled=False)
+
+    clear_resp = web_client.post("/api/cleide-auditoria/documents/clear")
+    assert clear_resp.status_code == 200
+
+
+def test_cleiton_global_upload_disabled_still_blocks_even_if_audit_enabled(
+    app, ctx, monkeypatch, tmp_path
+):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path, upload_enabled=False)
+    _patch_audit_cfg(monkeypatch, upload_enabled=True)
+    web = _load_web_module()
+    _authorized(monkeypatch, web)
+    client = web.app.test_client()
+    resp = _upload(client, "nota.txt", make_txt("bloqueado global"))
+    assert resp.status_code == 403
+    assert resp.get_json()["error_code"] == "cleiton_doc_upload_disabled"
+
+
+def test_chat_disabled_does_not_block_document_status(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, chat_enabled=False, upload_enabled=True)
+    resp = web_client.get("/api/cleide-auditoria/documents/status")
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+
+def test_chat_disabled_does_not_block_upload(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, chat_enabled=False, upload_enabled=True)
+    resp = _upload(web_client, "nota.txt", make_txt("upload com chat desligado"))
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+
+def test_chat_disabled_does_not_block_delete_and_clear(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, chat_enabled=True, upload_enabled=True)
+    doc_id = _upload(web_client, "audit.txt", make_txt("audit")).get_json()["document"]["doc_id"]
+    _patch_audit_cfg(monkeypatch, chat_enabled=False, upload_enabled=True)
+
+    delete_resp = web_client.delete(f"/api/cleide-auditoria/documents/{doc_id}")
+    assert delete_resp.status_code == 200
+
+    _upload(web_client, "outro.txt", make_txt("outro"))
+    clear_resp = web_client.post("/api/cleide-auditoria/documents/clear")
+    assert clear_resp.status_code == 200
+
+
+def test_upload_route_reads_cleide_audit_config():
+    import inspect
+
+    import app.cleide_audit_routes as routes_mod
+
+    source = inspect.getsource(routes_mod.cleide_audit_documents_upload)
+    assert "get_cleide_audit_config" in source
+    assert "upload_enabled" in source
+    assert "get_cleide_config" not in source
+
+
+def test_cleide_legacy_route_still_registered(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    rules = {rule.rule for rule in web.app.url_map.iter_rules()}
+    assert "/cleide-bi-frete" in rules
+    assert "/auditoria-frete" in rules

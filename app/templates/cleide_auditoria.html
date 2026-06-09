@@ -1,0 +1,967 @@
+{% extends "base.html" %}
+
+
+
+{% block title %}Cleide, Auditora Virtual de AgenteFrete{% endblock %}
+
+{% block meta_description %}Auditoria assistida de frete com a Cleide: upload de tabela, conferência e apoio operacional.{% endblock %}
+
+
+
+{% block content %}
+
+{% include 'partials/app_global_header.html' %}
+
+<div class="container mb-5">
+
+  <div class="cleide-auditoria-wrapper cleide-auditoria-embedded" id="cleideAuditoriaShell">
+
+    <div class="cleide-auditoria-container">
+
+      <div class="cleide-auditoria-header">
+
+        <div class="d-flex align-items-center">
+
+          {% if cleide_avatar_url %}
+
+          <img src="{{ cleide_avatar_url }}" alt="Cleide" class="cleide-auditoria-avatar me-2" />
+
+          {% else %}
+
+          <span class="cleide-auditoria-avatar-placeholder me-2"><i class="bi bi-clipboard-check"></i></span>
+
+          {% endif %}
+
+          <div>
+
+            <span class="fw-bold cleide-auditoria-name">Cleide, Auditora Virtual de AgenteFrete</span>
+
+            <small class="d-block cleide-auditoria-role" style="font-size: 0.75rem;">Atenção: a Cleide é uma IA e pode cometer erros.</small>
+
+          </div>
+
+        </div>
+
+        <p class="cleide-auditoria-prep small mb-0 mt-2">
+
+          Envie arquivos de apoio para a Cleide analisar nesta conversa.
+
+        </p>
+
+      </div>
+
+
+
+      <div class="cleide-auditoria-messages" id="cleideAuditoriaMessages">
+
+        <div class="cleide-auditoria-welcome small py-3 px-2"
+
+             id="cleideAuditoriaWelcome"
+
+             data-typewriter-text="Faça o upload da tabela de frete."
+
+             aria-live="polite">
+
+          <noscript>Faça o upload da tabela de frete.</noscript>
+
+        </div>
+
+      </div>
+
+
+
+      <div class="cleide-auditoria-input-area">
+
+        <form class="cleide-auditoria-form cleide-auditoria-form-with-attach" id="cleideAuditoriaForm" role="form" onsubmit="return false;">
+
+          <div class="cleide-auditoria-composer-wrap" id="cleideAuditoriaComposerWrap">
+
+            <div class="cleide-auditoria-composer" id="cleideAuditoriaComposer">
+
+              <button type="button"
+
+                      class="btn cleide-auditoria-attach-btn"
+
+                      id="cleideAuditoriaAttachBtn"
+
+                      aria-label="Abrir menu de ações"
+
+                      aria-expanded="false"
+
+                      aria-controls="cleideAuditoriaActionsMenu"
+
+                      aria-haspopup="menu"
+
+                      title="Abrir menu de ações">
+
+                <span class="cleide-auditoria-attach-icon" aria-hidden="true">+</span>
+
+              </button>
+
+              <input type="file"
+
+                     id="cleideAuditFileInput"
+
+                     class="visually-hidden"
+
+                     accept=".txt,.xml,.csv,.xlsx,.docx,.pdf"
+
+                     tabindex="-1"
+
+                     aria-hidden="true">
+
+              <textarea class="form-control cleide-auditoria-input"
+
+                        id="cleideAuditoriaInput"
+
+                        placeholder="Mensagem para a Cleide..."
+
+                        rows="2"
+
+                        autocomplete="off"></textarea>
+
+              <button type="button"
+
+                      class="btn btn-primary cleide-auditoria-send"
+
+                      id="cleideAuditoriaSend"
+
+                      aria-label="Enviar">
+
+                <i class="bi bi-send-fill"></i>
+
+              </button>
+
+            </div>
+
+            <div class="cleide-auditoria-actions-menu"
+
+                 id="cleideAuditoriaActionsMenu"
+
+                 role="menu"
+
+                 aria-label="Menu de ações da Cleide"
+
+                 hidden>
+
+              <button type="button"
+
+                      class="cleide-actions-item"
+
+                      id="cleideAuditoriaUploadItem"
+
+                      role="menuitem">
+
+                <i class="bi bi-paperclip" aria-hidden="true"></i>
+
+                <span>Enviar arquivos</span>
+
+              </button>
+
+              <div class="cleide-actions-divider" role="separator" aria-hidden="true"></div>
+
+              <a href="{{ url_for('index') }}" class="cleide-actions-item" role="menuitem">
+
+                <i class="bi bi-house-door" aria-hidden="true"></i>
+
+                <span>Home</span>
+
+              </a>
+
+              <a href="{{ url_for('fretes') }}" class="cleide-actions-item" role="menuitem">
+
+                <i class="bi bi-graph-up" aria-hidden="true"></i>
+
+                <span>Previsibilidade Frete</span>
+
+              </a>
+
+              <a href="{{ cleide_bi_href }}" class="cleide-actions-item" role="menuitem">
+
+                <i class="bi bi-bar-chart" aria-hidden="true"></i>
+
+                <span>BI Cleide</span>
+
+              </a>
+
+              <a href="{{ cleide_feed_href }}" class="cleide-actions-item" role="menuitem">
+
+                <i class="bi bi-rss" aria-hidden="true"></i>
+
+                <span>Feed</span>
+
+              </a>
+
+            </div>
+
+          </div>
+
+        </form>
+
+      </div>
+
+      <div class="cleide-audit-documents-area cleide-audit-documents-area-empty"
+
+           id="cleideAuditDocumentsPanel"
+
+           aria-live="polite">
+
+        <div class="cleide-audit-documents-toolbar" id="cleideAuditDocumentsToolbar">
+
+          <p class="cleide-audit-documents-hint small mb-0">
+
+            Documentos anexados nesta conversa.
+
+          </p>
+
+          <button type="button"
+
+                  class="btn btn-sm cleide-audit-documents-clear-btn"
+
+                  id="cleideAuditClearDocuments"
+
+                  aria-label="Limpar todos os documentos anexados"
+
+                  style="display: none;">
+
+            Limpar documentos
+
+          </button>
+
+        </div>
+
+        <ul class="cleide-audit-documents-list" id="cleideAuditDocumentsList"></ul>
+
+        <div class="cleide-audit-documents-status small" id="cleideAuditUploadStatus" role="status" aria-live="polite"></div>
+
+        <div class="cleide-audit-documents-error small" id="cleideAuditDocumentsError" role="alert" style="display: none;"></div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<style>
+
+  .cleide-auditoria-wrapper.cleide-auditoria-embedded {
+
+    border: none;
+
+    box-shadow: none;
+
+    background: transparent;
+
+    overflow: visible;
+
+    margin-bottom: 1rem;
+
+  }
+
+  .cleide-auditoria-container {
+
+    display: flex;
+
+    flex-direction: column;
+
+    min-height: 0;
+
+    overflow: visible;
+
+  }
+
+  .cleide-auditoria-embedded .cleide-auditoria-header {
+
+    padding: 0 0 0.85rem;
+
+    border-bottom: none;
+
+    background: transparent;
+
+    font-size: 0.95rem;
+
+  }
+
+  .cleide-auditoria-name { color: var(--af-text-primary, #F0F0F5) !important; }
+
+  .cleide-auditoria-role { color: var(--af-text-secondary, #8A8AA3) !important; }
+
+  .cleide-auditoria-prep {
+
+    color: var(--af-text-muted, #5A5A72);
+
+    max-width: 760px;
+
+  }
+
+  .cleide-auditoria-avatar {
+
+    width: 36px;
+
+    height: 36px;
+
+    border-radius: 50%;
+
+    object-fit: cover;
+
+    border: 1px solid rgba(0, 191, 255, 0.3);
+
+  }
+
+  .cleide-auditoria-avatar-placeholder {
+
+    width: 36px;
+
+    height: 36px;
+
+    border-radius: 50%;
+
+    background: linear-gradient(135deg, #6f42c1 0%, #00BFFF 100%);
+
+    color: #fff;
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    font-size: 1rem;
+
+  }
+
+  .cleide-auditoria-embedded .cleide-auditoria-messages {
+
+    background: transparent;
+
+    padding: 0 0 1rem;
+
+    max-height: none;
+
+    min-height: 0;
+
+    overflow: visible;
+
+  }
+
+  .cleide-auditoria-welcome {
+
+    color: var(--af-text-secondary, #8A8AA3);
+
+    border-radius: 0.5rem;
+
+    max-width: 760px;
+
+    font-size: 0.98rem;
+
+    line-height: 1.6;
+
+  }
+
+  .cleide-auditoria-embedded .cleide-auditoria-input-area {
+
+    padding: 0;
+
+    border-top: none;
+
+    background: transparent;
+
+    overflow: visible;
+
+  }
+
+  .cleide-auditoria-embedded .cleide-auditoria-form {
+
+    overflow: visible;
+
+  }
+
+  .cleide-auditoria-composer-wrap {
+
+    position: relative;
+
+    width: 100%;
+
+    overflow: visible;
+
+  }
+
+  .cleide-auditoria-composer {
+
+    display: flex;
+
+    align-items: center;
+
+    width: 100%;
+
+    min-height: 44px;
+
+    border: 1px solid rgba(0, 191, 255, 0.35);
+
+    border-radius: 1.75rem;
+
+    background: var(--af-bg-muted, #1E1E2E);
+
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+
+    overflow: hidden;
+
+  }
+
+  .cleide-auditoria-composer:focus-within {
+
+    border-color: var(--af-cyan-bright, #00D4FF);
+
+    box-shadow: 0 0 16px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.25));
+
+  }
+
+  .cleide-auditoria-form-with-attach .cleide-auditoria-input {
+
+    flex: 1 1 auto;
+
+    min-width: 0;
+
+    border: none !important;
+
+    border-radius: 0 !important;
+
+    box-shadow: none !important;
+
+    background: transparent !important;
+
+    resize: vertical;
+
+    height: 44px;
+
+    min-height: 44px;
+
+    max-height: 9rem;
+
+    margin: 0;
+
+    padding: 0.55rem 0.75rem;
+
+    line-height: 1.35;
+
+    color: var(--af-text-primary, #F0F0F5) !important;
+
+    overflow-y: auto;
+
+  }
+
+  .cleide-auditoria-form-with-attach .cleide-auditoria-input::placeholder {
+
+    color: var(--af-text-muted, #5A5A72);
+
+  }
+
+  .cleide-auditoria-form-with-attach .cleide-auditoria-input:focus {
+
+    box-shadow: none !important;
+
+    outline: none;
+
+  }
+
+  .cleide-auditoria-input:disabled {
+
+    opacity: 0.72;
+
+    cursor: not-allowed;
+
+  }
+
+  .cleide-auditoria-attach-btn {
+
+    flex: 0 0 auto;
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    align-self: center;
+
+    width: 48px;
+
+    height: 48px;
+
+    border: none !important;
+
+    border-radius: 0 !important;
+
+    background: transparent !important;
+
+    color: var(--af-text-primary, #E8EAF2) !important;
+
+    box-shadow: none !important;
+
+    min-width: 48px;
+
+    padding: 0 0 0 0.35rem;
+
+  }
+
+  .cleide-auditoria-attach-icon {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    width: 1.75rem;
+
+    height: 1.75rem;
+
+    font-size: 1.65rem;
+
+    font-weight: 600;
+
+    line-height: 1;
+
+    transition: transform 0.22s ease, color 0.15s ease;
+
+    transform-origin: center center;
+
+  }
+
+  .cleide-auditoria-attach-btn[aria-expanded="true"] .cleide-auditoria-attach-icon {
+
+    transform: rotate(45deg);
+
+  }
+
+  .cleide-auditoria-attach-btn:hover,
+
+  .cleide-auditoria-attach-btn:focus {
+
+    background: rgba(0, 191, 255, 0.14) !important;
+
+    color: var(--af-cyan-bright, #00D4FF) !important;
+
+    outline: none;
+
+  }
+
+  .cleide-auditoria-attach-btn.is-open,
+
+  .cleide-auditoria-attach-btn[aria-expanded="true"] {
+
+    color: var(--af-cyan, #00BFFF) !important;
+
+  }
+
+  .cleide-auditoria-form-with-attach .cleide-auditoria-send {
+
+    flex: 0 0 auto;
+
+    align-self: stretch;
+
+    border-radius: 0 1.75rem 1.75rem 0 !important;
+
+    border: none !important;
+
+    min-width: 48px;
+
+    padding-left: 0.85rem;
+
+    padding-right: 0.85rem;
+
+    margin-left: 0;
+
+    background: var(--af-cyan, #00BFFF) !important;
+
+  }
+
+  .cleide-auditoria-form-with-attach .cleide-auditoria-send:disabled {
+
+    opacity: 0.55;
+
+    cursor: not-allowed;
+
+  }
+
+  .cleide-auditoria-chat-msg { margin-bottom: 0.75rem; }
+
+  .cleide-auditoria-chat-msg-inner {
+
+    max-width: 85%;
+
+    padding: 0.5rem 0.75rem;
+
+    border-radius: 0.75rem;
+
+    white-space: pre-wrap;
+
+    line-height: 1.45;
+
+  }
+
+  .cleide-auditoria-chat-msg-user .cleide-auditoria-chat-msg-inner {
+
+    background: rgba(0, 191, 255, 0.25);
+
+    color: var(--af-text-primary, #F0F0F5);
+
+    border: 1px solid rgba(0, 191, 255, 0.3);
+
+    margin-left: auto;
+
+  }
+
+  .cleide-auditoria-chat-msg-bot .cleide-auditoria-chat-msg-inner {
+
+    background: var(--af-bg-muted, #1E1E2E);
+
+    color: var(--af-text-primary, #F0F0F5);
+
+    border: 1px solid var(--af-border, rgba(255, 255, 255, 0.06));
+
+  }
+
+  .cleide-auditoria-actions-menu {
+
+    position: fixed;
+
+    z-index: 2000;
+
+    min-width: 240px;
+
+    max-width: min(320px, calc(100vw - 2rem));
+
+    padding: 0.35rem;
+
+    border-radius: 0.85rem;
+
+    border: 1px solid rgba(255, 255, 255, 0.08);
+
+    background: rgba(12, 16, 28, 0.98);
+
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 191, 255, 0.08);
+
+    backdrop-filter: blur(8px);
+
+  }
+
+  .cleide-auditoria-actions-menu[hidden] {
+
+    display: none !important;
+
+  }
+
+  .cleide-actions-item {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 0.65rem;
+
+    width: 100%;
+
+    padding: 0.55rem 0.7rem;
+
+    border: none;
+
+    border-radius: 0.55rem;
+
+    background: transparent;
+
+    color: var(--af-text-primary, #F0F0F5);
+
+    font-size: 0.86rem;
+
+    text-decoration: none;
+
+    text-align: left;
+
+    cursor: pointer;
+
+    transition: background 0.15s ease, color 0.15s ease;
+
+  }
+
+  .cleide-actions-item:disabled {
+
+    opacity: 0.55;
+
+    cursor: not-allowed;
+
+  }
+
+  .cleide-actions-item i {
+
+    width: 1.1rem;
+
+    flex-shrink: 0;
+
+    color: var(--af-cyan, #00BFFF);
+
+    font-size: 1rem;
+
+  }
+
+  .cleide-actions-item:hover:not(:disabled),
+
+  .cleide-actions-item:focus-visible {
+
+    background: rgba(0, 191, 255, 0.1);
+
+    color: var(--af-text-primary, #F0F0F5);
+
+    outline: none;
+
+  }
+
+  .cleide-actions-divider {
+
+    height: 1px;
+
+    margin: 0.3rem 0.45rem;
+
+    background: rgba(255, 255, 255, 0.1);
+
+  }
+
+  .cleide-audit-documents-area {
+
+    padding: 0.35rem 0 0.65rem;
+
+    border-top: 1px solid rgba(0, 191, 255, 0.08);
+
+    background: transparent;
+
+  }
+
+  .cleide-audit-documents-area-empty {
+
+    padding-top: 0.35rem;
+
+    padding-bottom: 0.35rem;
+
+    border-top-color: rgba(0, 191, 255, 0.08);
+
+  }
+
+  .cleide-audit-documents-area:not(.cleide-audit-documents-area-empty) {
+
+    border-top-color: rgba(0, 191, 255, 0.12);
+
+    padding-top: 0.55rem;
+
+    padding-bottom: 0.75rem;
+
+  }
+
+  .cleide-audit-documents-toolbar {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    gap: 0.75rem;
+
+    margin-bottom: 0.35rem;
+
+  }
+
+  .cleide-audit-documents-hint {
+
+    color: var(--af-text-muted, #5A5A72);
+
+    line-height: 1.35;
+
+  }
+
+  .cleide-audit-documents-clear-btn {
+
+    border-radius: 999px !important;
+
+    border: 1px solid rgba(0, 191, 255, 0.28) !important;
+
+    background: rgba(255, 255, 255, 0.03) !important;
+
+    color: var(--af-text-secondary, #C8CCE5) !important;
+
+    white-space: nowrap;
+
+  }
+
+  .cleide-audit-documents-clear-btn:hover {
+
+    background: rgba(0, 191, 255, 0.1) !important;
+
+    border-color: rgba(0, 191, 255, 0.45) !important;
+
+    color: var(--af-text-primary, #F0F0F5) !important;
+
+  }
+
+  .cleide-audit-documents-list {
+
+    list-style: none;
+
+    margin: 0;
+
+    padding: 0;
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: 0.35rem;
+
+  }
+
+  .cleide-audit-documents-list:empty { display: none; }
+
+  .cleide-audit-doc-item {
+
+    display: flex;
+
+    align-items: flex-start;
+
+    justify-content: space-between;
+
+    gap: 0.65rem;
+
+    padding: 0.45rem 0.65rem;
+
+    border-radius: 0.55rem;
+
+    border: 1px solid rgba(0, 191, 255, 0.18);
+
+    background: rgba(255, 255, 255, 0.02);
+
+  }
+
+  .cleide-audit-doc-item-main { min-width: 0; flex: 1; }
+
+  .cleide-audit-doc-item-name {
+
+    color: var(--af-text-primary, #F0F0F5);
+
+    font-size: 0.82rem;
+
+    font-weight: 600;
+
+    word-break: break-word;
+
+  }
+
+  .cleide-audit-doc-item-meta {
+
+    color: var(--af-text-secondary, #8A8AA3);
+
+    font-size: 0.72rem;
+
+    line-height: 1.35;
+
+    margin-top: 0.15rem;
+
+  }
+
+  .cleide-audit-doc-item-badge {
+
+    display: inline-block;
+
+    margin-top: 0.2rem;
+
+    padding: 0.08rem 0.45rem;
+
+    border-radius: 999px;
+
+    font-size: 0.68rem;
+
+  }
+
+  .cleide-audit-doc-item-badge-ready {
+
+    border: 1px solid rgba(0, 196, 140, 0.35);
+
+    color: #00c48c;
+
+    background: rgba(0, 196, 140, 0.12);
+
+  }
+
+  .cleide-audit-doc-item-badge-preparing {
+
+    border: 1px solid rgba(255, 193, 7, 0.35);
+
+    color: #ffd966;
+
+    background: rgba(255, 193, 7, 0.08);
+
+  }
+
+  .cleide-audit-doc-item-badge-error {
+
+    border: 1px solid rgba(255, 77, 106, 0.35);
+
+    color: #ff8a9a;
+
+    background: rgba(255, 77, 106, 0.12);
+
+  }
+
+  .cleide-audit-doc-item-remove {
+
+    border: none;
+
+    background: transparent;
+
+    color: var(--af-text-muted, #8A8AA3);
+
+    padding: 0.15rem 0.35rem;
+
+    border-radius: 0.35rem;
+
+    cursor: pointer;
+
+    flex-shrink: 0;
+
+  }
+
+  .cleide-audit-doc-item-remove:hover {
+
+    color: var(--af-danger, #FF4D6A);
+
+    background: rgba(255, 77, 106, 0.08);
+
+  }
+
+  .cleide-audit-documents-status {
+
+    color: var(--af-text-muted, #5A5A72);
+
+    min-height: 0;
+
+    margin-top: 0.25rem;
+
+  }
+
+  .cleide-audit-documents-status:not(:empty) { min-height: 1rem; }
+
+  .cleide-audit-documents-error {
+
+    color: var(--af-danger, #FF4D6A) !important;
+
+    margin-top: 0.35rem;
+
+  }
+
+</style>
+
+<script src="{{ url_for('static', filename='js/cleide_auditoria.js') }}"></script>
+
+{% endblock %}

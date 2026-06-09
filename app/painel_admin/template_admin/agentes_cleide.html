@@ -2,91 +2,208 @@
 
 {% block admin_content %}
 <div class="container-fluid">
-    <h4 class="mb-3">Cleide — Controles de contexto</h4>
+    <h4 class="mb-3">Cleide — Administração</h4>
     <p class="text-muted small mb-4">
-        Ajuste da janela de contexto seguro usada no chat da Cleide, com guardrails de baixo risco.
+        Dois blocos independentes: BI de fretes atual e Cleide Auditoria documental em /auditoria-frete.
     </p>
-    <form method="post" action="{{ url_for('admin.agentes_cleide') }}" class="card border-0 shadow-sm">
+
+    <div class="card border-0 shadow-sm mb-4">
         <div class="card-body">
-            <div class="row g-3">
-                <div class="col-md-4">
-                    <label class="form-label">upload_total_max</label>
-                    <input type="number" min="100" max="200000" step="1" name="upload_total_max" class="form-control"
-                           value="{{ cfg.upload_total_max }}">
-                    <small class="text-muted">Máximo de linhas de dados aceitas no upload (sem cabeçalho).</small>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">chat_context_max_items_per_table</label>
-                    <input type="number" min="3" max="30" step="1" name="chat_context_max_items_per_table" class="form-control"
-                           value="{{ cfg.chat_context_max_items_per_table }}">
-                    <small class="text-muted">Máximo de linhas por tabela no contexto seguro.</small>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">chat_context_rankings_limit</label>
-                    <input type="number" min="3" max="25" step="1" name="chat_context_rankings_limit" class="form-control"
-                           value="{{ cfg.chat_context_rankings_limit }}">
-                    <small class="text-muted">Top N aplicado em rankings no contexto do chat.</small>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">chat_context_max_text_len</label>
-                    <input type="number" min="32" max="200" step="1" name="chat_context_max_text_len" class="form-control"
-                           value="{{ cfg.chat_context_max_text_len }}">
-                    <small class="text-muted">Tamanho máximo por campo textual.</small>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">chat_context_max_chars</label>
-                    <input type="number" min="1500" max="12000" step="100" name="chat_context_max_chars" class="form-control"
-                           value="{{ cfg.chat_context_max_chars }}">
-                    <small class="text-muted">Teto de caracteres do safe context para evitar explosão de tokens.</small>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">chat_response_max_chars</label>
-                    <input type="number" min="1200" max="6000" step="100" name="chat_response_max_chars" class="form-control"
-                           value="{{ cfg.chat_response_max_chars }}">
-                    <small class="text-muted">Limite máximo de caracteres por resposta do chat da Cleide.</small>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">chat_context_mode</label>
-                    <select name="chat_context_mode" class="form-select">
-                        <option value="executivo" {{ 'selected' if cfg.chat_context_mode == 'executivo' else '' }}>executivo</option>
-                        <option value="conservador" {{ 'selected' if cfg.chat_context_mode == 'conservador' else '' }}>conservador</option>
-                    </select>
-                    <small class="text-muted">Modo conservador reduz tabelas e volume exposto no contexto.</small>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label d-block">Flags de inclusão</label>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="chat_context_include_transportadora" id="chatContextIncludeTransportadora"
-                               {{ 'checked' if cfg.chat_context_include_transportadora else '' }}>
-                        <label class="form-check-label" for="chatContextIncludeTransportadora">include_transportadora</label>
+            <h5 class="mb-2">Cleide BI / Auditoria de Frete atual</h5>
+            <p class="text-muted small mb-4">
+                Configurações da Cleide usada no BI de fretes, dashboard, upload operacional e análises atuais.
+            </p>
+            <form method="post" action="{{ url_for('admin.agentes_cleide') }}">
+                <input type="hidden" name="form_name" value="cleide_bi">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">upload_total_max</label>
+                        <input type="number" min="100" max="200000" step="1" name="upload_total_max" class="form-control"
+                               value="{{ cfg.upload_total_max }}">
+                        <small class="text-muted">Máximo de linhas de dados aceitas no upload (sem cabeçalho).</small>
                     </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="chat_context_include_uf_origem" id="chatContextIncludeUfOrigem"
-                               {{ 'checked' if cfg.chat_context_include_uf_origem else '' }}>
-                        <label class="form-check-label" for="chatContextIncludeUfOrigem">include_uf_origem</label>
+                    <div class="col-md-4">
+                        <label class="form-label">chat_context_max_items_per_table</label>
+                        <input type="number" min="3" max="30" step="1" name="chat_context_max_items_per_table" class="form-control"
+                               value="{{ cfg.chat_context_max_items_per_table }}">
+                        <small class="text-muted">Máximo de linhas por tabela no contexto seguro.</small>
                     </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="chat_context_include_uf_destino" id="chatContextIncludeUfDestino"
-                               {{ 'checked' if cfg.chat_context_include_uf_destino else '' }}>
-                        <label class="form-check-label" for="chatContextIncludeUfDestino">include_uf_destino</label>
+                    <div class="col-md-4">
+                        <label class="form-label">chat_context_rankings_limit</label>
+                        <input type="number" min="3" max="25" step="1" name="chat_context_rankings_limit" class="form-control"
+                               value="{{ cfg.chat_context_rankings_limit }}">
+                        <small class="text-muted">Top N aplicado em rankings no contexto do chat.</small>
                     </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="chat_context_include_temporal" id="chatContextIncludeTemporal"
-                               {{ 'checked' if cfg.chat_context_include_temporal else '' }}>
-                        <label class="form-check-label" for="chatContextIncludeTemporal">include_temporal</label>
+                    <div class="col-md-4">
+                        <label class="form-label">chat_context_max_text_len</label>
+                        <input type="number" min="32" max="200" step="1" name="chat_context_max_text_len" class="form-control"
+                               value="{{ cfg.chat_context_max_text_len }}">
+                        <small class="text-muted">Tamanho máximo por campo textual.</small>
                     </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="chat_context_include_paretos" id="chatContextIncludeParetos"
-                               {{ 'checked' if cfg.chat_context_include_paretos else '' }}>
-                        <label class="form-check-label" for="chatContextIncludeParetos">include_paretos</label>
+                    <div class="col-md-4">
+                        <label class="form-label">chat_context_max_chars</label>
+                        <input type="number" min="1500" max="12000" step="100" name="chat_context_max_chars" class="form-control"
+                               value="{{ cfg.chat_context_max_chars }}">
+                        <small class="text-muted">Teto de caracteres do safe context para evitar explosão de tokens.</small>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">chat_response_max_chars</label>
+                        <input type="number" min="1200" max="6000" step="100" name="chat_response_max_chars" class="form-control"
+                               value="{{ cfg.chat_response_max_chars }}">
+                        <small class="text-muted">Limite máximo de caracteres por resposta do chat da Cleide.</small>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">chat_context_mode</label>
+                        <select name="chat_context_mode" class="form-select">
+                            <option value="executivo" {{ 'selected' if cfg.chat_context_mode == 'executivo' else '' }}>executivo</option>
+                            <option value="conservador" {{ 'selected' if cfg.chat_context_mode == 'conservador' else '' }}>conservador</option>
+                        </select>
+                        <small class="text-muted">Modo conservador reduz tabelas e volume exposto no contexto.</small>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label d-block">Flags de inclusão</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="chat_context_include_transportadora" id="chatContextIncludeTransportadora"
+                                   {{ 'checked' if cfg.chat_context_include_transportadora else '' }}>
+                            <label class="form-check-label" for="chatContextIncludeTransportadora">include_transportadora</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="chat_context_include_uf_origem" id="chatContextIncludeUfOrigem"
+                                   {{ 'checked' if cfg.chat_context_include_uf_origem else '' }}>
+                            <label class="form-check-label" for="chatContextIncludeUfOrigem">include_uf_origem</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="chat_context_include_uf_destino" id="chatContextIncludeUfDestino"
+                                   {{ 'checked' if cfg.chat_context_include_uf_destino else '' }}>
+                            <label class="form-check-label" for="chatContextIncludeUfDestino">include_uf_destino</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="chat_context_include_temporal" id="chatContextIncludeTemporal"
+                                   {{ 'checked' if cfg.chat_context_include_temporal else '' }}>
+                            <label class="form-check-label" for="chatContextIncludeTemporal">include_temporal</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="chat_context_include_paretos" id="chatContextIncludeParetos"
+                                   {{ 'checked' if cfg.chat_context_include_paretos else '' }}>
+                            <label class="form-check-label" for="chatContextIncludeParetos">include_paretos</label>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="mt-4">
-                <button type="submit" class="btn btn-primary">Salvar</button>
-                <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-secondary ms-2">Dashboard</a>
-            </div>
+                <div class="mt-4">
+                    <button type="submit" class="btn btn-primary">Salvar Cleide BI</button>
+                </div>
+            </form>
         </div>
-    </form>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="mb-2">Cleide Auditoria documental</h5>
+            <p class="text-muted small mb-3">
+                Configurações do novo chat da Cleide em /auditoria-frete, incluindo upload documental, contexto e IA governada.
+            </p>
+            <div class="alert alert-info small" role="alert">
+                Formatos permitidos, TTL, tamanho máximo e limites técnicos por tipo continuam sendo controlados globalmente em
+                <a href="{{ url_for('admin.agentes_cleiton') }}">/admin/agentes/cleiton</a>.
+            </div>
+            <form method="post" action="{{ url_for('admin.agentes_cleide') }}">
+                <input type="hidden" name="form_name" value="cleide_audit">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="chat_enabled" id="cleideAuditChatEnabled"
+                                   {{ 'checked' if audit_cfg.chat_enabled else '' }}>
+                            <label class="form-check-label fw-semibold" for="cleideAuditChatEnabled">Ativar chat da Cleide Auditoria</label>
+                        </div>
+                        <small class="text-muted d-block mt-1">
+                            Quando desligado, o endpoint de chat responde com bloqueio controlado antes da IA.
+                        </small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_chat_enabled</code></div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="upload_enabled" id="cleideAuditUploadEnabled"
+                                   {{ 'checked' if audit_cfg.upload_enabled else '' }}>
+                            <label class="form-check-label fw-semibold" for="cleideAuditUploadEnabled">Ativar upload documental da Cleide Auditoria</label>
+                        </div>
+                        <small class="text-muted d-block mt-1">
+                            Quando desligado, bloqueia apenas o upload documental da nova Cleide Auditoria. O upload global do Cleiton continua sendo o teto superior.
+                        </small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_upload_enabled</code></div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="cleideAuditChatMaxHistory">Máximo de mensagens no histórico</label>
+                        <input type="number" min="1" max="100" step="1" name="chat_max_history" id="cleideAuditChatMaxHistory" class="form-control"
+                               value="{{ audit_cfg.chat_max_history }}">
+                        <small class="text-muted">Limite de mensagens anteriores consideradas pelo backend da Cleide Auditoria.</small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_chat_max_history</code></div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="cleideAuditDocumentContextMaxChars">Limite de contexto documental</label>
+                        <input type="number" min="2000" max="200000" step="100" name="document_context_max_chars" id="cleideAuditDocumentContextMaxChars" class="form-control"
+                               value="{{ audit_cfg.document_context_max_chars }}">
+                        <small class="text-muted">Quantidade máxima de caracteres documentais enviados ao prompt da Cleide Auditoria, sempre limitada pelo teto global do Cleiton.</small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_document_context_max_chars</code></div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="cleideAuditMaxDocumentsConsidered">Máximo de documentos considerados</label>
+                        <input type="number" min="1" max="10" step="1" name="max_documents_considered" id="cleideAuditMaxDocumentsConsidered" class="form-control"
+                               value="{{ audit_cfg.max_documents_considered }}">
+                        <small class="text-muted">Quantidade máxima de documentos da sessão considerados no prompt, respeitando o teto global do Cleiton.</small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_max_documents_considered</code></div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="cleideAuditQuestionMaxChars">Limite de caracteres por pergunta</label>
+                        <input type="number" min="500" max="12000" step="100" name="question_max_chars" id="cleideAuditQuestionMaxChars" class="form-control"
+                               value="{{ audit_cfg.question_max_chars }}">
+                        <small class="text-muted">Perguntas acima deste limite são bloqueadas antes da IA.</small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_question_max_chars</code></div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="cleideAuditNoDocumentsBehavior">Comportamento sem documentos</label>
+                        <select name="no_documents_behavior" id="cleideAuditNoDocumentsBehavior" class="form-select">
+                            <option value="allow_guided" {{ 'selected' if audit_cfg.no_documents_behavior == 'allow_guided' else '' }}>Permitir conversa orientativa</option>
+                            <option value="require_documents" {{ 'selected' if audit_cfg.no_documents_behavior == 'require_documents' else '' }}>Exigir documento para análise</option>
+                        </select>
+                        <small class="text-muted">Define se a Cleide pode orientar o usuário sem documentos ou se deve exigir upload antes de responder.</small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_no_documents_behavior</code></div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="form-check mt-4">
+                            <input class="form-check-input" type="checkbox" name="show_documents_used" id="cleideAuditShowDocumentsUsed"
+                                   {{ 'checked' if audit_cfg.show_documents_used else '' }}>
+                            <label class="form-check-label fw-semibold" for="cleideAuditShowDocumentsUsed">Exibir documentos usados</label>
+                        </div>
+                        <small class="text-muted d-block mt-1">
+                            Quando ativo, a resposta pode incluir metadados seguros dos documentos considerados.
+                        </small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_show_documents_used</code></div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="no_hallucination_instruction_enabled" id="cleideAuditNoHallucination"
+                                   {{ 'checked' if audit_cfg.no_hallucination_instruction_enabled else '' }}>
+                            <label class="form-check-label fw-semibold" for="cleideAuditNoHallucination">Reforçar instrução de não inventar dados</label>
+                        </div>
+                        <small class="text-muted d-block mt-1">
+                            Mantém reforço extra para a Cleide declarar incerteza quando faltar base documental.
+                        </small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_no_hallucination_instruction_enabled</code></div>
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label" for="cleideAuditFallbackMessage">Mensagem de fallback em falha de IA</label>
+                        <textarea name="fallback_message" id="cleideAuditFallbackMessage" class="form-control" rows="3" maxlength="500">{{ audit_cfg.fallback_message }}</textarea>
+                        <small class="text-muted">Mensagem usada apenas quando há falha real de processamento/IA. Não substitui respostas normais nem bloqueios de login/franquia.</small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_fallback_message</code></div>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <button type="submit" class="btn btn-primary">Salvar Cleide Auditoria</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-secondary">Dashboard</a>
 </div>
 {% endblock %}

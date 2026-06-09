@@ -506,44 +506,112 @@ def agentes_roberto():
     )
 
 
+def _render_agentes_cleide_page(cleide_config_service, cleide_audit_config_service):
+    cfg = cleide_config_service.get_cleide_config()
+    audit_cfg = cleide_audit_config_service.get_cleide_audit_config()
+    return render_template(
+        "agentes_cleide.html",
+        cfg=cfg,
+        defaults=cleide_config_service.DEFAULTS,
+        audit_cfg=audit_cfg,
+        audit_defaults=cleide_audit_config_service.DEFAULTS,
+    )
+
+
 @admin_bp.route("/agentes/cleide", methods=["GET", "POST"])
 @login_required
 def agentes_cleide():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
+    from app.services import cleide_audit_config_service
     from app.services import cleide_config_service
 
     if request.method == "POST":
-        campos = {
-            "upload_total_max": (request.form.get("upload_total_max") or "").strip(),
-            "chat_context_max_items_per_table": (request.form.get("chat_context_max_items_per_table") or "").strip(),
-            "chat_context_max_text_len": (request.form.get("chat_context_max_text_len") or "").strip(),
-            "chat_context_rankings_limit": (request.form.get("chat_context_rankings_limit") or "").strip(),
-            "chat_response_max_chars": (request.form.get("chat_response_max_chars") or "").strip(),
-            "chat_context_include_transportadora": "1" if request.form.get("chat_context_include_transportadora") else "0",
-            "chat_context_include_uf_origem": "1" if request.form.get("chat_context_include_uf_origem") else "0",
-            "chat_context_include_uf_destino": "1" if request.form.get("chat_context_include_uf_destino") else "0",
-            "chat_context_include_temporal": "1" if request.form.get("chat_context_include_temporal") else "0",
-            "chat_context_include_paretos": "1" if request.form.get("chat_context_include_paretos") else "0",
-            "chat_context_mode": (request.form.get("chat_context_mode") or "").strip(),
-            "chat_context_max_chars": (request.form.get("chat_context_max_chars") or "").strip(),
-        }
-        try:
-            cleide_config_service.salvar_cleide_config(campos)
-            flash("Parâmetros da Cleide salvos com sucesso.", "success")
-        except ValueError as e:
-            flash(str(e), "warning")
-        except Exception as e:
-            _log.exception("Erro ao salvar parâmetros da Cleide: %s", e)
-            flash("Não foi possível salvar os parâmetros da Cleide.", "danger")
+        form_name = (request.form.get("form_name") or "").strip()
+
+        if form_name == "cleide_audit":
+            campos = {
+                "chat_enabled": request.form.get("chat_enabled"),
+                "upload_enabled": request.form.get("upload_enabled"),
+                "chat_max_history": (request.form.get("chat_max_history") or "").strip(),
+                "document_context_max_chars": (
+                    request.form.get("document_context_max_chars") or ""
+                ).strip(),
+                "max_documents_considered": (
+                    request.form.get("max_documents_considered") or ""
+                ).strip(),
+                "question_max_chars": (request.form.get("question_max_chars") or "").strip(),
+                "no_documents_behavior": (
+                    request.form.get("no_documents_behavior") or ""
+                ).strip(),
+                "show_documents_used": request.form.get("show_documents_used"),
+                "no_hallucination_instruction_enabled": request.form.get(
+                    "no_hallucination_instruction_enabled"
+                ),
+                "fallback_message": (request.form.get("fallback_message") or "").strip(),
+            }
+            try:
+                cleide_audit_config_service.salvar_cleide_audit_config(campos)
+                flash(
+                    "Parâmetros da Cleide Auditoria documental salvos com sucesso.",
+                    "success",
+                )
+            except ValueError as e:
+                flash(str(e), "warning")
+            except Exception as e:
+                _log.exception("Erro ao salvar parâmetros da Cleide Auditoria: %s", e)
+                flash(
+                    "Não foi possível salvar os parâmetros da Cleide Auditoria documental.",
+                    "danger",
+                )
+        elif form_name == "cleide_bi":
+            campos = {
+                "upload_total_max": (request.form.get("upload_total_max") or "").strip(),
+                "chat_context_max_items_per_table": (
+                    request.form.get("chat_context_max_items_per_table") or ""
+                ).strip(),
+                "chat_context_max_text_len": (
+                    request.form.get("chat_context_max_text_len") or ""
+                ).strip(),
+                "chat_context_rankings_limit": (
+                    request.form.get("chat_context_rankings_limit") or ""
+                ).strip(),
+                "chat_response_max_chars": (
+                    request.form.get("chat_response_max_chars") or ""
+                ).strip(),
+                "chat_context_include_transportadora": (
+                    "1" if request.form.get("chat_context_include_transportadora") else "0"
+                ),
+                "chat_context_include_uf_origem": (
+                    "1" if request.form.get("chat_context_include_uf_origem") else "0"
+                ),
+                "chat_context_include_uf_destino": (
+                    "1" if request.form.get("chat_context_include_uf_destino") else "0"
+                ),
+                "chat_context_include_temporal": (
+                    "1" if request.form.get("chat_context_include_temporal") else "0"
+                ),
+                "chat_context_include_paretos": (
+                    "1" if request.form.get("chat_context_include_paretos") else "0"
+                ),
+                "chat_context_mode": (request.form.get("chat_context_mode") or "").strip(),
+                "chat_context_max_chars": (
+                    request.form.get("chat_context_max_chars") or ""
+                ).strip(),
+            }
+            try:
+                cleide_config_service.salvar_cleide_config(campos)
+                flash("Parâmetros da Cleide BI salvos com sucesso.", "success")
+            except ValueError as e:
+                flash(str(e), "warning")
+            except Exception as e:
+                _log.exception("Erro ao salvar parâmetros da Cleide BI: %s", e)
+                flash("Não foi possível salvar os parâmetros da Cleide BI.", "danger")
+        else:
+            flash("Formulário não reconhecido. Nenhuma configuração foi alterada.", "warning")
         return redirect(url_for("admin.agentes_cleide"))
 
-    cfg = cleide_config_service.get_cleide_config()
-    return render_template(
-        "agentes_cleide.html",
-        cfg=cfg,
-        defaults=cleide_config_service.DEFAULTS,
-    )
+    return _render_agentes_cleide_page(cleide_config_service, cleide_audit_config_service)
 
 
 @admin_bp.route("/agentes/cleiton", methods=["GET", "POST"])

@@ -113,38 +113,51 @@ Júlia pode conversar sobre custo e estratégia, mas **não substitui** Roberto 
 
 ---
 
-## 5. Cleide — Motor Quantitativo Investigativo (olhar para trás)
+## 5. Cleide — BI e Auditoria (superfícies separadas)
 
-**Cleide** foi planejada para **olhar para trás e investigar o que já aconteceu**. Usa dados dos **últimos meses** para auditar custos **realizados** e encontrar desvios.
+A Cleide possui **duas superfícies visuais distintas** e APIs documentais governadas **ainda não conectadas** à tela de Auditoria nesta fase:
 
-**Atividade fim (quando Cleide é a melhor opção)**
-- Auditoria operacional de fretes.
-- Encontrar **erros**, **anomalias**, **divergências**.
-- Identificar **cobrança indevida** ou suspeita.
-- Validar se o pagamento de frete está correto.
-- Investigar concentração por transportadora e variações **já ocorridas**.
-- Analisar base/planilha com objetivo de **auditoria**, não de previsão nem de consultoria aberta.
-- Perguntas como: “onde errei?”, “paguei certo?”, “o que aconteceu nos últimos meses?”
+| Superfície | Rota | Estado atual |
+|---|---|---|
+| **BI Cleide** | `/cleide-bi-frete` | Operacional: upload de base, KPIs, filtros, dashboard e chat contextual sobre o dataset da sessão |
+| **Auditoria da Cleide** | `/auditoria-frete` | Tela visual inicial em fase preparatória (sem IA real, upload real ou processamento documental conectado) |
+| **APIs documentais** | `/api/cleide-auditoria/...` | Endpoints governados existentes, separados da tela visual e **não integrados** à experiência de `/auditoria-frete` nesta fase |
 
-**Meios (não definem o agente)**
-Cleide **pode** usar planilhas, bases, dashboards, BI e visualizações de auditoria — são **ferramentas**, não o diferencial.
+### 5.1 BI Cleide (`/cleide-bi-frete`)
 
-**Funcionalidades técnicas (referência)**
-- Investigação de anomalias financeiras e desvios operacionais.
-- Concentração de risco por transportadora.
-- Padrões suspeitos em faturas e cobranças duplicadas.
-- Visualizações: inconsistências, anomalias, riscos, divergências, conferência.
+**Atividade fim (quando BI Cleide é a melhor opção)**
+- Ler **indicadores e KPIs** de fretes na base enviada.
+- Explorar **dashboard** com filtros e variações.
+- Fazer **upload operacional** de planilha para análise estrutural.
+- Usar **chat executivo** sobre o contexto da sessão atual do BI.
 
 **Quando encaminhar**
-Intenção clara de **auditoria, conferência, investigação retrospectiva, validação de pagamentos passados ou análise de desvios já ocorridos** — inclusive com dashboard/BI **como meio**.
+Intenção de **BI operacional, indicadores, dashboard, KPIs, painel gerencial ou análise estrutural** da base de fretes já enviada à sessão.
 
-**Quando não encaminhar automaticamente**
-- Só menção a planilha, PDF, documento ou dashboard **sem** objetivo de investigar/auditar o passado.
+**Quando não encaminhar automaticamente para BI Cleide**
+- Intenção de **auditoria conversacional/documental assistida** da nova Auditoria da Cleide → superfície `/auditoria-frete` (ainda preparatória; ver §5.2).
+- Só menção a planilha, PDF, documento ou dashboard **sem** objetivo de BI/indicadores/painel operacional.
+- Previsão/projeção futura → Roberto (`/fretes`).
+- Consultoria aberta → Júlia.
 
 **Preservação frente à Júlia**
-Júlia pode aceitar documentos no chat logado para **apoio consultivo**, mas **não substitui** Cleide para auditoria matemática operacional, detecção estruturada de cobrança indevida ou motor de auditoria retrospectiva de fretes.
+Júlia pode aceitar documentos no chat logado para **apoio consultivo**, mas **não substitui** BI Cleide para painel quantitativo, KPIs estruturados e dashboard operacional de fretes.
 
-**Destino técnico:** `/auditoria-frete` (handoff: `cleide_audit`).
+**Destino técnico (BI):** `/cleide-bi-frete` (handoff legado: `cleide_audit`).
+
+### 5.2 Auditoria da Cleide (`/auditoria-frete`)
+
+**Auditoria da Cleide** (`/auditoria-frete`) **já existe** como tela visual inicial, com identidade própria e chat integrado à página.
+
+Nesta fase preparatória, a tela **ainda não oferece**:
+- IA real conectada;
+- upload assistido real;
+- processamento documental;
+- integração com os endpoints `/api/cleide-auditoria/...`.
+
+Essas capacidades serão ativadas em etapa futura. O Copilot pode mencionar a rota quando a intenção for claramente **auditoria conversacional/documental assistida**, mas deve deixar explícito que a experiência ainda está em evolução visual — sem prometer processamento já ativo.
+
+**Destino técnico (Auditoria visual):** `/auditoria-frete` (endpoint: `cleide.cleide_auditoria`).
 
 ---
 

@@ -1,0 +1,83 @@
+{% set app_header_title = app_header_title|default('Agentefrete') %}
+{% set app_header_subtitle = app_header_subtitle|default('Descubra o caminho certo para sua operação logística — indicadores em tempo real e orientação inteligente') %}
+{% set app_header_show_ticker = app_header_show_ticker|default(indicadores is defined and indicadores) %}
+
+<style>
+  :root{
+    --ri-primary:#0D6EFD;
+    --ri-dark:#212529;
+    --ri-success:#198754;
+  }
+  .af-app-header-ticker{
+    background:var(--ri-dark);
+    color:#fff;
+    overflow:hidden;
+    height:40px;
+    display:flex;
+    align-items:center;
+    border-bottom:2px solid var(--ri-primary);
+  }
+  .af-app-header-ticker-content{
+    display:flex;
+    white-space:nowrap;
+    animation:afAppHeaderTicker 30s linear infinite;
+  }
+  .af-app-header-ticker-item{
+    padding:0 40px;
+    font-size:.9rem;
+    display:flex;
+    align-items:center;
+  }
+  .af-app-header-ticker-label{
+    color:rgba(255,255,255,.75);
+    font-weight:700;
+    margin-right:8px;
+  }
+  .af-app-header-ticker-value{
+    color:var(--ri-success);
+    font-family:'Courier New', monospace;
+    font-weight:800;
+  }
+  @keyframes afAppHeaderTicker{
+    0%{ transform:translateX(0); }
+    100%{ transform:translateX(-50%); }
+  }
+</style>
+
+{% if app_header_show_ticker %}
+<div class="af-app-header-ticker shadow-sm">
+  <div class="af-app-header-ticker-content">
+    {% for i in range(2) %}
+    <div class="af-app-header-ticker-item">
+      <span class="af-app-header-ticker-label">DÓLAR:</span>
+      <span class="af-app-header-ticker-value">R$ {{ indicadores.dolar|default('0,00') }}</span>
+    </div>
+    <div class="af-app-header-ticker-item">
+      <span class="af-app-header-ticker-label">PETRÓLEO:</span>
+      <span class="af-app-header-ticker-value">US$ {{ indicadores.petroleo|default('0,00') }}</span>
+    </div>
+    <div class="af-app-header-ticker-item">
+      <span class="af-app-header-ticker-label">BDI:</span>
+      <span class="af-app-header-ticker-value">{{ indicadores.bdi|default('-') }}</span>
+    </div>
+    <div class="af-app-header-ticker-item">
+      <span class="af-app-header-ticker-label">FBX:</span>
+      <span class="af-app-header-ticker-value">{{ indicadores.fbx|default('-') }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<header class="af-hero-home py-5 mb-4">
+  <div class="container">
+    <div class="text-center my-4 position-relative">
+      <h1 class="fw-bolder mb-2" style="font-size: 2.5rem;">
+        <span class="af-text-gradient">{{ app_header_title }}</span>
+      </h1>
+      <p class="lead mb-4" style="color: var(--af-text-secondary); font-size: 1.1rem;">
+        {{ app_header_subtitle }}
+      </p>
+    </div>
+  </div>
+</header>

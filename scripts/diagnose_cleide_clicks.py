@@ -10,7 +10,7 @@ from pathlib import Path
 import websockets
 
 
-TARGET_URL = "http://127.0.0.1:5000/auditoria-frete"
+TARGET_URL = "http://127.0.0.1:5000/cleide-bi-frete"
 VIEWPORT = {"width": 1440, "height": 1400}
 OUTPUT_PATH = Path("logs/cleide_click_diagnosis.json")
 CHROME_CANDIDATES = [

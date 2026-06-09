@@ -1,9 +1,10 @@
 {# Componente de chat do Copilot (discovery) ou da Júlia (operational). #}
 {% set julia_surface = julia_chat_surface|default('discovery') %}
 {% set julia_documents_ui = julia_documents_ui|default(false) %}
-<div class="julia-chat-wrapper{% if julia_documents_ui %} julia-chat-with-documents julia-chat-embedded{% endif %}"
+<div class="julia-chat-wrapper{% if julia_documents_ui or julia_surface != 'operational' %} julia-chat-with-documents julia-chat-embedded{% endif %}"
      id="juliaChatWrapper"
-     {% if julia_documents_ui %}data-julia-documents="true"{% endif %}>
+     {% if julia_documents_ui %}data-julia-documents="true"{% endif %}
+     {% if julia_surface != 'operational' %}data-copilot-surface="true"{% endif %}>
   <div class="julia-chat-container">
     <div class="julia-chat-header">
       <div class="d-flex align-items-center">
@@ -34,10 +35,18 @@
         {% endif %}
         <br><br>Faça uma pergunta sobre logística, fretes, supply chain, estratégia ou planejamento.
         {% else %}
-        Faça uma pergunta sobre logística, fretes, supply chain, estratégia ou planejamento. Ex.: "Como estruturar um plano de redução de custo logístico?"
+        <span id="juliaWelcomeMessage"
+              data-typewriter-enabled="true"
+              data-typewriter-text="Faça uma pergunta sobre logística..."
+              aria-live="polite"></span>
+        <noscript>Faça uma pergunta sobre logística...</noscript>
         {% endif %}
         {% else %}
-        Olá, eu sou o Copilot do AgenteFrete.<br><br>Me conte o que você quer melhorar na sua operação logística e eu te ajudo a encontrar o melhor caminho.
+        <span id="copilotWelcomeMessage"
+              data-typewriter-enabled="true"
+              data-typewriter-text="Faça uma pergunta."
+              aria-live="polite"></span>
+        <noscript>Faça uma pergunta.</noscript>
         {% endif %}
       </div>
       {% if julia_surface != 'operational' %}
@@ -103,6 +112,7 @@
             </button>
             <div class="julia-actions-divider" role="separator" aria-hidden="true"></div>
             {% set _composer_cleide_href = cleide_auditoria_href if cleide_auditoria_href is defined else (url_for('cleide.auditoria_frete') if has_endpoint('cleide.auditoria_frete') else url_for('index')) %}
+            {% set _composer_cleide_auditoria_href = url_for('cleide.cleide_auditoria') if has_endpoint('cleide.cleide_auditoria') else url_for('index') %}
             {% set _composer_feed_href = feed_href if feed_href is defined else (url_for('feed') if has_endpoint('feed') else '/feed') %}
             <a href="{{ url_for('fretes') }}" class="julia-actions-item" role="menuitem">
               <i class="bi bi-graph-up" aria-hidden="true"></i>
@@ -110,7 +120,11 @@
             </a>
             <a href="{{ _composer_cleide_href }}" class="julia-actions-item" role="menuitem">
               <i class="bi bi-bar-chart" aria-hidden="true"></i>
-              <span>BI - Fretes</span>
+              <span>BI Cleide</span>
+            </a>
+            <a href="{{ _composer_cleide_auditoria_href }}" class="julia-actions-item" role="menuitem">
+              <i class="bi bi-clipboard-check" aria-hidden="true"></i>
+              <span>Auditoria de Frete</span>
             </a>
             <a href="{{ url_for('controle_estoque') }}" class="julia-actions-item" role="menuitem">
               <i class="bi bi-box-seam" aria-hidden="true"></i>
@@ -301,7 +315,7 @@
     border-color: var(--af-cyan-bright) !important;
     box-shadow: 0 0 20px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.3));
   }
-  {% if julia_documents_ui %}
+  {% if julia_documents_ui or julia_surface != 'operational' %}
   .julia-chat-wrapper.julia-chat-embedded {
     border: none;
     box-shadow: none;
@@ -330,6 +344,18 @@
     border-top: none;
     background: transparent;
     overflow: visible;
+  }
+  .julia-chat-embedded .julia-chat-messages {
+    background: transparent;
+    padding: 0 0 1rem;
+    max-height: none;
+    min-height: 0;
+    overflow: visible;
+  }
+  .julia-chat-embedded .julia-chat-welcome,
+  .julia-chat-embedded .julia-chat-discovery-suggestions,
+  .julia-chat-embedded .julia-chat-session-state {
+    max-width: 760px;
   }
   .julia-chat-embedded .julia-chat-form {
     overflow: visible;
@@ -475,6 +501,40 @@
     align-self: stretch;
     border-radius: 0 1.75rem 1.75rem 0 !important;
     border: none !important;
+    min-width: 48px;
+    padding-left: 0.85rem;
+    padding-right: 0.85rem;
+    margin-left: 0;
+  }
+  .julia-chat-embedded .input-group {
+    border: 1px solid rgba(0, 191, 255, 0.35);
+    border-radius: 1.75rem;
+    background: var(--af-bg-muted, #1E1E2E);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+  }
+  .julia-chat-embedded .input-group:focus-within {
+    border-color: var(--af-cyan-bright, #00D4FF);
+    box-shadow: 0 0 16px var(--af-cyan-glow-strong, rgba(0, 191, 255, 0.25));
+  }
+  .julia-chat-embedded .input-group .julia-chat-input {
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    margin: 0;
+    padding: 0.55rem 0.75rem;
+    min-height: 44px;
+    height: 44px;
+    resize: vertical;
+  }
+  .julia-chat-embedded .input-group .julia-chat-input:focus {
+    box-shadow: none !important;
+    outline: none;
+  }
+  .julia-chat-embedded .input-group .julia-chat-send {
+    border: none !important;
+    border-radius: 0 1.75rem 1.75rem 0 !important;
     min-width: 48px;
     padding-left: 0.85rem;
     padding-right: 0.85rem;

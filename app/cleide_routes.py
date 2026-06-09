@@ -33,7 +33,7 @@ def _authorize_cleide_upload_api():
     return None
 
 
-@cleide_bp.route("/auditoria-frete", methods=["GET"])
+@cleide_bp.route("/cleide-bi-frete", methods=["GET"])
 def auditoria_frete():
     is_authenticated = bool(getattr(current_user, "is_authenticated", False))
     autorizacao = None
@@ -42,7 +42,7 @@ def auditoria_frete():
     if is_authenticated and not autorizacao.get("permitido"):
         return render_template(
             "feature_under_construction.html",
-            origem="Auditoria de Frete",
+            origem="BI Cleide",
             mensagem_bloqueio=autorizacao.get("mensagem_usuario"),
         ), 403
 
@@ -61,6 +61,17 @@ def auditoria_frete():
             "modo_operacao": "login_required",
             "mensagem_usuario": "Faca login para enviar planilhas e usar recursos privados da Cleide.",
         },
+    )
+
+
+@cleide_bp.route("/auditoria-frete", methods=["GET"])
+def cleide_auditoria():
+    """Superfície visual da nova Auditoria da Cleide (sem IA/upload real nesta fase)."""
+    return render_template(
+        "cleide_auditoria.html",
+        cleide_avatar_url=url_for("static", filename="img/cleide-avatar.png"),
+        cleide_bi_href=url_for("cleide.auditoria_frete"),
+        cleide_feed_href=url_for("feed") if "feed" in current_app.view_functions else "/feed",
     )
 
 

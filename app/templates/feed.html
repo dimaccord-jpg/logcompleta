@@ -11,6 +11,7 @@ Notícias de logística, artigos estratégicos da Júlia e newsletter do Agentef
 {% block og_url %}https://www.agentefrete.com.br/feed{% endblock %}
 
 {% block content %}
+{% include 'partials/app_global_header.html' %}
 <style>
   :root{
     --ri-primary:#0D6EFD;
@@ -35,19 +36,6 @@ Notícias de logística, artigos estratégicos da Júlia e newsletter do Agentef
 </style>
 
 <div class="ri-page">
-  <header class="af-hero-home py-5 mb-4">
-    <div class="container">
-      <div class="text-center my-4 position-relative">
-        <h1 class="fw-bolder mb-2" style="font-size: 2.5rem;">
-          <span class="af-text-gradient">Feed Agentefrete</span>
-        </h1>
-        <p class="lead mb-0" style="color: var(--af-text-secondary); font-size: 1.1rem;">
-          Notícias, artigos estratégicos e newsletter sobre logística e frete
-        </p>
-      </div>
-    </div>
-  </header>
-
   <div class="container mb-5">
     <div class="row g-4">
       <div class="col-lg-8">

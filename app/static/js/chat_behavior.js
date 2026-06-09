@@ -20,6 +20,58 @@
   function byId(id) { return document.getElementById(id); }
   function qsAll(sel) { return document.querySelectorAll(sel); }
 
+  var TYPEWRITER_DONE_ATTR = 'data-typewriter-done';
+
+  function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  function runTypewriterOnElement(el, options) {
+    if (!el || el.getAttribute('data-typewriter-enabled') !== 'true') return;
+    if (el.getAttribute(TYPEWRITER_DONE_ATTR) === 'true') return;
+
+    var text = el.getAttribute('data-typewriter-text') || '';
+    if (!text) return;
+
+    el.setAttribute(TYPEWRITER_DONE_ATTR, 'true');
+
+    if (prefersReducedMotion()) {
+      el.textContent = text;
+      return;
+    }
+
+    el.textContent = '';
+    var index = 0;
+    var delayMs = (options && options.delayMs) || 36;
+
+    function typeNextChar() {
+      if (index >= text.length) {
+        el.textContent = text;
+        return;
+      }
+      el.textContent += text.charAt(index);
+      index += 1;
+      window.setTimeout(typeNextChar, delayMs);
+    }
+
+    typeNextChar();
+  }
+
+  function initOptInTypewriters(root) {
+    var scope = root || document;
+    var nodes = scope.querySelectorAll('[data-typewriter-enabled="true"][data-typewriter-text]');
+    for (var i = 0; i < nodes.length; i++) {
+      runTypewriterOnElement(nodes[i]);
+    }
+  }
+
+  function resetOptInTypewriter(el) {
+    if (!el || el.getAttribute('data-typewriter-enabled') !== 'true') return;
+    el.removeAttribute(TYPEWRITER_DONE_ATTR);
+    el.textContent = '';
+    runTypewriterOnElement(el);
+  }
+
   var chatLimits = (typeof window.JULIA_CHAT_LIMITS !== 'undefined' && window.JULIA_CHAT_LIMITS)
     ? window.JULIA_CHAT_LIMITS
     : null;
@@ -233,7 +285,11 @@
       var msgs = messagesEl.querySelectorAll('.julia-chat-msg');
       for (var i = 0; i < msgs.length; i++) msgs[i].remove();
     }
-    if (welcome) welcome.style.display = 'block';
+    if (welcome) {
+      welcome.style.display = 'block';
+      var typewriterEl = welcome.querySelector('[data-typewriter-enabled="true"]');
+      if (typewriterEl) resetOptInTypewriter(typewriterEl);
+    }
     if (input) input.value = '';
     setChatActive(false);
     setDiscoverySuggestionsVisible(true);
@@ -434,7 +490,13 @@
       roleEl.textContent = 'Consultoria em logística, supply chain, estratégia e planejamento. Atenção: a Júlia é uma IA e pode cometer erros.';
     }
     if (welcome) {
-      welcome.textContent = 'Faça uma pergunta sobre logística, fretes, supply chain, estratégia ou planejamento.';
+      welcome.innerHTML = '';
+      var span = document.createElement('span');
+      span.setAttribute('data-typewriter-enabled', 'true');
+      span.setAttribute('data-typewriter-text', 'Faça uma pergunta sobre logística...');
+      span.setAttribute('aria-live', 'polite');
+      welcome.appendChild(span);
+      runTypewriterOnElement(span);
       welcome.style.display = 'block';
     }
     if (input) input.placeholder = 'Mensagem para a Júlia...';
@@ -656,6 +718,8 @@
   }
 
   function init() {
+    initOptInTypewriters();
+
     var input = byId('juliaChatInput');
     var form = byId('juliaChatForm');
     var wrapper = byId('juliaChatWrapper');

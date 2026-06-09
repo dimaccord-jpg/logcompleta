@@ -1,9 +1,9 @@
 # Deploy e Promocao
 
-Data de consolidacao: `2026-05-29`  
-Commit de referencia: `20fa165`
+Data de consolidacao: `2026-06-05`
+Commit de referencia em producao: `b5fc444`
 
-## 1. Ambientes
+## Ambientes
 
 - `dev`: desenvolvimento local
 - `homolog`: validacao antes de promover
@@ -17,50 +17,49 @@ Variaveis contratuais:
 - `APP_DATA_DIR`
 - chaves Gemini
 
-## 2. Branches
+## Estado promovido
 
-Fluxo documentado:
+Entrega validada e promovida:
 
-- trabalho local
-- `homolog`
-- `producao`
+- `98012c8 feat: adiciona upload documental governado à Julia`
+- `b5fc444 fix: estabiliza desempenho documental da Julia`
 
-Estado de referencia desta documentacao:
+Confirmacoes operacionais:
 
-- `producao` em `20fa165`
+- `producao -> b5fc444`
+- homologacao validada antes da promocao
+- working tree limpo apos o push de promocao
 
-## 3. Migrations
+## Migrations
 
-Aplicar sempre antes da validacao final:
+Nao houve migration nova nesta entrega.
+
+Aplicar a cadeia existente normalmente antes de validar um ambiente:
 
 ```powershell
 alembic -c migrations/alembic.ini upgrade head
 ```
 
-Migration relevante do estado atual:
+## Smoke checks obrigatorios
 
-- `r2s3t4u5v6w7_onboarding_word_cloud_hidden_term.py`
+1. abrir `/` deslogado e validar onboarding discovery
+2. confirmar limite anonimo de `5` interacoes
+3. validar CTA de login
+4. fazer login e validar Julia operacional na Home
+5. validar `/chat_julia?mode=operational`
+6. validar upload documental da Julia
+7. validar PDF governado com Gemini Files quando configurado
+8. validar bloqueios por autorizacao/plano/franquia
+9. validar `/admin/agentes-cleiton` e o bloco documental
+10. validar `/admin/dashboard`, `/fretes` e `/cleide-bi-frete`
 
-## 4. Smoke checks obrigatorios
-
-1. abrir `/`
-2. validar onboarding discovery
-3. validar limite anonimo de 5 interacoes
-4. validar `Nova conversa`
-5. validar CTA de login
-6. validar `/admin/dashboard`
-7. validar hidden terms do onboarding
-8. validar `/fretes`
-9. validar `/auditoria-frete`
-
-## 5. Regra de promocao
+## Regra de promocao
 
 Nao promover homolog -> producao sem:
 
-- migrations aplicadas;
-- dashboard admin valido;
-- observabilidade do onboarding valida;
-- Roberto valido;
-- Cleide valida;
-- regras de franquia preservadas;
-- onboarding sem abatimento de franquia.
+- migrations existentes aplicadas ate `head`
+- validacao da Home publica e da Home logada
+- validacao da Julia documental governada
+- validacao da observabilidade
+- validacao de Roberto e Cleide
+- confirmacao de que nenhum temporario foi versionado

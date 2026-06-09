@@ -56,6 +56,7 @@ def test_operational_page_renders_attach_button(monkeypatch):
     assert 'accept=".txt,.xml,.csv,.xlsx,.docx,.pdf"' in html
     assert "julia_documents.js" in html
     assert "window.JULIA_DOCUMENTS_UI = true" in html
+    assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
 
 
 def test_attach_button_inside_composer(monkeypatch):
@@ -138,6 +139,23 @@ def test_authenticated_home_has_documents_area(monkeypatch):
     assert input_pos < docs_pos
 
 
+def test_operational_home_sem_ctas_onboarding(monkeypatch):
+    client = _operational_client(monkeypatch)
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="onboardingCtaGrid"' not in html
+    assert 'id="juliaChatDiscoverySuggestions"' not in html
+
+
+def test_operational_home_julia_welcome_typewriter_contract(monkeypatch):
+    client = _operational_client(monkeypatch)
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="juliaWelcomeMessage"' in html
+    assert 'data-typewriter-enabled="true"' in html
+    assert 'data-typewriter-text="Faça uma pergunta sobre logística..."' in html
+    assert "chat_behavior.js" in html
+    assert "Como estruturar um plano de redução de custo logístico" not in html
+
+
 def test_authenticated_home_renders_actions_submenu(monkeypatch):
     client = _operational_client(monkeypatch)
     html = client.get("/").get_data(as_text=True)
@@ -146,11 +164,14 @@ def test_authenticated_home_renders_actions_submenu(monkeypatch):
     assert "Enviar arquivos" in html
     assert 'class="julia-actions-divider"' in html
     assert "Previsibilidade Frete" in html
-    assert "BI - Fretes" in html
+    assert "BI Cleide" in html
+    assert "Auditoria de Frete" in html
     assert "Controle de Estoque" in html
     assert "Feed" in html
     menu_start = html.index('id="juliaChatActionsMenu"')
-    menu_chunk = html[menu_start:menu_start + 1800]
+    menu_chunk = html[menu_start:menu_start + 2200]
+    assert "/cleide-bi-frete" in menu_chunk
+    assert "/auditoria-frete" in menu_chunk
     assert "Área do Usuário" not in menu_chunk
     assert ">Sair<" not in menu_chunk.replace(" ", "")
     assert "Home / Notícias" not in menu_chunk
@@ -172,6 +193,16 @@ def test_embedded_julia_layout_class_on_authenticated_home(monkeypatch):
     embedded_block = html.split(".julia-chat-wrapper.julia-chat-embedded {", 1)[1].split("}", 1)[0]
     assert "border: none" in embedded_block
     assert "box-shadow: none" in embedded_block
+
+
+def test_public_home_copilot_uses_embedded_layout(monkeypatch):
+    web = _load_web_module()
+    monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+    monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
+    monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", lambda _u: {"permitido": True})
+    html = web.app.test_client().get("/").get_data(as_text=True)
+    assert "julia-chat-embedded" in html
+    assert 'data-copilot-surface="true"' in html
 
 
 def test_actions_menu_uses_fixed_layering():
@@ -326,7 +357,7 @@ def test_cleide_page_does_not_render_attach_button(monkeypatch):
         lambda _u: {"permitido": True, "modo_operacao": "normal"},
     )
     monkeypatch.setattr("app.cleide_routes.get_cleide_config", lambda: SimpleNamespace(layout_version=1))
-    resp = web.app.test_client().get("/auditoria-frete")
+    resp = web.app.test_client().get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     assert 'id="juliaChatAttachBtn"' not in html

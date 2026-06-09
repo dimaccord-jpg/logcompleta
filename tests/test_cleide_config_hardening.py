@@ -81,7 +81,7 @@ class _FakeConfigRegrasStore:
 def test_config_rethrow_em_runtime_real(monkeypatch):
     web = _load_web_module()
     monkeypatch.setattr(cfg, "ConfigRegras", _FakeConfigRegrasRaise)
-    with web.app.test_request_context("/auditoria-frete"):
+    with web.app.test_request_context("/cleide-bi-frete"):
         with pytest.raises(OperationalError):
             cfg._load_cfg_map()
 
@@ -89,7 +89,7 @@ def test_config_rethrow_em_runtime_real(monkeypatch):
 def test_config_fallback_controlado_em_contexto_explicito(monkeypatch):
     web = _load_web_module()
     monkeypatch.setattr(cfg, "ConfigRegras", _FakeConfigRegrasRaise)
-    with web.app.test_request_context("/auditoria-frete"):
+    with web.app.test_request_context("/cleide-bi-frete"):
         g.cleide_allow_config_fallback = True
         loaded_map = cfg._load_cfg_map()
         assert loaded_map == {}

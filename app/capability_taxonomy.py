@@ -36,7 +36,7 @@ DOMAIN_LABELS: dict[str, str] = {
     "editorial_market": "Notícias e tendências de mercado",
     "strategic_logistics": "Estratégia e consultoria logística",
     "freight_bi": "BI operacional de fretes e indicadores",
-    "operational_audit": "Auditoria operacional de fretes",
+    "operational_audit": "BI operacional de fretes (Cleide)",
     "forecast_planning": "Previsibilidade e planejamento de frete",
     "future_quotation": "Cotação automatizada de frete",
     "future_bid": "BID de frete",
@@ -115,8 +115,8 @@ DESTINATIONS: dict[str, DestinationSpec] = {
     ),
     "cleide_audit": DestinationSpec(
         id="cleide_audit",
-        label="Auditoria operacional de frete (Cleide)",
-        url="/auditoria-frete",
+        label="BI Cleide",
+        url="/cleide-bi-frete",
         requires_login=False,
         requires_dataset=True,
         agent="cleide",
@@ -152,9 +152,9 @@ ONBOARDING_CTAS: list[dict[str, Any]] = [
     },
     {
         "id": "operational_audit",
-        "label": "🔎 Auditoria operacional",
+        "label": "📊 BI Cleide — indicadores e painel operacional",
         "seed_domains": ["operational_audit", "freight_bi"],
-        "seed_message": "Preciso de auditoria operacional na minha base de fretes.",
+        "seed_message": "Quero usar o BI Cleide para analisar indicadores e o painel operacional da minha base de fretes.",
     },
     {
         "id": "strategic_support",

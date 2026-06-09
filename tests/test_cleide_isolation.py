@@ -39,7 +39,7 @@ def test_html_cleide_nao_referencia_contratos_roberto(monkeypatch):
     monkeypatch.setattr("app.cleide_routes.get_cleide_config", lambda: SimpleNamespace(layout_version=1))
 
     client = web.app.test_client()
-    resp = client.get("/auditoria-frete")
+    resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     assert "roberto_upload_ref" not in html
@@ -60,7 +60,7 @@ def test_html_cleide_sem_ativacao_funcional_real(monkeypatch):
     monkeypatch.setattr("app.cleide_routes.get_cleide_config", lambda: SimpleNamespace(layout_version=1))
 
     client = web.app.test_client()
-    resp = client.get("/auditoria-frete")
+    resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     assert "/api/roberto/" not in html

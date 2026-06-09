@@ -47,11 +47,13 @@ def test_auditoria_frete_retornar_200_quando_autorizado(monkeypatch):
     monkeypatch.setattr("app.cleide_routes.get_cleide_config", lambda: SimpleNamespace(layout_version=1))
 
     client = web.app.test_client()
-    resp = client.get("/auditoria-frete")
+    resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
+    assert '<span class="af-text-gradient">Agentefrete</span>' in html
     assert "Agente Cleide" in html
-    assert "Auditoria de Frete Operacional" in html
+    assert "BI Cleide" in html
+    assert "Auditoria de Frete Operacional" not in html
     assert 'data-testid="cleide-upload-placeholder"' in html
     assert "id=\"cleideUploadForm\"" in html
     assert "id=\"cleideUploadInput\"" in html
@@ -81,10 +83,12 @@ def test_auditoria_frete_publica_quando_nao_autenticado(monkeypatch):
     )
 
     client = web.app.test_client()
-    resp = client.get("/auditoria-frete")
+    resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
-    assert "Auditoria de Frete Operacional" in html
+    assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
+    assert "BI Cleide" in html
+    assert "Auditoria de Frete Operacional" not in html
     assert "Faca login para enviar planilhas" in html
     assert 'data-testid="cleide-template-download"' in html
     assert 'href="/api/cleide/template"' in html
@@ -104,7 +108,7 @@ def test_auditoria_frete_bloqueia_quando_franquia_nao_permite(monkeypatch):
     )
 
     client = web.app.test_client()
-    resp = client.get("/auditoria-frete")
+    resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 403
     html = resp.get_data(as_text=True)
     assert "Sua franquia atingiu o limite operacional." in html
@@ -123,11 +127,39 @@ def test_auditoria_frete_nao_depende_da_flag_de_ia(monkeypatch):
     monkeypatch.setattr("app.cleide_routes.get_cleide_config", lambda: SimpleNamespace(layout_version=1))
 
     client = web.app.test_client()
+    resp = client.get("/cleide-bi-frete")
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert "BI Cleide" in html
+    assert "Auditoria de Frete Operacional" not in html
+    assert "IA contextual e insights automáticos ainda inativos" in html
+
+
+def test_cleide_auditoria_rota_retorna_nova_tela(monkeypatch):
+    web = _load_web_module()
+    client = web.app.test_client()
     resp = client.get("/auditoria-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
-    assert "Auditoria de Frete Operacional" in html
-    assert "IA contextual e insights automáticos ainda inativos" in html
+    assert "Cleide, Auditora Virtual de AgenteFrete" in html
+    assert "Atenção: a Cleide é uma IA e pode cometer erros." in html
+    assert "Faça o upload da tabela de frete." in html
+    assert 'id="cleideAuditoriaAttachBtn"' in html
+    assert "cleide_auditoria.js" in html
+    assert "cleide_auditoria_frete.html" not in html
+    assert 'data-testid="cleide-hero"' not in html
+
+
+def test_cleide_auditoria_endpoint_separado_do_bi(monkeypatch):
+    from flask import url_for
+
+    web = _load_web_module()
+    with web.app.test_request_context("/"):
+        bi_url = url_for("cleide.auditoria_frete")
+        auditoria_url = url_for("cleide.cleide_auditoria")
+    assert bi_url == "/cleide-bi-frete"
+    assert auditoria_url == "/auditoria-frete"
+    assert bi_url != auditoria_url
 
 
 def test_chat_cleide_exige_login_sem_consumir_autorizacao(monkeypatch):

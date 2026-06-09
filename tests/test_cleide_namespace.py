@@ -24,7 +24,7 @@ def test_cleide_config_usa_prefixo_proprio():
 def test_cleide_config_defaults_basicos_em_request_context():
     from app.web import app
 
-    with app.test_request_context("/auditoria-frete"):
+    with app.test_request_context("/cleide-bi-frete"):
         from flask import g
         g.cleide_allow_config_fallback = True
         cfg = get_cleide_config()

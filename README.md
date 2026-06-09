@@ -1,158 +1,131 @@
 # Agentefrete / Log Completa
 
-Data de consolidacao: `2026-05-29`  
-Estado de referencia: `producao` / commit `20fa165`
+Data de consolidacao: `2026-06-05`
+Estado de referencia: `producao` / commit `b5fc444`
 
-Este `README.md` e a fonte principal de contexto funcional e operacional do projeto. Ele resume o estado real promovido em producao apos:
+Este `README.md` resume o estado real promovido em producao apos a entrega do upload documental governado da Julia:
 
-- onboarding discovery conversational-first;
-- Copilot do AgenteFrete na Home publica;
-- separacao Copilot x Julia;
-- observabilidade do onboarding;
-- contagem de tokens de onboarding;
-- dashboard administrativo de IA;
-- controle administrativo da nuvem de palavras;
-- Pareto 80/20;
-- ocultacao manual e reexibicao de termos;
-- regra de encaminhamento por atividade-fim;
-- migration `r2s3t4u5v6w7`.
+- `98012c8 feat: adiciona upload documental governado à Julia`
+- `b5fc444 fix: estabiliza desempenho documental da Julia`
 
 ## Estado atual do produto
 
-As superficies oficiais ativas sao:
+Superficies oficiais ativas:
 
-- Home publica com Copilot de descoberta: `/`
-- Julia operacional com login: `/chat_julia?mode=operational`
-- Roberto BI operacional e preditivo: `/fretes`
-- Cleide auditoria operacional e retrospectiva: `/auditoria-frete`
-- Feed editorial: `/feed`
-- Dashboard admin: `/admin/dashboard`
+- `/`: Home publica com Copilot de discovery para usuario anonimo ou logado
+- `/`: Home logada com Julia operacional embutida como superficie principal do usuario autenticado
+- `/chat_julia?mode=operational`: rota operacional dedicada da Julia, mantida para handoff e acesso direto
+- `/fretes`: Roberto BI operacional e preditivo
+- `/cleide-bi-frete`: Cleide BI operacional (upload, KPIs, dashboard e chat)
+- `/feed`: superficie editorial
+- `/admin/dashboard`: painel administrativo
 
-## Regra-mae de roteamento
+## Personas do produto
 
-Artefato nao define agente.  
-Planilha nao define agente.  
-Dashboard nao define agente.  
-BI nao define agente.  
-Custo nao define agente.
-
-O agente e definido pela atividade-fim e pelo horizonte temporal:
-
-- Roberto: previsao, projecao, tendencia, estimativa e horizonte futuro.
-- Cleide: auditoria, conferencia, desvios, anomalias, transportadoras e horizonte historico.
-- Julia: estrategia, supply chain, negociacao, interpretacao executiva e plano de acao.
-
-Se o usuario mencionar apenas artefatos ou temas genericos, o Copilot nao deve fazer handoff automatico. Ele precisa pedir contexto antes.
+- Copilot: descoberta publica e onboarding sem login
+- Julia: assistente estrategica e operacional logada, com suporte documental governado
+- Cleiton: governanca operacional, autorizacao, observabilidade, upload documental, limites e integracao com IA
+- Roberto: BI, previsoes e leitura forward-looking de fretes
+- Cleide: auditoria, conferencia e leitura retrospectiva
 
 ## Copilot da Home
 
-O Copilot da Home e um fluxo de discovery conversational-first:
+Contrato oficial:
 
-- endpoint oficial: `POST /api/onboarding_discovery`
-- reset oficial: `POST /api/onboarding_discovery/reset`
-- shell visual: `app/static/js/chat_behavior.js`
-- documento oficial de capacidades: `app/copilot_capabilities.md`
-- motor principal: Gemini governado por Cleiton Discovery
-- fallback: resposta local conversacional quando Gemini nao estiver disponivel
+- endpoint: `POST /api/onboarding_discovery`
+- reset: `POST /api/onboarding_discovery/reset`
+- funciona com ou sem login
+- limite anonimo: `5` interacoes por sessao
+- ao atingir o limite, retorna CTA de login para continuar gratuitamente com a Julia
+- usa Gemini governado por Cleiton Discovery, com fallback local quando necessario
+- nao consome franquia operacional do cliente
 
-Contrato real do fluxo:
+O Copilot nao se confunde com a Julia. Onboarding publico continua separado da experiencia operacional logada.
 
-- funciona com ou sem login;
-- usa sessao anonima para contar interacoes;
-- limite anonimo de 5 interacoes por sessao;
-- ao atingir o limite, mostra CTA de login para continuar gratuitamente com a Julia;
-- a acao `Nova conversa` zera o contador e limpa o contexto visual da sessao;
-- o contexto de onboarding para Julia so e preservado quando o handoff sugerido inclui `julia_operational`;
-- onboarding nao consome franquia operacional do cliente.
+## Julia operacional
 
-## Julia
+A Julia e a superficie operacional logada na Home. A rota `/chat_julia?mode=operational` continua valida, mas a experiencia principal consolidada no codigo atual e a Home autenticada.
 
-Julia nao e o Copilot da Home.
-
-Julia aparece em dois contextos:
-
-- como shell visual do chat da Home, enquanto o backend ainda e o onboarding discovery;
-- como agente operacional real em `/chat_julia?mode=operational`, sempre com login.
-
-Contrato atual da Julia operacional:
+Contrato real:
 
 - endpoint oficial: `POST /api/chat_julia`
-- exige autenticacao;
-- valida autorizacao operacional por franquia antes de consumir IA;
-- recebe contexto vindo do Copilot apenas quando houve handoff de onboarding para Julia.
+- exige autenticacao
+- valida autorizacao operacional por franquia antes de consumir IA
+- pode receber contexto resumido do Copilot quando houver handoff `julia_operational`
+- exibe o botao de documentos como parte da experiencia operacional logada
 
-## Roberto
+## Upload documental governado
 
-Roberto e o agente para BI operacional com foco preditivo e forward-looking.
+O upload documental da Julia nao e um fluxo solto nem uma rota de produto paralela. Ele faz parte da conversa operacional logada e e governado pelo Cleiton.
 
-Escopo real:
+Fluxo oficial:
 
-- dashboards e indicadores;
-- leitura de base historica de fretes;
-- tendencias e previsoes;
-- horizonte futuro;
-- chat Roberto com memoria propria;
-- upload e BI em `/fretes`.
+- upload: `POST /api/julia/documents/upload`
+- listagem: `GET /api/julia/documents`
+- remocao: `DELETE /api/julia/documents/<doc_id>`
+- limpeza: `POST /api/julia/documents/clear`
 
-Contrato tecnico:
+Tipos aceitos na UI e nos conversores atuais:
 
-- pagina oficial: `/fretes`
-- endpoint do chat: `POST /api/chat_roberto`
-- exige login;
-- usa `avaliar_autorizacao_operacao_por_franquia`;
-- historico do chat controlado por `chat_max_history` em configuracao admin.
+- `TXT`
+- `XML`
+- `CSV`
+- `XLSX`
+- `DOCX`
+- `PDF`
 
-## Cleide
+Governanca aplicada pelo Cleiton:
 
-Cleide e o agente de auditoria operacional retrospectiva.
+- autenticacao obrigatoria
+- autorizacao operacional por franquia
+- validacao por extensao/tamanho/tipo habilitado
+- limite por sessao e por arquivo
+- TTL de contexto documental
+- limpeza automatica opcional
+- preparo de contexto textual e multimodal para a IA
+- integracao governada com Gemini Files para PDF quando aplicavel
 
-Escopo real:
+Garantias importantes:
 
-- conferencia de custos realizados;
-- identificacao de desvios;
-- leitura historica;
-- concentracao por transportadora;
-- apoio quantitativo investigativo;
-- horizonte passado.
+- PDF pode entrar como contexto multimodal via Gemini Files
+- o sistema nao deve fingir leitura quando houver apenas placeholder ou quando o conteudo nao estiver pronto
+- arquivos temporarios ficam em `app/cleiton_doc_tmp/` e nao devem ser versionados
+- o store temporario persiste apenas JSON tecnico, sem bruto documental no banco
 
-Superficie oficial:
+## Cleiton
 
-- pagina: `/auditoria-frete`
-- health: `/api/cleide/health`
-- template: `/api/cleide/template`
-- upload: `/api/cleide/upload`
-- status: `/api/cleide/upload/status`
-- limpeza: `/api/cleide/upload/clear`
-- filtro analitico: `/api/cleide/dashboard/filter`
-- chat: `POST /api/chat_cleide`
+Cleiton nao deve ser descrito apenas como agente de chat. No estado atual ele e a camada central de governanca operacional.
+
+Responsabilidades relevantes nesta entrega:
+
+- autorizacao operacional por franquia
+- observabilidade do consumo
+- validacao e seguranca documental
+- controle de sessao e TTL
+- limites administrativos por tipo de arquivo
+- preparo de contexto para Julia
+- integracao com Gemini Files para PDF
+
+Configuracao administrativa documental:
+
+- fica no admin de Cleiton
+- usa `ConfigRegras`, sem nova migration nesta entrega
+- bloco oficial: upload habilitado, maximo de arquivos por sessao, bytes totais da sessao, TTL, cleanup, limite de caracteres de contexto, maximo de arquivos considerados por resposta e limites por tipo
 
 ## Observabilidade oficial
 
-Os trilhos oficiais continuam centralizados em eventos persistidos.
+Eventos oficiais:
 
-`IaConsumoEvento` registra tentativa real de chamada LLM com:
+- `IaConsumoEvento`: chamadas LLM reais
+- `ProcessingEvent`: processamento tecnico e snapshots auxiliares
 
-- `provider`
-- `operation`
-- `model`
-- `agent`
-- `flow_type`
-- `api_key_label`
-- tokens
-- `status`
-- `conta_id`
-- `franquia_id`
-- `usuario_id`
-
-`ProcessingEvent` registra processamento tecnico nao-LLM e snapshots auxiliares.
-
-Fluxos documentados no estado atual:
+Fluxos documentados:
 
 - `onboarding_discovery`
 - `operacional`
 - `administrativo`
 
-Leituras administrativas expostas no dashboard:
+Leituras administrativas:
 
 - `operational_tokens_month`
 - `onboarding_tokens_month`
@@ -160,116 +133,61 @@ Leituras administrativas expostas no dashboard:
 
 Regra critica:
 
-- onboarding conta como consumo interno de IA;
-- onboarding nao abate franquia do cliente.
+- onboarding conta como consumo interno
+- onboarding nao abate franquia
 
-## Dashboard admin
+## Banco e migrations
 
-O dashboard administrativo consolidado mostra:
+Esta entrega documental e funcional da Julia:
 
-- consumo IA operacional;
-- consumo IA onboarding;
-- total interno de tokens;
-- processamento analitico Roberto;
-- processamento analitico Cleide;
-- analise de termos do onboarding.
+- nao criou migration nova em `migrations/versions`
+- nao criou nova tabela para configuracao documental
+- reutiliza o mecanismo existente `ConfigRegras`
 
-### Nuvem de palavras do onboarding
+Migration relevante ja existente e mantida:
 
-Origem real:
+- `r2s3t4u5v6w7_onboarding_word_cloud_hidden_term.py`
 
-- `AuditoriaGerencial.tipo_decisao == "onboarding_discovery"`
-- campo `user_terms_normalized` em `contexto_json`
+## Testes relevantes da entrega
 
-Pipeline real:
+Cobertura diretamente relacionada:
 
-`user_terms_normalized -> normalizacao -> stopwords -> termos ocultos admin -> frequencia -> Pareto 80/20`
+- `tests/test_cleiton_doc_config_service.py`
+- `tests/test_cleiton_doc_store.py`
+- `tests/test_cleiton_doc_converters.py`
+- `tests/test_cleiton_admin_routes.py`
+- `tests/test_julia_chat_documental.py`
+- `tests/test_julia_documents_ui.py`
+- `tests/test_onboarding_discovery.py`
+- `tests/test_cleiton_doc_pdf_gemini.py`
+- `tests/test_julia_chat_plan_limit.py`
+- `tests/test_julia_pdf_documental_chat.py`
 
-Regras atuais:
+Validacao critica registrada antes da promocao:
 
-- stopwords sao removidas apenas na agregacao;
-- ocultacao manual nao altera o historico bruto;
-- reexibicao apenas desativa o ocultamento;
-- historico em `AuditoriaGerencial` permanece preservado;
-- o admin pode ocultar e reexibir termos pelo dashboard.
-
-## Banco de dados
-
-Modelo novo relevante:
-
-`OnboardingWordCloudHiddenTerm`
-
-Finalidade:
-
-- persistir termos ocultados manualmente na nuvem do onboarding;
-- permitir reativacao individual;
-- manter auditoria por termo sem apagar o historico bruto.
-
-Campos:
-
-- `id`
-- `term_normalized`
-- `is_active`
-- `created_at`
-- `updated_at`
-- `hidden_by_user_id`
-- `notes`
-
-Relacionamentos:
-
-- `hidden_by_user_id -> user.id`
-
-Migration associada:
-
-- `migrations/versions/r2s3t4u5v6w7_onboarding_word_cloud_hidden_term.py`
-
-## Ambientes
-
-Contrato atual:
-
-- `APP_ENV` obrigatorio: `dev`, `homolog`, `prod`
-- `DATABASE_URL` deve apontar para PostgreSQL
-- `PUBLIC_BASE_URL` define a base publica oficial do ambiente
-- `APP_DATA_DIR` governa persistencia operacional via `settings.data_dir`
-
-Fluxo de promocao:
-
-- desenvolvimento local
-- branch `homolog`
-- branch `producao`
-
-Estado confirmado neste commit:
-
-- `HEAD` local = `20fa165`
-- `20fa165` tambem esta em `origin/producao`
-
-Antes de promover homolog -> producao:
-
-- aplicar migrations ate `head`;
-- validar onboarding discovery;
-- validar handoff para Julia;
-- validar dashboard admin;
-- validar word cloud e hidden terms;
-- validar Roberto e Cleide;
-- validar suite critica.
+- `233 passed, 2 warnings`
+- warnings de dependencia/deprecacao, sem falha funcional
 
 ## Documentos oficiais de apoio
 
 Ler nesta ordem:
 
-1. `docs/auditoria_documental_2026-05-29.md`
-2. `docs/estado_oficial_consolidado.md`
-3. `docs/arquitetura_oficial.md`
-4. `docs/runtime_ia_e_observabilidade.md`
-5. `docs/onboarding_tecnico.md`
+1. `docs/estado_oficial_consolidado.md`
+2. `docs/arquitetura_oficial.md`
+3. `docs/runtime_ia_e_observabilidade.md`
+4. `docs/onboarding_tecnico.md`
+5. `docs/troubleshooting_operacional.md`
 6. `docs/runbook_onboarding_copilot.md`
-7. `migrations/README`
+7. `app/README_RUN.md`
+8. `app/README_DEPLOY.md`
+9. `migrations/README`
 
-## Fora de escopo e honestidade do produto
+## Honestidade de produto
 
-O produto nao deve prometer:
+Nao documentar nem prometer:
 
-- cotacao automatizada de fretes;
-- BID de frete;
-- execucao operacional tipo TMS/WMS;
-- handoff automatico baseado apenas em planilha, dashboard, BI ou custo.
+- cotacao automatizada de fretes
+- BID
+- TMS/WMS
+- automacao operacional inexistente
+- leitura documental fingida quando o conteudo nao foi extraido

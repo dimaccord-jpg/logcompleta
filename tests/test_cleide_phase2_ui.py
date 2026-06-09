@@ -39,9 +39,16 @@ def _get_cleide_html(monkeypatch) -> str:
     )
     monkeypatch.setattr("app.cleide_routes.get_cleide_config", lambda: SimpleNamespace(layout_version=2))
     client = web.app.test_client()
-    resp = client.get("/auditoria-frete")
+    resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     return resp.get_data(as_text=True)
+
+
+def test_cleide_bi_semantic_copy(monkeypatch):
+    html = _get_cleide_html(monkeypatch)
+    assert "BI Cleide" in html
+    assert "Auditoria de Frete Operacional" not in html
+    assert "Auditoria de Frete Operacional e Gerencial" not in html
 
 
 def test_cleide_phase7_sections_present(monkeypatch):

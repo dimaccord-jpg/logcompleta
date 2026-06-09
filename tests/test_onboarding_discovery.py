@@ -406,12 +406,44 @@ class TestOnboardingHomeUxContract:
         html = resp.get_data(as_text=True)
         assert "Copilot do AgenteFrete" in html
         assert "ONBOARDING_DISCOVERY_MODE = true" in html
+        assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
+
+    def test_home_publica_copilot_welcome_typewriter_e_ctas(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        web = importlib.import_module("app.web")
+        monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+        monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
+        monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", lambda _u: {"permitido": True})
+        html = web.app.test_client().get("/").get_data(as_text=True)
+        assert 'id="copilotWelcomeMessage"' in html
+        assert 'data-typewriter-text="Faça uma pergunta."' in html
+        assert 'id="onboardingCtaGrid"' not in html
+        assert 'id="juliaChatDiscoverySuggestions"' in html
+        assert "Se quiser, você pode começar por uma destas ideias:" in html
+        assert "Por onde quer começar? Escolha uma intenção" not in html
+        index_source = pathlib.Path("app/templates/index.html").read_text(encoding="utf-8")
+        assert 'id="onboardingCtaGrid"' not in index_source
+        assert "discovery_ctas_in_external_grid" not in index_source
+        cta_count = html.count('class="julia-chat-discovery-pill onboarding-cta-btn"')
+        assert cta_count > 0
+        assert html.count('class="btn btn-outline-primary btn-sm onboarding-cta-btn"') == 0
+        assert "julia-chat-embedded" in html
+        assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
 
     def test_frontend_discovery_mode_hides_refinement_chips(self):
         source = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
         assert "DISCOVERY_MODE" in source
         assert "var suggestions = DISCOVERY_MODE" in source
         assert "[]" in source.split("var suggestions = DISCOVERY_MODE")[1][:80]
+
+    def test_chat_behavior_opt_in_typewriter(self):
+        source = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
+        assert "initOptInTypewriters" in source
+        assert "data-typewriter-enabled" in source
+        assert "prefers-reduced-motion" in source
+        assert "startDiscoveryPlaceholderRotation" in source
 
     def test_frontend_handoff_buttons_still_work(self):
         source = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
@@ -983,7 +1015,7 @@ class TestCostKnowledge:
         doc = load_capabilities_document()
         assert "Artefato não define agente" in doc or "Artefatos não definem agente" in doc
         assert "Motor Quantitativo Preditivo" in doc or "Quantitativo Preditivo" in doc
-        assert "Motor Quantitativo Investigativo" in doc or "Quantitativo Investigativo" in doc
+        assert "BI Cleide" in doc or "Auditoria da Cleide" in doc
 
     def test_resolve_cost_ambiguous_without_intent(self):
         assert resolve_cost_context("Quero analisar meu custo de frete.") == "cost_ambiguous"

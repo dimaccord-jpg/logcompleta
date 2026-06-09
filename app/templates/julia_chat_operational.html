@@ -9,18 +9,7 @@ Converse com a Júlia sobre estratégia logística, supply chain e planejamento 
 {% block canonical %}https://www.agentefrete.com.br/chat_julia{% endblock %}
 
 {% block content %}
-<header class="af-hero-home py-4 mb-3">
-  <div class="container">
-    <div class="text-center my-3">
-      <h1 class="fw-bolder mb-2" style="font-size: 2rem;">
-        <span class="af-text-gradient">Consultoria logística</span>
-      </h1>
-      <p class="lead mb-0" style="color: var(--af-text-secondary); font-size: 1rem;">
-        Consumo operacional — estratégia, supply chain e planejamento com a Júlia
-      </p>
-    </div>
-  </div>
-</header>
+{% include 'partials/app_global_header.html' %}
 
 <div class="container mb-5">
   {% set julia_documents_ui = true %}
