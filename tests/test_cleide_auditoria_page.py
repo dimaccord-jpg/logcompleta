@@ -106,6 +106,9 @@ def test_cleide_auditoria_js_chat_conectado():
     assert "appendChatBubble" in js
     assert "setChatLoading" in js
     assert "uploadDocument" in js
+    assert "renderCleideMarkdown" in js
+    assert "inner.innerHTML = renderCleideMarkdown(text);" in js
+    assert "inner.textContent = text;" in js
     assert "gemini" not in js.lower()
 
 
@@ -215,6 +218,25 @@ def test_cleide_auditoria_layout_alinhado_julia_embedded():
     empty_docs_block = source.split(".cleide-audit-documents-area-empty {", 1)[1].split("}", 1)[0]
     assert "padding-top: 0.35rem" in empty_docs_block
     assert "border-top-color: rgba(0, 191, 255, 0.08)" in empty_docs_block
+
+
+def test_cleide_auditoria_markdown_render_contract():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function escapeHtml(text)" in js
+    assert "function renderCleideMarkdown(text)" in js
+    assert "replace(/&/g, '&amp;')" in js
+    assert "replace(/</g, '&lt;')" in js
+    assert "replace(/>/g, '&gt;')" in js
+    assert "replace(/\\*\\*([^*\\n][^*\\n]*?)\\*\\*/g, '<strong>$1</strong>')" in js
+    assert "line.match(/^\\s*\\*\\s+(.+)$/)" in js
+    assert "target=\"_blank\" rel=\"noopener noreferrer\"" in js
+
+
+def test_cleide_auditoria_template_suporta_listas_e_links_no_chat():
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    assert ".cleide-auditoria-chat-msg-inner ul" in source
+    assert ".cleide-auditoria-chat-msg-inner li" in source
+    assert ".cleide-auditoria-chat-msg-inner a" in source
 
 
 def test_cleide_auditoria_pagina_mantem_contratos_visuais(monkeypatch):

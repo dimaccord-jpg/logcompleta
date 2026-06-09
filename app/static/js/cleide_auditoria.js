@@ -442,6 +442,53 @@ function renderDocumentItem(doc) {
     if (sendBtn) sendBtn.disabled = !enabled;
   }
 
+  function escapeHtml(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderCleideMarkdown(text) {
+    function inlineFormat(raw) {
+      var safe = escapeHtml(raw || '');
+      safe = safe.replace(/\[([^\]\n]{1,120})\]\(((?:https?:\/\/|\/)[^\s)]+)\)/g, function (_, label, url) {
+        return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+      });
+      safe = safe.replace(/\*\*([^*\n][^*\n]*?)\*\*/g, '<strong>$1</strong>');
+      safe = safe.replace(/(^|[\s(])\*([^*\n][^*\n]*?)\*(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>');
+      return safe;
+    }
+
+    var lines = String(text || '').split(/\r?\n/);
+    var htmlParts = [];
+    var listItems = [];
+    var i;
+    for (i = 0; i < lines.length; i++) {
+      var line = lines[i] || '';
+      var listMatch = line.match(/^\s*\*\s+(.+)$/);
+      if (listMatch) {
+        listItems.push('<li>' + inlineFormat(listMatch[1]) + '</li>');
+        continue;
+      }
+      if (listItems.length) {
+        htmlParts.push('<ul>' + listItems.join('') + '</ul>');
+        listItems = [];
+      }
+      if (!line.trim()) {
+        htmlParts.push('<br>');
+      } else {
+        htmlParts.push(inlineFormat(line));
+      }
+    }
+    if (listItems.length) {
+      htmlParts.push('<ul>' + listItems.join('') + '</ul>');
+    }
+    return htmlParts.join('<br>');
+  }
+
   function appendChatBubble(role, text) {
     var container = byId('cleideAuditoriaMessages');
     if (!container || !text) return;
@@ -453,7 +500,11 @@ function renderDocumentItem(doc) {
 
     var inner = document.createElement('div');
     inner.className = 'cleide-auditoria-chat-msg-inner';
-    inner.textContent = text;
+    if (isUser) {
+      inner.textContent = text;
+    } else {
+      inner.innerHTML = renderCleideMarkdown(text);
+    }
     msg.appendChild(inner);
 
     container.appendChild(msg);
