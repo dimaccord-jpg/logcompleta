@@ -676,6 +676,7 @@ def _public_temp_table(record: dict | None) -> dict | None:
         "origins": list(record.get("origins") or []),
         "destinations": list(record.get("destinations") or []),
         "routes": list(record.get("routes") or []),
+        "freight_routes": list(record.get("freight_routes") or []),
         "weight_ranges": list(record.get("weight_ranges") or []),
         "freight_values": list(record.get("freight_values") or []),
         "accessorial_fees": list(record.get("accessorial_fees") or []),
@@ -898,6 +899,7 @@ def mark_temp_table_processing(source_doc_ids: list[str], *, user_scope=None, fr
         "origins": [],
         "destinations": [],
         "routes": [],
+        "freight_routes": [],
         "weight_ranges": [],
         "freight_values": [],
         "accessorial_fees": [],
@@ -1001,7 +1003,81 @@ def _is_useful_weight_range(item) -> bool:
     return False
 
 
+def _optional_normalized_str(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        candidate = value.strip()
+        return candidate or None
+    candidate = str(value).strip()
+    return candidate or None
+
+
+def _freight_route_field(item: dict, primary: str, *aliases: str) -> str | None:
+    keys = (primary, *aliases)
+    for key in keys:
+        if key not in item:
+            continue
+        normalized = _optional_normalized_str(item.get(key))
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def _normalize_freight_route_item(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    return {
+        "origin": _freight_route_field(item, "origin"),
+        "destination": _freight_route_field(item, "destination"),
+        "freight_type": _freight_route_field(item, "freight_type", "type"),
+        "weight_30": _freight_route_field(item, "weight_30", "weight_30kg"),
+        "weight_50": _freight_route_field(item, "weight_50", "weight_50kg"),
+        "weight_70": _freight_route_field(item, "weight_70", "weight_70kg"),
+        "weight_100": _freight_route_field(item, "weight_100", "weight_100kg"),
+        "boarding_fee": _freight_route_field(item, "boarding_fee", "taxa_embarque_kg"),
+        "freight_value_pct": _freight_route_field(item, "freight_value_pct", "frete_valor_pct"),
+        "freight_weight_kg": _freight_route_field(item, "freight_weight_kg", "frete_peso_kg"),
+        "notes": _freight_route_field(item, "notes", "observations", "observacoes") or "",
+        "evidence_ref": _freight_route_field(item, "evidence_ref"),
+        "confidence": _freight_route_field(item, "confidence"),
+    }
+
+
+def _is_useful_freight_route(item) -> bool:
+    normalized = _normalize_freight_route_item(item) if isinstance(item, dict) else None
+    if not normalized:
+        return False
+    useful_fields = (
+        "origin",
+        "destination",
+        "freight_type",
+        "weight_30",
+        "weight_50",
+        "weight_70",
+        "weight_100",
+        "boarding_fee",
+        "freight_value_pct",
+        "freight_weight_kg",
+    )
+    return any(normalized.get(field) is not None for field in useful_fields)
+
+
+def _normalize_freight_routes(raw_routes) -> list[dict]:
+    if not isinstance(raw_routes, list):
+        return []
+    normalized: list[dict] = []
+    for item in raw_routes:
+        route = _normalize_freight_route_item(item)
+        if route is not None:
+            normalized.append(route)
+    return normalized
+
+
 def _has_useful_partial_extraction_data(raw: dict) -> bool:
+    for item in _list_field_from_raw(raw, "freight_routes"):
+        if _is_useful_freight_route(item):
+            return True
     for item in _list_field_from_raw(raw, "freight_values"):
         if _is_useful_freight_value(item):
             return True
@@ -1073,6 +1149,7 @@ def normalize_partial_first_extraction_to_temp_table(raw: dict) -> dict:
         "origins": _list_field_from_raw(raw, "origins"),
         "destinations": _list_field_from_raw(raw, "destinations"),
         "routes": _list_field_from_raw(raw, "routes"),
+        "freight_routes": _normalize_freight_routes(_list_field_from_raw(raw, "freight_routes")),
         "weight_ranges": _list_field_from_raw(raw, "weight_ranges"),
         "freight_values": _list_field_from_raw(raw, "freight_values"),
         "accessorial_fees": _list_field_from_raw(raw, "accessorial_fees"),
@@ -1136,6 +1213,7 @@ def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
         "origins": _list_field_from_raw(normalized, "origins"),
         "destinations": _list_field_from_raw(normalized, "destinations"),
         "routes": _list_field_from_raw(normalized, "routes"),
+        "freight_routes": _normalize_freight_routes(_list_field_from_raw(normalized, "freight_routes")),
         "weight_ranges": _list_field_from_raw(normalized, "weight_ranges"),
         "freight_values": _list_field_from_raw(normalized, "freight_values"),
         "accessorial_fees": _list_field_from_raw(normalized, "accessorial_fees"),

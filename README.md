@@ -1,12 +1,12 @@
 # Agentefrete / Log Completa
 
-Data de consolidacao: `2026-06-05`
-Estado de referencia: `producao` / commit `b5fc444`
+Data de consolidacao: `2026-06-16`
+Estado de referencia: `producao` / merge `41c9271`
 
-Este `README.md` resume o estado real promovido em producao apos a entrega do upload documental governado da Julia:
+Este `README.md` resume o estado real promovido em producao apos a entrega da tabela temporaria extraida da Cleide Auditoria:
 
-- `98012c8 feat: adiciona upload documental governado à Julia`
-- `b5fc444 fix: estabiliza desempenho documental da Julia`
+- `f4ffeb1 feat: adiciona tabela temporaria na auditoria da Cleide`
+- `41c9271 merge: promove tabela temporaria da Cleide para producao`
 
 ## Estado atual do produto
 
@@ -17,6 +17,7 @@ Superficies oficiais ativas:
 - `/chat_julia?mode=operational`: rota operacional dedicada da Julia, mantida para handoff e acesso direto
 - `/fretes`: Roberto BI operacional e preditivo
 - `/cleide-bi-frete`: Cleide BI operacional (upload, KPIs, dashboard e chat)
+- `/auditoria-frete`: Cleide Auditoria documental com upload, chat e tabela temporaria extraida
 - `/feed`: superficie editorial
 - `/admin/dashboard`: painel administrativo
 
@@ -27,6 +28,51 @@ Superficies oficiais ativas:
 - Cleiton: governanca operacional, autorizacao, observabilidade, upload documental, limites e integracao com IA
 - Roberto: BI, previsoes e leitura forward-looking de fretes
 - Cleide: auditoria, conferencia e leitura retrospectiva
+
+## Cleide Auditoria documental
+
+Estado atual promovido:
+
+- a rota visual oficial e `/auditoria-frete`
+- o upload documental da Cleide Auditoria usa a governanca existente
+- apos cada upload valido, o backend tenta extrair uma tabela temporaria de frete
+- a tabela temporaria fica separada do chat conversacional da Cleide
+- a extração nao cria rota paralela de produto nem nova tabela de banco
+
+Contratos oficiais do fluxo:
+
+- upload: `POST /api/cleide-auditoria/documents/upload`
+- status documental: `GET /api/cleide-auditoria/documents/status`
+- remocao: `DELETE /api/cleide-auditoria/documents/<doc_id>`
+- limpeza: `POST /api/cleide-auditoria/documents/clear`
+- chat: `POST /api/cleide-auditoria/chat`
+
+Tabela temporaria extraida:
+
+- exibida na interface como `Tabela temporaria extraida`
+- persistida apenas como artefato tecnico temporario em arquivo/session/JSON
+- governada operacionalmente pelo Cleiton
+- vinculada ao TTL do ciclo documental da sessao
+- invalidada quando os documentos fonte mudam, sao removidos ou deixam de existir na sessao
+- obrigatoriamente sujeita a validacao humana
+- nao deve ser descrita como auditoria final
+
+Estados documentados no codigo atual:
+
+- `processing`
+- `awaiting_validation`
+- `validated`
+- `needs_review`
+- `failed`
+- `expired`
+- `discarded`
+
+Extracao tecnica:
+
+- modulo principal: `app/run_cleide_audit_temp_table.py`
+- prompt tecnico: `build_cleide_audit_temp_table_technical_prompt()` em `app/cleide_audit_prompt.py`
+- usa Gemini governado pelo Cleiton, com timeout proprio e fallback de modelo
+- responde JSON tecnico para estruturação de tabela temporaria, sem montar auditoria final
 
 ## Copilot da Home
 
@@ -138,11 +184,12 @@ Regra critica:
 
 ## Banco e migrations
 
-Esta entrega documental e funcional da Julia:
+Esta entrega da Cleide Auditoria:
 
 - nao criou migration nova em `migrations/versions`
-- nao criou nova tabela para configuracao documental
-- reutiliza o mecanismo existente `ConfigRegras`
+- nao alterou `app/models.py`
+- nao criou nova tabela de banco nem novo campo
+- reutiliza o store temporario e a governanca existente
 
 Migration relevante ja existente e mantida:
 
@@ -152,20 +199,16 @@ Migration relevante ja existente e mantida:
 
 Cobertura diretamente relacionada:
 
-- `tests/test_cleiton_doc_config_service.py`
-- `tests/test_cleiton_doc_store.py`
-- `tests/test_cleiton_doc_converters.py`
-- `tests/test_cleiton_admin_routes.py`
-- `tests/test_julia_chat_documental.py`
-- `tests/test_julia_documents_ui.py`
-- `tests/test_onboarding_discovery.py`
-- `tests/test_cleiton_doc_pdf_gemini.py`
-- `tests/test_julia_chat_plan_limit.py`
-- `tests/test_julia_pdf_documental_chat.py`
+- `tests/test_cleide_audit_temp_table.py`
+- `tests/test_cleide_audit_doc_routes.py`
+- `tests/test_cleide_auditoria_page.py`
+- `tests/test_cleide_audit_doc_service.py`
+- `tests/test_cleide_audit_doc_context.py`
+- `tests/test_cleide_audit_chat_routes.py`
 
 Validacao critica registrada antes da promocao:
 
-- `233 passed, 2 warnings`
+- `115 passed, 2 warnings`
 - warnings de dependencia/deprecacao, sem falha funcional
 
 ## Documentos oficiais de apoio
@@ -191,3 +234,4 @@ Nao documentar nem prometer:
 - TMS/WMS
 - automacao operacional inexistente
 - leitura documental fingida quando o conteudo nao foi extraido
+- tabela temporaria da Cleide como auditoria final

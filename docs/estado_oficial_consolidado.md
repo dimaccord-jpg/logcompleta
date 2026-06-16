@@ -1,7 +1,7 @@
 # Estado Oficial Consolidado
 
-Data de consolidacao: `2026-06-05`
-Commit de referencia: `b5fc444`
+Data de consolidacao: `2026-06-16`
+Commit de referencia: `41c9271`
 
 ## Escopo promovido
 
@@ -14,6 +14,7 @@ Estado confirmado no codigo e na promocao:
 - separacao preservada entre Copilot publico e Julia operacional
 - observabilidade de onboarding e operacional mantida
 - configuracao documental no admin do Cleiton sem migration nova
+- Cleide Auditoria com tabela temporaria extraida no fluxo pos-upload
 
 ## Superficies oficiais
 
@@ -22,6 +23,7 @@ Estado confirmado no codigo e na promocao:
 - `/chat_julia?mode=operational`: acesso dedicado da Julia
 - `/fretes`: Roberto
 - `/cleide-bi-frete`: Cleide BI operacional
+- `/auditoria-frete`: Cleide Auditoria documental
 - `/feed`: editorial
 - `/admin/dashboard`: admin
 
@@ -75,6 +77,24 @@ Papel correto no estado atual:
 - validacao e seguranca
 - TTL, cleanup e sessao
 - preparo de contexto e integracao com IA
+- governanca operacional da tabela temporaria da Cleide Auditoria
+
+## Cleide Auditoria
+
+Estado promovido:
+
+- upload documental e chat ativos em `/auditoria-frete`
+- extracao tecnica pos-upload separada do chat conversacional
+- retorno de `temp_table` no upload quando disponivel
+- retorno de `temp_table` no status documental
+
+Garantias:
+
+- a tabela temporaria e descartavel e nao representa auditoria final
+- a validacao humana continua obrigatoria
+- nao houve migration, nova tabela de banco ou alteracao estrutural de schema
+- o `operational_owner` da tabela temporaria e `cleiton`
+- o ciclo de vida acompanha o TTL dos documentos da sessao
 
 ## Configuracao administrativa
 
@@ -98,18 +118,14 @@ Esta entrega:
 
 Testes relevantes da entrega:
 
-- `tests/test_cleiton_doc_config_service.py`
-- `tests/test_cleiton_doc_store.py`
-- `tests/test_cleiton_doc_converters.py`
-- `tests/test_cleiton_admin_routes.py`
-- `tests/test_julia_chat_documental.py`
-- `tests/test_julia_documents_ui.py`
-- `tests/test_onboarding_discovery.py`
-- `tests/test_cleiton_doc_pdf_gemini.py`
-- `tests/test_julia_chat_plan_limit.py`
-- `tests/test_julia_pdf_documental_chat.py`
+- `tests/test_cleide_audit_temp_table.py`
+- `tests/test_cleide_audit_doc_routes.py`
+- `tests/test_cleide_auditoria_page.py`
+- `tests/test_cleide_audit_doc_service.py`
+- `tests/test_cleide_audit_doc_context.py`
+- `tests/test_cleide_audit_chat_routes.py`
 
 Resultado critico registrado:
 
-- `233 passed, 2 warnings`
+- `115 passed, 2 warnings`
 - warnings de dependencia/deprecacao, sem falha funcional

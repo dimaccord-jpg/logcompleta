@@ -325,6 +325,7 @@ def test_cleide_auditoria_js_temp_table_modal_renderizacao():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
     assert "renderTempTableModalContent" in js
     assert "freight_values" in js
+    assert "freight_routes" in js
     assert "accessorial_fees" in js
     assert "weight_ranges" in js
     assert "reading_alerts" in js
@@ -335,6 +336,87 @@ def test_cleide_auditoria_js_temp_table_modal_renderizacao():
     assert "checklist" not in js.lower()
     assert '<input' not in js
     assert "contentEditable" not in js
+    assert "document.createElement" in js
+    assert "textContent" in js
+
+
+def test_cleide_auditoria_js_temp_table_modal_blocos_operacionais():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "Frete por rota" in js
+    assert "Generalidades e serviços adicionais" in js
+    assert "Informações adicionais" in js
+    assert "Alertas de leitura" in js
+    assert "Evidências/referências" in js
+    assert "renderFreightRoutesSection" in js
+    assert "renderAdditionalInfoSection" in js
+
+
+def test_cleide_auditoria_js_temp_table_freight_route_columns():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    expected_columns = [
+        "Origem",
+        "Destino",
+        "Tipo",
+        "Até 30 kg",
+        "Até 50 kg",
+        "Até 70 kg",
+        "Até 100 kg",
+        "Taxa Embarque Kg",
+        "Frete Valor %",
+        "Frete Peso Kg",
+        "Observações",
+    ]
+    for column in expected_columns:
+        assert column in js
+
+
+def test_cleide_auditoria_js_temp_table_modal_prioriza_freight_routes():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "resolveFreightRouteRows" in js
+    assert "buildStructuredFreightRows" in js
+    assert "buildPartialFreightRows" in js
+    assert "isPartial: false" in js
+    assert "isPartial: true" in js
+    assert "freight_routes.length" in js or "freightRoutes.length" in js
+    assert "route.freight_type" in js
+    assert "extração parcial" in js
+    assert "não identificado" in js
+    assert "isPrimaryFreightAccessorialFee" in js
+    assert "getGeneralAccessorialFees" in js
+    assert (
+        "Alguns vínculos de origem, destino ou tipo de frete ainda precisam de validação humana."
+        in js
+    )
+    assert "Nenhuma rota de frete identificada nesta extração." in js
+
+
+def test_cleide_auditoria_js_temp_table_additional_info_empty_message():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert (
+        "Informações adicionais não identificadas no artefato atual."
+        in js
+    )
+
+
+def test_cleide_auditoria_js_temp_table_modal_somente_leitura():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "Salvar" not in js
+    assert "Editar" not in js
+    assert "checklist" not in js.lower()
+    assert "Validar e Salvar" not in js
+    assert "contentEditable" not in js
+
+
+def test_cleide_auditoria_template_temp_table_modal_layout():
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    assert "cleide-audit-temp-table-modal-freight-scroll" in source
+    assert "cleide-audit-temp-table-modal-freight-table" in source
+    assert "overflow-x: auto" in source
+    assert "min-width: 860px" in source
+    assert "position: sticky" in source
+    assert "Salvar" not in source
+    assert "Editar" not in source
+    assert "checklist" not in source.lower()
 
 
 def test_cleide_auditoria_js_painel_anexos_mantem_temp_table():

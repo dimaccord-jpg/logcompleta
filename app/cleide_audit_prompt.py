@@ -64,11 +64,10 @@ def build_cleide_audit_temp_table_technical_prompt() -> str:
 Voce e um extrator tecnico de custos de frete para a Cleide Auditoria.
 
 Objetivo:
-Ler os anexos desta sessao e detectar custos, taxas, faixas de peso e servicos de frete que possam compor uma tabela temporaria para validacao humana.
+Ler os anexos desta sessao e extrair a matriz principal de frete por rota (origem, destino, tipo e valores por faixa de peso), alem de generalidades e servicos adicionais, para compor uma tabela temporaria para validacao humana.
 
 Esta etapa NAO deve montar auditoria final.
-Esta etapa NAO precisa completar todas as rotas, origens, destinos ou regras comerciais.
-Esta etapa deve apenas capturar dados uteis detectados no documento.
+Esta etapa deve capturar dados uteis detectados no documento, inclusive parcialmente.
 
 Regras obrigatorias:
 - Responda com JSON puro.
@@ -78,7 +77,16 @@ Regras obrigatorias:
 - Nao invente dados ausentes.
 - Nao presuma layout fixo, transportadora fixa ou formato unico.
 - Aceite extracao parcial.
-- Se encontrar qualquer custo, taxa, faixa ou servico aproveitavel, use status "needs_review".
+- Extraia a matriz principal de frete por rota em freight_routes.
+- Cada linha da tabela de frete deve virar uma entrada em freight_routes.
+- Nao coloque generalidades em freight_routes.
+- Nao coloque servicos adicionais em freight_routes.
+- Mantenha generalidades e servicos adicionais em accessorial_fees.
+- Mantenha faixas gerais em weight_ranges.
+- Se origem, destino ou tipo nao estiverem claros, preencha com null e adicione alerta em reading_alerts.
+- Se a linha estiver parcialmente legivel, ainda assim retorne em freight_routes com confidence "needs_review".
+- Nao falhe se conseguir extrair pelo menos parte da matriz.
+- Se encontrar qualquer dado util em freight_routes, freight_values, accessorial_fees ou weight_ranges, use status "needs_review".
 - Use status "failed" somente se nao encontrar nenhum dado util de frete.
 - Quando houver duvida, mantenha o item com descricao simples e registre alerta.
 - Limite evidence_refs ao minimo necessario.
@@ -87,6 +95,7 @@ Retorne exatamente um objeto JSON neste formato:
 
 {
   "status": "needs_review",
+  "freight_routes": [],
   "freight_values": [],
   "accessorial_fees": [],
   "weight_ranges": [],
@@ -94,7 +103,26 @@ Retorne exatamente um objeto JSON neste formato:
   "evidence_refs": []
 }
 
-Formato sugerido para freight_values:
+Formato sugerido para freight_routes (uma entrada por linha da matriz de frete):
+[
+  {
+    "origin": "DF",
+    "destination": "JOINVILLE",
+    "freight_type": "FOB",
+    "weight_30": "115,00",
+    "weight_50": "135,00",
+    "weight_70": "168,00",
+    "weight_100": "190,00",
+    "boarding_fee": "190,0000",
+    "freight_value_pct": "0,3000",
+    "freight_weight_kg": "1,5000",
+    "notes": "",
+    "evidence_ref": "TABELA ALFA ATUAL.pdf (page 1)",
+    "confidence": "needs_review"
+  }
+]
+
+Formato sugerido para freight_values (fallback parcial/legado):
 [
   {
     "label": "Frete ate 30 Kg",
@@ -104,7 +132,7 @@ Formato sugerido para freight_values:
   }
 ]
 
-Formato sugerido para accessorial_fees:
+Formato sugerido para accessorial_fees (generalidades e servicos adicionais):
 [
   {
     "name": "Pedagio",

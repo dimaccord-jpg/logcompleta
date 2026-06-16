@@ -1,11 +1,11 @@
 # Execucao Local
 
-Data de consolidacao: `2026-06-05`
-Commit de referencia: `b5fc444`
+Data de consolidacao: `2026-06-16`
+Commit de referencia: `41c9271`
 
 ## Objetivo
 
-Executar o projeto localmente e validar o estado atual de Home, onboarding, Julia operacional logada e governanca documental.
+Executar o projeto localmente e validar o estado atual de Home, onboarding, Julia operacional logada, Cleide Auditoria e governanca documental.
 
 ## Premissas
 
@@ -25,7 +25,8 @@ Executar o projeto localmente e validar o estado atual de Home, onboarding, Juli
 7. anexar `TXT`, `XML`, `CSV`, `XLSX`, `DOCX` e `PDF` conforme ambiente permitir
 8. validar bloqueio por franquia/plano quando aplicavel
 9. validar `/admin/agentes-cleiton` com o bloco documental
-10. validar `/admin/dashboard`, `/fretes` e `/cleide-bi-frete`
+10. validar `/auditoria-frete` com upload, chat e tabela temporaria extraida
+11. validar `/admin/dashboard`, `/fretes` e `/cleide-bi-frete`
 
 ## Pontos de atencao
 
@@ -33,5 +34,7 @@ Executar o projeto localmente e validar o estado atual de Home, onboarding, Juli
 - a Home logada consolida a Julia como superficie operacional principal
 - `/chat_julia?mode=operational` continua valido para handoff e acesso direto
 - documentos da Julia dependem de autenticacao e autorizacao operacional
+- a Cleide Auditoria tenta extrair tabela temporaria apos upload e exige validacao humana
 - `app/cleiton_doc_tmp/` e temporario, local e ignorado no Git
+- `app/.tmp_repro_unit*` e `tt_*.json` nao devem entrar em commit
 - configuracao documental usa `ConfigRegras`, sem migration nova

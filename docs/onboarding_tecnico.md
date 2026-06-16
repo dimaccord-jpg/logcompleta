@@ -1,7 +1,7 @@
 # Onboarding Tecnico
 
-Data de consolidacao: `2026-06-05`
-Commit de referencia: `b5fc444`
+Data de consolidacao: `2026-06-16`
+Commit de referencia: `41c9271`
 
 ## Objetivo
 
@@ -25,6 +25,10 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - `app/static/js/chat_behavior.js`: shell visual do Copilot e da Julia
 - `app/julia_documents_routes.py`: API documental da Julia
 - `app/julia_doc_context.py`: montagem do contexto documental para o chat
+- `app/cleide_audit_routes.py`: upload, status e chat da Cleide Auditoria
+- `app/cleide_audit_doc_service.py`: sessao documental e ciclo de vida da tabela temporaria
+- `app/run_cleide_audit_temp_table.py`: extracao tecnica pos-upload da tabela temporaria
+- `app/cleide_audit_prompt.py`: prompt tecnico e prompt conversacional da Cleide Auditoria
 - `app/cleiton_doc_converters.py`: conversores dos tipos aceitos
 - `app/cleiton_doc_gemini_files.py`: governanca de PDF via Gemini Files
 - `app/cleiton_doc_store.py`: store temporario local
@@ -38,6 +42,7 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - Copilot e Julia nao devem ser confundidos
 - upload documental da Julia nao e produto paralelo
 - Cleiton e camada central de governanca operacional
+- a tabela temporaria da Cleide Auditoria e fluxo temporario governado, nao persistencia definitiva
 
 ## Regras que nao podem ser quebradas
 
@@ -45,7 +50,9 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - nao inventar leitura de documento
 - nao fazer onboarding abater franquia
 - nao versionar `app/cleiton_doc_tmp/`
+- nao versionar `app/.tmp_repro_unit*` nem `tt_*.json`
 - nao documentar tabela ou migration inexistente
+- nao documentar a tabela temporaria da Cleide como auditoria final
 
 ## Validacao minima de entrada
 
@@ -53,5 +60,6 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - abrir `/` logado e validar Julia operacional
 - validar `/chat_julia?mode=operational`
 - validar documentos da Julia com os tipos suportados
+- validar `/auditoria-frete`, upload da Cleide Auditoria e status com `temp_table`
 - validar admin do Cleiton
 - validar Roberto e Cleide

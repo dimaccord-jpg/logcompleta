@@ -2,6 +2,13 @@
 
 Objetivo: validar comportamento real ponta-a-ponta antes da promocao definitiva, sem alterar arquitetura, endpoint, governanca, billing, observabilidade ou os modulos Roberto/Julia.
 
+Estado desta entrega:
+
+- homolog aprovada no commit `f4ffeb1`
+- producao aprovada apos merge `41c9271`
+- sem migration nova
+- sem alteracao manual de banco
+
 ## Como usar
 
 1. Executar a bateria automatizada da Cleide.
@@ -24,6 +31,9 @@ Cobertura automatizada ja existente no projeto:
 - Provider error, bloqueios semanticos e IA desligada: `tests/test_cleide_controlled_chat_phase9.py`
 - Admin 403, salvar config e reabrir config: `tests/test_cleide_admin_routes.py`
 - Observabilidade exposta no payload: `tests/test_cleide_controlled_chat_phase9.py` e `tests/test_cleide_phase2_ui.py`
+- Temp table pos-upload: `tests/test_cleide_audit_temp_table.py`
+- Rotas documentais e payload de `temp_table`: `tests/test_cleide_audit_doc_routes.py`
+- Renderizacao da pagina `/auditoria-frete`: `tests/test_cleide_auditoria_page.py`
 
 ## Checklist operacional
 
@@ -44,6 +54,10 @@ Cobertura automatizada ja existente no projeto:
 | 13 | Pergunta operacional desconhecida | Gemini supervisionado quando habilitado | Auto | [ ] |
 | 14 | Prompt com numeros | PT-BR correto | Auto | [ ] |
 | 15 | Chat multiplas perguntas | Timeline preservada no front | Auto + manual | [ ] |
+| 16 | Upload documental da Cleide Auditoria | Documento registrado e retorno de `temp_table` quando disponivel | Auto + manual | [ ] |
+| 17 | Status documental da Cleide Auditoria | Endpoint devolve `documents` e `temp_table` coerentes | Auto + manual | [ ] |
+| 18 | Mudanca ou remocao de documento fonte | Temp table anterior invalidada corretamente | Auto + manual | [ ] |
+| 19 | Extracao parcial | Estado `awaiting_validation` ou `needs_review` com validacao humana obrigatoria | Auto + manual | [ ] |
 
 ## Observabilidade a validar
 
@@ -79,6 +93,8 @@ Validar:
 6. Simular indisponibilidade do provider em homolog e confirmar fallback governado.
 7. Validar bloqueios para fora de dominio, Roberto e Julia.
 8. Repetir com usuario nao-admin no admin e confirmar `403`.
+9. Remover ou trocar documento anexado e confirmar invalidacao da tabela temporaria anterior.
+10. Conferir que nenhum `app/.tmp_repro_unit*` ou `app/cleiton_doc_tmp/tt_*.json` entrou em versionamento.
 
 ## Registro final
 

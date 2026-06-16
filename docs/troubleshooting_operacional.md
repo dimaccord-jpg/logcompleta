@@ -1,7 +1,7 @@
 # Troubleshooting Operacional
 
-Data de consolidacao: `2026-06-05`
-Commit de referencia: `b5fc444`
+Data de consolidacao: `2026-06-16`
+Commit de referencia: `41c9271`
 
 ## 1. Home publica sem responder
 
@@ -87,3 +87,41 @@ Conferir:
 1. `flow_type = "onboarding_discovery"`
 2. separacao de metricas no dashboard
 3. ausencia de apropriacao operacional indevida
+
+## 9. Tabela temporaria da Cleide nao aparece apos upload
+
+Conferir:
+
+1. `POST /api/cleide-auditoria/documents/upload`
+2. `GET /api/cleide-auditoria/documents/status`
+3. `app/run_cleide_audit_temp_table.py`
+4. `app/cleide_audit_doc_service.py`
+5. `app/cleide_audit_prompt.py`
+
+Regra oficial:
+
+- a extracao acontece apos upload bem-sucedido
+- o chat da Cleide continua separado da extracao tecnica
+- `temp_table` pode nao existir se a extracao falhar, expirar ou se os documentos fonte mudarem
+
+## 10. Tabela temporaria sumiu depois de remover ou trocar documentos
+
+Comportamento esperado:
+
+- a tabela temporaria acompanha os documentos ativos da sessao
+- ao remover ou substituir documento fonte, a tabela anterior pode ser invalidada
+- o estado pode ir para `discarded` ou deixar de aparecer no payload publico
+
+Isso nao e regressao por si so. E o comportamento oficial do ciclo temporario governado.
+
+## 11. Arquivos temporarios tecnicos apareceram no Git
+
+Conferir:
+
+1. `.gitignore`
+2. residuos `app/.tmp_repro_unit*`
+3. residuos `app/cleiton_doc_tmp/tt_*.json`
+
+Regra oficial:
+
+- artefatos temporarios de teste e da temp_table nao devem ser versionados

@@ -68,3 +68,33 @@ Esta auditoria foi cruzada com:
 - `app/services/onboarding_word_cloud_hidden_terms_service.py`
 - `app/painel_admin/admin_routes.py`
 - `migrations/versions/r2s3t4u5v6w7_onboarding_word_cloud_hidden_term.py`
+
+## Complemento em 2026-06-16
+
+Auditoria complementar aplicada apos a promocao da tabela temporaria da Cleide Auditoria:
+
+- homolog aprovada no commit `f4ffeb1`
+- producao aprovada apos merge `41c9271`
+- nenhuma migration criada
+- nenhuma alteracao estrutural em banco
+
+Documentos revisados neste complemento:
+
+- `README.md`
+- `docs/estado_oficial_consolidado.md`
+- `docs/arquitetura_oficial.md`
+- `docs/onboarding_tecnico.md`
+- `docs/troubleshooting_operacional.md`
+- `app/README_RUN.md`
+- `app/README_DEPLOY.md`
+- `app/copilot_capabilities.md`
+- `docs/runbooks/cleide_homologacao_controlada_checklist.md`
+
+Escopo corrigido neste complemento:
+
+- a tabela temporaria da Cleide Auditoria passou de planejamento para implementacao ativa
+- a extracao ocorre no fluxo pos-upload e permanece separada do chat
+- o owner operacional da tabela temporaria e o Cleiton
+- a tabela continua temporaria, descartavel e sujeita a validacao humana
+- nao houve migration nem nova tabela de banco
+- os testes direcionados da entrega foram registrados com `115 passed, 2 warnings`
