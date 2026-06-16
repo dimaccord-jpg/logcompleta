@@ -246,6 +246,52 @@
 
 
 
+<div class="cleide-audit-temp-table-modal"
+
+     id="cleideAuditTempTableModal"
+
+     role="dialog"
+
+     aria-modal="true"
+
+     aria-labelledby="cleideAuditTempTableModalTitle"
+
+     hidden>
+
+  <div class="cleide-audit-temp-table-modal-backdrop" id="cleideAuditTempTableModalBackdrop"></div>
+
+  <div class="cleide-audit-temp-table-modal-dialog">
+
+    <div class="cleide-audit-temp-table-modal-header">
+
+      <h2 class="cleide-audit-temp-table-modal-title" id="cleideAuditTempTableModalTitle">Tabela temporária gerada</h2>
+
+      <p class="cleide-audit-temp-table-modal-subtitle" id="cleideAuditTempTableModalSubtitle">Revise os dados extraídos antes de continuar.</p>
+
+    </div>
+
+    <div class="cleide-audit-temp-table-modal-body" id="cleideAuditTempTableModalBody"></div>
+
+    <div class="cleide-audit-temp-table-modal-footer">
+
+      <button type="button"
+
+              class="btn btn-sm cleide-audit-temp-table-modal-close-btn"
+
+              id="cleideAuditTempTableModalClose">
+
+        Fechar
+
+      </button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+
 <style>
 
   .cleide-auditoria-wrapper.cleide-auditoria-embedded {
@@ -969,6 +1015,208 @@
   }
 
   .cleide-audit-documents-status:not(:empty) { min-height: 1rem; }
+
+  .cleide-audit-temp-table-item {
+    border-style: dashed;
+    background: rgba(111, 66, 193, 0.08);
+  }
+
+  .cleide-audit-temp-table-item .cleide-audit-doc-item-name::before {
+    content: "⧉ ";
+    opacity: 0.75;
+  }
+
+  .cleide-audit-temp-table-open-btn {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    flex: 1;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    border-radius: 0.35rem;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .cleide-audit-temp-table-open-btn:hover {
+    background: rgba(111, 66, 193, 0.12);
+  }
+
+  .cleide-audit-temp-table-open-btn:focus-visible {
+    outline: 2px solid var(--af-cyan, #00BFFF);
+    outline-offset: 2px;
+    background: rgba(111, 66, 193, 0.12);
+  }
+
+  .cleide-audit-temp-table-modal[hidden] {
+    display: none !important;
+  }
+
+  .cleide-audit-temp-table-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  body.cleide-audit-temp-table-modal-open {
+    overflow: hidden;
+  }
+
+  .cleide-audit-temp-table-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  .cleide-audit-temp-table-modal-dialog {
+    position: relative;
+    z-index: 1;
+    width: min(720px, 100%);
+    max-height: min(85vh, 900px);
+    display: flex;
+    flex-direction: column;
+    border-radius: 0.85rem;
+    border: 1px solid rgba(0, 191, 255, 0.25);
+    background: var(--af-bg-muted, #1E1E2E);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  }
+
+  .cleide-audit-temp-table-modal-header {
+    padding: 1rem 1.15rem 0.65rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .cleide-audit-temp-table-modal-title {
+    margin: 0;
+    font-size: 1.05rem;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-temp-table-modal-subtitle {
+    margin: 0.35rem 0 0;
+    font-size: 0.82rem;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-temp-table-modal-body {
+    padding: 0.85rem 1.15rem;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .cleide-audit-temp-table-modal-footer {
+    padding: 0.75rem 1.15rem 1rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .cleide-audit-temp-table-modal-close-btn {
+    border-radius: 999px !important;
+    border: 1px solid rgba(0, 191, 255, 0.35) !important;
+    background: rgba(0, 191, 255, 0.12) !important;
+    color: var(--af-text-primary, #F0F0F5) !important;
+  }
+
+  .cleide-audit-temp-table-modal-close-btn:hover {
+    background: rgba(0, 191, 255, 0.22) !important;
+  }
+
+  .cleide-audit-temp-table-modal-meta {
+    margin-bottom: 1rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: 0.55rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .cleide-audit-temp-table-modal-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.5rem;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    margin-bottom: 0.25rem;
+  }
+
+  .cleide-audit-temp-table-modal-meta-row:last-child {
+    margin-bottom: 0;
+  }
+
+  .cleide-audit-temp-table-modal-meta-label {
+    color: var(--af-text-secondary, #8A8AA3);
+    font-weight: 600;
+  }
+
+  .cleide-audit-temp-table-modal-meta-value {
+    color: var(--af-text-primary, #F0F0F5);
+    word-break: break-word;
+  }
+
+  .cleide-audit-temp-table-modal-section-title {
+    margin: 0.85rem 0 0.45rem;
+    font-size: 0.88rem;
+    color: var(--af-cyan, #00BFFF);
+  }
+
+  .cleide-audit-temp-table-modal-section-title:first-child {
+    margin-top: 0;
+  }
+
+  .cleide-audit-temp-table-modal-empty,
+  .cleide-audit-temp-table-modal-processing {
+    margin: 0.25rem 0 0.5rem;
+    font-size: 0.8rem;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-temp-table-modal-item {
+    margin-bottom: 0.5rem;
+    padding: 0.55rem 0.65rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .cleide-audit-temp-table-modal-detail-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.45rem;
+    font-size: 0.76rem;
+    line-height: 1.35;
+    margin-bottom: 0.15rem;
+  }
+
+  .cleide-audit-temp-table-modal-detail-label {
+    color: var(--af-text-secondary, #8A8AA3);
+    font-weight: 600;
+  }
+
+  .cleide-audit-temp-table-modal-detail-value {
+    color: var(--af-text-primary, #F0F0F5);
+    word-break: break-word;
+  }
+
+  .cleide-audit-temp-table-modal-list {
+    margin: 0.25rem 0 0.5rem;
+    padding-left: 1.15rem;
+    font-size: 0.8rem;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-temp-table-modal-list li {
+    margin-bottom: 0.2rem;
+  }
 
   .cleide-audit-documents-error {
 

@@ -39,8 +39,77 @@
     service: 'O serviço está indisponível no momento. Tente novamente em instantes.'
   };
 
+  var TEMP_TABLE_OPERATIONAL_MESSAGES = {
+    processing: 'Recebi os anexos e iniciei a estruturação da tabela temporária de frete.',
+    awaiting_validation: 'A tabela temporária foi estruturada e está aguardando sua validação.',
+    needs_review: 'A tabela temporária foi gerada. Revise os dados antes de continuar.',
+    failed: 'Não foi possível estruturar a tabela temporária a partir dos anexos enviados.',
+    expired: 'A tabela temporária desta sessão expirou.',
+    discarded: 'Os documentos de origem foram alterados ou removidos, então a tabela temporária anterior foi invalidada.'
+  };
+
+  var lastAnnouncedTempTableStatus = null;
+  var tempTablePollTimer = null;
+  var TEMP_TABLE_POLL_MS = 2500;
+  var currentTempTable = null;
+  var lastTempTableCardButton = null;
+
   function byId(id) {
     return document.getElementById(id);
+  }
+
+  function appendOperationalMessage(text) {
+    if (!text) return;
+    appendChatBubble('assistant', text);
+    chatHistory.push({ role: 'assistant', content: text });
+    chatHistory = trimChatHistory(chatHistory);
+  }
+
+  function announceTempTableStatusIfNeeded(tempTable) {
+    if (!tempTable || !tempTable.status) return;
+    var status = String(tempTable.status).toLowerCase();
+    if (status === lastAnnouncedTempTableStatus) return;
+    var message = TEMP_TABLE_OPERATIONAL_MESSAGES[status];
+    if (!message) return;
+    lastAnnouncedTempTableStatus = status;
+    appendOperationalMessage(message);
+  }
+
+  function stopTempTablePolling() {
+    if (tempTablePollTimer) {
+      window.clearInterval(tempTablePollTimer);
+      tempTablePollTimer = null;
+    }
+  }
+
+  function startTempTablePollingIfNeeded(tempTable) {
+    stopTempTablePolling();
+    if (!tempTable || String(tempTable.status || '').toLowerCase() !== 'processing') return;
+    tempTablePollTimer = window.setInterval(function () {
+      fetchDocuments().then(function (data) {
+        if (!data || !data.temp_table) {
+          stopTempTablePolling();
+          return;
+        }
+        var status = String(data.temp_table.status || '').toLowerCase();
+        if (status !== 'processing') {
+          stopTempTablePolling();
+        }
+      });
+    }, TEMP_TABLE_POLL_MS);
+  }
+
+  function handleTempTableFromStatus(data) {
+    if (!data) return;
+    var tempTable = data.temp_table || null;
+    if (tempTable && tempTable.temp_table_id) {
+      currentTempTable = tempTable;
+    } else {
+      currentTempTable = null;
+    }
+    renderDocuments(data.documents || [], tempTable);
+    announceTempTableStatusIfNeeded(tempTable);
+    startTempTablePollingIfNeeded(tempTable);
   }
 
   function formatBytes(bytes) {
@@ -140,6 +209,91 @@
     return 'cleide-audit-doc-item-badge cleide-audit-doc-item-badge-ready';
   }
 
+  function tempTableStatusLabel(status) {
+    var normalized = (status || '').toLowerCase();
+    if (normalized === 'processing') return 'processando';
+    if (normalized === 'awaiting_validation') return 'aguardando validação';
+    if (normalized === 'needs_review') return 'revisão necessária';
+    if (normalized === 'failed') return 'falha';
+    if (normalized === 'expired') return 'expirada';
+    if (normalized === 'discarded') return 'inválida';
+    if (normalized === 'validated') return 'validada';
+    return normalized || 'indisponível';
+  }
+
+  function tempTableBadgeClass(status) {
+    var normalized = (status || '').toLowerCase();
+    if (normalized === 'processing') {
+      return 'cleide-audit-doc-item-badge cleide-audit-doc-item-badge-preparing';
+    }
+    if (normalized === 'awaiting_validation' || normalized === 'validated') {
+      return 'cleide-audit-doc-item-badge cleide-audit-doc-item-badge-ready';
+    }
+    if (normalized === 'needs_review') {
+      return 'cleide-audit-doc-item-badge cleide-audit-doc-item-badge-preparing';
+    }
+    if (normalized === 'failed' || normalized === 'expired' || normalized === 'discarded') {
+      return 'cleide-audit-doc-item-badge cleide-audit-doc-item-badge-error';
+    }
+    return 'cleide-audit-doc-item-badge';
+  }
+
+  function tempTableContextNote(tempTable) {
+    var status = (tempTable.status || '').toLowerCase();
+    if (status === 'processing') return 'Estruturando tabela temporária a partir dos anexos...';
+    if (status === 'awaiting_validation') {
+      return 'Tabela temporária pronta e aguardando validação (somente leitura).';
+    }
+    if (status === 'needs_review') {
+      return 'Tabela temporária disponível para revisão (somente leitura).';
+    }
+    if (status === 'failed') return 'Não foi possível estruturar a tabela temporária.';
+    if (status === 'expired') return 'Tabela temporária expirada.';
+    if (status === 'discarded') return 'Tabela temporária invalidada.';
+    return 'Tabela temporária extraída (somente leitura).';
+  }
+
+  function renderTempTableItem(tempTable) {
+    var li = document.createElement('li');
+    li.className = 'cleide-audit-doc-item cleide-audit-temp-table-item';
+    li.setAttribute('data-temp-table-id', tempTable.temp_table_id || '');
+
+    var openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'cleide-audit-temp-table-open-btn';
+    openBtn.setAttribute('aria-label', 'Abrir dados da tabela temporária');
+    openBtn.addEventListener('click', function () {
+      lastTempTableCardButton = openBtn;
+      openTempTableModal();
+    });
+
+    var ui = tempTable.ui_visibility || {};
+    var name = document.createElement('div');
+    name.className = 'cleide-audit-doc-item-name';
+    name.textContent = ui.display_name || 'Tabela temporária extraída';
+
+    var meta = document.createElement('div');
+    meta.className = 'cleide-audit-doc-item-meta';
+    var sourceCount = Array.isArray(tempTable.source_documents) ? tempTable.source_documents.length : 0;
+    var parts = [
+      'ARTEFATO',
+      tempTableStatusLabel(tempTable.status),
+      formatExpiry(tempTable.expires_at)
+    ];
+    if (sourceCount > 0) parts.push(sourceCount + ' doc(s) origem');
+    meta.textContent = parts.join(' · ');
+
+    var badge = document.createElement('span');
+    badge.className = tempTableBadgeClass(tempTable.status);
+    badge.textContent = tempTableContextNote(tempTable);
+
+    openBtn.appendChild(name);
+    openBtn.appendChild(meta);
+    openBtn.appendChild(badge);
+    li.appendChild(openBtn);
+    return li;
+  }
+
 function renderDocumentItem(doc) {
     var li = document.createElement('li');
     li.className = 'cleide-audit-doc-item';
@@ -201,7 +355,7 @@ function renderDocumentItem(doc) {
     }
   }
 
-  function renderDocuments(documents) {
+  function renderDocuments(documents, tempTable) {
     var list = byId('cleideAuditDocumentsList');
     if (!list) return;
     list.innerHTML = '';
@@ -210,7 +364,10 @@ function renderDocumentItem(doc) {
       if (!doc || !doc.doc_id) return;
       list.appendChild(renderDocumentItem(doc));
     });
-    updateClearButton(items.length);
+    if (tempTable && tempTable.temp_table_id) {
+      list.appendChild(renderTempTableItem(tempTable));
+    }
+    updateClearButton(items.length + (tempTable && tempTable.temp_table_id ? 1 : 0));
   }
 
   function fetchDocuments() {
@@ -226,7 +383,8 @@ function renderDocumentItem(doc) {
           } else {
             setError(friendlyError(errData));
           }
-          renderDocuments([]);
+          currentTempTable = null;
+          renderDocuments([], null);
           return null;
         }
         if (!res.data || res.data.ok !== true) {
@@ -234,13 +392,17 @@ function renderDocumentItem(doc) {
           return null;
         }
         setError('');
-        renderDocuments(res.data.documents || []);
+        handleTempTableFromStatus(res.data);
         return res.data;
       })
       .catch(function () {
         setError('Não foi possível carregar os documentos da sessão.');
         return null;
       });
+  }
+
+  function refreshAttachmentsAfterChat() {
+    fetchDocuments();
   }
 
   function uploadDocument(file) {
@@ -265,7 +427,16 @@ function renderDocumentItem(doc) {
           return null;
         }
         setError('');
-        return fetchDocuments();
+        return fetchDocuments().then(function (statusData) {
+          if (statusData) return statusData;
+          if (res.data.temp_table) {
+            handleTempTableFromStatus({
+              documents: [],
+              temp_table: res.data.temp_table
+            });
+          }
+          return res.data;
+        });
       })
       .catch(function () {
         setError('Não foi possível enviar o documento. Tente novamente.');
@@ -313,7 +484,10 @@ function renderDocumentItem(doc) {
           setError(friendlyError(res.data));
           return;
         }
-        renderDocuments([]);
+        renderDocuments([], null);
+        currentTempTable = null;
+        lastAnnouncedTempTableStatus = null;
+        stopTempTablePolling();
         setStatus('');
       })
       .catch(function () {
@@ -588,6 +762,7 @@ function renderDocumentItem(doc) {
         chatHistory.push({ role: 'user', content: text });
         chatHistory.push({ role: 'assistant', content: answer });
         chatHistory = trimChatHistory(chatHistory);
+        refreshAttachmentsAfterChat();
       })
       .catch(function () {
         setChatLoading(false);
@@ -617,6 +792,244 @@ function renderDocumentItem(doc) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendChatMessage();
+      }
+    });
+  }
+
+  function displayFieldValue(value) {
+    if (value === null || value === undefined || value === '') return 'não informado';
+    return String(value);
+  }
+
+  function hasFieldValue(value) {
+    return value !== null && value !== undefined && value !== '';
+  }
+
+  function formatDateTime(iso) {
+    if (!iso) return 'não informado';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return 'não informado';
+    try {
+      return d.toLocaleString('pt-BR');
+    } catch (e) {
+      return String(iso);
+    }
+  }
+
+  function appendMetaRow(container, label, value) {
+    var row = document.createElement('div');
+    row.className = 'cleide-audit-temp-table-modal-meta-row';
+    var labelEl = document.createElement('span');
+    labelEl.className = 'cleide-audit-temp-table-modal-meta-label';
+    labelEl.textContent = label + ':';
+    var valueEl = document.createElement('span');
+    valueEl.className = 'cleide-audit-temp-table-modal-meta-value';
+    valueEl.textContent = displayFieldValue(value);
+    row.appendChild(labelEl);
+    row.appendChild(valueEl);
+    container.appendChild(row);
+  }
+
+  function appendDetailRow(container, label, value) {
+    if (!hasFieldValue(value)) return;
+    var row = document.createElement('div');
+    row.className = 'cleide-audit-temp-table-modal-detail-row';
+    var labelEl = document.createElement('span');
+    labelEl.className = 'cleide-audit-temp-table-modal-detail-label';
+    labelEl.textContent = label + ':';
+    var valueEl = document.createElement('span');
+    valueEl.className = 'cleide-audit-temp-table-modal-detail-value';
+    valueEl.textContent = String(value);
+    row.appendChild(labelEl);
+    row.appendChild(valueEl);
+    container.appendChild(row);
+  }
+
+  function appendSectionTitle(container, title) {
+    var heading = document.createElement('h3');
+    heading.className = 'cleide-audit-temp-table-modal-section-title';
+    heading.textContent = title;
+    container.appendChild(heading);
+  }
+
+  function appendEmptySectionMessage(container) {
+    var empty = document.createElement('p');
+    empty.className = 'cleide-audit-temp-table-modal-empty';
+    empty.textContent = 'Nenhum item identificado nesta seção.';
+    container.appendChild(empty);
+  }
+
+  function appendSimpleListSection(container, title, items) {
+    appendSectionTitle(container, title);
+    var list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      appendEmptySectionMessage(container);
+      return;
+    }
+    var ul = document.createElement('ul');
+    ul.className = 'cleide-audit-temp-table-modal-list';
+    list.forEach(function (item) {
+      if (!hasFieldValue(item)) return;
+      var li = document.createElement('li');
+      li.textContent = String(item);
+      ul.appendChild(li);
+    });
+    if (!ul.childNodes.length) {
+      appendEmptySectionMessage(container);
+      return;
+    }
+    container.appendChild(ul);
+  }
+
+  function appendItemCard(container, rows) {
+    var card = document.createElement('div');
+    card.className = 'cleide-audit-temp-table-modal-item';
+    rows.forEach(function (row) {
+      appendDetailRow(card, row.label, row.value);
+    });
+    container.appendChild(card);
+  }
+
+  function renderFreightValuesSection(container, items) {
+    appendSectionTitle(container, 'Valores de frete');
+    var list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      appendEmptySectionMessage(container);
+      return;
+    }
+    list.forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      appendItemCard(container, [
+        { label: 'Rótulo', value: displayFieldValue(item.label) },
+        { label: 'Valor', value: displayFieldValue(item.value) },
+        { label: 'Unidade', value: displayFieldValue(item.unit) },
+        { label: 'Observações', value: item.notes }
+      ]);
+    });
+  }
+
+  function renderAccessorialFeesSection(container, items) {
+    appendSectionTitle(container, 'Taxas e serviços adicionais');
+    var list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      appendEmptySectionMessage(container);
+      return;
+    }
+    list.forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      appendItemCard(container, [
+        { label: 'Nome', value: displayFieldValue(item.name) },
+        { label: 'Valor', value: displayFieldValue(item.value) },
+        { label: 'Unidade', value: displayFieldValue(item.unit) },
+        { label: 'Base de cálculo', value: displayFieldValue(item.calculation_basis) },
+        { label: 'Observações', value: item.notes }
+      ]);
+    });
+  }
+
+  function renderWeightRangesSection(container, items) {
+    appendSectionTitle(container, 'Faixas de peso');
+    var list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      appendEmptySectionMessage(container);
+      return;
+    }
+    list.forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      appendItemCard(container, [
+        { label: 'Rótulo', value: displayFieldValue(item.label) },
+        { label: 'Peso mínimo', value: displayFieldValue(item.min_weight) },
+        { label: 'Peso máximo', value: displayFieldValue(item.max_weight) },
+        { label: 'Unidade', value: displayFieldValue(item.unit) },
+        { label: 'Observações', value: item.notes }
+      ]);
+    });
+  }
+
+  function renderTempTableModalContent(tempTable) {
+    var body = byId('cleideAuditTempTableModalBody');
+    if (!body) return;
+    body.innerHTML = '';
+
+    if (!tempTable) {
+      var noData = document.createElement('p');
+      noData.className = 'cleide-audit-temp-table-modal-empty';
+      noData.textContent = 'Nenhuma tabela temporária disponível.';
+      body.appendChild(noData);
+      return;
+    }
+
+    var status = String(tempTable.status || '').toLowerCase();
+    if (status === 'processing') {
+      var processingMsg = document.createElement('p');
+      processingMsg.className = 'cleide-audit-temp-table-modal-processing';
+      processingMsg.textContent = 'Processamento em andamento. Os dados aparecerão aqui quando a extração terminar.';
+      body.appendChild(processingMsg);
+      return;
+    }
+
+    var meta = document.createElement('div');
+    meta.className = 'cleide-audit-temp-table-modal-meta';
+    appendMetaRow(meta, 'Status', tempTableStatusLabel(tempTable.status));
+    var sourceDocs = Array.isArray(tempTable.source_documents) ? tempTable.source_documents : [];
+    appendMetaRow(meta, 'Documento(s) de origem', sourceDocs.length ? sourceDocs.join(', ') : null);
+    appendMetaRow(meta, 'Criado em', formatDateTime(tempTable.created_at));
+    appendMetaRow(meta, 'Atualizado em', formatDateTime(tempTable.updated_at));
+    appendMetaRow(meta, 'Expira em', formatDateTime(tempTable.expires_at));
+    body.appendChild(meta);
+
+    renderFreightValuesSection(body, tempTable.freight_values);
+    renderAccessorialFeesSection(body, tempTable.accessorial_fees);
+    renderWeightRangesSection(body, tempTable.weight_ranges);
+    appendSimpleListSection(body, 'Alertas de leitura', tempTable.reading_alerts);
+    appendSimpleListSection(body, 'Evidências/referências', tempTable.evidence_refs);
+  }
+
+  function isTempTableModalOpen() {
+    var modal = byId('cleideAuditTempTableModal');
+    return !!(modal && !modal.hidden);
+  }
+
+  function openTempTableModal() {
+    var modal = byId('cleideAuditTempTableModal');
+    if (!modal) return;
+    renderTempTableModalContent(currentTempTable);
+    modal.hidden = false;
+    document.body.classList.add('cleide-audit-temp-table-modal-open');
+    var closeBtn = byId('cleideAuditTempTableModalClose');
+    if (closeBtn) closeBtn.focus();
+  }
+
+  function closeTempTableModal() {
+    var modal = byId('cleideAuditTempTableModal');
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    document.body.classList.remove('cleide-audit-temp-table-modal-open');
+    if (lastTempTableCardButton && typeof lastTempTableCardButton.focus === 'function') {
+      lastTempTableCardButton.focus();
+    }
+  }
+
+  function initTempTableModal() {
+    var modal = byId('cleideAuditTempTableModal');
+    var closeBtn = byId('cleideAuditTempTableModalClose');
+    var backdrop = byId('cleideAuditTempTableModalBackdrop');
+    if (!modal) return;
+
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function () {
+        closeTempTableModal();
+      });
+    }
+    if (backdrop) {
+      backdrop.addEventListener('click', function () {
+        closeTempTableModal();
+      });
+    }
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isTempTableModalOpen()) {
+        e.stopPropagation();
+        closeTempTableModal();
       }
     });
   }
@@ -680,6 +1093,7 @@ function renderDocumentItem(doc) {
     });
 
     initDocuments();
+    initTempTableModal();
     initChat();
   }
 

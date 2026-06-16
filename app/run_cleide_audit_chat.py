@@ -13,10 +13,7 @@ from uuid import uuid4
 
 from flask import has_app_context
 
-from app.cleide_audit_doc_service import (
-    CLEIDE_AUDIT_CHAT_FLOW_TYPE,
-    cleide_audit_chat_idempotency_key,
-)
+from app.cleide_audit_doc_service import CLEIDE_AUDIT_CHAT_FLOW_TYPE, cleide_audit_chat_idempotency_key
 from app.cleide_audit_prompt import build_cleide_audit_system_prompt
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.cleide_audit_config_service import get_cleide_audit_config
@@ -224,6 +221,8 @@ def chat_cleide_audit_reply(
     document_file_parts: list | None = None,
     has_documents: bool = False,
     documents_meta: list | None = None,
+    source_doc_ids: list[str] | None = None,
+    session_obj=None,
     max_history: int | None = None,
     question_max_chars: int | None = None,
     fallback_message: str | None = None,
