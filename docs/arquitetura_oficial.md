@@ -1,9 +1,9 @@
 # Arquitetura Oficial
 
-Data de consolidacao: `2026-06-05`
-Commit de referencia: `b5fc444`
+Data de consolidacao: `2026-06-16`
+Commit de referencia: `41c9271`
 
-Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos a entrega documental da Julia.
+Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos a entrega da tabela temporaria da Cleide Auditoria.
 
 ## Principios
 
@@ -51,7 +51,9 @@ Sempre:
 ### Cleide
 
 - superficie BI atual: `/cleide-bi-frete`
+- superficie documental atual: `/auditoria-frete`
 - papel: auditoria, conferencia, desvios e horizonte historico
+- na superficie documental, o chat e separado da extracao tecnica de tabela temporaria
 
 ## Regra-mae de handoff
 
@@ -92,6 +94,32 @@ Tabela canonica:
 - `/api/cleide/upload`
 - `/api/cleide/upload/status`
 - `/api/cleide/upload/clear`
+- `POST /api/cleide-auditoria/documents/upload`
+- `GET /api/cleide-auditoria/documents/status`
+- `DELETE /api/cleide-auditoria/documents/<doc_id>`
+- `POST /api/cleide-auditoria/documents/clear`
+- `POST /api/cleide-auditoria/chat`
+
+## Arquitetura documental da Cleide Auditoria
+
+O fluxo documental da Cleide Auditoria opera dentro da governanca existente e nao deve ser tratado como produto paralelo.
+
+Contratos reais:
+
+- o upload registra o documento na sessao e tenta acionar extracao tecnica pos-upload
+- a extracao tecnica usa `app/run_cleide_audit_temp_table.py`
+- o prompt tecnico fica em `build_cleide_audit_temp_table_technical_prompt()`
+- a resposta esperada do modelo e JSON tecnico, sem auditoria final
+- o endpoint de status devolve `temp_table` quando houver artefato ativo
+
+Garantias:
+
+- a tabela temporaria e separada do chat conversacional
+- a tabela temporaria e temporaria, descartavel e sujeita a validacao humana
+- o `operational_owner` e `cleiton`
+- o ciclo de vida depende do TTL dos documentos da sessao
+- invalidacoes ocorrem quando os documentos fonte mudam ou sao removidos
+- nao ha migration nova nem nova tabela de banco para esse fluxo
 
 ## Arquitetura documental da Julia
 

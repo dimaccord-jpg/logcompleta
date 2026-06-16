@@ -115,13 +115,13 @@ Júlia pode conversar sobre custo e estratégia, mas **não substitui** Roberto 
 
 ## 5. Cleide — BI e Auditoria (superfícies separadas)
 
-A Cleide possui **duas superfícies visuais distintas** e APIs documentais governadas **ainda não conectadas** à tela de Auditoria nesta fase:
+A Cleide possui **duas superfícies visuais distintas** e a experiência de Auditoria já está conectada ao fluxo documental governado do backend:
 
 | Superfície | Rota | Estado atual |
 |---|---|---|
 | **BI Cleide** | `/cleide-bi-frete` | Operacional: upload de base, KPIs, filtros, dashboard e chat contextual sobre o dataset da sessão |
-| **Auditoria da Cleide** | `/auditoria-frete` | Tela visual inicial em fase preparatória (sem IA real, upload real ou processamento documental conectado) |
-| **APIs documentais** | `/api/cleide-auditoria/...` | Endpoints governados existentes, separados da tela visual e **não integrados** à experiência de `/auditoria-frete` nesta fase |
+| **Auditoria da Cleide** | `/auditoria-frete` | Operacional: upload documental, chat assistido e exibição de tabela temporária extraída para validação humana |
+| **APIs documentais** | `/api/cleide-auditoria/...` | Endpoints governados conectados à experiência de `/auditoria-frete`, sem criar produto paralelo fora da governança existente |
 
 ### 5.1 BI Cleide (`/cleide-bi-frete`)
 
@@ -135,7 +135,7 @@ A Cleide possui **duas superfícies visuais distintas** e APIs documentais gover
 Intenção de **BI operacional, indicadores, dashboard, KPIs, painel gerencial ou análise estrutural** da base de fretes já enviada à sessão.
 
 **Quando não encaminhar automaticamente para BI Cleide**
-- Intenção de **auditoria conversacional/documental assistida** da nova Auditoria da Cleide → superfície `/auditoria-frete` (ainda preparatória; ver §5.2).
+- Intenção de **auditoria conversacional/documental assistida** da Auditoria da Cleide → superfície `/auditoria-frete` (ver §5.2).
 - Só menção a planilha, PDF, documento ou dashboard **sem** objetivo de BI/indicadores/painel operacional.
 - Previsão/projeção futura → Roberto (`/fretes`).
 - Consultoria aberta → Júlia.
@@ -147,15 +147,22 @@ Júlia pode aceitar documentos no chat logado para **apoio consultivo**, mas **n
 
 ### 5.2 Auditoria da Cleide (`/auditoria-frete`)
 
-**Auditoria da Cleide** (`/auditoria-frete`) **já existe** como tela visual inicial, com identidade própria e chat integrado à página.
+**Auditoria da Cleide** (`/auditoria-frete`) já opera como trilho documental governado para auditoria assistida.
 
-Nesta fase preparatória, a tela **ainda não oferece**:
-- IA real conectada;
-- upload assistido real;
-- processamento documental;
-- integração com os endpoints `/api/cleide-auditoria/...`.
+Contrato real da experiência:
 
-Essas capacidades serão ativadas em etapa futura. O Copilot pode mencionar a rota quando a intenção for claramente **auditoria conversacional/documental assistida**, mas deve deixar explícito que a experiência ainda está em evolução visual — sem prometer processamento já ativo.
+- possui upload documental conectado ao backend;
+- possui chat assistido na própria experiência;
+- tenta extrair uma **tabela temporária extraída** após upload válido;
+- expõe `temp_table` no status documental quando houver artefato ativo;
+- mantém a extração técnica separada do chat conversacional.
+
+Guardrails obrigatórios:
+
+- a tabela temporária não é auditoria final;
+- o usuário precisa validar a extração humanamente;
+- a responsabilidade operacional da tabela temporária é do **Cleiton**;
+- a extração é temporária, descartável e não cria nova tabela de banco.
 
 **Destino técnico (Auditoria visual):** `/auditoria-frete` (endpoint: `cleide.cleide_auditoria`).
 

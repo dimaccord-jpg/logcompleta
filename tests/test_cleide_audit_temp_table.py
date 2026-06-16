@@ -903,6 +903,7 @@ def test_chat_still_does_not_create_temp_table(web_client, monkeypatch):
 def test_temp_table_prompt_uses_partial_first_contract():
     prompt = build_cleide_audit_temp_table_technical_prompt()
     assert "custos de frete" in prompt.lower()
+    assert "freight_routes" in prompt
     assert "freight_values" in prompt
     assert "accessorial_fees" in prompt
     assert "weight_ranges" in prompt
@@ -1047,3 +1048,196 @@ def test_partial_first_payload_still_becomes_needs_review(web_client, monkeypatc
     temp_table = web_client.get("/api/cleide-auditoria/documents/status").get_json()["temp_table"]
     assert temp_table["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
     assert temp_table["freight_values"][0]["label"] == "Frete ate 30 Kg"
+
+
+def _sample_freight_routes_payload(**overrides) -> dict:
+    payload = {
+        "status": "needs_review",
+        "freight_routes": [
+            {
+                "origin": "DF",
+                "destination": "JOINVILLE",
+                "freight_type": "FOB",
+                "weight_30": "115,00",
+                "weight_50": "135,00",
+                "weight_70": "168,00",
+                "weight_100": "190,00",
+                "boarding_fee": "190,0000",
+                "freight_value_pct": "0,3000",
+                "freight_weight_kg": "1,5000",
+                "notes": "",
+                "evidence_ref": "TABELA ALFA ATUAL.pdf (page 1)",
+                "confidence": "needs_review",
+            }
+        ],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_freight_routes_payload_becomes_needs_review(web_client):
+    saved = _apply_payload(web_client, _sample_freight_routes_payload())
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(saved["freight_routes"]) == 1
+    assert saved["freight_routes"][0]["origin"] == "DF"
+    assert saved["freight_routes"][0]["destination"] == "JOINVILLE"
+
+
+def test_normalize_partial_first_preserves_freight_routes():
+    payload = _sample_freight_routes_payload()
+    normalized = normalize_partial_first_extraction_to_temp_table(payload)
+    assert normalized["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(normalized["freight_routes"]) == 1
+    assert normalized["freight_routes"][0]["freight_type"] == "FOB"
+    assert normalized["freight_routes"][0]["weight_30"] == "115,00"
+
+
+def test_coerce_temp_table_payload_preserves_freight_routes(web_client):
+    saved = _apply_payload(web_client, _sample_freight_routes_payload())
+    assert len(saved["freight_routes"]) == 1
+    assert saved["freight_routes"][0]["boarding_fee"] == "190,0000"
+
+
+def test_public_temp_table_exposes_freight_routes(web_client):
+    saved = _apply_payload(web_client, _sample_freight_routes_payload())
+    public = audit_doc_service._public_temp_table(saved)
+    assert public is not None
+    assert "freight_routes" in public
+    assert len(public["freight_routes"]) == 1
+    assert public["freight_routes"][0]["origin"] == "DF"
+
+
+def test_resolve_extraction_status_considers_freight_routes_useful(web_client):
+    payload = {
+        "status": "failed",
+        "freight_routes": [{"origin": "SP", "destination": None, "freight_type": None}],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+
+
+def test_freight_routes_only_useful_does_not_become_failed(web_client):
+    payload = {
+        "status": "needs_review",
+        "freight_routes": [
+            {
+                "origin": None,
+                "destination": "RJ",
+                "freight_type": None,
+                "weight_30": None,
+                "weight_50": None,
+                "weight_70": None,
+                "weight_100": None,
+                "boarding_fee": None,
+                "freight_value_pct": None,
+                "freight_weight_kg": None,
+            }
+        ],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+
+
+def test_freight_routes_missing_fields_preserved_as_none(web_client):
+    payload = {
+        "status": "needs_review",
+        "freight_routes": [{"origin": "DF", "destination": "JOINVILLE"}],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    route = saved["freight_routes"][0]
+    assert route["origin"] == "DF"
+    assert route["destination"] == "JOINVILLE"
+    assert route["freight_type"] is None
+    assert route["weight_30"] is None
+    assert route["boarding_fee"] is None
+    assert route["notes"] == ""
+
+
+def test_accessorial_fees_still_works_with_freight_routes(web_client):
+    payload = _sample_freight_routes_payload(
+        accessorial_fees=[
+            {
+                "name": "Pedagio",
+                "value": "R$8,61",
+                "unit": "R$",
+                "calculation_basis": "fracao de 100Kg",
+                "notes": "",
+            }
+        ],
+    )
+    saved = _apply_payload(web_client, payload)
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(saved["freight_routes"]) == 1
+    assert len(saved["accessorial_fees"]) == 1
+    assert saved["accessorial_fees"][0]["name"] == "Pedagio"
+
+
+def test_freight_values_fallback_still_works_without_freight_routes(web_client):
+    payload = {
+        "status": "needs_review",
+        "freight_routes": [],
+        "freight_values": [
+            {"label": "Frete ate 30 Kg", "value": "120.00", "unit": "R$", "notes": ""},
+        ],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert saved["freight_routes"] == []
+    assert len(saved["freight_values"]) == 1
+
+
+def test_freight_routes_normalizes_aliases():
+    payload = {
+        "status": "needs_review",
+        "freight_routes": [
+            {
+                "origin": "DF",
+                "destination": "JOINVILLE",
+                "type": "CIF",
+                "weight_30kg": "100,00",
+                "taxa_embarque_kg": "1,00",
+            }
+        ],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    normalized = normalize_partial_first_extraction_to_temp_table(payload)
+    route = normalized["freight_routes"][0]
+    assert route["freight_type"] == "CIF"
+    assert route["weight_30"] == "100,00"
+    assert route["boarding_fee"] == "1,00"
+
+
+def test_temp_table_prompt_includes_freight_routes_contract():
+    prompt = build_cleide_audit_temp_table_technical_prompt()
+    assert "freight_routes" in prompt
+    assert "matriz principal de frete por rota" in prompt.lower()
+    assert "generalidades em freight_routes" in prompt.lower() or "nao coloque generalidades em freight_routes" in prompt.lower()
+    assert "servicos adicionais em freight_routes" in prompt.lower() or "nao coloque servicos adicionais em freight_routes" in prompt.lower()

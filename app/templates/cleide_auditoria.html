@@ -1080,7 +1080,7 @@
   .cleide-audit-temp-table-modal-dialog {
     position: relative;
     z-index: 1;
-    width: min(720px, 100%);
+    width: min(920px, 100%);
     max-height: min(85vh, 900px);
     display: flex;
     flex-direction: column;
@@ -1216,6 +1216,115 @@
 
   .cleide-audit-temp-table-modal-list li {
     margin-bottom: 0.2rem;
+  }
+
+  .cleide-audit-temp-table-modal-section {
+    margin-bottom: 0.65rem;
+  }
+
+  .cleide-audit-temp-table-modal-partial-badge-row {
+    margin: 0.15rem 0 0.35rem;
+  }
+
+  .cleide-audit-temp-table-modal-partial-badge {
+    display: inline-block;
+    padding: 0.12rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
+    border: 1px solid rgba(255, 193, 7, 0.4);
+    color: #ffd966;
+    background: rgba(255, 193, 7, 0.1);
+  }
+
+  .cleide-audit-temp-table-modal-partial-helper {
+    margin: 0.35rem 0 0.55rem;
+    font-size: 0.76rem;
+    color: var(--af-text-secondary, #8A8AA3);
+    line-height: 1.4;
+  }
+
+  .cleide-audit-temp-table-modal-freight-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0.25rem 0 0.5rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.12);
+  }
+
+  .cleide-audit-temp-table-modal-freight-table {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: collapse;
+    font-size: 0.74rem;
+  }
+
+  .cleide-audit-temp-table-modal-freight-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: rgba(30, 30, 46, 0.98);
+    color: var(--af-cyan, #00BFFF);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.45rem 0.55rem;
+    border-bottom: 1px solid rgba(0, 191, 255, 0.22);
+    white-space: nowrap;
+  }
+
+  .cleide-audit-temp-table-modal-freight-table tbody td {
+    color: var(--af-text-primary, #F0F0F5);
+    padding: 0.4rem 0.55rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    vertical-align: top;
+    word-break: break-word;
+  }
+
+  .cleide-audit-temp-table-modal-freight-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .cleide-audit-temp-table-modal-data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.76rem;
+    margin: 0.25rem 0 0.5rem;
+  }
+
+  .cleide-audit-temp-table-modal-data-table thead th {
+    color: var(--af-cyan, #00BFFF);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.4rem 0.55rem;
+    border-bottom: 1px solid rgba(0, 191, 255, 0.18);
+  }
+
+  .cleide-audit-temp-table-modal-data-table tbody td {
+    color: var(--af-text-primary, #F0F0F5);
+    padding: 0.38rem 0.55rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    vertical-align: top;
+    word-break: break-word;
+  }
+
+  .cleide-audit-temp-table-modal-data-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  @media (max-width: 576px) {
+    .cleide-audit-temp-table-modal {
+      padding: 0.5rem;
+    }
+
+    .cleide-audit-temp-table-modal-header,
+    .cleide-audit-temp-table-modal-body,
+    .cleide-audit-temp-table-modal-footer {
+      padding-left: 0.85rem;
+      padding-right: 0.85rem;
+    }
   }
 
   .cleide-audit-documents-error {

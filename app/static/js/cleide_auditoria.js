@@ -881,68 +881,385 @@ function renderDocumentItem(doc) {
     container.appendChild(ul);
   }
 
-  function appendItemCard(container, rows) {
-    var card = document.createElement('div');
-    card.className = 'cleide-audit-temp-table-modal-item';
+  var FREIGHT_WEIGHT_LIMITS = [30, 50, 70, 100];
+  var NOT_IDENTIFIED_LABEL = 'não identificado';
+
+  var PRIMARY_FREIGHT_FEE_PATTERNS = [
+    /^taxa\s+embarque(\s+kg)?$/i,
+    /^frete\s+valor(\s+%)?$/i,
+    /^frete\s+peso(\s+kg)?$/i
+  ];
+
+  var COMMERCIAL_INFO_FIELDS = [
+    { key: 'validity', label: 'Validade', altKeys: ['validade'] },
+    { key: 'icms', label: 'ICMS' },
+    { key: 'billing', label: 'Faturamento', altKeys: ['faturamento'] },
+    { key: 'adjustment', label: 'Reajuste', altKeys: ['reajuste'] },
+    { key: 'general_conditions', label: 'Condições gerais', altKeys: ['condicoes_gerais'] },
+    { key: 'excluded_items', label: 'Itens não inclusos', altKeys: ['itens_nao_inclusos'] },
+    { key: 'termination', label: 'Rescisão', altKeys: ['rescisao'] },
+    { key: 'commercial_notes', label: 'Observações comerciais', altKeys: ['observacoes_comerciais'] }
+  ];
+
+  var FREIGHT_ROUTE_TABLE_HEADERS = [
+    'Origem',
+    'Destino',
+    'Tipo',
+    'Até 30 kg',
+    'Até 50 kg',
+    'Até 70 kg',
+    'Até 100 kg',
+    'Taxa Embarque Kg',
+    'Frete Valor %',
+    'Frete Peso Kg',
+    'Observações'
+  ];
+
+  function normalizeTextKey(value) {
+    return String(value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+  }
+
+  function isPrimaryFreightAccessorialFee(fee) {
+    if (!fee || typeof fee !== 'object') return false;
+    var name = normalizeTextKey(fee.name);
+    if (!name) return false;
+    var i;
+    for (i = 0; i < PRIMARY_FREIGHT_FEE_PATTERNS.length; i += 1) {
+      if (PRIMARY_FREIGHT_FEE_PATTERNS[i].test(name)) return true;
+    }
+    return false;
+  }
+
+  function formatDisplayValue(value, unit) {
+    if (!hasFieldValue(value)) {
+      if (hasFieldValue(unit)) return displayFieldValue(null);
+      return '';
+    }
+    var text = String(value);
+    if (hasFieldValue(unit) && text.indexOf(String(unit)) === -1) {
+      return text + ' ' + String(unit);
+    }
+    return text;
+  }
+
+  function tableCellText(value, allowEmpty) {
+    if (!hasFieldValue(value)) {
+      return allowEmpty ? '' : displayFieldValue(null);
+    }
+    return String(value);
+  }
+
+  function extractWeightLimitFromText(text) {
+    var match = String(text || '').match(/(\d{1,3})\s*kg/i);
+    if (!match) return null;
+    var n = parseInt(match[1], 10);
+    if (FREIGHT_WEIGHT_LIMITS.indexOf(n) !== -1) return n;
+    return null;
+  }
+
+  function getWeightColumnValues(tempTable) {
+    var cols = { 30: '', 50: '', 70: '', 100: '' };
+    var notes = [];
+    var freightValues = Array.isArray(tempTable.freight_values) ? tempTable.freight_values : [];
+    var weightRanges = Array.isArray(tempTable.weight_ranges) ? tempTable.weight_ranges : [];
+
+    freightValues.forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      var limit = extractWeightLimitFromText(item.label);
+      if (limit && !hasFieldValue(cols[limit])) {
+        cols[limit] = formatDisplayValue(item.value, item.unit);
+      } else if (!limit && hasFieldValue(item.label)) {
+        notes.push(String(item.label) + (hasFieldValue(item.value) ? ': ' + formatDisplayValue(item.value, item.unit) : ''));
+      }
+      if (hasFieldValue(item.notes)) notes.push(String(item.notes));
+    });
+
+    weightRanges.forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      var limit = null;
+      if (typeof item.max_weight === 'number' && FREIGHT_WEIGHT_LIMITS.indexOf(item.max_weight) !== -1) {
+        limit = item.max_weight;
+      }
+      if (!limit) limit = extractWeightLimitFromText(item.label);
+      if (limit && !hasFieldValue(cols[limit])) {
+        var rangeVal = hasFieldValue(item.notes) ? String(item.notes) : '';
+        if (!rangeVal && (hasFieldValue(item.min_weight) || hasFieldValue(item.max_weight))) {
+          rangeVal = [
+            hasFieldValue(item.min_weight) ? String(item.min_weight) : '',
+            hasFieldValue(item.max_weight) ? String(item.max_weight) : ''
+          ].filter(Boolean).join('-') + (item.unit ? ' ' + item.unit : '');
+        }
+        if (rangeVal) cols[limit] = rangeVal;
+      } else if (hasFieldValue(item.label)) {
+        notes.push(String(item.label));
+      }
+    });
+
+    return { cols: cols, notes: notes };
+  }
+
+  function getPrimaryFreightFees(accessorialFees) {
+    var fees = Array.isArray(accessorialFees) ? accessorialFees : [];
+    var boarding = '';
+    var freightValue = '';
+    var freightWeight = '';
+    fees.forEach(function (fee) {
+      if (!fee || typeof fee !== 'object') return;
+      var name = normalizeTextKey(fee.name);
+      var formatted = formatDisplayValue(fee.value, fee.unit);
+      if (/^taxa\s+embarque/.test(name)) boarding = formatted || boarding;
+      else if (/^frete\s+valor/.test(name)) freightValue = formatted || freightValue;
+      else if (/^frete\s+peso/.test(name)) freightWeight = formatted || freightWeight;
+    });
+    return {
+      boarding_fee: boarding,
+      freight_value_pct: freightValue,
+      freight_weight_kg: freightWeight
+    };
+  }
+
+  function hasFreightRouteSourceData(tempTable) {
+    var freightRoutes = Array.isArray(tempTable.freight_routes) ? tempTable.freight_routes : [];
+    if (freightRoutes.length) return true;
+    var freightValues = Array.isArray(tempTable.freight_values) ? tempTable.freight_values : [];
+    var weightRanges = Array.isArray(tempTable.weight_ranges) ? tempTable.weight_ranges : [];
+    if (freightValues.length || weightRanges.length) return true;
+    var fees = Array.isArray(tempTable.accessorial_fees) ? tempTable.accessorial_fees : [];
+    return fees.some(function (fee) { return isPrimaryFreightAccessorialFee(fee); });
+  }
+
+  function buildStructuredFreightRows(freightRoutes) {
+    return freightRoutes.map(function (route) {
+      if (!route || typeof route !== 'object') return null;
+      var routeType = route.freight_type || route.type;
+      function routeField(primary, alias) {
+        var value = route[primary];
+        if (!hasFieldValue(value) && alias) value = route[alias];
+        return hasFieldValue(value) ? String(value) : '';
+      }
+      return {
+        origin: hasFieldValue(route.origin) ? String(route.origin) : NOT_IDENTIFIED_LABEL,
+        destination: hasFieldValue(route.destination) ? String(route.destination) : NOT_IDENTIFIED_LABEL,
+        type: hasFieldValue(routeType) ? String(routeType) : NOT_IDENTIFIED_LABEL,
+        weight_30: routeField('weight_30', 'weight_30kg'),
+        weight_50: routeField('weight_50', 'weight_50kg'),
+        weight_70: routeField('weight_70', 'weight_70kg'),
+        weight_100: routeField('weight_100', 'weight_100kg'),
+        boarding_fee: routeField('boarding_fee', 'taxa_embarque_kg'),
+        freight_value_pct: routeField('freight_value_pct', 'frete_valor_pct'),
+        freight_weight_kg: routeField('freight_weight_kg', 'frete_peso_kg'),
+        notes: routeField('notes') || routeField('observations') || routeField('observacoes')
+      };
+    }).filter(Boolean);
+  }
+
+  function buildPartialFreightRows(tempTable) {
+    var weightData = getWeightColumnValues(tempTable);
+    var primaryFees = getPrimaryFreightFees(tempTable.accessorial_fees);
+    var textualNotes = weightData.notes.slice();
+    var cols = weightData.cols;
+    var hasAnyWeight = FREIGHT_WEIGHT_LIMITS.some(function (limit) { return hasFieldValue(cols[limit]); });
+    var hasAnyFee = hasFieldValue(primaryFees.boarding_fee)
+      || hasFieldValue(primaryFees.freight_value_pct)
+      || hasFieldValue(primaryFees.freight_weight_kg);
+
+    if (!hasAnyWeight && !hasAnyFee && !textualNotes.length) return [];
+
+    return [{
+      origin: NOT_IDENTIFIED_LABEL,
+      destination: NOT_IDENTIFIED_LABEL,
+      type: NOT_IDENTIFIED_LABEL,
+      weight_30: cols[30],
+      weight_50: cols[50],
+      weight_70: cols[70],
+      weight_100: cols[100],
+      boarding_fee: primaryFees.boarding_fee,
+      freight_value_pct: primaryFees.freight_value_pct,
+      freight_weight_kg: primaryFees.freight_weight_kg,
+      notes: textualNotes.join('; ')
+    }];
+  }
+
+  function resolveFreightRouteRows(tempTable) {
+    var freightRoutes = Array.isArray(tempTable.freight_routes) ? tempTable.freight_routes : [];
+    if (freightRoutes.length) {
+      return { rows: buildStructuredFreightRows(freightRoutes), isPartial: false };
+    }
+    return { rows: buildPartialFreightRows(tempTable), isPartial: true };
+  }
+
+  function appendTableCell(tr, text, isHeader, allowEmpty) {
+    var el = document.createElement(isHeader ? 'th' : 'td');
+    el.textContent = isHeader ? String(text) : tableCellText(text, allowEmpty);
+    if (isHeader) el.scope = 'col';
+    tr.appendChild(el);
+  }
+
+  function renderFreightRoutesSection(container, tempTable) {
+    appendSectionTitle(container, 'Frete por rota');
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-temp-table-modal-section cleide-audit-temp-table-modal-freight-section';
+
+    var resolved = resolveFreightRouteRows(tempTable);
+    var rows = resolved.rows;
+
+    if (resolved.isPartial) {
+      var badgeRow = document.createElement('div');
+      badgeRow.className = 'cleide-audit-temp-table-modal-partial-badge-row';
+      var badge = document.createElement('span');
+      badge.className = 'cleide-audit-temp-table-modal-partial-badge';
+      badge.textContent = 'extração parcial';
+      badgeRow.appendChild(badge);
+      section.appendChild(badgeRow);
+      var helper = document.createElement('p');
+      helper.className = 'cleide-audit-temp-table-modal-partial-helper';
+      helper.textContent = 'Alguns vínculos de origem, destino ou tipo de frete ainda precisam de validação humana.';
+      section.appendChild(helper);
+    }
+
+    if (!hasFreightRouteSourceData(tempTable) || !rows.length) {
+      var empty = document.createElement('p');
+      empty.className = 'cleide-audit-temp-table-modal-empty';
+      empty.textContent = 'Nenhuma rota de frete identificada nesta extração.';
+      section.appendChild(empty);
+      container.appendChild(section);
+      return;
+    }
+
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll';
+
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-freight-table';
+
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    FREIGHT_ROUTE_TABLE_HEADERS.forEach(function (heading) {
+      appendTableCell(headerRow, heading, true, false);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
     rows.forEach(function (row) {
-      appendDetailRow(card, row.label, row.value);
+      var tr = document.createElement('tr');
+      appendTableCell(tr, row.origin, false, false);
+      appendTableCell(tr, row.destination, false, false);
+      appendTableCell(tr, row.type, false, false);
+      appendTableCell(tr, row.weight_30, false, false);
+      appendTableCell(tr, row.weight_50, false, false);
+      appendTableCell(tr, row.weight_70, false, false);
+      appendTableCell(tr, row.weight_100, false, false);
+      appendTableCell(tr, row.boarding_fee, false, false);
+      appendTableCell(tr, row.freight_value_pct, false, false);
+      appendTableCell(tr, row.freight_weight_kg, false, false);
+      appendTableCell(tr, row.notes, false, true);
+      tbody.appendChild(tr);
     });
-    container.appendChild(card);
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    section.appendChild(scrollWrap);
+    container.appendChild(section);
   }
 
-  function renderFreightValuesSection(container, items) {
-    appendSectionTitle(container, 'Valores de frete');
-    var list = Array.isArray(items) ? items : [];
+  function getGeneralAccessorialFees(accessorialFees) {
+    return (Array.isArray(accessorialFees) ? accessorialFees : []).filter(function (fee) {
+      return !isPrimaryFreightAccessorialFee(fee);
+    });
+  }
+
+  function renderAccessorialFeesSection(container, accessorialFees) {
+    appendSectionTitle(container, 'Generalidades e serviços adicionais');
+    var list = getGeneralAccessorialFees(accessorialFees);
     if (!list.length) {
       appendEmptySectionMessage(container);
       return;
     }
+
+    var showScope = list.some(function (item) {
+      return item && hasFieldValue(item.scope);
+    });
+
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-data-table';
+
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    var headers = ['Nome', 'Valor', 'Unidade', 'Base de cálculo', 'Observações'];
+    if (showScope) headers.push('Escopo');
+    headers.forEach(function (heading) {
+      appendTableCell(headerRow, heading, true, false);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
     list.forEach(function (item) {
       if (!item || typeof item !== 'object') return;
-      appendItemCard(container, [
-        { label: 'Rótulo', value: displayFieldValue(item.label) },
-        { label: 'Valor', value: displayFieldValue(item.value) },
-        { label: 'Unidade', value: displayFieldValue(item.unit) },
-        { label: 'Observações', value: item.notes }
-      ]);
+      var tr = document.createElement('tr');
+      appendTableCell(tr, displayFieldValue(item.name), false, false);
+      appendTableCell(tr, displayFieldValue(item.value), false, false);
+      appendTableCell(tr, displayFieldValue(item.unit), false, false);
+      appendTableCell(tr, displayFieldValue(item.calculation_basis), false, false);
+      appendTableCell(tr, hasFieldValue(item.notes) ? String(item.notes) : displayFieldValue(null), false, false);
+      if (showScope) {
+        appendTableCell(tr, hasFieldValue(item.scope) ? String(item.scope) : displayFieldValue(null), false, false);
+      }
+      tbody.appendChild(tr);
     });
+    table.appendChild(tbody);
+    container.appendChild(table);
   }
 
-  function renderAccessorialFeesSection(container, items) {
-    appendSectionTitle(container, 'Taxas e serviços adicionais');
-    var list = Array.isArray(items) ? items : [];
-    if (!list.length) {
-      appendEmptySectionMessage(container);
-      return;
+  function collectCommercialInfo(tempTable) {
+    var entries = [];
+    var seen = {};
+    var commercial = tempTable.commercial_info;
+
+    function pushEntry(label, value) {
+      if (!hasFieldValue(value) || seen[label]) return;
+      seen[label] = true;
+      entries.push({ label: label, value: String(value) });
     }
-    list.forEach(function (item) {
-      if (!item || typeof item !== 'object') return;
-      appendItemCard(container, [
-        { label: 'Nome', value: displayFieldValue(item.name) },
-        { label: 'Valor', value: displayFieldValue(item.value) },
-        { label: 'Unidade', value: displayFieldValue(item.unit) },
-        { label: 'Base de cálculo', value: displayFieldValue(item.calculation_basis) },
-        { label: 'Observações', value: item.notes }
-      ]);
+
+    function readField(source, field) {
+      if (!source || typeof source !== 'object') return;
+      var val = source[field.key];
+      if (!hasFieldValue(val) && field.altKeys) {
+        field.altKeys.forEach(function (altKey) {
+          if (!hasFieldValue(val)) val = source[altKey];
+        });
+      }
+      pushEntry(field.label, val);
+    }
+
+    if (commercial && typeof commercial === 'object') {
+      COMMERCIAL_INFO_FIELDS.forEach(function (field) {
+        readField(commercial, field);
+      });
+    }
+    COMMERCIAL_INFO_FIELDS.forEach(function (field) {
+      readField(tempTable, field);
     });
+    return entries;
   }
 
-  function renderWeightRangesSection(container, items) {
-    appendSectionTitle(container, 'Faixas de peso');
-    var list = Array.isArray(items) ? items : [];
-    if (!list.length) {
-      appendEmptySectionMessage(container);
+  function renderAdditionalInfoSection(container, tempTable) {
+    appendSectionTitle(container, 'Informações adicionais');
+    var entries = collectCommercialInfo(tempTable);
+    if (!entries.length) {
+      var empty = document.createElement('p');
+      empty.className = 'cleide-audit-temp-table-modal-empty';
+      empty.textContent = 'Informações adicionais não identificadas no artefato atual.';
+      container.appendChild(empty);
       return;
     }
-    list.forEach(function (item) {
-      if (!item || typeof item !== 'object') return;
-      appendItemCard(container, [
-        { label: 'Rótulo', value: displayFieldValue(item.label) },
-        { label: 'Peso mínimo', value: displayFieldValue(item.min_weight) },
-        { label: 'Peso máximo', value: displayFieldValue(item.max_weight) },
-        { label: 'Unidade', value: displayFieldValue(item.unit) },
-        { label: 'Observações', value: item.notes }
-      ]);
+    entries.forEach(function (entry) {
+      appendDetailRow(container, entry.label, entry.value);
     });
   }
 
@@ -978,9 +1295,9 @@ function renderDocumentItem(doc) {
     appendMetaRow(meta, 'Expira em', formatDateTime(tempTable.expires_at));
     body.appendChild(meta);
 
-    renderFreightValuesSection(body, tempTable.freight_values);
+    renderFreightRoutesSection(body, tempTable);
     renderAccessorialFeesSection(body, tempTable.accessorial_fees);
-    renderWeightRangesSection(body, tempTable.weight_ranges);
+    renderAdditionalInfoSection(body, tempTable);
     appendSimpleListSection(body, 'Alertas de leitura', tempTable.reading_alerts);
     appendSimpleListSection(body, 'Evidências/referências', tempTable.evidence_refs);
   }
