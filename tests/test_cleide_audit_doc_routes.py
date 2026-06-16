@@ -399,10 +399,22 @@ def test_chat_endpoint_registered_in_cleide_auditoria_namespace(app, ctx, monkey
 
 def test_no_ia_called_on_upload(web_client, monkeypatch):
     chat_mock = MagicMock()
-    monkeypatch.setattr("app.run_cleiton_gemini_governance.cleiton_governed_generate_content", chat_mock)
-    resp = _upload(web_client, "nota.txt", make_txt("sem ia"))
+    monkeypatch.setattr("app.run_cleide_audit_chat.cleiton_governed_generate_content", chat_mock)
+    payload = {"status": "awaiting_validation", "extracted_items": []}
+
+    class _Resp:
+        text = __import__("json").dumps(payload)
+
+    extraction_mock = MagicMock(return_value=_Resp())
+    monkeypatch.setattr(
+        "app.run_cleide_audit_temp_table.cleiton_governed_generate_content",
+        extraction_mock,
+    )
+    monkeypatch.setattr("app.run_cleide_audit_temp_table._get_client", lambda: object())
+    resp = _upload(web_client, "nota.txt", make_txt("sem ia no chat"))
     assert resp.status_code == 200
     chat_mock.assert_not_called()
+    extraction_mock.assert_called()
 
 
 def test_julia_documents_still_work(web_client):

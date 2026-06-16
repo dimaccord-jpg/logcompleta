@@ -7,6 +7,7 @@ Sem rotas, chat, IA ou billing.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -69,6 +70,7 @@ from app.cleiton_doc_gemini_files import (
 from app.cleiton_doc_prepare import prepare_document
 from app.cleiton_doc_service import CleitonDocSessionError, maybe_cleanup_expired_cleiton_docs
 from app.cleiton_doc_store import (
+    get_cleiton_doc_tmp_dir,
     load_document_record,
     remove_document_record,
     save_document_record,
@@ -85,10 +87,27 @@ CLEIDE_AUDIT_CHAT_HISTORY_SESSION_KEY = "cleide_audit_chat_history"
 CLEIDE_AUDIT_UPLOAD_LOCK_SESSION_KEY = "cleide_audit_upload_lock"
 CLEIDE_AUDIT_LAST_REQUEST_ID_SESSION_KEY = "cleide_audit_last_request_id"
 CLEIDE_AUDIT_UPLOAD_IN_PROGRESS_SESSION_KEY = "cleide_audit_upload_in_progress"
+CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY = "cleide_audit_temp_table_id"
+CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY = "cleide_audit_temp_table_source_doc_ids"
+
+TEMP_TABLE_STATUS_PROCESSING = "processing"
+TEMP_TABLE_STATUS_AWAITING_VALIDATION = "awaiting_validation"
+TEMP_TABLE_STATUS_VALIDATED = "validated"
+TEMP_TABLE_STATUS_NEEDS_REVIEW = "needs_review"
+TEMP_TABLE_STATUS_FAILED = "failed"
+TEMP_TABLE_STATUS_EXPIRED = "expired"
+TEMP_TABLE_STATUS_DISCARDED = "discarded"
+
+TEMP_TABLE_VERSION_MARKER = "cleide_audit_temp_table_v1"
+TEMP_TABLE_OPERATIONAL_OWNER = "cleiton"
+TEMP_TABLE_UI_DISPLAY_NAME = "Tabela temporária extraída"
+TEMP_TABLE_JSON_BEGIN = "---CLEIDE_TEMP_TABLE---"
+TEMP_TABLE_JSON_END = "---END_CLEIDE_TEMP_TABLE---"
 
 CLEIDE_AUDIT_DOCUMENT_UPLOAD_FLOW_TYPE = "cleide_audit_document_upload"
 CLEIDE_AUDIT_DOCUMENT_PREPARE_FLOW_TYPE = "cleide_audit_document_prepare"
 CLEIDE_AUDIT_CHAT_FLOW_TYPE = "cleide_audit_chat"
+CLEIDE_AUDIT_TEMP_TABLE_EXTRACTION_FLOW_TYPE = "cleide_audit_temp_table_extraction"
 
 SOURCE_AGENT_CLEIDE_AUDIT = "cleide_audit"
 
@@ -103,6 +122,12 @@ def cleide_audit_upload_doc_idempotency_key(doc_id: str) -> str:
 
 def cleide_audit_chat_idempotency_key(request_id: str) -> str:
     return f"cleide-audit-chat:{(request_id or '').strip()}"
+
+
+def cleide_audit_temp_table_extraction_idempotency_key(source_doc_ids: list[str]) -> str:
+    normalized = _normalize_source_doc_ids(source_doc_ids)
+    joined = ":".join(normalized)
+    return f"cleide-audit-temp-table:{TEMP_TABLE_VERSION_MARKER}:{joined}"
 
 
 def _utcnow() -> datetime:
@@ -534,6 +559,11 @@ def remove_document_from_session(doc_id: str) -> dict:
         remove_cleide_audit_doc_id(session, ref)
         _mark_session_modified()
 
+    invalidate_temp_table_if_source_changed(
+        reason=TEMP_TABLE_STATUS_DISCARDED,
+        removed_doc_id=ref,
+    )
+
     return {
         "ok": True,
         "doc_id": ref,
@@ -554,6 +584,7 @@ def clear_documents_for_session() -> dict:
             removed_store += 1
         removed_session += 1
     clear_cleide_audit_doc_ids(session)
+    invalidate_temp_table_for_session(reason=TEMP_TABLE_STATUS_DISCARDED)
     _mark_session_modified()
     return {
         "ok": True,
@@ -563,19 +594,623 @@ def clear_documents_for_session() -> dict:
     }
 
 
+def _temp_table_filename(temp_table_id: str) -> str:
+    ref = (temp_table_id or "").strip()
+    if not ref:
+        raise ValueError("temp_table_id inválido.")
+    return f"tt_{ref}.json"
+
+
+def _temp_table_path(temp_table_id: str):
+    from pathlib import Path
+
+    safe_name = _temp_table_filename(temp_table_id)
+    base = Path(get_cleiton_doc_tmp_dir()).resolve()
+    candidate = (base / safe_name).resolve()
+    if candidate.parent != base:
+        raise ValueError("temp_table path inválido.")
+    return candidate
+
+
+def _write_temp_table_atomic(path, payload: dict) -> None:
+    from app.cleiton_doc_store import _write_json_atomic
+
+    _write_json_atomic(path, payload)
+
+
+def _normalize_source_doc_ids(doc_ids: list[str] | None) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in doc_ids or []:
+        if not isinstance(item, str):
+            continue
+        ref = item.strip()
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        cleaned.append(ref)
+    return cleaned
+
+
+def get_temp_table_id(session_obj) -> str | None:
+    raw = session_obj.get(CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY)
+    if not isinstance(raw, str):
+        return None
+    ref = raw.strip()
+    return ref or None
+
+
+def set_temp_table_id(session_obj, temp_table_id: str | None) -> None:
+    ref = (temp_table_id or "").strip()
+    if ref:
+        session_obj[CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY] = ref
+    else:
+        session_obj.pop(CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY, None)
+
+
+def get_temp_table_source_doc_ids(session_obj) -> list[str]:
+    raw = session_obj.get(CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY)
+    if not isinstance(raw, list):
+        return []
+    return _normalize_source_doc_ids(raw)
+
+
+def set_temp_table_source_doc_ids(session_obj, doc_ids: list[str]) -> None:
+    session_obj[CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY] = _normalize_source_doc_ids(doc_ids)
+
+
+def clear_temp_table_session_refs(session_obj) -> None:
+    session_obj.pop(CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY, None)
+    session_obj.pop(CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY, None)
+
+
+def _public_temp_table(record: dict | None) -> dict | None:
+    if not record:
+        return None
+    ui = record.get("ui_visibility") if isinstance(record.get("ui_visibility"), dict) else {}
+    return {
+        "temp_table_id": record.get("temp_table_id"),
+        "status": record.get("status"),
+        "source_documents": list(record.get("source_documents") or []),
+        "detected_carrier": record.get("detected_carrier"),
+        "origins": list(record.get("origins") or []),
+        "destinations": list(record.get("destinations") or []),
+        "routes": list(record.get("routes") or []),
+        "weight_ranges": list(record.get("weight_ranges") or []),
+        "freight_values": list(record.get("freight_values") or []),
+        "accessorial_fees": list(record.get("accessorial_fees") or []),
+        "charge_type_detected": record.get("charge_type_detected"),
+        "extracted_items": list(record.get("extracted_items") or []),
+        "uncertain_fields": list(record.get("uncertain_fields") or []),
+        "reading_alerts": list(record.get("reading_alerts") or []),
+        "evidence_refs": list(record.get("evidence_refs") or []),
+        "created_at": record.get("created_at"),
+        "updated_at": record.get("updated_at"),
+        "expires_at": record.get("expires_at"),
+        "session_scope": record.get("session_scope"),
+        "franquia_scope": record.get("franquia_scope"),
+        "user_scope": record.get("user_scope"),
+        "operational_owner": record.get("operational_owner"),
+        "ui_visibility": {
+            "display_name": ui.get("display_name") or TEMP_TABLE_UI_DISPLAY_NAME,
+            "readonly": True,
+        },
+        "version_marker": record.get("version_marker"),
+    }
+
+
+def load_temp_table_record(temp_table_id: str, *, ttl_hours: int) -> dict | None:
+    ref = (temp_table_id or "").strip()
+    if not ref:
+        return None
+    try:
+        path = _temp_table_path(ref)
+    except ValueError:
+        return None
+    if not path.is_file():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            remove_temp_table_record(ref)
+            return None
+    except Exception:
+        remove_temp_table_record(ref)
+        return None
+
+    expires_at = _parse_iso(payload.get(FIELD_EXPIRES_AT))
+    if expires_at is None:
+        created_at = _parse_iso(payload.get(FIELD_CREATED_AT))
+        if created_at is None:
+            remove_temp_table_record(ref)
+            return None
+        expires_at = created_at + timedelta(hours=max(1, int(ttl_hours)))
+    if _utcnow() >= expires_at:
+        payload["status"] = TEMP_TABLE_STATUS_EXPIRED
+        payload["updated_at"] = _utcnow().isoformat()
+        try:
+            _write_temp_table_atomic(path, payload)
+        except Exception:
+            remove_temp_table_record(ref)
+            return None
+        return payload
+    return payload
+
+
+def save_temp_table_record(record: dict) -> dict:
+    _require_session()
+    temp_table_id = (record.get("temp_table_id") or uuid4().hex).strip()
+    record = dict(record)
+    record["temp_table_id"] = temp_table_id
+    path = _temp_table_path(temp_table_id)
+    _write_temp_table_atomic(path, record)
+    set_temp_table_id(session, temp_table_id)
+    set_temp_table_source_doc_ids(session, list(record.get("source_documents") or []))
+    _mark_session_modified()
+    return record
+
+
+def remove_temp_table_record(temp_table_id: str) -> bool:
+    ref = (temp_table_id or "").strip()
+    if not ref:
+        return False
+    try:
+        path = _temp_table_path(ref)
+    except ValueError:
+        return False
+    if path.is_file():
+        try:
+            path.unlink()
+        except Exception:
+            return False
+    return True
+
+
+def invalidate_temp_table_for_session(*, reason: str = TEMP_TABLE_STATUS_DISCARDED) -> None:
+    _require_session()
+    temp_table_id = get_temp_table_id(session)
+    clear_temp_table_session_refs(session)
+    if temp_table_id:
+        remove_temp_table_record(temp_table_id)
+    _mark_session_modified()
+
+
+def invalidate_temp_table_if_source_changed(
+    *,
+    reason: str = TEMP_TABLE_STATUS_DISCARDED,
+    removed_doc_id: str | None = None,
+) -> None:
+    _require_session()
+    temp_table_id = get_temp_table_id(session)
+    if not temp_table_id:
+        return
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(temp_table_id, ttl_hours=cfg.upload_ttl_hours)
+    if record is None:
+        clear_temp_table_session_refs(session)
+        _mark_session_modified()
+        return
+    source_docs = list(record.get("source_documents") or [])
+    active_ids = set(get_cleide_audit_doc_ids(session))
+    if removed_doc_id and removed_doc_id in source_docs:
+        invalidate_temp_table_for_session(reason=reason)
+        return
+    if source_docs and not all(doc_id in active_ids for doc_id in source_docs):
+        invalidate_temp_table_for_session(reason=reason)
+
+
+def _parse_iso(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if dt.tzinfo:
+            off = dt.utcoffset()
+            dt = (dt.replace(tzinfo=None) - off) if off else dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _temp_table_expires_at(source_doc_ids: list[str]) -> str:
+    cfg = get_cleiton_doc_config()
+    latest: datetime | None = None
+    for doc_id in source_doc_ids:
+        record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
+        if record is None:
+            continue
+        candidate = _parse_iso(record.get(FIELD_EXPIRES_AT))
+        if candidate and (latest is None or candidate > latest):
+            latest = candidate
+    if latest is None:
+        latest = _utcnow() + timedelta(hours=max(1, int(cfg.upload_ttl_hours)))
+    return latest.isoformat()
+
+
+def get_active_temp_table_for_session() -> dict | None:
+    _require_session()
+    sync_temp_table_with_session_documents()
+    temp_table_id = get_temp_table_id(session)
+    if not temp_table_id:
+        return None
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(temp_table_id, ttl_hours=cfg.upload_ttl_hours)
+    if record is None:
+        clear_temp_table_session_refs(session)
+        _mark_session_modified()
+        return None
+    status = (record.get("status") or "").strip()
+    if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_EXPIRED}:
+        return _public_temp_table(record)
+    return _public_temp_table(record)
+
+
+def sync_temp_table_with_session_documents() -> None:
+    _require_session()
+    temp_table_id = get_temp_table_id(session)
+    if not temp_table_id:
+        return
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(temp_table_id, ttl_hours=cfg.upload_ttl_hours)
+    if record is None:
+        clear_temp_table_session_refs(session)
+        _mark_session_modified()
+        return
+    active_ids = set(get_cleide_audit_doc_ids(session))
+    source_docs = list(record.get("source_documents") or [])
+    if source_docs and not all(doc_id in active_ids for doc_id in source_docs):
+        invalidate_temp_table_for_session(reason=TEMP_TABLE_STATUS_DISCARDED)
+
+
+def should_attempt_temp_table_extraction(session_obj, source_doc_ids: list[str]) -> bool:
+    normalized = _normalize_source_doc_ids(source_doc_ids)
+    if not normalized:
+        return False
+    sync_temp_table_with_session_documents()
+    temp_table_id = get_temp_table_id(session_obj)
+    if not temp_table_id:
+        return True
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(temp_table_id, ttl_hours=cfg.upload_ttl_hours)
+    if record is None:
+        return True
+    bound_sources = _normalize_source_doc_ids(list(record.get("source_documents") or []))
+    if bound_sources != normalized:
+        return True
+    raw_status = record.get("status")
+    status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
+    if status == TEMP_TABLE_STATUS_PROCESSING:
+        return False
+    return False
+
+
+def mark_temp_table_processing(source_doc_ids: list[str], *, user_scope=None, franquia_scope=None) -> dict:
+    _require_session()
+    normalized = _normalize_source_doc_ids(source_doc_ids)
+    now = _utcnow()
+    temp_table_id = get_temp_table_id(session) or uuid4().hex
+    record = {
+        "temp_table_id": temp_table_id,
+        "status": TEMP_TABLE_STATUS_PROCESSING,
+        "source_documents": normalized,
+        "detected_carrier": None,
+        "origins": [],
+        "destinations": [],
+        "routes": [],
+        "weight_ranges": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "charge_type_detected": None,
+        "extracted_items": [],
+        "uncertain_fields": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "expires_at": _temp_table_expires_at(normalized),
+        "session_scope": CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+        "franquia_scope": franquia_scope,
+        "user_scope": user_scope,
+        "operational_owner": TEMP_TABLE_OPERATIONAL_OWNER,
+        "ui_visibility": {
+            "display_name": TEMP_TABLE_UI_DISPLAY_NAME,
+            "readonly": True,
+        },
+        "version_marker": TEMP_TABLE_VERSION_MARKER,
+    }
+    return save_temp_table_record(record)
+
+
+def temp_table_status_message(status: str) -> str:
+    mapping = {
+        TEMP_TABLE_STATUS_PROCESSING: (
+            "Recebi os anexos e iniciei a estruturação da tabela temporária de frete."
+        ),
+        TEMP_TABLE_STATUS_AWAITING_VALIDATION: (
+            "A tabela temporária foi estruturada e está aguardando sua validação."
+        ),
+        TEMP_TABLE_STATUS_NEEDS_REVIEW: (
+            "A tabela temporária foi gerada. Revise os dados antes de continuar."
+        ),
+        TEMP_TABLE_STATUS_FAILED: (
+            "Não foi possível estruturar a tabela temporária a partir dos anexos enviados."
+        ),
+        TEMP_TABLE_STATUS_EXPIRED: (
+            "A tabela temporária desta sessão expirou."
+        ),
+        TEMP_TABLE_STATUS_DISCARDED: (
+            "Os documentos de origem foram alterados ou removidos, "
+            "então a tabela temporária anterior foi invalidada."
+        ),
+    }
+    return mapping.get((status or "").strip(), "")
+
+
+def _normalize_temp_table_status(raw_status) -> str:
+    allowed = {
+        TEMP_TABLE_STATUS_AWAITING_VALIDATION,
+        TEMP_TABLE_STATUS_NEEDS_REVIEW,
+        TEMP_TABLE_STATUS_FAILED,
+        TEMP_TABLE_STATUS_VALIDATED,
+    }
+    if not isinstance(raw_status, str):
+        return TEMP_TABLE_STATUS_FAILED
+    candidate = raw_status.strip().lower()
+    if not candidate or candidate not in allowed:
+        return TEMP_TABLE_STATUS_FAILED
+    return candidate
+
+
+def _list_field_from_raw(raw: dict, name: str) -> list:
+    value = raw.get(name)
+    return list(value) if isinstance(value, list) else []
+
+
+def _is_useful_freight_value(item) -> bool:
+    if isinstance(item, dict):
+        label = item.get("label")
+        if isinstance(label, str) and label.strip():
+            return True
+        return item.get("value") is not None
+    if isinstance(item, str):
+        return bool(item.strip())
+    return False
+
+
+def _is_useful_accessorial_fee(item) -> bool:
+    if isinstance(item, dict):
+        name = item.get("name")
+        if isinstance(name, str) and name.strip():
+            return True
+        return item.get("value") is not None
+    if isinstance(item, str):
+        return bool(item.strip())
+    return False
+
+
+def _is_useful_weight_range(item) -> bool:
+    if isinstance(item, dict):
+        label = item.get("label")
+        if isinstance(label, str) and label.strip():
+            return True
+        if item.get("min_weight") is not None or item.get("max_weight") is not None:
+            return True
+    if isinstance(item, str):
+        return bool(item.strip())
+    return False
+
+
+def _has_useful_partial_extraction_data(raw: dict) -> bool:
+    for item in _list_field_from_raw(raw, "freight_values"):
+        if _is_useful_freight_value(item):
+            return True
+    for item in _list_field_from_raw(raw, "accessorial_fees"):
+        if _is_useful_accessorial_fee(item):
+            return True
+    for item in _list_field_from_raw(raw, "weight_ranges"):
+        if _is_useful_weight_range(item):
+            return True
+    return False
+
+
+def _has_legacy_useful_extraction_data(raw: dict) -> bool:
+    for name in ("origins", "destinations", "routes", "extracted_items", "uncertain_fields"):
+        items = _list_field_from_raw(raw, name)
+        if items:
+            return True
+    carrier = raw.get("detected_carrier")
+    if isinstance(carrier, str) and carrier.strip():
+        return True
+    charge = raw.get("charge_type_detected")
+    if isinstance(charge, str) and charge.strip():
+        return True
+    return False
+
+
+def _resolve_extraction_status(raw: dict, expanded: dict) -> str:
+    """Resolve status final após normalização partial-first."""
+    has_partial = _has_useful_partial_extraction_data(expanded)
+    has_legacy = _has_legacy_useful_extraction_data(expanded)
+    candidate = _normalize_temp_table_status(raw.get("status"))
+
+    if has_partial:
+        return TEMP_TABLE_STATUS_NEEDS_REVIEW
+
+    if candidate == TEMP_TABLE_STATUS_AWAITING_VALIDATION:
+        return TEMP_TABLE_STATUS_AWAITING_VALIDATION
+
+    if candidate == TEMP_TABLE_STATUS_VALIDATED:
+        return TEMP_TABLE_STATUS_VALIDATED
+
+    if has_legacy and candidate == TEMP_TABLE_STATUS_FAILED:
+        return TEMP_TABLE_STATUS_NEEDS_REVIEW
+
+    if has_legacy:
+        return candidate
+
+    if candidate == TEMP_TABLE_STATUS_NEEDS_REVIEW:
+        return TEMP_TABLE_STATUS_FAILED
+
+    return TEMP_TABLE_STATUS_FAILED
+
+
+def normalize_partial_first_extraction_to_temp_table(raw: dict) -> dict:
+    """
+    Normaliza a resposta partial-first (Etapa A) para o contrato interno da temp_table.
+
+    A Etapa A retorna apenas custos brutos detectados; o backend completa campos
+    opcionais do contrato interno sem exigir fechamento de rotas ou transportadora.
+    """
+    alerts = [
+        str(item).strip()
+        for item in _list_field_from_raw(raw, "reading_alerts")
+        if isinstance(item, str) and str(item).strip()
+    ]
+    expanded = {
+        "status": raw.get("status"),
+        "detected_carrier": raw.get("detected_carrier"),
+        "origins": _list_field_from_raw(raw, "origins"),
+        "destinations": _list_field_from_raw(raw, "destinations"),
+        "routes": _list_field_from_raw(raw, "routes"),
+        "weight_ranges": _list_field_from_raw(raw, "weight_ranges"),
+        "freight_values": _list_field_from_raw(raw, "freight_values"),
+        "accessorial_fees": _list_field_from_raw(raw, "accessorial_fees"),
+        "charge_type_detected": raw.get("charge_type_detected"),
+        "extracted_items": _list_field_from_raw(raw, "extracted_items"),
+        "uncertain_fields": _list_field_from_raw(raw, "uncertain_fields"),
+        "reading_alerts": alerts,
+        "evidence_refs": _list_field_from_raw(raw, "evidence_refs"),
+        "franquia_scope": raw.get("franquia_scope"),
+        "user_scope": raw.get("user_scope"),
+    }
+    expanded["status"] = _resolve_extraction_status(raw, expanded)
+    return expanded
+
+
+def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
+    now = _utcnow().isoformat()
+    normalized = normalize_partial_first_extraction_to_temp_table(raw)
+    status = _resolve_extraction_status(raw, normalized)
+    uncertain = (
+        normalized.get("uncertain_fields")
+        if isinstance(normalized.get("uncertain_fields"), list)
+        else []
+    )
+    alerts = [
+        str(item).strip()
+        for item in (
+            normalized.get("reading_alerts")
+            if isinstance(normalized.get("reading_alerts"), list)
+            else []
+        )
+        if isinstance(item, str) and str(item).strip()
+    ]
+
+    if _has_useful_partial_extraction_data(normalized):
+        status = TEMP_TABLE_STATUS_NEEDS_REVIEW
+    elif status == TEMP_TABLE_STATUS_NEEDS_REVIEW and not _has_legacy_useful_extraction_data(
+        normalized
+    ):
+        status = TEMP_TABLE_STATUS_FAILED
+
+    if status == TEMP_TABLE_STATUS_AWAITING_VALIDATION and (uncertain or alerts):
+        status = TEMP_TABLE_STATUS_NEEDS_REVIEW
+    if status == TEMP_TABLE_STATUS_NEEDS_REVIEW and not alerts and not uncertain:
+        alerts = [
+            "A extração encontrou dados parciais e precisa de validação humana."
+        ]
+    if status == TEMP_TABLE_STATUS_FAILED and not alerts:
+        alerts = [
+            "Não foi possível estruturar a tabela temporária a partir dos anexos enviados."
+        ]
+
+    temp_table_id = get_temp_table_id(session) or uuid4().hex
+    existing = load_temp_table_record(temp_table_id, ttl_hours=get_cleiton_doc_config().upload_ttl_hours)
+    created_at = (existing or {}).get("created_at") or now
+    return {
+        "temp_table_id": temp_table_id,
+        "status": status,
+        "source_documents": _normalize_source_doc_ids(source_doc_ids),
+        "detected_carrier": normalized.get("detected_carrier"),
+        "origins": _list_field_from_raw(normalized, "origins"),
+        "destinations": _list_field_from_raw(normalized, "destinations"),
+        "routes": _list_field_from_raw(normalized, "routes"),
+        "weight_ranges": _list_field_from_raw(normalized, "weight_ranges"),
+        "freight_values": _list_field_from_raw(normalized, "freight_values"),
+        "accessorial_fees": _list_field_from_raw(normalized, "accessorial_fees"),
+        "charge_type_detected": normalized.get("charge_type_detected"),
+        "extracted_items": _list_field_from_raw(normalized, "extracted_items"),
+        "uncertain_fields": uncertain,
+        "reading_alerts": alerts,
+        "evidence_refs": _list_field_from_raw(normalized, "evidence_refs"),
+        "created_at": created_at,
+        "updated_at": now,
+        "expires_at": _temp_table_expires_at(_normalize_source_doc_ids(source_doc_ids)),
+        "session_scope": CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+        "franquia_scope": normalized.get("franquia_scope"),
+        "user_scope": normalized.get("user_scope"),
+        "operational_owner": TEMP_TABLE_OPERATIONAL_OWNER,
+        "ui_visibility": {
+            "display_name": TEMP_TABLE_UI_DISPLAY_NAME,
+            "readonly": True,
+        },
+        "version_marker": TEMP_TABLE_VERSION_MARKER,
+    }
+
+
+def apply_temp_table_extraction_from_model_payload(
+    payload: dict | None,
+    *,
+    source_doc_ids: list[str],
+) -> dict | None:
+    _require_session()
+    normalized = _normalize_source_doc_ids(source_doc_ids)
+    if not normalized:
+        return None
+    if not isinstance(payload, dict):
+        record = _coerce_temp_table_payload({"status": TEMP_TABLE_STATUS_FAILED}, source_doc_ids=normalized)
+        return save_temp_table_record(record)
+    record = _coerce_temp_table_payload(payload, source_doc_ids=normalized)
+    return save_temp_table_record(record)
+
+
+def split_temp_table_block_from_answer(answer_text: str) -> tuple[str, dict | None]:
+    text = answer_text or ""
+    begin = text.find(TEMP_TABLE_JSON_BEGIN)
+    if begin < 0:
+        return text.strip(), None
+    end = text.find(TEMP_TABLE_JSON_END, begin)
+    if end < 0:
+        return text.strip(), None
+    json_chunk = text[begin + len(TEMP_TABLE_JSON_BEGIN) : end].strip()
+    visible = (text[:begin] + text[end + len(TEMP_TABLE_JSON_END) :]).strip()
+    if not json_chunk:
+        return visible, None
+    try:
+        parsed = json.loads(json_chunk)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return visible, None
+    return visible, parsed if isinstance(parsed, dict) else None
+
+
 def build_document_status_metadata() -> dict:
     """Metadados básicos para futuro endpoint de status da Cleide Auditoria."""
     _require_session()
     maybe_cleanup_expired_cleiton_docs()
+    sync_temp_table_with_session_documents()
     totals = get_document_session_totals()
+    temp_table = get_active_temp_table_for_session()
     return {
         "domain": CLEIDE_AUDIT_DOMAIN,
         "flow_types": {
             "upload": CLEIDE_AUDIT_DOCUMENT_UPLOAD_FLOW_TYPE,
             "prepare": CLEIDE_AUDIT_DOCUMENT_PREPARE_FLOW_TYPE,
             "chat": CLEIDE_AUDIT_CHAT_FLOW_TYPE,
+            "temp_table_extraction": CLEIDE_AUDIT_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
         },
         "documents": get_active_documents_for_session(),
+        "temp_table": temp_table,
         "allowed_formats": get_allowed_document_formats(),
         "session": {
             "count": totals["active_count"],

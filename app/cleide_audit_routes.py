@@ -17,11 +17,14 @@ from app.cleide_audit_doc_service import (
     build_document_status_metadata,
     clear_documents_for_session,
     get_allowed_document_formats,
+    get_cleide_audit_doc_ids,
     get_document_session_totals,
+    get_active_temp_table_for_session,
     maybe_cleanup_expired_cleiton_docs,
     prepare_and_register_document,
     remove_document_from_session,
 )
+from app.run_cleide_audit_temp_table import trigger_temp_table_extraction_for_session
 from app.run_cleide_audit_chat import (
     cache_chat_response,
     chat_cleide_audit_reply,
@@ -226,12 +229,31 @@ def cleide_audit_documents_upload():
             500,
         )
 
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        trigger_temp_table_extraction_for_session(
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+        )
+    except Exception:
+        logger.exception(
+            "Cleide temp_table: falha na extração pós-upload; upload preservado."
+        )
+
+    temp_table = None
+    try:
+        temp_table = get_active_temp_table_for_session()
+    except Exception:
+        logger.exception("Cleide temp_table: falha ao ler temp_table após upload.")
+
     return jsonify(
         {
             "ok": True,
             "document": document,
             "session": _session_payload(),
             "allowed_formats": get_allowed_document_formats(),
+            "temp_table": temp_table,
         }
     )
 
@@ -251,6 +273,7 @@ def cleide_audit_documents_status():
         {
             "ok": True,
             "documents": metadata["documents"],
+            "temp_table": metadata.get("temp_table"),
             "session": metadata["session"],
             "allowed_formats": metadata["allowed_formats"],
             "upload_enabled": cleiton_upload_enabled and cleide_audit_upload_enabled,
@@ -411,6 +434,8 @@ def cleide_audit_chat():
         document_file_parts=doc_ctx.get("gemini_file_parts") or None,
         has_documents=bool(doc_ctx.get("has_documents")),
         documents_meta=(doc_ctx.get("meta") or {}).get("documents"),
+        source_doc_ids=get_cleide_audit_doc_ids(session),
+        session_obj=session,
         max_history=audit_cfg.chat_max_history,
         question_max_chars=audit_cfg.question_max_chars,
         fallback_message=audit_cfg.fallback_message,

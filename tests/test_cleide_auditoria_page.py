@@ -278,6 +278,11 @@ def test_cleide_auditoria_js_mantem_endpoints_e_badges():
     assert "cleide-audit-doc-item-badge-ready" in js
     assert "cleide-audit-doc-item-badge-preparing" in js
     assert "cleide-audit-doc-item-badge-error" in js
+    assert "renderTempTableItem" in js
+    assert "temp_table" in js
+    assert "Tabela temporária extraída" in js
+    assert "TEMP_TABLE_OPERATIONAL_MESSAGES" in js
+    assert "announceTempTableStatusIfNeeded" in js
 
 
 def test_cleide_bi_continua_separado(monkeypatch):
@@ -290,3 +295,51 @@ def test_cleide_bi_continua_separado(monkeypatch):
     bi_html = web.app.test_client().get("/cleide-bi-frete").get_data(as_text=True)
     assert "BI Cleide" in bi_html
     assert "Cleide, Auditora Virtual de AgenteFrete" not in bi_html
+
+
+def test_cleide_auditoria_js_needs_review_message_atualizada():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "A tabela temporária foi gerada. Revise os dados antes de continuar." in js
+    assert "leitura incerta" not in js
+
+
+def test_cleide_auditoria_temp_table_card_clicavel():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "cleide-audit-temp-table-open-btn" in js
+    assert 'aria-label' in js
+    assert "Abrir dados da tabela temporária" in js
+    assert "openTempTableModal" in js
+    assert "currentTempTable" in js
+
+
+def test_cleide_auditoria_temp_table_modal_no_template():
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    assert 'id="cleideAuditTempTableModal"' in source
+    assert "Tabela temporária gerada" in source
+    assert "Revise os dados extraídos antes de continuar." in source
+    assert 'id="cleideAuditTempTableModalClose"' in source
+    assert "Validar e Salvar" not in source
+
+
+def test_cleide_auditoria_js_temp_table_modal_renderizacao():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "renderTempTableModalContent" in js
+    assert "freight_values" in js
+    assert "accessorial_fees" in js
+    assert "weight_ranges" in js
+    assert "reading_alerts" in js
+    assert "evidence_refs" in js
+    assert "Nenhum item identificado nesta seção." in js
+    assert "Processamento em andamento. Os dados aparecerão aqui quando a extração terminar." in js
+    assert "Validar e Salvar" not in js
+    assert "checklist" not in js.lower()
+    assert '<input' not in js
+    assert "contentEditable" not in js
+
+
+def test_cleide_auditoria_js_painel_anexos_mantem_temp_table():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "renderDocuments" in js
+    assert "renderTempTableItem" in js
+    assert "handleTempTableFromStatus" in js
+    assert "renderDocumentItem" in js
