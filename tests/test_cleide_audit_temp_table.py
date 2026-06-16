@@ -903,6 +903,7 @@ def test_chat_still_does_not_create_temp_table(web_client, monkeypatch):
 def test_temp_table_prompt_uses_partial_first_contract():
     prompt = build_cleide_audit_temp_table_technical_prompt()
     assert "custos de frete" in prompt.lower()
+    assert "freight_tables" in prompt
     assert "freight_routes" in prompt
     assert "freight_values" in prompt
     assert "accessorial_fees" in prompt
@@ -1237,7 +1238,210 @@ def test_freight_routes_normalizes_aliases():
 
 def test_temp_table_prompt_includes_freight_routes_contract():
     prompt = build_cleide_audit_temp_table_technical_prompt()
+    assert "freight_tables" in prompt
     assert "freight_routes" in prompt
-    assert "matriz principal de frete por rota" in prompt.lower()
-    assert "generalidades em freight_routes" in prompt.lower() or "nao coloque generalidades em freight_routes" in prompt.lower()
-    assert "servicos adicionais em freight_routes" in prompt.lower() or "nao coloque servicos adicionais em freight_routes" in prompt.lower()
+    assert "tabelas tarifarias" in prompt.lower()
+    assert "nao force colunas fixas de alfa" in prompt.lower()
+    assert "nao reconstrua freight_tables a partir de freight_routes" in prompt.lower()
+    assert (
+        "generalidades em freight_routes" in prompt.lower()
+        or "nao coloque generalidades em freight_routes" in prompt.lower()
+    )
+    assert (
+        "servicos adicionais em freight_routes" in prompt.lower()
+        or "nao coloque servicos adicionais em freight_routes" in prompt.lower()
+    )
+
+
+def _sample_hengst_freight_tables_payload(**overrides) -> dict:
+    payload = {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "IAM - SP CAPITAL",
+                "table_type": "weight_range_table",
+                "context": {
+                    "route_label": "IAM - SP CAPITAL",
+                    "origin": None,
+                    "destination": None,
+                    "customer": None,
+                    "supplier": None,
+                    "valid_from": "08/04/2025",
+                    "valid_to": "31/03/2026",
+                    "delivery_deadline": "72h após a coleta",
+                },
+                "columns": [
+                    "Frete Peso",
+                    "Frete",
+                    "Pedágio (F/100kg)",
+                    "TX",
+                    "Seguro",
+                    "Gris",
+                    "Imposto",
+                ],
+                "rows": [
+                    {
+                        "Frete Peso": "De 0 kgs à 50 Kgs",
+                        "Frete": "R$ 37,80",
+                        "Pedágio (F/100kg)": "R$ 2,16",
+                        "TX": "R$ 12,96",
+                        "Seguro": "0,20%",
+                        "Gris": "0,15%",
+                        "Imposto": "(+) ICMS",
+                    }
+                ],
+                "notes": "",
+                "evidence_ref": "Proposta HENGST 20252026.pdf (page 1)",
+                "confidence": "needs_review",
+            },
+            {
+                "table_title": "IAM - SP INTERIOR",
+                "table_type": "weight_range_table",
+                "context": {"route_label": "IAM - SP INTERIOR"},
+                "columns": ["Frete Peso", "Frete", "Pedágio (F/100kg)"],
+                "rows": [{"Frete Peso": "De 0 kgs à 50 Kgs", "Frete": "R$ 42,00"}],
+                "notes": "",
+                "evidence_ref": "Proposta HENGST 20252026.pdf (page 2)",
+                "confidence": "needs_review",
+            },
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [
+            {
+                "name": "Pedágio geral",
+                "value": "conforme tabela",
+                "unit": "",
+                "calculation_basis": "",
+                "notes": "",
+            }
+        ],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_freight_tables_payload_becomes_needs_review(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(saved["freight_tables"]) == 2
+
+
+def test_normalize_partial_first_preserves_freight_tables():
+    payload = _sample_hengst_freight_tables_payload()
+    normalized = normalize_partial_first_extraction_to_temp_table(payload)
+    assert normalized["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(normalized["freight_tables"]) == 2
+    table = normalized["freight_tables"][0]
+    assert table["table_title"] == "IAM - SP CAPITAL"
+    assert table["table_type"] == "weight_range_table"
+    assert table["context"]["valid_from"] == "08/04/2025"
+    assert table["columns"] == [
+        "Frete Peso",
+        "Frete",
+        "Pedágio (F/100kg)",
+        "TX",
+        "Seguro",
+        "Gris",
+        "Imposto",
+    ]
+    assert table["rows"][0]["Frete"] == "R$ 37,80"
+    assert table["evidence_ref"] == "Proposta HENGST 20252026.pdf (page 1)"
+    assert table["confidence"] == "needs_review"
+
+
+def test_coerce_temp_table_payload_preserves_freight_tables(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    assert len(saved["freight_tables"]) == 2
+    assert saved["freight_tables"][0]["columns"][0] == "Frete Peso"
+    assert saved["freight_tables"][0]["rows"][0]["Gris"] == "0,15%"
+
+
+def test_public_temp_table_exposes_freight_tables(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    public = audit_doc_service._public_temp_table(saved)
+    assert public is not None
+    assert "freight_tables" in public
+    assert len(public["freight_tables"]) == 2
+    assert public["freight_tables"][0]["table_title"] == "IAM - SP CAPITAL"
+
+
+def test_has_useful_partial_extraction_data_considers_freight_tables(web_client):
+    payload = {
+        "status": "failed",
+        "freight_tables": [
+            {
+                "table_title": None,
+                "columns": [],
+                "rows": [{"Frete": "R$ 10,00"}],
+            }
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+
+
+def test_hengst_like_payload_not_forced_to_alfa_columns(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    assert saved["freight_routes"] == []
+    table = saved["freight_tables"][0]
+    assert "Frete Peso" in table["columns"]
+    assert "weight_30" not in table["columns"]
+    assert "origin" not in table["columns"]
+
+
+def test_alfa_like_payload_still_works_with_freight_routes(web_client):
+    saved = _apply_payload(web_client, _sample_freight_routes_payload())
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(saved["freight_routes"]) == 1
+    assert saved["freight_routes"][0]["origin"] == "DF"
+
+
+def test_mark_processing_initializes_freight_tables(web_client):
+    with web_client.session_transaction() as sess:
+        sess[audit_doc_service.CLEIDE_AUDIT_DOC_IDS_SESSION_KEY] = ["doc-1"]
+    with web_client.application.app_context():
+        with web_client.application.test_request_context():
+            record = mark_temp_table_processing(["doc-1"])
+            assert record["freight_tables"] == []
+
+
+def test_freight_table_useful_with_title_only(web_client):
+    payload = {
+        "status": "needs_review",
+        "freight_tables": [{"table_title": "SÃO PAULO - JOINVILLE", "columns": [], "rows": []}],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert saved["freight_tables"][0]["table_title"] == "SÃO PAULO - JOINVILLE"
+
+
+def test_freight_table_useful_with_column_only(web_client):
+    payload = {
+        "status": "needs_review",
+        "freight_tables": [{"table_title": None, "columns": ["Frete Vol. (R$/Pallet)"], "rows": []}],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert saved["freight_tables"][0]["columns"] == ["Frete Vol. (R$/Pallet)"]

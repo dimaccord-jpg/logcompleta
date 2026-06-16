@@ -1166,6 +1166,151 @@ function renderDocumentItem(doc) {
     container.appendChild(section);
   }
 
+  var FREIGHT_TABLE_CONTEXT_FIELDS = [
+    { key: 'route_label', label: 'Rota / tabela' },
+    { key: 'origin', label: 'Origem' },
+    { key: 'destination', label: 'Destino' },
+    { key: 'customer', label: 'Cliente' },
+    { key: 'supplier', label: 'Fornecedor' },
+    { key: 'valid_from', label: 'Válido de' },
+    { key: 'valid_to', label: 'Válido até' },
+    { key: 'delivery_deadline', label: 'Prazo de entrega' }
+  ];
+
+  function hasUsefulFreightTables(tempTable) {
+    var tables = Array.isArray(tempTable.freight_tables) ? tempTable.freight_tables : [];
+    return tables.length > 0;
+  }
+
+  function renderFreightTableContext(container, context) {
+    if (!context || typeof context !== 'object') return;
+    var ctxWrap = document.createElement('div');
+    ctxWrap.className = 'cleide-audit-temp-table-modal-freight-table-context';
+    var hasAny = false;
+    FREIGHT_TABLE_CONTEXT_FIELDS.forEach(function (field) {
+      var val = context[field.key];
+      if (!hasFieldValue(val)) return;
+      hasAny = true;
+      appendDetailRow(ctxWrap, field.label, String(val));
+    });
+    if (hasAny) container.appendChild(ctxWrap);
+  }
+
+  function renderDynamicFreightTable(container, freightTable) {
+    var columns = Array.isArray(freightTable.columns) ? freightTable.columns : [];
+    var rows = Array.isArray(freightTable.rows) ? freightTable.rows : [];
+
+    if (!columns.length && !rows.length) {
+      var empty = document.createElement('p');
+      empty.className = 'cleide-audit-temp-table-modal-empty';
+      empty.textContent = 'Nenhuma linha identificada nesta tabela.';
+      container.appendChild(empty);
+      return;
+    }
+
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll';
+
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-freight-table';
+
+    if (columns.length) {
+      var thead = document.createElement('thead');
+      var headerRow = document.createElement('tr');
+      columns.forEach(function (col) {
+        appendTableCell(headerRow, col, true, false);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+    }
+
+    var tbody = document.createElement('tbody');
+    rows.forEach(function (row) {
+      if (!row || typeof row !== 'object') return;
+      var tr = document.createElement('tr');
+      if (columns.length) {
+        columns.forEach(function (col) {
+          appendTableCell(tr, row[col], false, false);
+        });
+      } else {
+        Object.keys(row).forEach(function (key) {
+          appendTableCell(tr, row[key], false, false);
+        });
+      }
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    container.appendChild(scrollWrap);
+  }
+
+  function renderFreightTableCard(container, freightTable, index) {
+    var card = document.createElement('details');
+    card.className = 'cleide-audit-temp-table-modal-freight-table-card';
+    card.open = index === 0;
+
+    var summary = document.createElement('summary');
+    summary.className = 'cleide-audit-temp-table-modal-freight-table-summary';
+    var titleText = hasFieldValue(freightTable.table_title)
+      ? String(freightTable.table_title)
+      : 'Tabela ' + (index + 1);
+    summary.textContent = titleText;
+    card.appendChild(summary);
+
+    var cardBody = document.createElement('div');
+    cardBody.className = 'cleide-audit-temp-table-modal-freight-table-body';
+
+    if (hasFieldValue(freightTable.table_type)) {
+      appendDetailRow(cardBody, 'Tipo', String(freightTable.table_type));
+    }
+    renderFreightTableContext(cardBody, freightTable.context);
+    renderDynamicFreightTable(cardBody, freightTable);
+    if (hasFieldValue(freightTable.notes)) {
+      appendDetailRow(cardBody, 'Observações', String(freightTable.notes));
+    }
+    if (hasFieldValue(freightTable.evidence_ref)) {
+      appendDetailRow(cardBody, 'Evidência', String(freightTable.evidence_ref));
+    }
+
+    card.appendChild(cardBody);
+    container.appendChild(card);
+  }
+
+  function renderFreightTablesSection(container, tempTable) {
+    appendSectionTitle(container, 'Tabelas de frete identificadas');
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-temp-table-modal-section cleide-audit-temp-table-modal-freight-tables-section';
+
+    var tables = Array.isArray(tempTable.freight_tables) ? tempTable.freight_tables : [];
+    if (!tables.length) {
+      var empty = document.createElement('p');
+      empty.className = 'cleide-audit-temp-table-modal-empty';
+      empty.textContent = 'Nenhuma tabela tarifária identificada nesta extração.';
+      section.appendChild(empty);
+      container.appendChild(section);
+      return;
+    }
+
+    tables.forEach(function (freightTable, index) {
+      if (!freightTable || typeof freightTable !== 'object') return;
+      renderFreightTableCard(section, freightTable, index);
+    });
+    container.appendChild(section);
+  }
+
+  function renderMainFreightSection(container, tempTable) {
+    if (hasUsefulFreightTables(tempTable)) {
+      renderFreightTablesSection(container, tempTable);
+      return;
+    }
+    var freightRoutes = Array.isArray(tempTable.freight_routes) ? tempTable.freight_routes : [];
+    if (freightRoutes.length) {
+      renderFreightRoutesSection(container, tempTable);
+      return;
+    }
+    renderFreightRoutesSection(container, tempTable);
+  }
+
   function getGeneralAccessorialFees(accessorialFees) {
     return (Array.isArray(accessorialFees) ? accessorialFees : []).filter(function (fee) {
       return !isPrimaryFreightAccessorialFee(fee);
@@ -1295,7 +1440,7 @@ function renderDocumentItem(doc) {
     appendMetaRow(meta, 'Expira em', formatDateTime(tempTable.expires_at));
     body.appendChild(meta);
 
-    renderFreightRoutesSection(body, tempTable);
+    renderMainFreightSection(body, tempTable);
     renderAccessorialFeesSection(body, tempTable.accessorial_fees);
     renderAdditionalInfoSection(body, tempTable);
     appendSimpleListSection(body, 'Alertas de leitura', tempTable.reading_alerts);

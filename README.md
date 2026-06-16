@@ -1,12 +1,20 @@
 # Agentefrete / Log Completa
 
 Data de consolidacao: `2026-06-16`
-Estado de referencia: `producao` / merge `41c9271`
+Estado de referencia: `producao` / merge `834ddbe`
 
-Este `README.md` resume o estado real promovido em producao apos a entrega da tabela temporaria extraida da Cleide Auditoria:
+Este `README.md` resume o estado real homologado e promovido apos a estabilizacao da auditoria documental da Cleide:
 
-- `f4ffeb1 feat: adiciona tabela temporaria na auditoria da Cleide`
-- `41c9271 merge: promove tabela temporaria da Cleide para producao`
+- `08114df feat: estabiliza tabela temporaria da auditoria Cleide`
+- `834ddbe merge: promove estabilizacao da auditoria Cleide para producao`
+
+Confirmacoes operacionais:
+
+- `homolog` contem `08114df`
+- `producao` contem merge `834ddbe`
+- homolog foi validada antes da promocao
+- producao foi validada e aprovada apos deploy
+- nao houve migration nova, nova tabela, novo campo ou alteracao manual de schema
 
 ## Estado atual do produto
 
@@ -27,17 +35,20 @@ Superficies oficiais ativas:
 - Julia: assistente estrategica e operacional logada, com suporte documental governado
 - Cleiton: governanca operacional, autorizacao, observabilidade, upload documental, limites e integracao com IA
 - Roberto: BI, previsoes e leitura forward-looking de fretes
-- Cleide: auditoria, conferencia e leitura retrospectiva
+- Cleide: entrevista de auditoria, conferencia e leitura retrospectiva
 
 ## Cleide Auditoria documental
 
 Estado atual promovido:
 
 - a rota visual oficial e `/auditoria-frete`
-- o upload documental da Cleide Auditoria usa a governanca existente
+- o upload documental usa a governanca existente do Cleiton
 - apos cada upload valido, o backend tenta extrair uma tabela temporaria de frete
+- a extracao/atualizacao da tabela temporaria ocorre no fluxo pos-upload/status/documentos
 - a tabela temporaria fica separada do chat conversacional da Cleide
-- a extração nao cria rota paralela de produto nem nova tabela de banco
+- o chat consulta contexto documental, mas nao deve criar, alterar ou sobrescrever a tabela temporaria
+- a interface exibe a tabela temporaria na area de documentos anexados/estado documental com acoes de revisao e validacao humana
+- a extracao nao cria rota paralela de produto nem nova tabela de banco
 
 Contratos oficiais do fluxo:
 
@@ -51,11 +62,12 @@ Tabela temporaria extraida:
 
 - exibida na interface como `Tabela temporaria extraida`
 - persistida apenas como artefato tecnico temporario em arquivo/session/JSON
-- governada operacionalmente pelo Cleiton
-- vinculada ao TTL do ciclo documental da sessao
+- descartavel, derivada dos documentos da sessao e sujeita a TTL
+- governada operacionalmente pelo Cleiton, nao pela Cleide
+- vinculada ao ciclo documental da sessao
 - invalidada quando os documentos fonte mudam, sao removidos ou deixam de existir na sessao
 - obrigatoriamente sujeita a validacao humana
-- nao deve ser descrita como auditoria final
+- nao substitui auditoria final nem deve ser descrita como dado persistente
 
 Estados documentados no codigo atual:
 
@@ -72,7 +84,7 @@ Extracao tecnica:
 - modulo principal: `app/run_cleide_audit_temp_table.py`
 - prompt tecnico: `build_cleide_audit_temp_table_technical_prompt()` em `app/cleide_audit_prompt.py`
 - usa Gemini governado pelo Cleiton, com timeout proprio e fallback de modelo
-- responde JSON tecnico para estruturação de tabela temporaria, sem montar auditoria final
+- responde JSON tecnico para estruturacao de tabela temporaria, sem montar auditoria final
 
 ## Copilot da Home
 
@@ -136,6 +148,8 @@ Garantias importantes:
 - PDF pode entrar como contexto multimodal via Gemini Files
 - o sistema nao deve fingir leitura quando houver apenas placeholder ou quando o conteudo nao estiver pronto
 - arquivos temporarios ficam em `app/cleiton_doc_tmp/` e nao devem ser versionados
+- arquivos `tt_*.json`, `.cleanup_meta.json` e residuos `.json` dessa pasta nao devem entrar em commit
+- residuos `app/.tmp_repro_unit*` nao devem ser versionados
 - o store temporario persiste apenas JSON tecnico, sem bruto documental no banco
 
 ## Cleiton
@@ -151,6 +165,7 @@ Responsabilidades relevantes nesta entrega:
 - limites administrativos por tipo de arquivo
 - preparo de contexto para Julia
 - integracao com Gemini Files para PDF
+- ownership operacional da tabela temporaria da Cleide Auditoria
 
 Configuracao administrativa documental:
 
@@ -189,6 +204,7 @@ Esta entrega da Cleide Auditoria:
 - nao criou migration nova em `migrations/versions`
 - nao alterou `app/models.py`
 - nao criou nova tabela de banco nem novo campo
+- nao exigiu alteracao manual de schema
 - reutiliza o store temporario e a governanca existente
 
 Migration relevante ja existente e mantida:
@@ -200,16 +216,15 @@ Migration relevante ja existente e mantida:
 Cobertura diretamente relacionada:
 
 - `tests/test_cleide_audit_temp_table.py`
-- `tests/test_cleide_audit_doc_routes.py`
 - `tests/test_cleide_auditoria_page.py`
-- `tests/test_cleide_audit_doc_service.py`
-- `tests/test_cleide_audit_doc_context.py`
-- `tests/test_cleide_audit_chat_routes.py`
 
-Validacao critica registrada antes da promocao:
+Validacoes registradas antes da promocao:
 
-- `115 passed, 2 warnings`
-- warnings de dependencia/deprecacao, sem falha funcional
+- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
+- resultado: `99 passed, 2 warnings`
+- `python -m pytest`
+- resultado: `1114 passed, 36 warnings`
+- warnings conhecidos de dependencia/uso legado, sem bloqueio da entrega
 
 ## Documentos oficiais de apoio
 

@@ -676,6 +676,7 @@ def _public_temp_table(record: dict | None) -> dict | None:
         "origins": list(record.get("origins") or []),
         "destinations": list(record.get("destinations") or []),
         "routes": list(record.get("routes") or []),
+        "freight_tables": list(record.get("freight_tables") or []),
         "freight_routes": list(record.get("freight_routes") or []),
         "weight_ranges": list(record.get("weight_ranges") or []),
         "freight_values": list(record.get("freight_values") or []),
@@ -899,6 +900,7 @@ def mark_temp_table_processing(source_doc_ids: list[str], *, user_scope=None, fr
         "origins": [],
         "destinations": [],
         "routes": [],
+        "freight_tables": [],
         "freight_routes": [],
         "weight_ranges": [],
         "freight_values": [],
@@ -1074,7 +1076,125 @@ def _normalize_freight_routes(raw_routes) -> list[dict]:
     return normalized
 
 
+def _normalize_freight_table_context(raw_context) -> dict:
+    if not isinstance(raw_context, dict):
+        return {
+            "route_label": None,
+            "origin": None,
+            "destination": None,
+            "customer": None,
+            "supplier": None,
+            "valid_from": None,
+            "valid_to": None,
+            "delivery_deadline": None,
+        }
+    return {
+        "route_label": _optional_normalized_str(raw_context.get("route_label")),
+        "origin": _optional_normalized_str(raw_context.get("origin")),
+        "destination": _optional_normalized_str(raw_context.get("destination")),
+        "customer": _optional_normalized_str(raw_context.get("customer")),
+        "supplier": _optional_normalized_str(raw_context.get("supplier")),
+        "valid_from": _optional_normalized_str(raw_context.get("valid_from")),
+        "valid_to": _optional_normalized_str(raw_context.get("valid_to")),
+        "delivery_deadline": _optional_normalized_str(raw_context.get("delivery_deadline")),
+    }
+
+
+def _normalize_freight_table_row(item, columns: list[str]) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    normalized: dict = {}
+    for col in columns:
+        if col in item:
+            val = item.get(col)
+            if val is None:
+                normalized[col] = None
+            elif isinstance(val, str):
+                normalized[col] = val
+            else:
+                normalized[col] = str(val)
+    for key, val in item.items():
+        if key not in normalized and isinstance(key, str) and key.strip():
+            if val is None:
+                normalized[key] = None
+            elif isinstance(val, str):
+                normalized[key] = val
+            else:
+                normalized[key] = str(val)
+    return normalized
+
+
+def _normalize_freight_table_item(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    raw_columns = item.get("columns")
+    columns: list[str] = []
+    if isinstance(raw_columns, list):
+        for col in raw_columns:
+            if isinstance(col, str):
+                candidate = col.strip()
+                if candidate:
+                    columns.append(candidate)
+    raw_rows = item.get("rows")
+    rows: list[dict] = []
+    if isinstance(raw_rows, list):
+        for row in raw_rows:
+            normalized_row = _normalize_freight_table_row(row, columns)
+            if normalized_row:
+                rows.append(normalized_row)
+    return {
+        "table_title": _optional_normalized_str(item.get("table_title")),
+        "table_type": _optional_normalized_str(item.get("table_type")),
+        "context": _normalize_freight_table_context(item.get("context")),
+        "columns": columns,
+        "rows": rows,
+        "notes": _optional_normalized_str(item.get("notes")) or "",
+        "evidence_ref": _optional_normalized_str(item.get("evidence_ref")),
+        "confidence": _optional_normalized_str(item.get("confidence")),
+    }
+
+
+def _row_has_any_value(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    for val in row.values():
+        if val is None:
+            continue
+        if isinstance(val, str) and not val.strip():
+            continue
+        return True
+    return False
+
+
+def _is_useful_freight_table(item) -> bool:
+    normalized = _normalize_freight_table_item(item) if isinstance(item, dict) else None
+    if not normalized:
+        return False
+    if normalized.get("table_title"):
+        return True
+    if normalized.get("columns"):
+        return True
+    for row in normalized.get("rows") or []:
+        if _row_has_any_value(row):
+            return True
+    return False
+
+
+def _normalize_freight_tables(raw_tables) -> list[dict]:
+    if not isinstance(raw_tables, list):
+        return []
+    normalized: list[dict] = []
+    for item in raw_tables:
+        table = _normalize_freight_table_item(item)
+        if table is not None:
+            normalized.append(table)
+    return normalized
+
+
 def _has_useful_partial_extraction_data(raw: dict) -> bool:
+    for item in _list_field_from_raw(raw, "freight_tables"):
+        if _is_useful_freight_table(item):
+            return True
     for item in _list_field_from_raw(raw, "freight_routes"):
         if _is_useful_freight_route(item):
             return True
@@ -1149,6 +1269,7 @@ def normalize_partial_first_extraction_to_temp_table(raw: dict) -> dict:
         "origins": _list_field_from_raw(raw, "origins"),
         "destinations": _list_field_from_raw(raw, "destinations"),
         "routes": _list_field_from_raw(raw, "routes"),
+        "freight_tables": _normalize_freight_tables(_list_field_from_raw(raw, "freight_tables")),
         "freight_routes": _normalize_freight_routes(_list_field_from_raw(raw, "freight_routes")),
         "weight_ranges": _list_field_from_raw(raw, "weight_ranges"),
         "freight_values": _list_field_from_raw(raw, "freight_values"),
@@ -1213,6 +1334,7 @@ def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
         "origins": _list_field_from_raw(normalized, "origins"),
         "destinations": _list_field_from_raw(normalized, "destinations"),
         "routes": _list_field_from_raw(normalized, "routes"),
+        "freight_tables": _normalize_freight_tables(_list_field_from_raw(normalized, "freight_tables")),
         "freight_routes": _normalize_freight_routes(_list_field_from_raw(normalized, "freight_routes")),
         "weight_ranges": _list_field_from_raw(normalized, "weight_ranges"),
         "freight_values": _list_field_from_raw(normalized, "freight_values"),
