@@ -1,9 +1,9 @@
 # Arquitetura Oficial
 
 Data de consolidacao: `2026-06-16`
-Commit de referencia: `41c9271`
+Commit de referencia: `834ddbe`
 
-Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos a entrega da tabela temporaria da Cleide Auditoria.
+Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos a estabilizacao da auditoria documental da Cleide.
 
 ## Principios
 
@@ -13,12 +13,14 @@ Nao criar:
 - bypass de autorizacao ou franquia
 - leitura documental inventada
 - persistencia desnecessaria em banco para contexto temporario
+- documentacao que trate a tabela temporaria como auditoria final ou dado persistente
 
 Sempre:
 
 - usar os trilhos oficiais
 - tratar o codigo atual como fonte de verdade
 - manter observabilidade e governanca centrais no Cleiton
+- manter a separacao entre extracao documental e chat conversacional da Cleide
 
 ## Superficies e papeis
 
@@ -41,6 +43,7 @@ Sempre:
 
 - papel: governanca operacional central
 - controla autorizacao, observabilidade, limites, upload documental, preparo de contexto e integracao com IA
+- e o owner operacional da tabela temporaria da auditoria documental
 - nao deve ser descrito apenas como agente de chat
 
 ### Roberto
@@ -107,6 +110,7 @@ O fluxo documental da Cleide Auditoria opera dentro da governanca existente e na
 Contratos reais:
 
 - o upload registra o documento na sessao e tenta acionar extracao tecnica pos-upload
+- a atualizacao da tabela temporaria continua no fluxo documental/status, nao no chat
 - a extracao tecnica usa `app/run_cleide_audit_temp_table.py`
 - o prompt tecnico fica em `build_cleide_audit_temp_table_technical_prompt()`
 - a resposta esperada do modelo e JSON tecnico, sem auditoria final
@@ -119,7 +123,7 @@ Garantias:
 - o `operational_owner` e `cleiton`
 - o ciclo de vida depende do TTL dos documentos da sessao
 - invalidacoes ocorrem quando os documentos fonte mudam ou sao removidos
-- nao ha migration nova nem nova tabela de banco para esse fluxo
+- nao ha migration nova, nova tabela de banco, novo campo ou alteracao manual de schema para esse fluxo
 
 ## Arquitetura documental da Julia
 

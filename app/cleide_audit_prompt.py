@@ -64,7 +64,7 @@ def build_cleide_audit_temp_table_technical_prompt() -> str:
 Voce e um extrator tecnico de custos de frete para a Cleide Auditoria.
 
 Objetivo:
-Ler os anexos desta sessao e extrair a matriz principal de frete por rota (origem, destino, tipo e valores por faixa de peso), alem de generalidades e servicos adicionais, para compor uma tabela temporaria para validacao humana.
+Ler os anexos desta sessao e extrair fielmente as tabelas tarifarias de frete presentes no documento, alem de generalidades e servicos adicionais, para compor uma tabela temporaria para validacao humana.
 
 Esta etapa NAO deve montar auditoria final.
 Esta etapa deve capturar dados uteis detectados no documento, inclusive parcialmente.
@@ -77,24 +77,34 @@ Regras obrigatorias:
 - Nao invente dados ausentes.
 - Nao presuma layout fixo, transportadora fixa ou formato unico.
 - Aceite extracao parcial.
-- Extraia a matriz principal de frete por rota em freight_routes.
-- Cada linha da tabela de frete deve virar uma entrada em freight_routes.
+- Primeiro identifique todas as tabelas tarifarias presentes no documento.
+- Para cada tabela tarifaria, crie uma entrada em freight_tables.
+- Preserve o titulo real da tabela em table_title.
+- Preserve o contexto da tabela em context (route_label, origin, destination, customer, supplier, valid_from, valid_to, delivery_deadline).
+- Preserve as colunas reais da tabela em columns, na ordem em que aparecem.
+- Preserve as linhas reais da tabela em rows, com chaves dinamicas conforme columns.
+- Nao force colunas fixas de ALFA (origem/destino/faixas 30/50/70/100) quando o documento tiver layout diferente.
+- Nao converta toda tabela em origem/destino se ela nao tiver origem/destino explicitos.
+- Nao coloque generalidades dentro de freight_tables, exceto se forem parte de uma tabela tarifaria real.
+- Preencha freight_routes apenas quando houver matriz clara de origem/destino/tipo/faixas estruturaveis (ex.: tabela ALFA).
+- Nao reconstrua freight_tables a partir de freight_routes.
 - Nao coloque generalidades em freight_routes.
 - Nao coloque servicos adicionais em freight_routes.
 - Mantenha generalidades e servicos adicionais em accessorial_fees.
 - Mantenha faixas gerais em weight_ranges.
-- Se origem, destino ou tipo nao estiverem claros, preencha com null e adicione alerta em reading_alerts.
-- Se a linha estiver parcialmente legivel, ainda assim retorne em freight_routes com confidence "needs_review".
-- Nao falhe se conseguir extrair pelo menos parte da matriz.
-- Se encontrar qualquer dado util em freight_routes, freight_values, accessorial_fees ou weight_ranges, use status "needs_review".
+- Se origem, destino ou tipo nao estiverem claros em freight_routes, preencha com null e adicione alerta em reading_alerts.
+- Se a linha estiver parcialmente legivel, ainda assim retorne com confidence "needs_review".
+- Nao falhe se conseguir extrair pelo menos parte dos dados.
+- Se encontrar qualquer dado util em freight_tables, freight_routes, freight_values, accessorial_fees ou weight_ranges, use status "needs_review".
 - Use status "failed" somente se nao encontrar nenhum dado util de frete.
-- Quando houver duvida, mantenha o item com descricao simples e registre alerta.
+- Quando houver duvida, mantenha o item com descricao simples e registre alerta em reading_alerts.
 - Limite evidence_refs ao minimo necessario.
 
 Retorne exatamente um objeto JSON neste formato:
 
 {
   "status": "needs_review",
+  "freight_tables": [],
   "freight_routes": [],
   "freight_values": [],
   "accessorial_fees": [],
@@ -103,7 +113,50 @@ Retorne exatamente um objeto JSON neste formato:
   "evidence_refs": []
 }
 
-Formato sugerido para freight_routes (uma entrada por linha da matriz de frete):
+Formato sugerido para freight_tables (uma entrada por tabela tarifaria identificada no documento):
+[
+  {
+    "table_title": "IAM - SP CAPITAL",
+    "table_type": "weight_range_table",
+    "context": {
+      "route_label": "IAM - SP CAPITAL",
+      "origin": null,
+      "destination": null,
+      "customer": null,
+      "supplier": null,
+      "valid_from": "08/04/2025",
+      "valid_to": "31/03/2026",
+      "delivery_deadline": "72h apos a coleta"
+    },
+    "columns": [
+      "Frete Peso",
+      "Frete",
+      "Pedagio (F/100kg)",
+      "TX",
+      "Seguro",
+      "Gris",
+      "Imposto"
+    ],
+    "rows": [
+      {
+        "Frete Peso": "De 0 kgs a 50 Kgs",
+        "Frete": "R$ 37,80",
+        "Pedagio (F/100kg)": "R$ 2,16",
+        "TX": "R$ 12,96",
+        "Seguro": "0,20%",
+        "Gris": "0,15%",
+        "Imposto": "(+) ICMS"
+      }
+    ],
+    "notes": "",
+    "evidence_ref": "Proposta HENGST 20252026.pdf (page 1)",
+    "confidence": "needs_review"
+  }
+]
+
+O campo context aceita dados parciais. Se algo nao estiver claro, use null.
+
+Formato sugerido para freight_routes (opcional — apenas quando houver matriz origem/destino/tipo/faixas estruturaveis):
 [
   {
     "origin": "DF",

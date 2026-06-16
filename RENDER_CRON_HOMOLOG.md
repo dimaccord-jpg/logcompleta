@@ -13,7 +13,8 @@ Consulte este arquivo somente para detalhes especificos de execucao automatica e
 - `CRON_SECRET` configurado
 - `APP_BASE_URL` configurado no Cron Job
 - persistencia valida
-- migrations ja tratadas no ambiente alvo
+- migrations existentes ja tratadas no ambiente alvo
+- estado homologado de referencia: `08114df`
 
 ## Comandos Render
 
@@ -30,26 +31,23 @@ curl -fsS -X POST "$APP_BASE_URL/cron/billing-snapshot" -H "X-Cron-Secret: $CRON
 
 ## Validacao
 
-- cron protegido responde `403` sem segredo;
-- cron protegido responde `403` com header invalido;
-- cron responde `200` com segredo valido;
-- `curl -f` torna falhas `4xx/5xx` visiveis no Render;
-- `?secret=` permanece apenas como compatibilidade temporaria e sera removido apos a homologacao;
-- `/cron/finance` executa a mesma coleta do comando `python -m app.finance`, mas dentro do servico principal;
-- a resposta deve expor `monetizacao_downgrade` para inspecao operacional da virada;
-- downgrades pendentes para `starter` e `free` so sao efetivados por essa rotina, nao pelo frontend;
-- tarefas automaticas nao quebram health checks;
-- execucao de indices usa caminho persistente;
-- nao considerar cron homologado sem ambiente e schema validos.
+- cron protegido responde `403` sem segredo
+- cron protegido responde `403` com header invalido
+- cron responde `200` com segredo valido
+- `curl -f` torna falhas `4xx/5xx` visiveis no Render
+- `?secret=` permanece apenas como compatibilidade temporaria
+- `/cron/finance` executa a mesma coleta do comando `python -m app.finance`, mas dentro do servico principal
+- a resposta deve expor `monetizacao_downgrade` para inspecao operacional da virada
+- downgrades pendentes para `starter` e `free` so sao efetivados por essa rotina, nao pelo frontend
+- tarefas automaticas nao quebram health checks
+- execucao de indices usa caminho persistente
+- nao considerar cron homologado sem ambiente e schema validos
 
-## Papel no Fluxo Stripe
+## Observacao sobre a entrega Cleide
 
-- `/cron/executar-cleiton` chama `efetivar_mudancas_pendentes_ciclo()`;
-- `/cron/finance` atualiza Dolar, Petroleo, BDI e FBX no mesmo `indices.json` persistente do servico principal;
-- a rotina procura `ContaMonetizacaoVinculo` ativos com `mudanca_pendente=true`;
-- quando `efetivar_em` chega, aplica o `plano_futuro` na `Franquia` e limpa a pendencia;
-- para `free`, remove `fim_ciclo`, ajusta `inicio_ciclo` e zera `consumo_acumulado`;
-- para `starter`, reinicia o ciclo mensal interno a partir de `efetivar_em`.
+- a promocao da estabilizacao da auditoria Cleide nao adicionou migration propria ao cron
+- a tabela temporaria da auditoria continua fora do schema persistente
+- os cron jobs nao devem depender de `app/cleiton_doc_tmp/` nem versionar residuos locais
 
 ## Referencia Principal
 

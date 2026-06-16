@@ -1,7 +1,7 @@
 # Troubleshooting Operacional
 
 Data de consolidacao: `2026-06-16`
-Commit de referencia: `41c9271`
+Commit de referencia: `834ddbe`
 
 ## 1. Home publica sem responder
 
@@ -102,6 +102,7 @@ Regra oficial:
 
 - a extracao acontece apos upload bem-sucedido
 - o chat da Cleide continua separado da extracao tecnica
+- Cleiton e o owner operacional da tabela temporaria
 - `temp_table` pode nao existir se a extracao falhar, expirar ou se os documentos fonte mudarem
 
 ## 10. Tabela temporaria sumiu depois de remover ou trocar documentos
@@ -114,13 +115,29 @@ Comportamento esperado:
 
 Isso nao e regressao por si so. E o comportamento oficial do ciclo temporario governado.
 
-## 11. Arquivos temporarios tecnicos apareceram no Git
+## 11. Chat da Cleide alterou a tabela temporaria
+
+Isso deve ser tratado como regressao.
+
+Conferir:
+
+1. se a alteracao ocorreu apos `POST /api/cleide-auditoria/chat`
+2. se houve novo upload, remocao ou limpeza documental
+3. se o payload de status mudou sem evento documental correspondente
+
+Regra oficial:
+
+- o chat consulta contexto documental
+- o chat nao deve recriar, alterar ou sobrescrever a tabela temporaria
+
+## 12. Arquivos temporarios tecnicos apareceram no Git
 
 Conferir:
 
 1. `.gitignore`
 2. residuos `app/.tmp_repro_unit*`
 3. residuos `app/cleiton_doc_tmp/tt_*.json`
+4. `.cleanup_meta.json` e outros `.json` residuais em `app/cleiton_doc_tmp/`
 
 Regra oficial:
 

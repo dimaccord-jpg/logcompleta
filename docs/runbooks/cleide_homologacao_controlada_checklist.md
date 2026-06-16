@@ -4,9 +4,11 @@ Objetivo: validar comportamento real ponta-a-ponta antes da promocao definitiva,
 
 Estado desta entrega:
 
-- homolog aprovada no commit `f4ffeb1`
-- producao aprovada apos merge `41c9271`
+- homolog aprovada no commit `08114df`
+- producao aprovada apos merge `834ddbe`
 - sem migration nova
+- sem nova tabela de banco
+- sem novo campo
 - sem alteracao manual de banco
 
 ## Como usar
@@ -20,6 +22,13 @@ Estado desta entrega:
    - `C) precisa ajuste`
 
 ## Evidencias automatizadas atuais
+
+Validacoes registradas antes da promocao:
+
+- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
+- resultado: `99 passed, 2 warnings`
+- `python -m pytest`
+- resultado: `1114 passed, 36 warnings`
 
 Cobertura automatizada ja existente no projeto:
 
@@ -58,6 +67,7 @@ Cobertura automatizada ja existente no projeto:
 | 17 | Status documental da Cleide Auditoria | Endpoint devolve `documents` e `temp_table` coerentes | Auto + manual | [ ] |
 | 18 | Mudanca ou remocao de documento fonte | Temp table anterior invalidada corretamente | Auto + manual | [ ] |
 | 19 | Extracao parcial | Estado `awaiting_validation` ou `needs_review` com validacao humana obrigatoria | Auto + manual | [ ] |
+| 20 | Conversa apos extracao | Chat usa contexto, mas nao recria nem sobrescreve a tabela temporaria | Auto + manual | [ ] |
 
 ## Observabilidade a validar
 
@@ -94,7 +104,7 @@ Validar:
 7. Validar bloqueios para fora de dominio, Roberto e Julia.
 8. Repetir com usuario nao-admin no admin e confirmar `403`.
 9. Remover ou trocar documento anexado e confirmar invalidacao da tabela temporaria anterior.
-10. Conferir que nenhum `app/.tmp_repro_unit*` ou `app/cleiton_doc_tmp/tt_*.json` entrou em versionamento.
+10. Conferir que nenhum `app/.tmp_repro_unit*`, `app/cleiton_doc_tmp/tt_*.json`, `.cleanup_meta.json` ou residuo `.json` entrou em versionamento.
 
 ## Registro final
 

@@ -1,7 +1,7 @@
 # Onboarding Tecnico
 
 Data de consolidacao: `2026-06-16`
-Commit de referencia: `41c9271`
+Commit de referencia: `08114df`
 
 ## Objetivo
 
@@ -43,6 +43,8 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - upload documental da Julia nao e produto paralelo
 - Cleiton e camada central de governanca operacional
 - a tabela temporaria da Cleide Auditoria e fluxo temporario governado, nao persistencia definitiva
+- Cleide continua responsavel pela entrevista/chat de auditoria
+- Cleiton e o owner operacional da tabela temporaria
 
 ## Regras que nao podem ser quebradas
 
@@ -50,9 +52,11 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - nao inventar leitura de documento
 - nao fazer onboarding abater franquia
 - nao versionar `app/cleiton_doc_tmp/`
-- nao versionar `app/.tmp_repro_unit*` nem `tt_*.json`
+- nao versionar `app/.tmp_repro_unit*`
+- nao versionar `tt_*.json`, `.cleanup_meta.json` nem outros `.json` residuais de `app/cleiton_doc_tmp/`
 - nao documentar tabela ou migration inexistente
 - nao documentar a tabela temporaria da Cleide como auditoria final
+- nao atribuir ownership da tabela temporaria a Cleide
 
 ## Validacao minima de entrada
 
@@ -61,5 +65,6 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - validar `/chat_julia?mode=operational`
 - validar documentos da Julia com os tipos suportados
 - validar `/auditoria-frete`, upload da Cleide Auditoria e status com `temp_table`
+- validar que a tabela temporaria aparece como artefato temporario sujeito a revisao humana
 - validar admin do Cleiton
 - validar Roberto e Cleide

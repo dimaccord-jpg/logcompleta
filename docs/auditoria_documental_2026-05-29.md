@@ -1,7 +1,7 @@
 # Auditoria Documental
 
-Data da auditoria: `2026-05-29`  
-Commit de referencia: `20fa165`
+Data da auditoria: `2026-05-29`
+Commit de referencia original: `20fa165`
 
 Objetivo desta auditoria: localizar a documentacao existente, mapear aderencia ao codigo atual e registrar o que foi atualizado para refletir o estado real promovido.
 
@@ -23,9 +23,9 @@ Objetivo desta auditoria: localizar a documentacao existente, mapear aderencia a
 
 | Documento | Finalidade | Ultima atualizacao anterior | Divergencia principal |
 | --- | --- | --- | --- |
-| `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md` | Fotografia de homologacao/publicacao | `2026-05-13` (`6dc0072`) | Nao reflete integralmente Copilot conversational-first e hidden terms |
-| `RENDER_CRON_HOMOLOG.md` | Cron de homolog | `2026-04-29` (`600b0b9`) | Continua util, mas nao cobre onboarding/word cloud/admin |
-| `docs/guia_monetizacao_franquias.md` | Monetizacao, franquia e billing | `2026-05-13` (`6dc0072`) | Continua valido como trilho de governanca, mas nao detalha onboarding interno |
+| `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md` | Fotografia de homologacao/publicacao | `2026-05-13` (`6dc0072`) | Exigia alinhamento com o estado homologado/promovido atual |
+| `RENDER_CRON_HOMOLOG.md` | Cron de homolog | `2026-04-29` (`600b0b9`) | Continua util, mas precisava referenciar o estado validado atual |
+| `docs/guia_monetizacao_franquias.md` | Monetizacao, franquia e billing | `2026-05-13` (`6dc0072`) | Continua valido como trilho de governanca, sem impacto especifico desta entrega |
 | `docs/changelog_consolidado.md` | Historico de mudancas | sem consolidacao recente | Nao e fonte de verdade do estado atual |
 
 ## Documentacao obsoleta
@@ -36,15 +36,12 @@ Objetivo desta auditoria: localizar a documentacao existente, mapear aderencia a
 
 ## Documentacao ausente
 
-Arquivos ausentes identificados e criados nesta auditoria:
+Arquivos ausentes identificados e criados na auditoria original:
 
-- `docs/runbook_onboarding_copilot.md`  
-  Runbook unico para onboarding, observabilidade, handoffs, dashboard, word cloud e promocao homolog -> producao.
+- `docs/runbook_onboarding_copilot.md`
+- `docs/auditoria_documental_2026-05-29.md`
 
-- `docs/auditoria_documental_2026-05-29.md`  
-  Relatorio formal da auditoria documental solicitada.
-
-## Divergencias encontradas no inicio da auditoria
+## Divergencias encontradas no inicio da auditoria original
 
 - O `README.md` e os docs centrais ainda priorizavam a arquitetura antiga `Roberto -> Cleiton -> Julia`, sem tratar o Copilot da Home como superficie oficial separada.
 - A separacao entre Copilot e Julia estava clara no codigo, mas incompleta nos documentos.
@@ -71,30 +68,39 @@ Esta auditoria foi cruzada com:
 
 ## Complemento em 2026-06-16
 
-Auditoria complementar aplicada apos a promocao da tabela temporaria da Cleide Auditoria:
+Auditoria complementar aplicada apos a promocao da estabilizacao da auditoria documental da Cleide:
 
-- homolog aprovada no commit `f4ffeb1`
-- producao aprovada apos merge `41c9271`
+- homolog aprovada no commit `08114df`
+- producao aprovada apos merge `834ddbe`
 - nenhuma migration criada
 - nenhuma alteracao estrutural em banco
+- nenhuma nova tabela de banco
+- nenhum novo campo
 
 Documentos revisados neste complemento:
 
 - `README.md`
 - `docs/estado_oficial_consolidado.md`
 - `docs/arquitetura_oficial.md`
+- `docs/runtime_ia_e_observabilidade.md`
 - `docs/onboarding_tecnico.md`
 - `docs/troubleshooting_operacional.md`
 - `app/README_RUN.md`
 - `app/README_DEPLOY.md`
 - `app/copilot_capabilities.md`
 - `docs/runbooks/cleide_homologacao_controlada_checklist.md`
+- `DIAGNOSTICO_HOMOLOG_PUBLICACAO.md`
+- `RENDER_CRON_HOMOLOG.md`
 
 Escopo corrigido neste complemento:
 
-- a tabela temporaria da Cleide Auditoria passou de planejamento para implementacao ativa
-- a extracao ocorre no fluxo pos-upload e permanece separada do chat
+- a tabela temporaria da Cleide Auditoria passou de implementacao inicial para estado estabilizado em homolog e producao
+- a extracao ocorre no fluxo pos-upload/status e permanece separada do chat
 - o owner operacional da tabela temporaria e o Cleiton
+- Cleide continua responsavel pela entrevista/chat de auditoria
 - a tabela continua temporaria, descartavel e sujeita a validacao humana
-- nao houve migration nem nova tabela de banco
-- os testes direcionados da entrega foram registrados com `115 passed, 2 warnings`
+- nao houve migration, nova tabela de banco, novo campo ou schema novo
+- `app/cleiton_doc_tmp/` permanece ignorada e local
+- `tt_*.json`, `.cleanup_meta.json`, demais `.json` residuais da pasta e `app/.tmp_repro_unit*` nao devem ser versionados
+- os testes direcionados da entrega foram registrados com `99 passed, 2 warnings`
+- a suite completa foi registrada com `1114 passed, 36 warnings`

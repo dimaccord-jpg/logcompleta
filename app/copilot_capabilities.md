@@ -147,7 +147,7 @@ Júlia pode aceitar documentos no chat logado para **apoio consultivo**, mas **n
 
 ### 5.2 Auditoria da Cleide (`/auditoria-frete`)
 
-**Auditoria da Cleide** (`/auditoria-frete`) já opera como trilho documental governado para auditoria assistida.
+**Auditoria da Cleide** (`/auditoria-frete`) já opera como trilho documental governado para auditoria assistida e reflete o estado estabilizado promovido em homolog/producao sem migration adicional.
 
 Contrato real da experiência:
 
@@ -162,6 +162,8 @@ Guardrails obrigatórios:
 - a tabela temporária não é auditoria final;
 - o usuário precisa validar a extração humanamente;
 - a responsabilidade operacional da tabela temporária é do **Cleiton**;
+- a Cleide continua responsável pela entrevista/chat de auditoria;
+- o chat não deve recriar, alterar ou sobrescrever a tabela temporária;
 - a extração é temporária, descartável e não cria nova tabela de banco.
 
 **Destino técnico (Auditoria visual):** `/auditoria-frete` (endpoint: `cleide.cleide_auditoria`).

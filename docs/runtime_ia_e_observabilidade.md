@@ -1,11 +1,11 @@
 # Runtime IA e Observabilidade
 
-Data de consolidacao: `2026-06-05`
-Commit de referencia: `b5fc444`
+Data de consolidacao: `2026-06-16`
+Commit de referencia: `834ddbe`
 
 ## Objetivo
 
-Consolidar o runtime oficial de IA, consumo tecnico e governanca documental apos a entrega da Julia documental.
+Consolidar o runtime oficial de IA, consumo tecnico e governanca documental no estado homologado em `08114df` e promovido em producao por `834ddbe`.
 
 ## Eventos oficiais
 
@@ -39,7 +39,7 @@ Leitura pratica:
 
 - `onboarding_discovery`: Copilot da Home
 - `operacional`: Julia, Roberto e Cleide em consumo real
-- `administrativo`: painois e agregacoes administrativas
+- `administrativo`: paineis e agregacoes administrativas
 
 ## Onboarding discovery
 
@@ -70,6 +70,17 @@ Pontos observaveis:
 
 O sistema deve deixar explicito quando o PDF ainda nao esta pronto para leitura pela IA ou quando o contexto e apenas multimodal.
 
+## Cleide Auditoria e observabilidade
+
+O fluxo documental da Cleide Auditoria tambem opera no trilho oficial do Cleiton.
+
+Pontos observaveis:
+
+- upload/status documental podem expor `temp_table` quando houver artefato ativo
+- a extracao da tabela temporaria ocorre no fluxo pos-upload/status
+- o chat da Cleide consome contexto, mas nao deve alterar o ciclo de vida da `temp_table`
+- a tabela temporaria continua descartavel, sujeita a TTL e a validacao humana
+
 ## Metricas administrativas
 
 - `operational_tokens_month`
@@ -97,4 +108,4 @@ Campos principais:
 - `prompt_max_files_considered`
 - limites por tipo para `pdf`, `excel`, `docx`, `txt`, `xml`, `csv`
 
-Nao houve migration nova para essa configuracao.
+Nao houve migration nova, tabela nova, campo novo ou alteracao manual de schema para essa configuracao ou para a estabilizacao da auditoria Cleide.

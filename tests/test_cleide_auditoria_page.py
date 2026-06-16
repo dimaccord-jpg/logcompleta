@@ -324,6 +324,7 @@ def test_cleide_auditoria_temp_table_modal_no_template():
 def test_cleide_auditoria_js_temp_table_modal_renderizacao():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
     assert "renderTempTableModalContent" in js
+    assert "freight_tables" in js
     assert "freight_values" in js
     assert "freight_routes" in js
     assert "accessorial_fees" in js
@@ -338,15 +339,19 @@ def test_cleide_auditoria_js_temp_table_modal_renderizacao():
     assert "contentEditable" not in js
     assert "document.createElement" in js
     assert "textContent" in js
+    assert "não informado" in js
 
 
 def test_cleide_auditoria_js_temp_table_modal_blocos_operacionais():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "Tabelas de frete identificadas" in js
     assert "Frete por rota" in js
     assert "Generalidades e serviços adicionais" in js
     assert "Informações adicionais" in js
     assert "Alertas de leitura" in js
     assert "Evidências/referências" in js
+    assert "renderFreightTablesSection" in js
+    assert "renderMainFreightSection" in js
     assert "renderFreightRoutesSection" in js
     assert "renderAdditionalInfoSection" in js
 
@@ -370,14 +375,23 @@ def test_cleide_auditoria_js_temp_table_freight_route_columns():
         assert column in js
 
 
-def test_cleide_auditoria_js_temp_table_modal_prioriza_freight_routes():
+def test_cleide_auditoria_js_temp_table_modal_prioriza_freight_tables():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "freight_tables" in js
+    assert "hasUsefulFreightTables" in js
+    assert "renderMainFreightSection" in js
+    assert "renderFreightTablesSection" in js
+    assert "renderDynamicFreightTable" in js
+    assert "renderFreightTableCard" in js
+    assert "renderFreightTableContext" in js
+    assert "Tabelas de frete identificadas" in js
+    assert "hasUsefulFreightTables(tempTable)" in js
+    assert "freightRoutes.length" in js
     assert "resolveFreightRouteRows" in js
     assert "buildStructuredFreightRows" in js
     assert "buildPartialFreightRows" in js
     assert "isPartial: false" in js
     assert "isPartial: true" in js
-    assert "freight_routes.length" in js or "freightRoutes.length" in js
     assert "route.freight_type" in js
     assert "extração parcial" in js
     assert "não identificado" in js
@@ -388,6 +402,14 @@ def test_cleide_auditoria_js_temp_table_modal_prioriza_freight_routes():
         in js
     )
     assert "Nenhuma rota de frete identificada nesta extração." in js
+    main_block_start = js.index("function renderMainFreightSection")
+    main_block = js[main_block_start:main_block_start + 600]
+    assert "hasUsefulFreightTables(tempTable)" in main_block
+    assert "renderFreightTablesSection" in main_block
+    assert "renderFreightRoutesSection" in main_block
+    tables_call = main_block.index("renderFreightTablesSection")
+    routes_call = main_block.index("renderFreightRoutesSection")
+    assert tables_call < routes_call
 
 
 def test_cleide_auditoria_js_temp_table_additional_info_empty_message():
@@ -411,6 +433,7 @@ def test_cleide_auditoria_template_temp_table_modal_layout():
     source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
     assert "cleide-audit-temp-table-modal-freight-scroll" in source
     assert "cleide-audit-temp-table-modal-freight-table" in source
+    assert "cleide-audit-temp-table-modal-freight-table-card" in source
     assert "overflow-x: auto" in source
     assert "min-width: 860px" in source
     assert "position: sticky" in source
