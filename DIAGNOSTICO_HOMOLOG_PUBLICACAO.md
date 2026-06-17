@@ -6,12 +6,13 @@ Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 ## Estado Atual Confirmado
 
 - pacote funcional da fase atual integrado localmente
-- homolog validada no commit `08114df`
-- producao atualizada e aprovada apos merge `834ddbe`
+- homolog validada no commit `c5a73e1`
+- producao atualizada e aprovada apos merge `5f10f6d`
 - estabilizacao da auditoria documental da Cleide promovida sem nova migration
 - tabela temporaria da auditoria Cleide estabilizada como artefato tecnico temporario, descartavel e sujeito a validacao humana
 - owner operacional da tabela temporaria: Cleiton
 - chat da Cleide permanece separado da extracao/atualizacao da tabela temporaria
+- modal da tabela temporaria mantido em modo somente leitura
 - documentos legais estabilizados com storage persistente em `settings.data_dir`, sem dependencia operacional de `app/static/...`
 - rota publica `/termos-de-uso` restaurada como entrada canonica para fluxo publico
 
@@ -27,6 +28,7 @@ Nao tratar como opcional:
 - disco persistente do Render montado e coerente com `APP_DATA_DIR` ou `RENDER_DISK_PATH`
 - telas admin alinhadas com o backend
 - garantia de que `app/cleiton_doc_tmp/` e residuos `tt_*.json`, `.cleanup_meta.json` e `.tmp_repro_unit*` nao entrem em versionamento
+- garantia de que nenhum `.db` local ou banco embarcado foi versionado para essa entrega
 
 ## Go / No-Go
 

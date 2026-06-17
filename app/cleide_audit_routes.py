@@ -14,6 +14,13 @@ from flask_login import current_user
 from app.cleide_audit_doc_context import build_cleide_audit_document_context_for_chat
 from app.cleide_audit_doc_service import (
     CLEIDE_AUDIT_CHAT_FLOW_TYPE,
+    ERROR_TEMP_TABLE_EXPIRED,
+    ERROR_TEMP_TABLE_ID_MISMATCH,
+    ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+    ERROR_TEMP_TABLE_NOT_FOUND,
+    ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE,
+    ERROR_TEMP_TABLE_SCOPE_MISMATCH,
+    CleideAuditTempTableError,
     build_document_status_metadata,
     clear_documents_for_session,
     get_allowed_document_formats,
@@ -23,6 +30,7 @@ from app.cleide_audit_doc_service import (
     maybe_cleanup_expired_cleiton_docs,
     prepare_and_register_document,
     remove_document_from_session,
+    save_temp_table_edit,
 )
 from app.run_cleide_audit_temp_table import trigger_temp_table_extraction_for_session
 from app.run_cleide_audit_chat import (
@@ -132,6 +140,18 @@ def _http_status_for_error(error_code: str) -> int:
         return 413
     if error_code == ERROR_MAX_FILES:
         return 409
+    return 400
+
+
+def _http_status_for_temp_table_error(error_code: str) -> int:
+    if error_code == ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE:
+        return 413
+    if error_code == ERROR_TEMP_TABLE_ID_MISMATCH:
+        return 409
+    if error_code == ERROR_TEMP_TABLE_SCOPE_MISMATCH:
+        return 403
+    if error_code in {ERROR_TEMP_TABLE_NOT_FOUND, ERROR_TEMP_TABLE_EXPIRED}:
+        return 404
     return 400
 
 
@@ -320,6 +340,61 @@ def cleide_audit_documents_clear():
     if "removed_from_session" in result:
         payload["removed_from_session"] = result["removed_from_session"]
     return jsonify(payload)
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/temp-table/save", methods=["POST"])
+def cleide_audit_temp_table_save():
+    unauthorized = _authorize_cleide_audit_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                    "message": "Payload deve ser um objeto JSON.",
+                }
+            ),
+            400,
+        )
+
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        temp_table = save_temp_table_edit(
+            data,
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+            content_length=request.content_length,
+        )
+    except CleideAuditTempTableError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_temp_table_error(exc.error_code),
+        )
+    except Exception:
+        logger.exception("Falha inesperada ao salvar revisão da temp_table da Cleide Auditoria.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "temp_table_save_failed",
+                    "message": "Não foi possível salvar a revisão da tabela temporária.",
+                }
+            ),
+            500,
+        )
+
+    return jsonify({"ok": True, "temp_table": temp_table})
 
 
 @cleide_audit_bp.route("/api/cleide-auditoria/chat", methods=["POST"])

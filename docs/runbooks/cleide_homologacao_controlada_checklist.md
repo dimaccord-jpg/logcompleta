@@ -1,11 +1,13 @@
 # Cleide - Homologacao Operacional Controlada
 
+Este documento e um runbook historico/de validacao controlada da entrega aprovada. Nao deve ser interpretado como descricao de um fluxo de produto paralelo nem como fonte primaria da arquitetura ativa.
+
 Objetivo: validar comportamento real ponta-a-ponta antes da promocao definitiva, sem alterar arquitetura, endpoint, governanca, billing, observabilidade ou os modulos Roberto/Julia.
 
 Estado desta entrega:
 
-- homolog aprovada no commit `08114df`
-- producao aprovada apos merge `834ddbe`
+- homolog aprovada no commit `c5a73e1`
+- producao aprovada apos merge `5f10f6d`
 - sem migration nova
 - sem nova tabela de banco
 - sem novo campo
@@ -26,9 +28,9 @@ Estado desta entrega:
 Validacoes registradas antes da promocao:
 
 - `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado: `99 passed, 2 warnings`
+- resultado: `109 passed, 2 warnings`
 - `python -m pytest`
-- resultado: `1114 passed, 36 warnings`
+- resultado: `1124 passed, 36 warnings`
 
 Cobertura automatizada ja existente no projeto:
 
@@ -66,7 +68,7 @@ Cobertura automatizada ja existente no projeto:
 | 16 | Upload documental da Cleide Auditoria | Documento registrado e retorno de `temp_table` quando disponivel | Auto + manual | [ ] |
 | 17 | Status documental da Cleide Auditoria | Endpoint devolve `documents` e `temp_table` coerentes | Auto + manual | [ ] |
 | 18 | Mudanca ou remocao de documento fonte | Temp table anterior invalidada corretamente | Auto + manual | [ ] |
-| 19 | Extracao parcial | Estado `awaiting_validation` ou `needs_review` com validacao humana obrigatoria | Auto + manual | [ ] |
+| 19 | Extracao parcial | Estado `needs_review` ou `awaiting_validation`, sempre com validacao humana obrigatoria | Auto + manual | [ ] |
 | 20 | Conversa apos extracao | Chat usa contexto, mas nao recria nem sobrescreve a tabela temporaria | Auto + manual | [ ] |
 
 ## Observabilidade a validar
@@ -104,7 +106,8 @@ Validar:
 7. Validar bloqueios para fora de dominio, Roberto e Julia.
 8. Repetir com usuario nao-admin no admin e confirmar `403`.
 9. Remover ou trocar documento anexado e confirmar invalidacao da tabela temporaria anterior.
-10. Conferir que nenhum `app/.tmp_repro_unit*`, `app/cleiton_doc_tmp/tt_*.json`, `.cleanup_meta.json` ou residuo `.json` entrou em versionamento.
+10. Abrir o card da tabela temporaria e confirmar modal somente leitura.
+11. Conferir que nenhum `app/.tmp_repro_unit*`, `app/cleiton_doc_tmp/tt_*.json`, `.cleanup_meta.json`, residuo `.json` ou `.db` local entrou em versionamento.
 
 ## Registro final
 

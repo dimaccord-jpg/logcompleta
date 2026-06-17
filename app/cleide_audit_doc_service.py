@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -104,12 +105,33 @@ TEMP_TABLE_UI_DISPLAY_NAME = "Tabela temporária extraída"
 TEMP_TABLE_JSON_BEGIN = "---CLEIDE_TEMP_TABLE---"
 TEMP_TABLE_JSON_END = "---END_CLEIDE_TEMP_TABLE---"
 
+TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES = 512 * 1024
+TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE = "save_and_advance"
+HUMAN_REVIEW_STATUS_REVIEWED = "reviewed"
+HUMAN_REVIEW_STATUS_EDITED = "edited"
+
+ERROR_TEMP_TABLE_NOT_FOUND = "cleide_audit_temp_table_not_found"
+ERROR_TEMP_TABLE_ID_MISMATCH = "cleide_audit_temp_table_id_mismatch"
+ERROR_TEMP_TABLE_EXPIRED = "cleide_audit_temp_table_expired"
+ERROR_TEMP_TABLE_INVALID_PAYLOAD = "cleide_audit_temp_table_invalid_payload"
+ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE = "cleide_audit_temp_table_payload_too_large"
+ERROR_TEMP_TABLE_SCOPE_MISMATCH = "cleide_audit_temp_table_scope_mismatch"
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
 CLEIDE_AUDIT_DOCUMENT_UPLOAD_FLOW_TYPE = "cleide_audit_document_upload"
 CLEIDE_AUDIT_DOCUMENT_PREPARE_FLOW_TYPE = "cleide_audit_document_prepare"
 CLEIDE_AUDIT_CHAT_FLOW_TYPE = "cleide_audit_chat"
 CLEIDE_AUDIT_TEMP_TABLE_EXTRACTION_FLOW_TYPE = "cleide_audit_temp_table_extraction"
 
 SOURCE_AGENT_CLEIDE_AUDIT = "cleide_audit"
+
+
+class CleideAuditTempTableError(ValueError):
+    def __init__(self, error_code: str, message: str):
+        super().__init__(message)
+        self.error_code = error_code
+        self.message = message
 
 
 def cleide_audit_upload_idempotency_key(request_id: str) -> str:
@@ -698,7 +720,390 @@ def _public_temp_table(record: dict | None) -> dict | None:
             "readonly": True,
         },
         "version_marker": record.get("version_marker"),
+        "human_review_status": record.get("human_review_status"),
+        "human_edited_at": record.get("human_edited_at"),
+        "human_edited_by_user_id": record.get("human_edited_by_user_id"),
+        "edit_version": record.get("edit_version"),
     }
+
+
+def _sanitize_cell_string(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value)
+    if not isinstance(value, str):
+        value = str(value)
+    cleaned = "".join(
+        ch for ch in value if ch in {"\n", "\t"} or (ord(ch) >= 32 and ord(ch) != 127)
+    )
+    cleaned = _HTML_TAG_RE.sub("", cleaned)
+    stripped = cleaned.strip()
+    return stripped if stripped else ""
+
+
+def _sanitize_freight_table_context(raw_context) -> dict:
+    normalized = _normalize_freight_table_context(raw_context)
+    return {
+        key: _sanitize_cell_string(val) if val is not None else None
+        for key, val in normalized.items()
+    }
+
+
+def _validate_freight_table_item_for_save(item) -> dict:
+    if not isinstance(item, dict):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Cada item de freight_tables deve ser um objeto.",
+        )
+    raw_columns = item.get("columns")
+    columns: list[str] = []
+    if raw_columns is not None:
+        if not isinstance(raw_columns, list):
+            raise CleideAuditTempTableError(
+                ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                "freight_tables.columns deve ser uma lista.",
+            )
+        for col in raw_columns:
+            if not isinstance(col, str):
+                raise CleideAuditTempTableError(
+                    ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                    "Nome de coluna inválido.",
+                )
+            candidate = _sanitize_cell_string(col)
+            if not candidate:
+                raise CleideAuditTempTableError(
+                    ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                    "Coluna sem nome não é permitida.",
+                )
+            columns.append(candidate)
+    raw_rows = item.get("rows")
+    rows: list[dict] = []
+    if raw_rows is not None:
+        if not isinstance(raw_rows, list):
+            raise CleideAuditTempTableError(
+                ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                "freight_tables.rows deve ser uma lista.",
+            )
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                raise CleideAuditTempTableError(
+                    ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                    "Cada linha de freight_tables deve ser um objeto.",
+                )
+            normalized_row: dict = {}
+            if columns:
+                for col in columns:
+                    val = row.get(col)
+                    if val is None:
+                        normalized_row[col] = None
+                    else:
+                        normalized_row[col] = _sanitize_cell_string(val)
+            else:
+                for key, val in row.items():
+                    if not isinstance(key, str) or not key.strip():
+                        continue
+                    safe_key = _sanitize_cell_string(key)
+                    if not safe_key:
+                        continue
+                    normalized_row[safe_key] = _sanitize_cell_string(val) if val is not None else None
+            if normalized_row:
+                rows.append(normalized_row)
+    if not columns and not rows:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Tabela principal não pode ficar completamente vazia.",
+        )
+    if columns and not rows:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Tabela principal não pode ficar sem linhas.",
+        )
+    if rows and not columns:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Tabela principal não pode ficar sem colunas.",
+        )
+    return {
+        "table_title": _sanitize_cell_string(item.get("table_title")),
+        "table_type": _sanitize_cell_string(item.get("table_type")),
+        "context": _sanitize_freight_table_context(item.get("context")),
+        "columns": columns,
+        "rows": rows,
+        "notes": _sanitize_cell_string(item.get("notes")) or "",
+        "evidence_ref": _sanitize_cell_string(item.get("evidence_ref")),
+        "confidence": _sanitize_cell_string(item.get("confidence")),
+    }
+
+
+def _validate_freight_tables_for_save(raw_tables) -> list[dict]:
+    if raw_tables is None:
+        return []
+    if not isinstance(raw_tables, list):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "freight_tables deve ser uma lista.",
+        )
+    if not raw_tables:
+        return []
+    return [_validate_freight_table_item_for_save(item) for item in raw_tables]
+
+
+def _validate_freight_routes_for_save(raw_routes) -> list[dict]:
+    if raw_routes is None:
+        return []
+    if not isinstance(raw_routes, list):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "freight_routes deve ser uma lista.",
+        )
+    if not raw_routes:
+        return []
+    normalized = _normalize_freight_routes(raw_routes)
+    if not normalized:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "freight_routes inválido.",
+        )
+    sanitized: list[dict] = []
+    for route in normalized:
+        sanitized.append(
+            {
+                key: _sanitize_cell_string(val) if val is not None else None
+                for key, val in route.items()
+            }
+        )
+    return sanitized
+
+
+def _normalize_accessorial_fee_item(item) -> dict | None:
+    if isinstance(item, str):
+        text = _optional_normalized_str(item)
+        if text is None:
+            return None
+        return {
+            "name": text,
+            "value": None,
+            "unit": None,
+            "calculation_basis": None,
+            "notes": "",
+            "scope": None,
+        }
+    if not isinstance(item, dict):
+        return None
+    return {
+        "name": _optional_normalized_str(item.get("name")),
+        "value": _optional_normalized_str(item.get("value")),
+        "unit": _optional_normalized_str(item.get("unit")),
+        "calculation_basis": _optional_normalized_str(item.get("calculation_basis")),
+        "notes": _optional_normalized_str(item.get("notes")) or "",
+        "scope": _optional_normalized_str(item.get("scope")),
+    }
+
+
+def _normalize_accessorial_fees(raw_fees) -> list[dict]:
+    if not isinstance(raw_fees, list):
+        return []
+    normalized: list[dict] = []
+    for item in raw_fees:
+        fee = _normalize_accessorial_fee_item(item)
+        if fee is not None:
+            normalized.append(fee)
+    return normalized
+
+
+def _validate_accessorial_fees_for_save(raw_fees) -> list[dict]:
+    if raw_fees is None:
+        return []
+    if not isinstance(raw_fees, list):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "accessorial_fees deve ser uma lista.",
+        )
+    if not raw_fees:
+        return []
+    normalized = _normalize_accessorial_fees(raw_fees)
+    if len(normalized) != len(raw_fees):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "accessorial_fees inválido.",
+        )
+    return [
+        {
+            "name": _sanitize_cell_string(item.get("name")),
+            "value": _sanitize_cell_string(item.get("value")),
+            "unit": _sanitize_cell_string(item.get("unit")),
+            "calculation_basis": _sanitize_cell_string(item.get("calculation_basis")),
+            "notes": _sanitize_cell_string(item.get("notes")) or "",
+            "scope": _sanitize_cell_string(item.get("scope")),
+        }
+        for item in normalized
+    ]
+
+
+def _assert_temp_table_scope(record: dict, *, user_scope=None, franquia_scope=None) -> None:
+    record_user = record.get("user_scope")
+    if record_user is not None and user_scope is not None and record_user != user_scope:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_SCOPE_MISMATCH,
+            "Escopo de usuário não autorizado para esta tabela temporária.",
+        )
+    record_franquia = record.get("franquia_scope")
+    if (
+        record_franquia is not None
+        and franquia_scope is not None
+        and record_franquia != franquia_scope
+    ):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_SCOPE_MISMATCH,
+            "Escopo de franquia não autorizado para esta tabela temporária.",
+        )
+
+
+def _validate_temp_table_save_payload(payload, *, content_length: int | None = None) -> dict:
+    if content_length is not None and content_length > TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE,
+            "Payload de edição excede o limite permitido.",
+        )
+    if not isinstance(payload, dict):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Payload deve ser um objeto JSON.",
+        )
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Payload JSON inválido.",
+        ) from None
+    if len(serialized.encode("utf-8")) > TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE,
+            "Payload de edição excede o limite permitido.",
+        )
+    temp_table_id = payload.get("temp_table_id")
+    if not isinstance(temp_table_id, str) or not temp_table_id.strip():
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "temp_table_id é obrigatório.",
+        )
+    edit_target = payload.get("edit_target")
+    if not isinstance(edit_target, dict):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "edit_target é obrigatório.",
+        )
+    review_action = payload.get("review_action")
+    if review_action is not None and review_action != TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "review_action inválida.",
+        )
+    freight_tables = _validate_freight_tables_for_save(edit_target.get("freight_tables"))
+    freight_routes = _validate_freight_routes_for_save(edit_target.get("freight_routes"))
+    accessorial_fees = _validate_accessorial_fees_for_save(edit_target.get("accessorial_fees"))
+    return {
+        "temp_table_id": temp_table_id.strip(),
+        "freight_tables": freight_tables,
+        "freight_routes": freight_routes,
+        "accessorial_fees": accessorial_fees,
+        "has_structural_edit": bool(freight_tables or freight_routes or accessorial_fees),
+        "review_action": review_action or TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE,
+    }
+
+
+def save_temp_table_edit(
+    payload: dict,
+    *,
+    user_scope=None,
+    franquia_scope=None,
+    content_length: int | None = None,
+) -> dict:
+    """
+    Persiste revisão/edição humana no artefato temporário tt_*.json da sessão.
+
+    Não cria novo artefato, não chama Gemini e não grava em banco relacional.
+    """
+    _require_session()
+    validated = _validate_temp_table_save_payload(payload, content_length=content_length)
+    sync_temp_table_with_session_documents()
+    active_id = get_temp_table_id(session)
+    if not active_id:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_NOT_FOUND,
+            "Nenhuma tabela temporária ativa nesta sessão.",
+        )
+    if validated["temp_table_id"] != active_id:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_ID_MISMATCH,
+            "temp_table_id não corresponde à tabela temporária ativa da sessão.",
+        )
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
+    if record is None:
+        clear_temp_table_session_refs(session)
+        _mark_session_modified()
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_NOT_FOUND,
+            "Tabela temporária ativa não encontrada.",
+        )
+    status = (record.get("status") or "").strip().lower()
+    if status == TEMP_TABLE_STATUS_EXPIRED:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_EXPIRED,
+            "A tabela temporária desta sessão expirou.",
+        )
+    if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_NOT_FOUND,
+            "Tabela temporária indisponível para revisão.",
+        )
+    _assert_temp_table_scope(record, user_scope=user_scope, franquia_scope=franquia_scope)
+
+    now = _utcnow().isoformat()
+    preserved_expires_at = record.get("expires_at")
+    updated = dict(record)
+    if validated["freight_tables"]:
+        updated["freight_tables"] = validated["freight_tables"]
+    if validated["freight_routes"]:
+        updated["freight_routes"] = validated["freight_routes"]
+    if validated["accessorial_fees"] or "accessorial_fees" in (payload.get("edit_target") or {}):
+        updated["accessorial_fees"] = validated["accessorial_fees"]
+    updated["updated_at"] = now
+    updated["expires_at"] = preserved_expires_at
+    updated["human_review_status"] = (
+        HUMAN_REVIEW_STATUS_EDITED
+        if validated["has_structural_edit"]
+        else HUMAN_REVIEW_STATUS_REVIEWED
+    )
+    updated["human_edited_at"] = now
+    if user_scope is not None:
+        updated["human_edited_by_user_id"] = user_scope
+    current_edit_version = updated.get("edit_version")
+    if isinstance(current_edit_version, int) and current_edit_version >= 0:
+        updated["edit_version"] = current_edit_version + 1
+    else:
+        updated["edit_version"] = 1
+
+    saved = save_temp_table_record(updated)
+    logger.info(
+        "Cleide temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s",
+        saved.get("temp_table_id"),
+        user_scope,
+        updated.get("human_review_status"),
+        len(saved.get("freight_tables") or []),
+        len(saved.get("freight_routes") or []),
+        len(saved.get("accessorial_fees") or []),
+    )
+    public = _public_temp_table(saved)
+    if public is None:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_NOT_FOUND,
+            "Não foi possível retornar a tabela temporária atualizada.",
+        )
+    return public
 
 
 def load_temp_table_record(temp_table_id: str, *, ttl_hours: int) -> dict | None:
@@ -1359,15 +1764,73 @@ def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
     }
 
 
+def _has_human_review_metadata(record: dict | None) -> bool:
+    if not record or not isinstance(record, dict):
+        return False
+    if record.get("human_review_status"):
+        return True
+    if record.get("human_edited_at"):
+        return True
+    if record.get("human_edited_by_user_id") is not None:
+        return True
+    edit_version = record.get("edit_version")
+    if isinstance(edit_version, int) and edit_version > 0:
+        return True
+    if isinstance(edit_version, str) and edit_version.strip().isdigit() and int(edit_version) > 0:
+        return True
+    return False
+
+
+def _source_documents_match(existing_sources, incoming_sources: list[str]) -> bool:
+    return _normalize_source_doc_ids(list(existing_sources or [])) == _normalize_source_doc_ids(
+        incoming_sources
+    )
+
+
+def _should_skip_extraction_overwrite(
+    existing: dict | None,
+    *,
+    source_doc_ids: list[str],
+    force_overwrite: bool = False,
+) -> bool:
+    if force_overwrite or not existing:
+        return False
+    if not _has_human_review_metadata(existing):
+        return False
+    return _source_documents_match(existing.get("source_documents"), source_doc_ids)
+
+
 def apply_temp_table_extraction_from_model_payload(
     payload: dict | None,
     *,
     source_doc_ids: list[str],
+    force_overwrite: bool = False,
 ) -> dict | None:
     _require_session()
     normalized = _normalize_source_doc_ids(source_doc_ids)
     if not normalized:
         return None
+
+    cfg = get_cleiton_doc_config()
+    temp_table_id = get_temp_table_id(session)
+    existing = None
+    if temp_table_id:
+        existing = load_temp_table_record(temp_table_id, ttl_hours=cfg.upload_ttl_hours)
+
+    if _should_skip_extraction_overwrite(
+        existing,
+        source_doc_ids=normalized,
+        force_overwrite=force_overwrite,
+    ):
+        logger.info(
+            "Cleide temp_table extraction skipped because human-reviewed artifact already exists "
+            "(temp_table_id=%s edit_version=%s human_review_status=%s).",
+            existing.get("temp_table_id") if existing else None,
+            (existing or {}).get("edit_version"),
+            (existing or {}).get("human_review_status"),
+        )
+        return existing
+
     if not isinstance(payload, dict):
         record = _coerce_temp_table_payload({"status": TEMP_TABLE_STATUS_FAILED}, source_doc_ids=normalized)
         return save_temp_table_record(record)

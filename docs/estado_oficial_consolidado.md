@@ -1,7 +1,7 @@
 # Estado Oficial Consolidado
 
 Data de consolidacao: `2026-06-16`
-Commit de referencia: `834ddbe`
+Commit de referencia: `5f10f6d`
 
 ## Escopo promovido
 
@@ -16,8 +16,8 @@ Estado confirmado no codigo e na promocao:
 
 ## Estado oficial de ambiente
 
-- `homolog` contem `08114df`
-- `producao` contem merge `834ddbe`
+- `homolog` contem `c5a73e1`
+- `producao` contem merge `5f10f6d`
 - producao foi validada e aprovada apos deploy
 - nao houve migration nova
 - nao houve schema novo
@@ -97,12 +97,15 @@ Estado promovido:
 - retorno de `temp_table` no upload quando disponivel
 - retorno de `temp_table` no status documental
 - o chat consulta o contexto, mas nao deve recriar, alterar ou sobrescrever a tabela temporaria
+- a interface exibe card clicavel da tabela temporaria no painel de anexos/documentos
+- o modal da tabela temporaria e somente leitura
 
 Garantias:
 
 - a tabela temporaria e descartavel e nao representa auditoria final
 - a validacao humana continua obrigatoria
 - nao houve migration, nova tabela de banco ou alteracao estrutural de schema
+- nao houve banco local ou arquivo `.db` versionado
 - o `operational_owner` da tabela temporaria e `cleiton`
 - o ciclo de vida acompanha o TTL dos documentos da sessao
 
@@ -128,6 +131,7 @@ Esta entrega:
 ## Git e temporarios
 
 - `app/cleiton_doc_tmp/` permanece local, temporaria e ignorada no Git
+- `app/cleiton_doc_tmp/` esta protegido pelo `.gitignore`
 - `tt_*.json`, `.cleanup_meta.json` e outros `.json` dessa pasta nao devem ser versionados
 - residuos `app/.tmp_repro_unit*` nao devem ser versionados
 
@@ -136,7 +140,7 @@ Esta entrega:
 Validacoes registradas para a promocao:
 
 - `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado: `99 passed, 2 warnings`
+- resultado: `109 passed, 2 warnings`
 - `python -m pytest`
-- resultado: `1114 passed, 36 warnings`
+- resultado: `1124 passed, 36 warnings`
 - warnings conhecidos de dependencia/uso legado, sem falha funcional

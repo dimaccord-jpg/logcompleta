@@ -70,8 +70,8 @@ Esta auditoria foi cruzada com:
 
 Auditoria complementar aplicada apos a promocao da estabilizacao da auditoria documental da Cleide:
 
-- homolog aprovada no commit `08114df`
-- producao aprovada apos merge `834ddbe`
+- homolog aprovada no commit `c5a73e1`
+- producao aprovada apos merge `5f10f6d`
 - nenhuma migration criada
 - nenhuma alteracao estrutural em banco
 - nenhuma nova tabela de banco
@@ -99,8 +99,10 @@ Escopo corrigido neste complemento:
 - o owner operacional da tabela temporaria e o Cleiton
 - Cleide continua responsavel pela entrevista/chat de auditoria
 - a tabela continua temporaria, descartavel e sujeita a validacao humana
+- a UI oficial exibe card clicavel e modal readonly para a tabela temporaria
 - nao houve migration, nova tabela de banco, novo campo ou schema novo
+- nao houve `.db` local versionado
 - `app/cleiton_doc_tmp/` permanece ignorada e local
 - `tt_*.json`, `.cleanup_meta.json`, demais `.json` residuais da pasta e `app/.tmp_repro_unit*` nao devem ser versionados
-- os testes direcionados da entrega foram registrados com `99 passed, 2 warnings`
-- a suite completa foi registrada com `1114 passed, 36 warnings`
+- os testes direcionados da entrega foram registrados com `109 passed, 2 warnings`
+- a suite completa foi registrada com `1124 passed, 36 warnings`

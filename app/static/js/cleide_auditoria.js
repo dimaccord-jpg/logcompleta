@@ -5,6 +5,7 @@
   var API_UPLOAD = '/api/cleide-auditoria/documents/upload';
   var API_CLEAR = '/api/cleide-auditoria/documents/clear';
   var API_CHAT = '/api/cleide-auditoria/chat';
+  var API_TEMP_TABLE_SAVE = '/api/cleide-auditoria/temp-table/save';
   var uploadInFlight = false;
   var chatInFlight = false;
   var chatHistory = [];
@@ -53,6 +54,165 @@
   var TEMP_TABLE_POLL_MS = 2500;
   var currentTempTable = null;
   var lastTempTableCardButton = null;
+  var tempTableEditMode = false;
+  var tempTableEditSnapshot = null;
+  var tempTableSaveInFlight = false;
+  var openFreightTableKeys = new Set();
+  var hasUserTouchedFreightTableOpenState = false;
+
+  function deepCloneValue(value) {
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) {
+      return value.map(function (item) { return deepCloneValue(item); });
+    }
+    var out = {};
+    Object.keys(value).forEach(function (key) {
+      out[key] = deepCloneValue(value[key]);
+    });
+    return out;
+  }
+
+  function deepCloneTempTable(tempTable) {
+    if (!tempTable) return null;
+    return deepCloneValue(tempTable);
+  }
+
+  function setTempTableModalError(message) {
+    var el = byId('cleideAuditTempTableModalError');
+    if (!el) return;
+    if (!message) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    el.hidden = false;
+    el.textContent = message;
+  }
+
+  function updateTempTableModalFooter() {
+    var editBtn = byId('cleideAuditTempTableModalEdit');
+    var cancelBtn = byId('cleideAuditTempTableModalCancelEdit');
+    var saveBtn = byId('cleideAuditTempTableModalSave');
+    var banner = byId('cleideAuditTempTableModalEditBanner');
+    if (editBtn) editBtn.hidden = !!tempTableEditMode;
+    if (cancelBtn) cancelBtn.hidden = !tempTableEditMode;
+    if (banner) banner.hidden = !tempTableEditMode;
+    document.body.classList.toggle('cleide-audit-temp-table-modal-editing', !!tempTableEditMode);
+    if (saveBtn) {
+      saveBtn.disabled = !!tempTableSaveInFlight;
+      saveBtn.setAttribute('aria-busy', tempTableSaveInFlight ? 'true' : 'false');
+    }
+  }
+
+  function canEditFreightTables(tempTable) {
+    return hasUsefulFreightTables(tempTable);
+  }
+
+  function canEditFreightRoutes(tempTable) {
+    if (!tempTable || canEditFreightTables(tempTable)) return false;
+    var routes = Array.isArray(tempTable.freight_routes) ? tempTable.freight_routes : [];
+    return routes.length > 0;
+  }
+
+  function canEditAccessorialFees(tempTable) {
+    if (!tempTable) return false;
+    return getGeneralAccessorialFees(tempTable.accessorial_fees).length > 0;
+  }
+
+  function enterTempTableEditMode() {
+    if (!currentTempTable || tempTableEditMode) return;
+    tempTableEditSnapshot = deepCloneTempTable(currentTempTable);
+    tempTableEditMode = true;
+    setTempTableModalError('');
+    renderTempTableModalContent(currentTempTable);
+    updateTempTableModalFooter();
+    var cancelBtn = byId('cleideAuditTempTableModalCancelEdit');
+    if (cancelBtn) cancelBtn.focus();
+  }
+
+  function cancelTempTableEdit() {
+    if (!tempTableEditMode) return;
+    if (tempTableEditSnapshot) {
+      currentTempTable = deepCloneTempTable(tempTableEditSnapshot);
+    }
+    tempTableEditMode = false;
+    tempTableEditSnapshot = null;
+    setTempTableModalError('');
+    renderTempTableModalContent(currentTempTable);
+    updateTempTableModalFooter();
+    var editBtn = byId('cleideAuditTempTableModalEdit');
+    if (editBtn) editBtn.focus();
+  }
+
+  function collectTempTableSavePayload() {
+    if (!currentTempTable || !currentTempTable.temp_table_id) return null;
+    var payload = {
+      temp_table_id: currentTempTable.temp_table_id,
+      edit_target: {
+        freight_tables: [],
+        freight_routes: [],
+        accessorial_fees: []
+      },
+      review_action: 'save_and_advance'
+    };
+    if (tempTableEditMode) {
+      if (canEditFreightTables(currentTempTable)) {
+        payload.edit_target.freight_tables = deepCloneTempTable(currentTempTable.freight_tables) || [];
+      } else if (canEditFreightRoutes(currentTempTable)) {
+        payload.edit_target.freight_routes = deepCloneTempTable(currentTempTable.freight_routes) || [];
+      }
+      payload.edit_target.accessorial_fees = deepCloneTempTable(currentTempTable.accessorial_fees) || [];
+    }
+    return payload;
+  }
+
+  function saveTempTableAndAdvance() {
+    if (!currentTempTable || tempTableSaveInFlight) return;
+    var payload = collectTempTableSavePayload();
+    if (!payload) {
+      setTempTableModalError('Nenhuma tabela temporária disponível para salvar.');
+      return;
+    }
+    tempTableSaveInFlight = true;
+    updateTempTableModalFooter();
+    setTempTableModalError('');
+
+    fetch(API_TEMP_TABLE_SAVE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload)
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true) {
+          var errMsg = (res.data && res.data.message) || 'Não foi possível salvar a revisão da tabela temporária.';
+          setTempTableModalError(errMsg);
+          return;
+        }
+        if (res.data.temp_table) {
+          currentTempTable = res.data.temp_table;
+        }
+        tempTableEditMode = false;
+        tempTableEditSnapshot = null;
+        closeTempTableModal();
+        appendOperationalMessage(
+          'Tabela temporária revisada e salva. A próxima etapa da auditoria ainda será habilitada.'
+        );
+        fetchDocuments();
+      })
+      .catch(function () {
+        setTempTableModalError('Não foi possível salvar a revisão. Verifique sua conexão e tente novamente.');
+      })
+      .finally(function () {
+        tempTableSaveInFlight = false;
+        updateTempTableModalFooter();
+      });
+  }
 
   function byId(id) {
     return document.getElementById(id);
@@ -242,15 +402,15 @@
     var status = (tempTable.status || '').toLowerCase();
     if (status === 'processing') return 'Estruturando tabela temporária a partir dos anexos...';
     if (status === 'awaiting_validation') {
-      return 'Tabela temporária pronta e aguardando validação (somente leitura).';
+      return 'Tabela temporária pronta e aguardando validação.';
     }
     if (status === 'needs_review') {
-      return 'Tabela temporária disponível para revisão (somente leitura).';
+      return 'Tabela temporária disponível para revisão e edição.';
     }
     if (status === 'failed') return 'Não foi possível estruturar a tabela temporária.';
     if (status === 'expired') return 'Tabela temporária expirada.';
     if (status === 'discarded') return 'Tabela temporária invalidada.';
-    return 'Tabela temporária extraída (somente leitura).';
+    return 'Tabela temporária extraída para revisão.';
   }
 
   function renderTempTableItem(tempTable) {
@@ -915,6 +1075,20 @@ function renderDocumentItem(doc) {
     'Observações'
   ];
 
+  var FREIGHT_ROUTE_EDIT_FIELDS = [
+    { key: 'origin', alt: null },
+    { key: 'destination', alt: null },
+    { key: 'freight_type', alt: 'type' },
+    { key: 'weight_30', alt: 'weight_30kg' },
+    { key: 'weight_50', alt: 'weight_50kg' },
+    { key: 'weight_70', alt: 'weight_70kg' },
+    { key: 'weight_100', alt: 'weight_100kg' },
+    { key: 'boarding_fee', alt: 'taxa_embarque_kg' },
+    { key: 'freight_value_pct', alt: 'frete_valor_pct' },
+    { key: 'freight_weight_kg', alt: 'frete_peso_kg' },
+    { key: 'notes', alt: 'observations' }
+  ];
+
   function normalizeTextKey(value) {
     return String(value || '')
       .toLowerCase()
@@ -1099,10 +1273,80 @@ function renderDocumentItem(doc) {
     tr.appendChild(el);
   }
 
+  function readFreightRouteField(route, field) {
+    var value = route[field.key];
+    if (!hasFieldValue(value) && field.alt) value = route[field.alt];
+    return hasFieldValue(value) ? String(value) : '';
+  }
+
+  function writeFreightRouteField(route, field, newValue) {
+    route[field.key] = newValue;
+    if (field.alt && field.alt in route) {
+      delete route[field.alt];
+    }
+  }
+
+  function renderEditableFreightRoutesTable(container, tempTable) {
+    var routes = Array.isArray(tempTable.freight_routes) ? tempTable.freight_routes : [];
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll';
+
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-freight-table';
+
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    FREIGHT_ROUTE_TABLE_HEADERS.forEach(function (heading) {
+      appendTableCell(headerRow, heading, true, false);
+    });
+    var actionsHeader = document.createElement('th');
+    actionsHeader.scope = 'col';
+    actionsHeader.className = 'cleide-audit-temp-table-modal-actions-col';
+    actionsHeader.textContent = 'Ações';
+    headerRow.appendChild(actionsHeader);
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    routes.forEach(function (route, rowIndex) {
+      if (!route || typeof route !== 'object') return;
+      var tr = document.createElement('tr');
+      FREIGHT_ROUTE_EDIT_FIELDS.forEach(function (field) {
+        appendEditableCell(tr, readFreightRouteField(route, field), function (newValue) {
+          if (!currentTempTable.freight_routes[rowIndex]) return;
+          writeFreightRouteField(currentTempTable.freight_routes[rowIndex], field, newValue);
+        });
+      });
+      appendRowDeleteCell(tr, function () {
+        if (!Array.isArray(currentTempTable.freight_routes)) return;
+        currentTempTable.freight_routes.splice(rowIndex, 1);
+        renderTempTableModalContent(currentTempTable);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    container.appendChild(scrollWrap);
+  }
+
   function renderFreightRoutesSection(container, tempTable) {
     appendSectionTitle(container, 'Frete por rota');
     var section = document.createElement('div');
     section.className = 'cleide-audit-temp-table-modal-section cleide-audit-temp-table-modal-freight-section';
+
+    if (tempTableEditMode && canEditFreightRoutes(tempTable)) {
+      if (!tempTable.freight_routes.length) {
+        var emptyEdit = document.createElement('p');
+        emptyEdit.className = 'cleide-audit-temp-table-modal-empty';
+        emptyEdit.textContent = 'Nenhuma rota de frete identificada nesta extração.';
+        section.appendChild(emptyEdit);
+        container.appendChild(section);
+        return;
+      }
+      renderEditableFreightRoutesTable(section, tempTable);
+      container.appendChild(section);
+      return;
+    }
 
     var resolved = resolveFreightRouteRows(tempTable);
     var rows = resolved.rows;
@@ -1182,6 +1426,25 @@ function renderDocumentItem(doc) {
     return tables.length > 0;
   }
 
+  function getFreightTableKey(table, index) {
+    if (!table || typeof table !== 'object') return 'index:' + index;
+    var parts = [];
+    if (hasFieldValue(table.evidence_ref)) parts.push(String(table.evidence_ref));
+    if (hasFieldValue(table.table_title)) parts.push(String(table.table_title));
+    if (hasFieldValue(table.table_type)) parts.push(String(table.table_type));
+    var context = table.context;
+    if (context && typeof context === 'object' && hasFieldValue(context.route_label)) {
+      parts.push(String(context.route_label));
+    }
+    if (!parts.length) return 'index:' + index;
+    return parts.join('::');
+  }
+
+  function resetFreightTableOpenState() {
+    openFreightTableKeys.clear();
+    hasUserTouchedFreightTableOpenState = false;
+  }
+
   function renderFreightTableContext(container, context) {
     if (!context || typeof context !== 'object') return;
     var ctxWrap = document.createElement('div');
@@ -1196,9 +1459,38 @@ function renderDocumentItem(doc) {
     if (hasAny) container.appendChild(ctxWrap);
   }
 
-  function renderDynamicFreightTable(container, freightTable) {
+  function appendEditableCell(tr, value, onChange) {
+    var td = document.createElement('td');
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cleide-audit-temp-table-modal-cell-input';
+    input.value = hasFieldValue(value) ? String(value) : '';
+    input.addEventListener('input', function () {
+      if (typeof onChange === 'function') onChange(input.value);
+    });
+    td.appendChild(input);
+    tr.appendChild(td);
+  }
+
+  function appendRowDeleteCell(tr, onDelete) {
+    var td = document.createElement('td');
+    td.className = 'cleide-audit-temp-table-modal-actions-col';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cleide-audit-temp-table-modal-row-delete-btn';
+    btn.textContent = 'Excluir';
+    btn.setAttribute('aria-label', 'Excluir linha');
+    btn.addEventListener('click', function () {
+      if (typeof onDelete === 'function') onDelete();
+    });
+    td.appendChild(btn);
+    tr.appendChild(td);
+  }
+
+  function renderDynamicFreightTable(container, freightTable, tableIndex) {
     var columns = Array.isArray(freightTable.columns) ? freightTable.columns : [];
     var rows = Array.isArray(freightTable.rows) ? freightTable.rows : [];
+    var editMode = !!tempTableEditMode;
 
     if (!columns.length && !rows.length) {
       var empty = document.createElement('p');
@@ -1217,24 +1509,84 @@ function renderDocumentItem(doc) {
     if (columns.length) {
       var thead = document.createElement('thead');
       var headerRow = document.createElement('tr');
-      columns.forEach(function (col) {
-        appendTableCell(headerRow, col, true, false);
+      columns.forEach(function (col, colIndex) {
+        if (editMode) {
+          var th = document.createElement('th');
+          th.scope = 'col';
+          var headerWrap = document.createElement('div');
+          var label = document.createElement('span');
+          label.textContent = String(col);
+          headerWrap.appendChild(label);
+          var colBtn = document.createElement('button');
+          colBtn.type = 'button';
+          colBtn.className = 'cleide-audit-temp-table-modal-col-delete-btn';
+          colBtn.textContent = '×';
+          colBtn.setAttribute('aria-label', 'Excluir coluna ' + col);
+          colBtn.addEventListener('click', function () {
+            if (!window.confirm('Excluir a coluna "' + col + '"? Esta ação não pode ser desfeita sem cancelar a edição.')) {
+              return;
+            }
+            var tableRef = currentTempTable.freight_tables[tableIndex];
+            if (!tableRef || !Array.isArray(tableRef.columns)) return;
+            var removedCol = tableRef.columns[colIndex];
+            tableRef.columns.splice(colIndex, 1);
+            (tableRef.rows || []).forEach(function (row) {
+              if (row && typeof row === 'object' && removedCol in row) {
+                delete row[removedCol];
+              }
+            });
+            renderTempTableModalContent(currentTempTable);
+          });
+          headerWrap.appendChild(colBtn);
+          th.appendChild(headerWrap);
+          headerRow.appendChild(th);
+        } else {
+          appendTableCell(headerRow, col, true, false);
+        }
       });
+      if (editMode) {
+        var actionsHeader = document.createElement('th');
+        actionsHeader.scope = 'col';
+        actionsHeader.className = 'cleide-audit-temp-table-modal-actions-col';
+        actionsHeader.textContent = 'Ações';
+        headerRow.appendChild(actionsHeader);
+      }
       thead.appendChild(headerRow);
       table.appendChild(thead);
     }
 
     var tbody = document.createElement('tbody');
-    rows.forEach(function (row) {
+    rows.forEach(function (row, rowIndex) {
       if (!row || typeof row !== 'object') return;
       var tr = document.createElement('tr');
       if (columns.length) {
         columns.forEach(function (col) {
-          appendTableCell(tr, row[col], false, false);
+          if (editMode) {
+            appendEditableCell(tr, row[col], function (newValue) {
+              if (!currentTempTable.freight_tables[tableIndex]) return;
+              if (!Array.isArray(currentTempTable.freight_tables[tableIndex].rows)) {
+                currentTempTable.freight_tables[tableIndex].rows = [];
+              }
+              if (!currentTempTable.freight_tables[tableIndex].rows[rowIndex]) {
+                currentTempTable.freight_tables[tableIndex].rows[rowIndex] = {};
+              }
+              currentTempTable.freight_tables[tableIndex].rows[rowIndex][col] = newValue;
+            });
+          } else {
+            appendTableCell(tr, row[col], false, false);
+          }
         });
-      } else {
+      } else if (!editMode) {
         Object.keys(row).forEach(function (key) {
           appendTableCell(tr, row[key], false, false);
+        });
+      }
+      if (editMode) {
+        appendRowDeleteCell(tr, function () {
+          var tableRef = currentTempTable.freight_tables[tableIndex];
+          if (!tableRef || !Array.isArray(tableRef.rows)) return;
+          tableRef.rows.splice(rowIndex, 1);
+          renderTempTableModalContent(currentTempTable);
         });
       }
       tbody.appendChild(tr);
@@ -1247,7 +1599,20 @@ function renderDocumentItem(doc) {
   function renderFreightTableCard(container, freightTable, index) {
     var card = document.createElement('details');
     card.className = 'cleide-audit-temp-table-modal-freight-table-card';
-    card.open = index === 0;
+    var tableKey = getFreightTableKey(freightTable, index);
+    if (hasUserTouchedFreightTableOpenState) {
+      card.open = openFreightTableKeys.has(tableKey);
+    } else {
+      card.open = index === 0;
+    }
+    card.addEventListener('toggle', function () {
+      hasUserTouchedFreightTableOpenState = true;
+      if (card.open) {
+        openFreightTableKeys.add(tableKey);
+      } else {
+        openFreightTableKeys.delete(tableKey);
+      }
+    });
 
     var summary = document.createElement('summary');
     summary.className = 'cleide-audit-temp-table-modal-freight-table-summary';
@@ -1264,7 +1629,7 @@ function renderDocumentItem(doc) {
       appendDetailRow(cardBody, 'Tipo', String(freightTable.table_type));
     }
     renderFreightTableContext(cardBody, freightTable.context);
-    renderDynamicFreightTable(cardBody, freightTable);
+    renderDynamicFreightTable(cardBody, freightTable, index);
     if (hasFieldValue(freightTable.notes)) {
       appendDetailRow(cardBody, 'Observações', String(freightTable.notes));
     }
@@ -1325,6 +1690,11 @@ function renderDocumentItem(doc) {
       return;
     }
 
+    if (tempTableEditMode && canEditAccessorialFees(currentTempTable)) {
+      renderEditableAccessorialFeesSection(container, list);
+      return;
+    }
+
     var showScope = list.some(function (item) {
       return item && hasFieldValue(item.scope);
     });
@@ -1358,6 +1728,98 @@ function renderDocumentItem(doc) {
     });
     table.appendChild(tbody);
     container.appendChild(table);
+  }
+
+  function appendAccessorialFieldCell(tr, value, onChange, placeholder) {
+    var td = document.createElement('td');
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cleide-audit-temp-table-modal-cell-input';
+    input.value = hasFieldValue(value) ? String(value) : '';
+    if (placeholder) input.placeholder = placeholder;
+    input.addEventListener('input', function () {
+      if (typeof onChange === 'function') onChange(input.value);
+    });
+    td.appendChild(input);
+    tr.appendChild(td);
+  }
+
+  function renderEditableAccessorialFeesSection(container, list) {
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-temp-table-modal-section cleide-audit-temp-table-modal-accessorial-section';
+
+    var helper = document.createElement('p');
+    helper.className = 'cleide-audit-temp-table-modal-partial-helper';
+    helper.textContent = 'Edite generalidades e serviços adicionais com mais espaço e salve tudo junto na revisão.';
+    section.appendChild(helper);
+
+    var actions = document.createElement('div');
+    actions.className = 'cleide-audit-temp-table-modal-toolbar';
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'cleide-audit-temp-table-modal-add-btn';
+    addBtn.textContent = 'Adicionar item';
+    addBtn.addEventListener('click', function () {
+      if (!Array.isArray(currentTempTable.accessorial_fees)) currentTempTable.accessorial_fees = [];
+      currentTempTable.accessorial_fees.push({
+        name: '',
+        value: '',
+        unit: '',
+        calculation_basis: '',
+        notes: '',
+        scope: 'general'
+      });
+      renderTempTableModalContent(currentTempTable);
+    });
+    actions.appendChild(addBtn);
+    section.appendChild(actions);
+
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll';
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-data-table cleide-audit-temp-table-modal-data-table-editable';
+
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    ['Nome', 'Valor', 'Unidade', 'Base de cálculo', 'Observações', 'Escopo', 'Ações'].forEach(function (heading) {
+      appendTableCell(headerRow, heading, true, false);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    (currentTempTable.accessorial_fees || []).forEach(function (item, feeIndex) {
+      if (!item || typeof item !== 'object' || isPrimaryFreightAccessorialFee(item)) return;
+      var tr = document.createElement('tr');
+      appendAccessorialFieldCell(tr, item.name, function (newValue) {
+        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].name = newValue;
+      }, 'Ex.: Pedágio geral');
+      appendAccessorialFieldCell(tr, item.value, function (newValue) {
+        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].value = newValue;
+      }, 'Ex.: conforme tabela');
+      appendAccessorialFieldCell(tr, item.unit, function (newValue) {
+        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].unit = newValue;
+      }, 'R$, %, texto');
+      appendAccessorialFieldCell(tr, item.calculation_basis, function (newValue) {
+        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].calculation_basis = newValue;
+      }, 'Base de cálculo');
+      appendAccessorialFieldCell(tr, item.notes, function (newValue) {
+        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].notes = newValue;
+      }, 'Observações');
+      appendAccessorialFieldCell(tr, item.scope, function (newValue) {
+        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].scope = newValue;
+      }, 'general');
+      appendRowDeleteCell(tr, function () {
+        if (!Array.isArray(currentTempTable.accessorial_fees)) return;
+        currentTempTable.accessorial_fees.splice(feeIndex, 1);
+        renderTempTableModalContent(currentTempTable);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    section.appendChild(scrollWrap);
+    container.appendChild(section);
   }
 
   function collectCommercialInfo(tempTable) {
@@ -1455,11 +1917,13 @@ function renderDocumentItem(doc) {
   function openTempTableModal() {
     var modal = byId('cleideAuditTempTableModal');
     if (!modal) return;
+    setTempTableModalError('');
     renderTempTableModalContent(currentTempTable);
+    updateTempTableModalFooter();
     modal.hidden = false;
     document.body.classList.add('cleide-audit-temp-table-modal-open');
-    var closeBtn = byId('cleideAuditTempTableModalClose');
-    if (closeBtn) closeBtn.focus();
+    var saveBtn = byId('cleideAuditTempTableModalSave');
+    if (saveBtn) saveBtn.focus();
   }
 
   function closeTempTableModal() {
@@ -1467,6 +1931,11 @@ function renderDocumentItem(doc) {
     if (!modal || modal.hidden) return;
     modal.hidden = true;
     document.body.classList.remove('cleide-audit-temp-table-modal-open');
+    resetFreightTableOpenState();
+    tempTableEditMode = false;
+    tempTableEditSnapshot = null;
+    setTempTableModalError('');
+    updateTempTableModalFooter();
     if (lastTempTableCardButton && typeof lastTempTableCardButton.focus === 'function') {
       lastTempTableCardButton.focus();
     }
@@ -1474,13 +1943,25 @@ function renderDocumentItem(doc) {
 
   function initTempTableModal() {
     var modal = byId('cleideAuditTempTableModal');
-    var closeBtn = byId('cleideAuditTempTableModalClose');
+    var saveBtn = byId('cleideAuditTempTableModalSave');
+    var editBtn = byId('cleideAuditTempTableModalEdit');
+    var cancelEditBtn = byId('cleideAuditTempTableModalCancelEdit');
     var backdrop = byId('cleideAuditTempTableModalBackdrop');
     if (!modal) return;
 
-    if (closeBtn) {
-      closeBtn.addEventListener('click', function () {
-        closeTempTableModal();
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        saveTempTableAndAdvance();
+      });
+    }
+    if (editBtn) {
+      editBtn.addEventListener('click', function () {
+        enterTempTableEditMode();
+      });
+    }
+    if (cancelEditBtn) {
+      cancelEditBtn.addEventListener('click', function () {
+        cancelTempTableEdit();
       });
     }
     if (backdrop) {
@@ -1494,6 +1975,7 @@ function renderDocumentItem(doc) {
         closeTempTableModal();
       }
     });
+    updateTempTableModalFooter();
   }
 
   function initDocuments() {
