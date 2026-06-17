@@ -107,6 +107,14 @@ def _upload(client, filename: str, content: bytes, mime: str = "text/plain"):
     )
 
 
+def _post_temp_table_save(client, payload: dict):
+    return client.post(
+        "/api/cleide-auditoria/temp-table/save",
+        json=payload,
+        content_type="application/json",
+    )
+
+
 @pytest.fixture
 def web_client(app, tmp_path, monkeypatch, ctx):
     with app.app_context():
@@ -135,6 +143,7 @@ def test_anonymous_receives_401_on_all_endpoints(app, ctx, monkeypatch, tmp_path
         json={"message": "auditar"},
         content_type="application/json",
     ).status_code == 401
+    assert _post_temp_table_save(client, {"temp_table_id": "x", "edit_target": {}}).status_code == 401
 
     body = client.get("/api/cleide-auditoria/documents/status").get_json()
     assert body["error_code"] == "auth_required"

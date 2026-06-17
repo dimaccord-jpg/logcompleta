@@ -1,17 +1,17 @@
 # Agentefrete / Log Completa
 
 Data de consolidacao: `2026-06-16`
-Estado de referencia: `producao` / merge `834ddbe`
+Estado de referencia: `producao` / merge `5f10f6d`
 
 Este `README.md` resume o estado real homologado e promovido apos a estabilizacao da auditoria documental da Cleide:
 
-- `08114df feat: estabiliza tabela temporaria da auditoria Cleide`
-- `834ddbe merge: promove estabilizacao da auditoria Cleide para producao`
+- `c5a73e1 feat: estabiliza tabela temporaria da auditoria Cleide`
+- `5f10f6d merge: promove estabilizacao da auditoria Cleide para producao`
 
 Confirmacoes operacionais:
 
-- `homolog` contem `08114df`
-- `producao` contem merge `834ddbe`
+- `homolog` contem `c5a73e1`
+- `producao` contem merge `5f10f6d`
 - homolog foi validada antes da promocao
 - producao foi validada e aprovada apos deploy
 - nao houve migration nova, nova tabela, novo campo ou alteracao manual de schema
@@ -47,7 +47,8 @@ Estado atual promovido:
 - a extracao/atualizacao da tabela temporaria ocorre no fluxo pos-upload/status/documentos
 - a tabela temporaria fica separada do chat conversacional da Cleide
 - o chat consulta contexto documental, mas nao deve criar, alterar ou sobrescrever a tabela temporaria
-- a interface exibe a tabela temporaria na area de documentos anexados/estado documental com acoes de revisao e validacao humana
+- a interface exibe a tabela temporaria na area de documentos anexados/estado documental como card clicavel
+- o modal da tabela temporaria opera em modo somente leitura, com revisao e validacao humana
 - a extracao nao cria rota paralela de produto nem nova tabela de banco
 
 Contratos oficiais do fluxo:
@@ -68,6 +69,7 @@ Tabela temporaria extraida:
 - invalidada quando os documentos fonte mudam, sao removidos ou deixam de existir na sessao
 - obrigatoriamente sujeita a validacao humana
 - nao substitui auditoria final nem deve ser descrita como dado persistente
+- nao cria migration, tabela, campo nem alteracao manual de schema
 
 Estados documentados no codigo atual:
 
@@ -148,6 +150,7 @@ Garantias importantes:
 - PDF pode entrar como contexto multimodal via Gemini Files
 - o sistema nao deve fingir leitura quando houver apenas placeholder ou quando o conteudo nao estiver pronto
 - arquivos temporarios ficam em `app/cleiton_doc_tmp/` e nao devem ser versionados
+- `app/cleiton_doc_tmp/` esta protegido no `.gitignore`
 - arquivos `tt_*.json`, `.cleanup_meta.json` e residuos `.json` dessa pasta nao devem entrar em commit
 - residuos `app/.tmp_repro_unit*` nao devem ser versionados
 - o store temporario persiste apenas JSON tecnico, sem bruto documental no banco
@@ -205,6 +208,7 @@ Esta entrega da Cleide Auditoria:
 - nao alterou `app/models.py`
 - nao criou nova tabela de banco nem novo campo
 - nao exigiu alteracao manual de schema
+- nao versiona banco local nem arquivo `.db`
 - reutiliza o store temporario e a governanca existente
 
 Migration relevante ja existente e mantida:
@@ -221,9 +225,9 @@ Cobertura diretamente relacionada:
 Validacoes registradas antes da promocao:
 
 - `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado: `99 passed, 2 warnings`
+- resultado: `109 passed, 2 warnings`
 - `python -m pytest`
-- resultado: `1114 passed, 36 warnings`
+- resultado: `1124 passed, 36 warnings`
 - warnings conhecidos de dependencia/uso legado, sem bloqueio da entrega
 
 ## Documentos oficiais de apoio

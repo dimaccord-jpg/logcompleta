@@ -1,7 +1,7 @@
 # Arquitetura Oficial
 
 Data de consolidacao: `2026-06-16`
-Commit de referencia: `834ddbe`
+Commit de referencia: `5f10f6d`
 
 Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos a estabilizacao da auditoria documental da Cleide.
 
@@ -115,15 +115,19 @@ Contratos reais:
 - o prompt tecnico fica em `build_cleide_audit_temp_table_technical_prompt()`
 - a resposta esperada do modelo e JSON tecnico, sem auditoria final
 - o endpoint de status devolve `temp_table` quando houver artefato ativo
+- a UI exibe um card clicavel de tabela temporaria e abre modal somente leitura
+- a priorizacao visual e operacional recai sobre blocos operacionais, rotas/tabelas de frete e informacoes adicionais
 
 Garantias:
 
 - a tabela temporaria e separada do chat conversacional
 - a tabela temporaria e temporaria, descartavel e sujeita a validacao humana
+- a tabela temporaria e readonly na experiencia da Cleide
 - o `operational_owner` e `cleiton`
 - o ciclo de vida depende do TTL dos documentos da sessao
 - invalidacoes ocorrem quando os documentos fonte mudam ou sao removidos
 - nao ha migration nova, nova tabela de banco, novo campo ou alteracao manual de schema para esse fluxo
+- nao ha conexao nova com APIs da Julia ou do BI nessa superficie documental
 
 ## Arquitetura documental da Julia
 
@@ -136,6 +140,7 @@ Contratos reais:
 - a API chama `avaliar_autorizacao_operacao_por_franquia`
 - o store temporario usa `app/cleiton_doc_tmp/`
 - o store persiste JSON tecnico temporario, nao cria tabela nova
+- o diretorio `app/cleiton_doc_tmp/` esta protegido no `.gitignore`
 - PDF pode usar Gemini Files como contexto multimodal governado
 
 Tipos suportados na implementacao atual:

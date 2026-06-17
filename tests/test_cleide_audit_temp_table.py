@@ -30,9 +30,16 @@ from app.cleide_audit_doc_service import (
     mark_temp_table_processing,
     normalize_partial_first_extraction_to_temp_table,
     remove_document_from_session,
+    save_temp_table_edit,
     should_attempt_temp_table_extraction,
     split_temp_table_block_from_answer,
     temp_table_status_message,
+    CleideAuditTempTableError,
+    ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+    ERROR_TEMP_TABLE_NOT_FOUND,
+    HUMAN_REVIEW_STATUS_EDITED,
+    HUMAN_REVIEW_STATUS_REVIEWED,
+    TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES,
 )
 from app.cleide_audit_prompt import build_cleide_audit_temp_table_technical_prompt
 from app.services.cleide_audit_config_service import CleideAuditConfig, DEFAULT_FALLBACK_MESSAGE
@@ -346,13 +353,13 @@ def test_public_auditoria_page_unchanged(monkeypatch):
     assert "cleide_auditoria.js" in html
 
 
-def test_no_new_routes(app, ctx, monkeypatch, tmp_path):
+def test_no_new_routes_except_temp_table_save(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
     web = _load_web_module()
     rules = {rule.rule for rule in web.app.url_map.iter_rules()}
     assert "/api/cleide-auditoria/documents/status" in rules
-    assert not any("temp-table" in rule for rule in rules)
+    assert "/api/cleide-auditoria/temp-table/save" in rules
     assert not any("checklist" in rule for rule in rules)
 
 
@@ -427,7 +434,16 @@ def _apply_payload(web_client, payload: dict) -> dict:
     with web_client.application.app_context():
         with web_client.application.test_request_context():
             mark_temp_table_processing(["doc-1"])
-            return apply_temp_table_extraction_from_model_payload(payload, source_doc_ids=["doc-1"])
+            saved = apply_temp_table_extraction_from_model_payload(payload, source_doc_ids=["doc-1"])
+    with web_client.session_transaction() as sess:
+        sess[audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY] = saved["temp_table_id"]
+        sess[audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY] = list(
+            saved.get("source_documents") or ["doc-1"]
+        )
+        sess[audit_doc_service.CLEIDE_AUDIT_DOC_IDS_SESSION_KEY] = list(
+            saved.get("source_documents") or ["doc-1"]
+        )
+    return saved
 
 
 def test_coerce_status_integer_falls_back_to_failed(web_client):
@@ -1445,3 +1461,479 @@ def test_freight_table_useful_with_column_only(web_client):
     saved = _apply_payload(web_client, payload)
     assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
     assert saved["freight_tables"][0]["columns"] == ["Frete Vol. (R$/Pallet)"]
+
+
+def _save_payload_for_record(record: dict, **overrides) -> dict:
+    tables = record.get("freight_tables") or []
+    routes = record.get("freight_routes") or []
+    fees = record.get("accessorial_fees") or []
+    payload = {
+        "temp_table_id": record["temp_table_id"],
+        "edit_target": {
+            "freight_tables": tables,
+            "freight_routes": routes,
+            "accessorial_fees": fees,
+        },
+        "review_action": "save_and_advance",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _post_temp_table_save(web_client, payload: dict):
+    return web_client.post(
+        "/api/cleide-auditoria/temp-table/save",
+        json=payload,
+        content_type="application/json",
+    )
+
+
+def test_temp_table_save_requires_login(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    anon = SimpleNamespace(is_authenticated=False)
+    monkeypatch.setattr(web, "current_user", anon)
+    monkeypatch.setattr("app.cleide_audit_routes.current_user", anon)
+    client = web.app.test_client()
+    resp = _post_temp_table_save(client, {"temp_table_id": "x", "edit_target": {}})
+    assert resp.status_code == 401
+    assert resp.get_json()["error_code"] == "auth_required"
+
+
+def test_temp_table_save_without_active_temp_table(web_client):
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": "missing",
+            "edit_target": {"freight_tables": [], "freight_routes": []},
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 404
+    assert resp.get_json()["error_code"] == ERROR_TEMP_TABLE_NOT_FOUND
+
+
+def test_temp_table_save_id_mismatch(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": "wrong-id",
+            "edit_target": {"freight_tables": [], "freight_routes": []},
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["error_code"] == "cleide_audit_temp_table_id_mismatch"
+    assert saved["temp_table_id"] != "wrong-id"
+
+
+def test_temp_table_save_preserves_expires_at(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    original_expires = saved["expires_at"]
+    edited_tables = list(saved["freight_tables"])
+    edited_tables[0] = dict(edited_tables[0])
+    edited_tables[0]["rows"] = list(edited_tables[0]["rows"])
+    edited_tables[0]["rows"][0] = dict(edited_tables[0]["rows"][0])
+    edited_tables[0]["rows"][0]["Frete"] = "R$ 40,00"
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {"freight_tables": edited_tables, "freight_routes": []},
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["temp_table"]["expires_at"] == original_expires
+
+
+def test_temp_table_save_preserves_source_documents_and_id(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        _save_payload_for_record(saved),
+    )
+    assert resp.status_code == 200
+    public = resp.get_json()["temp_table"]
+    assert public["temp_table_id"] == saved["temp_table_id"]
+    assert public["source_documents"] == saved["source_documents"]
+
+
+def test_temp_table_save_updates_review_metadata(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert resp.status_code == 200
+    public = resp.get_json()["temp_table"]
+    assert public["human_review_status"] == HUMAN_REVIEW_STATUS_EDITED
+    assert public["human_edited_at"]
+    assert public["human_edited_by_user_id"] == 42
+    assert public["updated_at"]
+    assert public.get("edit_version") == 1
+
+
+def test_temp_table_save_review_only_marks_reviewed(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {"freight_tables": [], "freight_routes": []},
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 200
+    public = resp.get_json()["temp_table"]
+    assert public["human_review_status"] == HUMAN_REVIEW_STATUS_REVIEWED
+
+
+def test_temp_table_save_does_not_call_gemini(web_client, monkeypatch):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    gemini_mock = MagicMock()
+    monkeypatch.setattr(audit_temp_table, "cleiton_governed_generate_content", gemini_mock)
+    resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert resp.status_code == 200
+    gemini_mock.assert_not_called()
+
+
+def test_temp_table_save_does_not_create_new_artifact(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    before_id = saved["temp_table_id"]
+    resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert resp.status_code == 200
+    assert resp.get_json()["temp_table"]["temp_table_id"] == before_id
+
+
+def test_temp_table_save_rejects_invalid_payload(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": [{"columns": [""], "rows": [{"": "x"}]}],
+                "freight_routes": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == ERROR_TEMP_TABLE_INVALID_PAYLOAD
+
+
+def test_temp_table_save_rejects_empty_main_table(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": [{"columns": [], "rows": []}],
+                "freight_routes": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == ERROR_TEMP_TABLE_INVALID_PAYLOAD
+
+
+def test_temp_table_save_rejects_oversized_payload(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    huge = "x" * (TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES + 1024)
+    edited_tables = list(saved["freight_tables"])
+    edited_tables[0] = dict(edited_tables[0])
+    edited_tables[0]["rows"] = [{"Frete Peso": huge, "Frete": "1", "Pedágio (F/100kg)": "1", "TX": "1", "Seguro": "1", "Gris": "1", "Imposto": "1"}]
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {"freight_tables": edited_tables, "freight_routes": []},
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 413
+
+
+def test_temp_table_save_persists_only_in_temp_artifact(web_client, tmp_path):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    edited_tables = list(saved["freight_tables"])
+    edited_tables[0] = dict(edited_tables[0])
+    edited_tables[0]["rows"] = list(edited_tables[0]["rows"])
+    edited_tables[0]["rows"][0] = dict(edited_tables[0]["rows"][0])
+    edited_tables[0]["rows"][0]["Frete"] = "R$ 99,99"
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {"freight_tables": edited_tables, "freight_routes": []},
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 200
+    path = audit_doc_service._temp_table_path(saved["temp_table_id"])
+    assert path.is_file()
+    with open(path, "r", encoding="utf-8") as handle:
+        stored = json.load(handle)
+    assert stored["freight_tables"][0]["rows"][0]["Frete"] == "R$ 99,99"
+    assert stored["accessorial_fees"] == saved["accessorial_fees"]
+
+
+def test_temp_table_save_persists_accessorial_fees_edits(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    edited_fees = list(saved["accessorial_fees"])
+    edited_fees[0] = dict(edited_fees[0])
+    edited_fees[0]["notes"] = "ajuste manual"
+    edited_fees[0]["scope"] = "general"
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": [],
+                "freight_routes": [],
+                "accessorial_fees": edited_fees,
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["temp_table"]["accessorial_fees"][0]["notes"] == "ajuste manual"
+    assert body["temp_table"]["accessorial_fees"][0]["scope"] == "general"
+
+
+def test_clear_documents_removes_edited_temp_table(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert resp.status_code == 200
+    with web_client.session_transaction() as sess:
+        sess[audit_doc_service.CLEIDE_AUDIT_DOC_IDS_SESSION_KEY] = ["doc-1"]
+    web_client.post("/api/cleide-auditoria/documents/clear")
+    assert web_client.get("/api/cleide-auditoria/documents/status").get_json()["temp_table"] is None
+
+
+def test_temp_table_save_expired_record(web_client, monkeypatch, tmp_path):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    path = audit_doc_service._temp_table_path(saved["temp_table_id"])
+    with open(path, "r", encoding="utf-8") as handle:
+        record = json.load(handle)
+    record["status"] = audit_doc_service.TEMP_TABLE_STATUS_NEEDS_REVIEW
+    record["expires_at"] = (datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=1)).isoformat()
+    audit_doc_service._write_temp_table_atomic(path, record)
+    resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert resp.status_code == 404
+    assert resp.get_json()["error_code"] == audit_doc_service.ERROR_TEMP_TABLE_EXPIRED
+
+
+def _apply_extraction_with_client_session(web_client, payload, source_doc_ids=None):
+    source_doc_ids = source_doc_ids or ["doc-1"]
+    session_keys = (
+        audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY,
+        audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY,
+        audit_doc_service.CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+    )
+    with web_client.session_transaction() as sess:
+        snapshot = {key: sess.get(key) for key in session_keys}
+    with web_client.application.app_context():
+        with web_client.application.test_request_context():
+            from flask import session as flask_session
+
+            for key, value in snapshot.items():
+                if value is not None:
+                    flask_session[key] = value
+            return apply_temp_table_extraction_from_model_payload(
+                payload,
+                source_doc_ids=source_doc_ids,
+            )
+
+
+def test_temp_table_save_removes_accessorial_fees_persists_in_artifact(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": saved["freight_tables"],
+                "freight_routes": [],
+                "accessorial_fees": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 200
+    path = audit_doc_service._temp_table_path(saved["temp_table_id"])
+    with open(path, "r", encoding="utf-8") as handle:
+        stored = json.load(handle)
+    assert stored["accessorial_fees"] == []
+
+
+def test_temp_table_status_after_save_returns_reduced_accessorial_fees(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    save_resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": saved["freight_tables"],
+                "freight_routes": [],
+                "accessorial_fees": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    assert save_resp.status_code == 200
+    public = save_resp.get_json()["temp_table"]
+    assert public["accessorial_fees"] == []
+    assert public["human_review_status"] == HUMAN_REVIEW_STATUS_EDITED
+    assert public.get("edit_version") == 1
+
+
+def test_extraction_does_not_overwrite_human_reviewed_record(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    save_resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": saved["freight_tables"],
+                "freight_routes": [],
+                "accessorial_fees": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    assert save_resp.status_code == 200
+    saved_public = save_resp.get_json()["temp_table"]
+
+    model_payload = _sample_hengst_freight_tables_payload()
+    model_payload["accessorial_fees"].append(
+        {
+            "name": "Taxa reintroduzida",
+            "value": "R$ 10,00",
+            "unit": "R$",
+            "calculation_basis": "",
+            "notes": "",
+        }
+    )
+    result = _apply_extraction_with_client_session(web_client, model_payload)
+    assert result["human_review_status"] == saved_public["human_review_status"]
+    assert result["human_edited_at"] == saved_public["human_edited_at"]
+    assert result["human_edited_by_user_id"] == saved_public["human_edited_by_user_id"]
+    assert result["edit_version"] == saved_public["edit_version"]
+    assert result["accessorial_fees"] == []
+
+
+def test_extraction_does_not_reintroduce_removed_accessorial_fees(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": saved["freight_tables"],
+                "freight_routes": [],
+                "accessorial_fees": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    model_payload = _sample_hengst_freight_tables_payload()
+    assert len(model_payload["accessorial_fees"]) >= 1
+    result = _apply_extraction_with_client_session(web_client, model_payload)
+    assert result["accessorial_fees"] == []
+
+
+def test_extraction_initial_without_human_review_still_works(web_client):
+    payload = _sample_hengst_freight_tables_payload()
+    saved = _apply_payload(web_client, payload)
+    assert saved["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(saved["freight_tables"]) == 2
+    assert len(saved["accessorial_fees"]) == 1
+    assert saved.get("human_review_status") is None
+
+
+def test_extraction_allowed_when_source_documents_change(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": saved["freight_tables"],
+                "freight_routes": [],
+                "accessorial_fees": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    model_payload = _sample_hengst_freight_tables_payload()
+    result = _apply_extraction_with_client_session(
+        web_client,
+        model_payload,
+        source_doc_ids=["doc-1", "doc-2"],
+    )
+    assert result["source_documents"] == ["doc-1", "doc-2"]
+    assert len(result["accessorial_fees"]) == 1
+
+
+def test_extraction_skip_preserves_expires_at(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    original_expires = saved["expires_at"]
+    _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": saved["freight_tables"],
+                "freight_routes": [],
+                "accessorial_fees": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    result = _apply_extraction_with_client_session(
+        web_client,
+        _sample_hengst_freight_tables_payload(),
+    )
+    assert result["expires_at"] == original_expires
+
+
+def test_extraction_force_overwrite_bypasses_human_review_guard(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "freight_tables": saved["freight_tables"],
+                "freight_routes": [],
+                "accessorial_fees": [],
+            },
+            "review_action": "save_and_advance",
+        },
+    )
+    with web_client.session_transaction() as sess:
+        snapshot = {
+            audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY: sess.get(
+                audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY
+            ),
+        }
+    with web_client.application.app_context():
+        with web_client.application.test_request_context():
+            from flask import session as flask_session
+
+            flask_session[audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY] = snapshot[
+                audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY
+            ]
+            result = apply_temp_table_extraction_from_model_payload(
+                _sample_hengst_freight_tables_payload(),
+                source_doc_ids=["doc-1"],
+                force_overwrite=True,
+            )
+    assert len(result["accessorial_fees"]) == 1
+    assert result.get("human_review_status") is None

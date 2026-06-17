@@ -155,7 +155,8 @@ Contrato real da experiência:
 - possui chat assistido na própria experiência;
 - tenta extrair uma **tabela temporária extraída** após upload válido;
 - expõe `temp_table` no status documental quando houver artefato ativo;
-- mantém a extração técnica separada do chat conversacional.
+- mantém a extração técnica separada do chat conversacional;
+- exibe a tabela temporária como card clicável com modal somente leitura.
 
 Guardrails obrigatórios:
 
@@ -164,7 +165,8 @@ Guardrails obrigatórios:
 - a responsabilidade operacional da tabela temporária é do **Cleiton**;
 - a Cleide continua responsável pela entrevista/chat de auditoria;
 - o chat não deve recriar, alterar ou sobrescrever a tabela temporária;
-- a extração é temporária, descartável e não cria nova tabela de banco.
+- a extração é temporária, descartável e não cria nova tabela de banco;
+- nenhuma API da Júlia ou do BI deve ser acoplada à página de auditoria para governar a `temp_table`.
 
 **Destino técnico (Auditoria visual):** `/auditoria-frete` (endpoint: `cleide.cleide_auditoria`).
 

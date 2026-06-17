@@ -1,7 +1,7 @@
 # Troubleshooting Operacional
 
 Data de consolidacao: `2026-06-16`
-Commit de referencia: `834ddbe`
+Commit de referencia: `5f10f6d`
 
 ## 1. Home publica sem responder
 
@@ -104,6 +104,7 @@ Regra oficial:
 - o chat da Cleide continua separado da extracao tecnica
 - Cleiton e o owner operacional da tabela temporaria
 - `temp_table` pode nao existir se a extracao falhar, expirar ou se os documentos fonte mudarem
+- o modal da tabela temporaria permanece somente leitura
 
 ## 10. Tabela temporaria sumiu depois de remover ou trocar documentos
 
@@ -142,3 +143,4 @@ Conferir:
 Regra oficial:
 
 - artefatos temporarios de teste e da temp_table nao devem ser versionados
+- `app/cleiton_doc_tmp/` esta coberto pelo `.gitignore`

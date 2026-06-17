@@ -14,7 +14,7 @@ Consulte este arquivo somente para detalhes especificos de execucao automatica e
 - `APP_BASE_URL` configurado no Cron Job
 - persistencia valida
 - migrations existentes ja tratadas no ambiente alvo
-- estado homologado de referencia: `08114df`
+- estado homologado de referencia: `c5a73e1`
 
 ## Comandos Render
 
@@ -48,6 +48,7 @@ curl -fsS -X POST "$APP_BASE_URL/cron/billing-snapshot" -H "X-Cron-Secret: $CRON
 - a promocao da estabilizacao da auditoria Cleide nao adicionou migration propria ao cron
 - a tabela temporaria da auditoria continua fora do schema persistente
 - os cron jobs nao devem depender de `app/cleiton_doc_tmp/` nem versionar residuos locais
+- nenhum `.db` local ou artefato tecnico da temp table faz parte do deploy
 
 ## Referencia Principal
 

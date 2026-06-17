@@ -317,7 +317,11 @@ def test_cleide_auditoria_temp_table_modal_no_template():
     assert 'id="cleideAuditTempTableModal"' in source
     assert "Tabela temporária gerada" in source
     assert "Revise os dados extraídos antes de continuar." in source
-    assert 'id="cleideAuditTempTableModalClose"' in source
+    assert 'id="cleideAuditTempTableModalSave"' in source
+    assert 'id="cleideAuditTempTableModalEdit"' in source
+    assert 'id="cleideAuditTempTableModalCancelEdit"' in source
+    assert "Salvar e Avançar" in source
+    assert "Editar" in source
     assert "Validar e Salvar" not in source
 
 
@@ -335,8 +339,7 @@ def test_cleide_auditoria_js_temp_table_modal_renderizacao():
     assert "Processamento em andamento. Os dados aparecerão aqui quando a extração terminar." in js
     assert "Validar e Salvar" not in js
     assert "checklist" not in js.lower()
-    assert '<input' not in js
-    assert "contentEditable" not in js
+    assert "createElement('input')" in js or 'createElement("input")' in js
     assert "document.createElement" in js
     assert "textContent" in js
     assert "não informado" in js
@@ -422,11 +425,28 @@ def test_cleide_auditoria_js_temp_table_additional_info_empty_message():
 
 def test_cleide_auditoria_js_temp_table_modal_somente_leitura():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
-    assert "Salvar" not in js
-    assert "Editar" not in js
+    assert "saveTempTableAndAdvance" in js
+    assert "enterTempTableEditMode" in js
+    assert "cancelTempTableEdit" in js
+    assert "API_TEMP_TABLE_SAVE" in js
     assert "checklist" not in js.lower()
     assert "Validar e Salvar" not in js
     assert "contentEditable" not in js
+    assert "collectTempTableSavePayload" in js
+    assert "accessorial_fees" in js
+    payload_block = js[js.index("function collectTempTableSavePayload"): js.index("function collectTempTableSavePayload") + 900]
+    assert "accessorial_fees" in payload_block
+
+
+def test_cleide_auditoria_js_temp_table_edit_features():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "cleide-audit-temp-table-modal-cell-input" in js
+    assert "cleide-audit-temp-table-modal-row-delete-btn" in js
+    assert "cleide-audit-temp-table-modal-col-delete-btn" in js
+    assert "deepCloneTempTable" in js
+    assert "tempTableEditSnapshot" in js
+    assert "renderEditableFreightRoutesTable" in js
+    assert "window.confirm" in js
 
 
 def test_cleide_auditoria_template_temp_table_modal_layout():
@@ -437,8 +457,8 @@ def test_cleide_auditoria_template_temp_table_modal_layout():
     assert "overflow-x: auto" in source
     assert "min-width: 860px" in source
     assert "position: sticky" in source
-    assert "Salvar" not in source
-    assert "Editar" not in source
+    assert "Salvar e Avançar" in source
+    assert "Editar" in source
     assert "checklist" not in source.lower()
 
 
@@ -448,3 +468,106 @@ def test_cleide_auditoria_js_painel_anexos_mantem_temp_table():
     assert "renderTempTableItem" in js
     assert "handleTempTableFromStatus" in js
     assert "renderDocumentItem" in js
+
+
+def test_cleide_auditoria_js_temp_table_modal_edita_accessorial_fees():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    assert "canEditAccessorialFees" in js
+    assert "renderEditableAccessorialFeesSection" in js
+    assert "Adicionar item" in js
+    assert "currentTempTable.accessorial_fees.push" in js
+    assert "cleide-audit-temp-table-modal-add-btn" in source
+    assert "min-width: 1120px" in source
+
+
+def test_cleide_auditoria_js_freight_table_open_state_variables():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "openFreightTableKeys" in js
+    assert "hasUserTouchedFreightTableOpenState" in js
+    assert "new Set()" in js
+
+
+def test_cleide_auditoria_js_freight_table_stable_key():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function getFreightTableKey" in js
+    assert "table.evidence_ref" in js
+    assert "table.table_title" in js
+    assert "table.table_type" in js
+    assert "context.route_label" in js
+    key_block = js[js.index("function getFreightTableKey"): js.index("function getFreightTableKey") + 700]
+    assert "index:" in key_block
+
+
+def test_cleide_auditoria_js_freight_table_first_open_by_default():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    card_block = js[js.index("function renderFreightTableCard"): js.index("function renderFreightTableCard") + 900]
+    assert "index === 0" in card_block
+    assert "hasUserTouchedFreightTableOpenState" in card_block
+
+
+def test_cleide_auditoria_js_freight_table_preserves_open_after_rerender():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    card_block = js[js.index("function renderFreightTableCard"): js.index("function renderFreightTableCard") + 900]
+    assert "openFreightTableKeys.has(tableKey)" in card_block
+    assert "openFreightTableKeys.add(tableKey)" in card_block
+    assert "openFreightTableKeys.delete(tableKey)" in card_block
+    assert "addEventListener('toggle'" in card_block or 'addEventListener("toggle"' in card_block
+
+
+def test_cleide_auditoria_js_freight_table_row_delete_keeps_open_state():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    delete_block = js[js.index("appendRowDeleteCell(tr, function () {", js.index("function renderDynamicFreightTable")): js.index("appendRowDeleteCell(tr, function () {", js.index("function renderDynamicFreightTable")) + 400]
+    assert "renderTempTableModalContent(currentTempTable)" in delete_block
+    assert "resetFreightTableOpenState" not in delete_block
+
+
+def test_cleide_auditoria_js_freight_table_col_delete_keeps_open_state():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    col_start = js.index("colBtn.addEventListener('click', function () {", js.index("function renderDynamicFreightTable"))
+    col_block = js[col_start:col_start + 900]
+    assert "renderTempTableModalContent(currentTempTable)" in col_block
+    assert "resetFreightTableOpenState" not in col_block
+
+
+def test_cleide_auditoria_js_freight_table_accessorial_edit_keeps_open_state():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    add_block = js[js.index("addBtn.addEventListener('click', function () {", js.index("function renderEditableAccessorialFeesSection")): js.index("addBtn.addEventListener('click', function () {", js.index("function renderEditableAccessorialFeesSection")) + 500]
+    delete_block = js[js.index("appendRowDeleteCell(tr, function () {", js.index("function renderEditableAccessorialFeesSection")): js.index("appendRowDeleteCell(tr, function () {", js.index("function renderEditableAccessorialFeesSection")) + 400]
+    assert "renderTempTableModalContent(currentTempTable)" in add_block
+    assert "renderTempTableModalContent(currentTempTable)" in delete_block
+    assert "resetFreightTableOpenState" not in add_block
+    assert "resetFreightTableOpenState" not in delete_block
+
+
+def test_cleide_auditoria_js_freight_table_open_state_reset_on_modal_close():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function resetFreightTableOpenState" in js
+    close_block = js[js.index("function closeTempTableModal"): js.index("function closeTempTableModal") + 500]
+    assert "resetFreightTableOpenState()" in close_block
+    reset_block = js[js.index("function resetFreightTableOpenState"): js.index("function resetFreightTableOpenState") + 300]
+    assert "openFreightTableKeys.clear()" in reset_block
+    assert "hasUserTouchedFreightTableOpenState = false" in reset_block
+
+
+def test_cleide_auditoria_js_freight_table_open_state_not_in_save_payload():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    payload_block = js[js.index("function collectTempTableSavePayload"): js.index("function collectTempTableSavePayload") + 900]
+    assert "openFreightTableKeys" not in payload_block
+    assert "hasUserTouchedFreightTableOpenState" not in payload_block
+    assert "getFreightTableKey" not in payload_block
+    assert "resetFreightTableOpenState" not in payload_block
+
+
+def test_cleide_auditoria_js_freight_table_open_state_does_not_affect_other_sections():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function saveTempTableAndAdvance") + 1200]
+    assert "freight_routes" in save_block or "collectTempTableSavePayload" in save_block
+    payload_block = js[js.index("function collectTempTableSavePayload"): js.index("function collectTempTableSavePayload") + 900]
+    assert "freight_routes" in payload_block
+    assert "accessorial_fees" in payload_block
+    assert "save_and_advance" in payload_block
+    routes_block = js[js.index("function renderFreightRoutesSection"): js.index("function renderFreightRoutesSection") + 1200]
+    assert "openFreightTableKeys" not in routes_block
+    accessorial_block = js[js.index("function renderAccessorialFeesSection"): js.index("function renderAccessorialFeesSection") + 1200]
+    assert "openFreightTableKeys" not in accessorial_block
