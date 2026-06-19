@@ -541,6 +541,9 @@ def agentes_cleide():
                     request.form.get("max_documents_considered") or ""
                 ).strip(),
                 "question_max_chars": (request.form.get("question_max_chars") or "").strip(),
+                "audited_file_max_rows": (
+                    request.form.get("audited_file_max_rows") or ""
+                ).strip(),
                 "no_documents_behavior": (
                     request.form.get("no_documents_behavior") or ""
                 ).strip(),

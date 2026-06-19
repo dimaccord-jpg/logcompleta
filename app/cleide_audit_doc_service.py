@@ -7,9 +7,13 @@ Sem rotas, chat, IA ou billing.
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import re
+import unicodedata
+import zipfile
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -77,6 +81,7 @@ from app.cleiton_doc_store import (
     save_document_record,
 )
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
+from app.services.cleide_audit_config_service import get_cleide_audit_config
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +122,117 @@ ERROR_TEMP_TABLE_INVALID_PAYLOAD = "cleide_audit_temp_table_invalid_payload"
 ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE = "cleide_audit_temp_table_payload_too_large"
 ERROR_TEMP_TABLE_SCOPE_MISMATCH = "cleide_audit_temp_table_scope_mismatch"
 
+COVERAGE_TABLE_COLUMNS = ["UF destino", "Cidade destino", "Região de frete"]
+COVERAGE_TABLE_STATUS_NEEDS_REVIEW = "needs_review"
+COVERAGE_UPLOAD_MAX_BYTES = 512 * 1024
+COVERAGE_UPLOAD_MAX_ROWS = 10000
+
+ERROR_COVERAGE_NO_TEMP_TABLE = "cleide_audit_coverage_no_temp_table"
+ERROR_COVERAGE_INVALID_FORMAT = "cleide_audit_coverage_invalid_format"
+ERROR_COVERAGE_EMPTY_FILE = "cleide_audit_coverage_empty_file"
+ERROR_COVERAGE_PAYLOAD_TOO_LARGE = "cleide_audit_coverage_payload_too_large"
+ERROR_COVERAGE_PARSE_FAILED = "cleide_audit_coverage_parse_failed"
+ERROR_COVERAGE_INVALID_PAYLOAD = "cleide_audit_coverage_invalid_payload"
+ERROR_COVERAGE_EXPIRED = "cleide_audit_coverage_expired"
+ERROR_COVERAGE_SCOPE_MISMATCH = "cleide_audit_coverage_scope_mismatch"
+
+AUDIT_BATCH_SHEET_NAME = "Modelo Cleide"
+AUDIT_INPUT_SCHEMA_VERSION = "cleide_audit_input_v1"
+AUDIT_BATCH_STATUS_UPLOADED = "uploaded"
+AUDIT_BATCH_STATUS_PROCESSED = "processed"
+AUDIT_UPLOAD_MAX_BYTES = 2 * 1024 * 1024
+CLEIDE_AUDIT_TEMPLATE_FILENAME = "template_cleide_auditoria_frete.xlsx"
+
+ERROR_AUDIT_NO_TEMP_TABLE = "cleide_audit_audit_no_temp_table"
+ERROR_AUDIT_INVALID_FORMAT = "cleide_audit_audit_invalid_format"
+ERROR_AUDIT_EMPTY_FILE = "cleide_audit_audit_empty_file"
+ERROR_AUDIT_PAYLOAD_TOO_LARGE = "cleide_audit_audit_payload_too_large"
+ERROR_AUDIT_PARSE_FAILED = "cleide_audit_audit_parse_failed"
+ERROR_AUDIT_MISSING_COLUMNS = "cleide_audit_audit_missing_columns"
+ERROR_AUDIT_TOO_MANY_ROWS = "cleide_audit_audit_too_many_rows"
+ERROR_AUDIT_EXPIRED = "cleide_audit_audit_expired"
+ERROR_AUDIT_SCOPE_MISMATCH = "cleide_audit_audit_scope_mismatch"
+ERROR_AUDIT_INVALID_SHEET = "cleide_audit_audit_invalid_sheet"
+ERROR_AUDIT_EMPTY_ROWS = "cleide_audit_audit_empty_rows"
+ERROR_AUDIT_BATCH_NOT_FOUND = "cleide_audit_audit_batch_not_found"
+ERROR_AUDIT_BATCH_EMPTY = "cleide_audit_audit_batch_empty"
+
+AUDIT_STATUS_OK = "ok"
+AUDIT_STATUS_DIVERGENT = "divergent"
+AUDIT_STATUS_MISSING_COVERAGE = "missing_coverage_mapping"
+AUDIT_STATUS_AMBIGUOUS_COVERAGE = "ambiguous_coverage_mapping"
+AUDIT_STATUS_MISSING_FREIGHT_RULE = "missing_freight_rule"
+AUDIT_STATUS_INVALID_WEIGHT = "invalid_weight"
+AUDIT_STATUS_INVALID_CHARGED_FREIGHT = "invalid_charged_freight"
+AUDIT_STATUS_UNSUPPORTED_PRICING = "unsupported_pricing_model"
+
+_AUDIT_REQUIRED_FIELDS = (
+    "destination_city",
+    "destination_uf",
+    "charged_freight",
+    "audited_weight",
+)
+_AUDIT_OPTIONAL_FIELDS = (
+    "carrier",
+    "document_number",
+    "origin_city",
+    "origin_uf",
+    "invoice_value",
+    "modal",
+    "issue_date",
+    "delivery_date",
+)
+_AUDIT_FIELD_LABELS = {
+    "destination_city": "cidade_destino",
+    "destination_uf": "uf_destino",
+    "charged_freight": "valor_frete",
+    "audited_weight": "peso",
+    "carrier": "transportadora",
+    "document_number": "numero_documento",
+    "origin_city": "cidade_origem",
+    "origin_uf": "uf_origem",
+    "invoice_value": "valor_nf",
+    "modal": "modal",
+    "issue_date": "data_emissao",
+    "delivery_date": "data_entrega",
+}
+
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_BR_UFS = frozenset(
+    {
+        "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
+        "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
+    }
+)
+_COVERAGE_REJECT_GENERIC_HEADERS = frozenset(
+    {
+        "destino",
+        "grupo",
+        "tipo",
+        "obs",
+        "observacao",
+        "observacoes",
+        "nota",
+        "notas",
+        "comentario",
+        "comentarios",
+        "info",
+        "informacao",
+        "informacoes",
+    }
+)
+_COVERAGE_FIELD_LABELS = {
+    "destination_uf": "UF destino",
+    "destination_city": "Cidade destino",
+    "freight_region": "Região de frete",
+}
+_COVERAGE_FIELD_HINTS = {
+    "destination_uf": "Você pode usar nomes como UF, Estado ou Unidade Federativa.",
+    "destination_city": "Você pode usar nomes como Cidade, Município, Localidade ou Cidade atendida.",
+    "freight_region": "Você pode usar nomes como Praça, Região, Rota, Itinerário, Área ou Zona.",
+}
+_COVERAGE_REQUIRED_FIELDS = ("destination_uf", "destination_city", "freight_region")
+_COVERAGE_HEADER_ALIASES: dict[str, str] = {}
 
 CLEIDE_AUDIT_DOCUMENT_UPLOAD_FLOW_TYPE = "cleide_audit_document_upload"
 CLEIDE_AUDIT_DOCUMENT_PREPARE_FLOW_TYPE = "cleide_audit_document_prepare"
@@ -128,6 +243,20 @@ SOURCE_AGENT_CLEIDE_AUDIT = "cleide_audit"
 
 
 class CleideAuditTempTableError(ValueError):
+    def __init__(self, error_code: str, message: str):
+        super().__init__(message)
+        self.error_code = error_code
+        self.message = message
+
+
+class CleideAuditCoverageError(ValueError):
+    def __init__(self, error_code: str, message: str):
+        super().__init__(message)
+        self.error_code = error_code
+        self.message = message
+
+
+class CleideAuditBatchError(ValueError):
     def __init__(self, error_code: str, message: str):
         super().__init__(message)
         self.error_code = error_code
@@ -686,11 +815,2124 @@ def clear_temp_table_session_refs(session_obj) -> None:
     session_obj.pop(CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY, None)
 
 
+def _normalize_coverage_header(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.lower()
+    text = re.sub(r"[_\-\/.:]+", " ", text)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _coverage_alias_entries() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return (
+        (
+            "destination_uf",
+            (
+                "uf",
+                "uf destino",
+                "uf de destino",
+                "uf dest",
+                "uf destinatario",
+                "uf destinatário",
+                "uf destin",
+                "uf destno",
+                "estado",
+                "estado destino",
+                "estado de destino",
+                "estado dest",
+                "estado destin",
+                "estado detino",
+                "sigla uf",
+                "sigla estado",
+                "unidade federativa",
+                "uf entrega",
+                "uf de entrega",
+                "uf_destino",
+            ),
+        ),
+        (
+            "destination_city",
+            (
+                "cidade",
+                "cidade destino",
+                "cidade de destino",
+                "cidade dest",
+                "cidade destinatario",
+                "cidade destinatário",
+                "cidade destin",
+                "cidade detino",
+                "cid destino",
+                "municipio",
+                "município",
+                "municipio destino",
+                "município destino",
+                "municipio de destino",
+                "municipo",
+                "municípo",
+                "municip",
+                "mun destino",
+                "localidade",
+                "localidade destino",
+                "cidade atendida",
+                "cidade de atendimento",
+                "cidade entrega",
+                "cidade de entrega",
+                "destino cidade",
+                "cidade_destino",
+            ),
+        ),
+        (
+            "freight_region",
+            (
+                "praca",
+                "praça",
+                "praca destino",
+                "praça destino",
+                "praca dest",
+                "prasa",
+                "regiao",
+                "região",
+                "regiao de frete",
+                "região de frete",
+                "regiao frete",
+                "região frete",
+                "regiao fret",
+                "regiao fretee",
+                "regiao de fret",
+                "regiao de fretee",
+                "regiao de atendimento",
+                "região de atendimento",
+                "regiao atendida",
+                "região atendida",
+                "regiao destino",
+                "região destino",
+                "area",
+                "área",
+                "area de atendimento",
+                "área de atendimento",
+                "zona",
+                "zona de entrega",
+                "setor",
+                "setor de entrega",
+                "rota",
+                "rota destino",
+                "rota de entrega",
+                "codigo regiao",
+                "código região",
+                "cod regiao",
+                "cód regiao",
+                "itinerario",
+                "itinerário",
+                "itinerario entrega",
+                "itinerário entrega",
+                "itinerarioo",
+                "regional",
+                "regional destino",
+                "faixa regional",
+                "grupo destino",
+                "grupo de destino",
+                "regiao_frete",
+            ),
+        ),
+    )
+
+
+def _build_coverage_header_aliases() -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for field_name, labels in _coverage_alias_entries():
+        for label in labels:
+            key = _normalize_coverage_header(label)
+            if not key or key in _COVERAGE_REJECT_GENERIC_HEADERS:
+                continue
+            aliases.setdefault(key, field_name)
+    return aliases
+
+
+def _ensure_coverage_header_aliases() -> dict[str, str]:
+    global _COVERAGE_HEADER_ALIASES
+    if not _COVERAGE_HEADER_ALIASES:
+        _COVERAGE_HEADER_ALIASES = _build_coverage_header_aliases()
+    return _COVERAGE_HEADER_ALIASES
+
+
+def _coverage_edit_distance(left: str, right: str) -> int:
+    if left == right:
+        return 0
+    if not left:
+        return len(right)
+    if not right:
+        return len(left)
+    prev = list(range(len(right) + 1))
+    for i, left_char in enumerate(left, start=1):
+        current = [i]
+        for j, right_char in enumerate(right, start=1):
+            cost = 0 if left_char == right_char else 1
+            current.append(
+                min(
+                    current[-1] + 1,
+                    prev[j] + 1,
+                    prev[j - 1] + cost,
+                )
+            )
+        prev = current
+    return prev[-1]
+
+
+def _coverage_fuzzy_max_distance(alias_key: str) -> int:
+    if len(alias_key) <= 4:
+        return 1
+    if len(alias_key) <= 7:
+        return 1
+    return 2
+
+
+def _resolve_coverage_field(header: str) -> str | None:
+    normalized = _normalize_coverage_header(header)
+    if not normalized:
+        return None
+    aliases = _ensure_coverage_header_aliases()
+    exact = aliases.get(normalized)
+    if exact:
+        return exact
+    if normalized in _COVERAGE_REJECT_GENERIC_HEADERS:
+        return None
+
+    best_field: str | None = None
+    best_distance = 999
+    second_best_distance = 999
+    for alias_key, field_name in aliases.items():
+        max_distance = _coverage_fuzzy_max_distance(alias_key)
+        distance = _coverage_edit_distance(normalized, alias_key)
+        if distance > max_distance:
+            continue
+        if distance < best_distance:
+            second_best_distance = best_distance
+            best_distance = distance
+            best_field = field_name
+        elif distance == best_distance and field_name != best_field:
+            second_best_distance = distance
+    if best_field is None:
+        return None
+    if second_best_distance == best_distance:
+        return None
+    return best_field
+
+
+def _coverage_column_sample_values(raw_rows: list[list], col_index: int, *, max_rows: int = 50) -> list[str]:
+    values: list[str] = []
+    for raw_row in raw_rows[1 : max_rows + 1]:
+        if not isinstance(raw_row, list) or col_index >= len(raw_row):
+            continue
+        value = str(raw_row[col_index] or "").strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def _score_coverage_column_as_uf(values: list[str]) -> float:
+    if not values:
+        return 0.0
+    hits = sum(1 for value in values if _normalize_destination_uf(value) in _BR_UFS)
+    return hits / len(values)
+
+
+def _score_coverage_column_as_city(values: list[str]) -> float:
+    if not values:
+        return 0.0
+    hits = 0
+    for value in values:
+        if _normalize_destination_uf(value) in _BR_UFS:
+            continue
+        cleaned = _sanitize_cell_string(value)
+        if not cleaned or len(cleaned) < 3:
+            continue
+        alpha_ratio = sum(ch.isalpha() or ch.isspace() for ch in cleaned) / len(cleaned)
+        if alpha_ratio >= 0.7:
+            hits += 1
+    return hits / len(values)
+
+
+_REGION_NAME_HINTS = frozenset(
+    {
+        "norte",
+        "nordeste",
+        "sul",
+        "sudeste",
+        "centro oeste",
+        "centro-oeste",
+        "interior",
+        "capital",
+        "metropolitana",
+        "litoral",
+        "fluvial",
+        "fluvias",
+    }
+)
+_REGION_PATTERN_RE = re.compile(
+    r"^[A-Za-z]{2}\s*[-/]\s*.+|.+\s+(interior|capital|metropolitana|litoral)\b.*",
+    re.IGNORECASE,
+)
+
+
+def _score_coverage_column_as_region(values: list[str]) -> float:
+    if not values:
+        return 0.0
+    hits = 0
+    unique_values = {value.casefold() for value in values}
+    repetition_bonus = 0.0
+    if len(values) >= 3:
+        repetition_bonus = min(0.25, (1 - (len(unique_values) / len(values))) * 0.5)
+    for value in values:
+        cleaned = _sanitize_cell_string(value)
+        if not cleaned:
+            continue
+        normalized = _normalize_coverage_header(cleaned)
+        if _REGION_PATTERN_RE.match(cleaned):
+            hits += 1
+            continue
+        if any(hint in normalized for hint in _REGION_NAME_HINTS):
+            hits += 1
+            continue
+        if re.search(r"\d", cleaned) and re.search(r"[A-Za-z]{2}", cleaned):
+            hits += 0.75
+    base = hits / len(values)
+    return min(1.0, base + repetition_bonus)
+
+
+def _infer_coverage_columns_from_content(
+    raw_rows: list[list],
+    field_indexes: dict[str, int],
+    header_row: list,
+) -> dict[str, int]:
+    used_indexes = set(field_indexes.values())
+    candidate_indexes = [
+        index for index in range(len(header_row)) if index not in used_indexes
+    ]
+    if not candidate_indexes:
+        return {}
+
+    missing_fields = [field for field in _COVERAGE_REQUIRED_FIELDS if field not in field_indexes]
+    if not missing_fields:
+        return {}
+
+    scores: dict[str, dict[int, float]] = {field: {} for field in missing_fields}
+    for col_index in candidate_indexes:
+        values = _coverage_column_sample_values(raw_rows, col_index)
+        if not values:
+            continue
+        if "destination_uf" in missing_fields:
+            scores["destination_uf"][col_index] = _score_coverage_column_as_uf(values)
+        if "destination_city" in missing_fields:
+            scores["destination_city"][col_index] = _score_coverage_column_as_city(values)
+        if "freight_region" in missing_fields:
+            scores["freight_region"][col_index] = _score_coverage_column_as_region(values)
+
+    inferred: dict[str, int] = {}
+    assigned: set[int] = set()
+    thresholds = {
+        "destination_uf": 0.75,
+        "destination_city": 0.55,
+        "freight_region": 0.45,
+    }
+
+    while True:
+        best_field: str | None = None
+        best_col: int | None = None
+        best_score = -1.0
+        for field in missing_fields:
+            if field in inferred:
+                continue
+            threshold = thresholds[field]
+            for col_index, score in scores.get(field, {}).items():
+                if col_index in assigned or score < threshold:
+                    continue
+                if score > best_score:
+                    best_score = score
+                    best_field = field
+                    best_col = col_index
+        if best_field is None or best_col is None:
+            break
+        inferred[best_field] = best_col
+        assigned.add(best_col)
+
+    return inferred
+
+
+def _resolve_coverage_field_indexes(raw_rows: list[list]) -> dict[str, int]:
+    header_row = raw_rows[0]
+    field_indexes: dict[str, int] = {}
+    for index, header in enumerate(header_row):
+        field_name = _resolve_coverage_field(str(header or ""))
+        if field_name and field_name not in field_indexes:
+            field_indexes[field_name] = index
+
+    missing_fields = [field for field in _COVERAGE_REQUIRED_FIELDS if field not in field_indexes]
+    if missing_fields:
+        inferred = _infer_coverage_columns_from_content(raw_rows, field_indexes, header_row)
+        for field_name, index in inferred.items():
+            if field_name not in field_indexes:
+                field_indexes[field_name] = index
+
+    return field_indexes
+
+
+def _format_coverage_missing_columns_error(missing_fields: list[str]) -> str:
+    labels = [_COVERAGE_FIELD_LABELS[field] for field in missing_fields if field in _COVERAGE_FIELD_LABELS]
+    hints = [
+        _COVERAGE_FIELD_HINTS[field]
+        for field in missing_fields
+        if field in _COVERAGE_FIELD_HINTS
+    ]
+    message = "Colunas obrigatórias ausentes: " + ", ".join(labels) + "."
+    if hints:
+        message += " " + " ".join(hints)
+    return message
+
+
+def _normalize_destination_uf(value) -> str | None:
+    cleaned = _sanitize_cell_string(value)
+    if not cleaned:
+        return None
+    candidate = re.sub(r"[^A-Za-z]", "", cleaned).upper()
+    if len(candidate) != 2:
+        return None
+    return candidate
+
+
+def _empty_coverage_table_shell(*, uploaded_at: str | None = None) -> dict:
+    return {
+        "status": COVERAGE_TABLE_STATUS_NEEDS_REVIEW,
+        "columns": list(COVERAGE_TABLE_COLUMNS),
+        "rows": [],
+        "validation_warnings": [],
+        "human_review_status": None,
+        "human_edited_at": None,
+        "human_edited_by_user_id": None,
+        "edit_version": 0,
+        "uploaded_at": uploaded_at or _utcnow().isoformat(),
+    }
+
+
+def _public_coverage_table(coverage) -> dict | None:
+    if not isinstance(coverage, dict):
+        return None
+    rows = coverage.get("rows")
+    return {
+        "status": coverage.get("status"),
+        "columns": list(coverage.get("columns") or COVERAGE_TABLE_COLUMNS),
+        "rows": list(rows) if isinstance(rows, list) else [],
+        "validation_warnings": list(coverage.get("validation_warnings") or []),
+        "human_review_status": coverage.get("human_review_status"),
+        "human_edited_at": coverage.get("human_edited_at"),
+        "human_edited_by_user_id": coverage.get("human_edited_by_user_id"),
+        "edit_version": coverage.get("edit_version"),
+        "uploaded_at": coverage.get("uploaded_at"),
+    }
+
+
+def _decode_coverage_csv_bytes(file_bytes: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return (file_bytes or b"").decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise CleideAuditCoverageError(
+        ERROR_COVERAGE_PARSE_FAILED,
+        "Não foi possível decodificar o arquivo CSV de cobertura.",
+    )
+
+
+def _parse_coverage_tabular_rows(raw_rows: list[list], *, source_file_name: str) -> tuple[list[dict], list[str]]:
+    if not raw_rows:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_EMPTY_FILE,
+            "O arquivo de cobertura está vazio.",
+        )
+    header_row = raw_rows[0]
+    if not isinstance(header_row, list):
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_PARSE_FAILED,
+            "Cabeçalho do arquivo de cobertura inválido.",
+        )
+    field_indexes = _resolve_coverage_field_indexes(raw_rows)
+    missing_fields = [
+        field for field in _COVERAGE_REQUIRED_FIELDS if field not in field_indexes
+    ]
+    if missing_fields:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_PARSE_FAILED,
+            _format_coverage_missing_columns_error(missing_fields),
+        )
+
+    parsed_rows: list[dict] = []
+    warnings: list[str] = []
+    row_index = 0
+    for raw_row in raw_rows[1:]:
+        if not isinstance(raw_row, list):
+            continue
+        if not any(str(cell or "").strip() for cell in raw_row):
+            continue
+        row_index += 1
+        if row_index > COVERAGE_UPLOAD_MAX_ROWS:
+            raise CleideAuditCoverageError(
+                ERROR_COVERAGE_PAYLOAD_TOO_LARGE,
+                "O arquivo de cobertura excede o limite de linhas permitido.",
+            )
+
+        def _cell(field: str) -> str:
+            idx = field_indexes[field]
+            if idx >= len(raw_row):
+                return ""
+            return str(raw_row[idx] or "").strip()
+
+        destination_uf = _normalize_destination_uf(_cell("destination_uf"))
+        destination_city = _sanitize_cell_string(_cell("destination_city"))
+        freight_region = _sanitize_cell_string(_cell("freight_region"))
+        row_errors: list[str] = []
+        if not destination_uf:
+            row_errors.append("UF inválida ou ausente")
+        if not destination_city:
+            row_errors.append("cidade ausente")
+        if not freight_region:
+            row_errors.append("região de frete ausente")
+        if row_errors:
+            warnings.append(f"Linha {row_index} ignorada: {', '.join(row_errors)}.")
+            continue
+        parsed_rows.append(
+            {
+                "destination_uf": destination_uf,
+                "destination_city": destination_city,
+                "freight_region": freight_region,
+                "row_index": row_index,
+                "source_file_name": source_file_name,
+                "confidence": None,
+                "evidence_ref": None,
+                "notes": "",
+            }
+        )
+    if not parsed_rows and not warnings:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_EMPTY_FILE,
+            "Nenhuma linha válida encontrada no arquivo de cobertura.",
+        )
+    return parsed_rows, warnings
+
+
+def _parse_coverage_csv_bytes(file_bytes: bytes, *, source_file_name: str) -> tuple[list[dict], list[str]]:
+    text = _decode_coverage_csv_bytes(file_bytes)
+    if not text.strip():
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_EMPTY_FILE,
+            "O arquivo de cobertura está vazio.",
+        )
+    reader = csv.reader(io.StringIO(text))
+    raw_rows = [row for row in reader]
+    return _parse_coverage_tabular_rows(raw_rows, source_file_name=source_file_name)
+
+
+def _parse_coverage_xlsx_bytes(file_bytes: bytes, *, source_file_name: str) -> tuple[list[dict], list[str]]:
+    if not file_bytes:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_EMPTY_FILE,
+            "O arquivo de cobertura está vazio.",
+        )
+    if len(file_bytes) > COVERAGE_UPLOAD_MAX_BYTES:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_PAYLOAD_TOO_LARGE,
+            "O arquivo de cobertura excede o limite de tamanho permitido.",
+        )
+    try:
+        if zipfile.is_zipfile(io.BytesIO(file_bytes)):
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+                if archive.testzip() is not None:
+                    raise CleideAuditCoverageError(
+                        ERROR_COVERAGE_PARSE_FAILED,
+                        "Arquivo XLSX de cobertura corrompido.",
+                    )
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    except CleideAuditCoverageError:
+        raise
+    except Exception as exc:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_PARSE_FAILED,
+            "Não foi possível ler o arquivo XLSX de cobertura.",
+        ) from exc
+
+    raw_rows: list[list] = []
+    try:
+        sheet = workbook.active
+        for row in sheet.iter_rows(values_only=True):
+            raw_rows.append(["" if cell is None else str(cell) for cell in row])
+    finally:
+        workbook.close()
+    return _parse_coverage_tabular_rows(raw_rows, source_file_name=source_file_name)
+
+
+def _validate_coverage_row_for_save(item, *, row_index: int) -> dict:
+    if not isinstance(item, dict):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Cada linha de coverage_table deve ser um objeto.",
+        )
+    destination_uf = _normalize_destination_uf(item.get("destination_uf"))
+    destination_city = _sanitize_cell_string(item.get("destination_city"))
+    freight_region = _sanitize_cell_string(item.get("freight_region"))
+    notes = _sanitize_cell_string(item.get("notes")) or ""
+    if not destination_uf:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            f"Linha {row_index}: UF destino inválida ou ausente.",
+        )
+    if not destination_city:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            f"Linha {row_index}: cidade destino é obrigatória.",
+        )
+    if not freight_region:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            f"Linha {row_index}: região de frete é obrigatória.",
+        )
+    return {
+        "destination_uf": destination_uf,
+        "destination_city": destination_city,
+        "freight_region": freight_region,
+        "row_index": row_index,
+        "source_file_name": _sanitize_cell_string(item.get("source_file_name")),
+        "confidence": item.get("confidence"),
+        "evidence_ref": _sanitize_cell_string(item.get("evidence_ref")),
+        "notes": notes,
+    }
+
+
+def _validate_coverage_table_for_save(raw_coverage) -> dict | None:
+    if raw_coverage is None:
+        return None
+    if not isinstance(raw_coverage, dict):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "coverage_table deve ser um objeto.",
+        )
+    raw_rows = raw_coverage.get("rows")
+    if raw_rows is None:
+        return {"rows": []}
+    if not isinstance(raw_rows, list):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "coverage_table.rows deve ser uma lista.",
+        )
+    normalized_rows: list[dict] = []
+    for index, row in enumerate(raw_rows, start=1):
+        normalized_rows.append(_validate_coverage_row_for_save(row, row_index=index))
+    return {"rows": normalized_rows}
+
+
+def upload_coverage_table_from_file(
+    *,
+    display_name: str,
+    file_bytes: bytes,
+    extension: str | None,
+    user_scope=None,
+    franquia_scope=None,
+) -> dict:
+    """
+    Upload complementar determinístico de coverage_table no tt_*.json ativo.
+
+    Não registra documento principal, não chama Gemini e não dispara extração de frete.
+    """
+    _require_session()
+    if not file_bytes:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_EMPTY_FILE,
+            "O arquivo de cobertura está vazio.",
+        )
+    if len(file_bytes) > COVERAGE_UPLOAD_MAX_BYTES:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_PAYLOAD_TOO_LARGE,
+            "O arquivo de cobertura excede o limite de tamanho permitido.",
+        )
+
+    ext = (extension or "").strip().lower()
+    if not ext.startswith("."):
+        ext = f".{ext}" if ext else ""
+    if ext == ".pdf":
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_INVALID_FORMAT,
+            "Upload de cobertura aceita apenas CSV e XLSX nesta fase.",
+        )
+    if ext not in {".csv", ".xlsx"}:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_INVALID_FORMAT,
+            "Upload de cobertura aceita apenas CSV e XLSX nesta fase.",
+        )
+
+    sync_temp_table_with_session_documents()
+    active_id = get_temp_table_id(session)
+    if not active_id:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_NO_TEMP_TABLE,
+            "Nenhuma tabela temporária ativa nesta sessão.",
+        )
+
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
+    if record is None:
+        clear_temp_table_session_refs(session)
+        _mark_session_modified()
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_NO_TEMP_TABLE,
+            "Tabela temporária ativa não encontrada.",
+        )
+    status = (record.get("status") or "").strip().lower()
+    if status == TEMP_TABLE_STATUS_EXPIRED:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_EXPIRED,
+            "A tabela temporária desta sessão expirou.",
+        )
+    if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_NO_TEMP_TABLE,
+            "Tabela temporária indisponível para upload complementar.",
+        )
+    _assert_temp_table_scope(record, user_scope=user_scope, franquia_scope=franquia_scope)
+
+    safe_name = secure_filename(display_name or "coverage") or "coverage"
+    if ext == ".csv":
+        rows, warnings = _parse_coverage_csv_bytes(file_bytes, source_file_name=safe_name)
+    else:
+        rows, warnings = _parse_coverage_xlsx_bytes(file_bytes, source_file_name=safe_name)
+
+    now = _utcnow().isoformat()
+    preserved_expires_at = record.get("expires_at")
+    updated = dict(record)
+    coverage = _empty_coverage_table_shell(uploaded_at=now)
+    existing_coverage = record.get("coverage_table")
+    if isinstance(existing_coverage, dict):
+        coverage["human_review_status"] = existing_coverage.get("human_review_status")
+        coverage["human_edited_at"] = existing_coverage.get("human_edited_at")
+        coverage["human_edited_by_user_id"] = existing_coverage.get("human_edited_by_user_id")
+        coverage["edit_version"] = existing_coverage.get("edit_version") or 0
+    coverage["rows"] = rows
+    coverage["validation_warnings"] = warnings
+    updated["coverage_table"] = coverage
+    updated["updated_at"] = now
+    updated["expires_at"] = preserved_expires_at
+
+    saved = save_temp_table_record(updated)
+    logger.info(
+        "Cleide coverage upload: temp_table_id=%s user_id=%s rows=%s warnings=%s",
+        saved.get("temp_table_id"),
+        user_scope,
+        len(rows),
+        len(warnings),
+    )
+    public = _public_temp_table(saved)
+    if public is None:
+        raise CleideAuditCoverageError(
+            ERROR_COVERAGE_NO_TEMP_TABLE,
+            "Não foi possível retornar a tabela temporária atualizada.",
+        )
+    return public
+
+
+def _audit_header_aliases() -> dict[str, tuple[str, ...]]:
+    return {
+        "destination_city": (
+            "cidade destino",
+            "cidade de destino",
+            "cidade_destino",
+            "destino cidade",
+        ),
+        "destination_uf": (
+            "uf destino",
+            "uf de destino",
+            "uf_destino",
+            "destino uf",
+            "estado destino",
+        ),
+        "charged_freight": (
+            "valor frete",
+            "valor do frete",
+            "valor_frete",
+            "valor frete cobrado",
+            "valor do frete cobrado",
+            "valor_frete_cobrado",
+            "frete cobrado",
+            "frete",
+        ),
+        "audited_weight": (
+            "peso",
+            "peso auditado",
+            "peso_auditado",
+            "peso cobrado",
+            "peso kg",
+        ),
+        "carrier": ("transportadora", "nome transportadora", "empresa transportadora"),
+        "document_number": (
+            "numero documento",
+            "numero do documento",
+            "numero_documento",
+            "documento",
+            "nf",
+            "nota fiscal",
+        ),
+        "origin_city": ("cidade origem", "cidade de origem", "cidade_origem"),
+        "origin_uf": ("uf origem", "uf de origem", "uf_origem", "estado origem"),
+        "invoice_value": ("valor nf", "valor da nf", "valor_nf", "valor nota fiscal"),
+        "modal": ("modal", "tipo modal", "modalidade"),
+        "issue_date": ("data emissao", "data de emissao", "data_emissao", "emissao"),
+        "delivery_date": ("data entrega", "data de entrega", "data_entrega", "entrega"),
+    }
+
+
+def _resolve_audit_field(header_value) -> str | None:
+    normalized = _normalize_coverage_header(header_value)
+    if not normalized:
+        return None
+    for field_name, aliases in _audit_header_aliases().items():
+        if normalized in aliases:
+            return field_name
+    return None
+
+
+def _resolve_audit_field_indexes(header_row: list) -> tuple[dict[str, int], dict[str, str]]:
+    field_indexes: dict[str, int] = {}
+    header_map: dict[str, str] = {}
+    for index, header in enumerate(header_row):
+        field_name = _resolve_audit_field(header)
+        if field_name and field_name not in field_indexes:
+            field_indexes[field_name] = index
+            source_header = _sanitize_cell_string(header) or str(header or "").strip()
+            header_map[source_header] = field_name
+    return field_indexes, header_map
+
+
+def _format_audit_missing_columns_error(missing_fields: list[str]) -> str:
+    labels = [_AUDIT_FIELD_LABELS.get(field, field) for field in missing_fields]
+    return "Colunas obrigatórias ausentes: " + ", ".join(labels) + "."
+
+
+def _parse_audit_numeric(value) -> float | None:
+    cleaned = _sanitize_cell_string(value)
+    if cleaned is None:
+        return None
+    text = cleaned.replace(" ", "")
+    if not text:
+        return None
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
+    try:
+        parsed = float(text)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def _audit_row_is_empty(raw_row: list, field_indexes: dict[str, int]) -> bool:
+    for index in field_indexes.values():
+        if index < len(raw_row):
+            cell = _sanitize_cell_string(raw_row[index])
+            if cell:
+                return False
+    return True
+
+
+def _normalize_audit_row(
+    raw_row: list,
+    *,
+    row_index: int,
+    field_indexes: dict[str, int],
+    source_file_name: str,
+) -> dict | None:
+    if _audit_row_is_empty(raw_row, field_indexes):
+        return None
+
+    destination_city = _sanitize_cell_string(
+        raw_row[field_indexes["destination_city"]]
+        if field_indexes["destination_city"] < len(raw_row)
+        else None
+    )
+    destination_uf = _normalize_destination_uf(
+        raw_row[field_indexes["destination_uf"]]
+        if field_indexes["destination_uf"] < len(raw_row)
+        else None
+    )
+    charged_freight = _parse_audit_numeric(
+        raw_row[field_indexes["charged_freight"]]
+        if field_indexes["charged_freight"] < len(raw_row)
+        else None
+    )
+    audited_weight = _parse_audit_numeric(
+        raw_row[field_indexes["audited_weight"]]
+        if field_indexes["audited_weight"] < len(raw_row)
+        else None
+    )
+
+    if not destination_city or not destination_uf or charged_freight is None or audited_weight is None:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_PARSE_FAILED,
+            f"Linha {row_index}: dados obrigatórios inválidos ou ausentes.",
+        )
+
+    normalized: dict = {
+        "row_index": row_index,
+        "destination_city": destination_city,
+        "destination_uf": destination_uf,
+        "charged_freight": charged_freight,
+        "audited_weight": audited_weight,
+        "source_file_name": source_file_name,
+    }
+
+    for field_name in _AUDIT_OPTIONAL_FIELDS:
+        if field_name not in field_indexes:
+            continue
+        index = field_indexes[field_name]
+        raw_value = raw_row[index] if index < len(raw_row) else None
+        if field_name in {"invoice_value"}:
+            parsed_value = _parse_audit_numeric(raw_value)
+            if parsed_value is not None:
+                normalized[field_name] = parsed_value
+            continue
+        if field_name == "origin_uf":
+            parsed_uf = _normalize_destination_uf(raw_value)
+            if parsed_uf:
+                normalized[field_name] = parsed_uf
+            continue
+        cleaned = _sanitize_cell_string(raw_value)
+        if cleaned:
+            normalized[field_name] = cleaned
+
+    return normalized
+
+
+def _parse_audit_tabular_rows(
+    raw_rows: list[list],
+    *,
+    source_file_name: str,
+    max_rows: int,
+) -> tuple[list[dict], dict[str, str], str | None]:
+    if not raw_rows:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_EMPTY_FILE,
+            "O arquivo auditado está vazio.",
+        )
+
+    header_row = raw_rows[0]
+    field_indexes, header_map = _resolve_audit_field_indexes(header_row)
+    missing_fields = [
+        field for field in _AUDIT_REQUIRED_FIELDS if field not in field_indexes
+    ]
+    if missing_fields:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_MISSING_COLUMNS,
+            _format_audit_missing_columns_error(missing_fields),
+        )
+
+    normalized_rows: list[dict] = []
+    data_row_index = 0
+    for raw_row in raw_rows[1:]:
+        if _audit_row_is_empty(raw_row, field_indexes):
+            continue
+        data_row_index += 1
+        if data_row_index > max_rows:
+            raise CleideAuditBatchError(
+                ERROR_AUDIT_TOO_MANY_ROWS,
+                f"O arquivo excede o limite de {max_rows} linhas configurado para auditoria.",
+            )
+        normalized = _normalize_audit_row(
+            raw_row,
+            row_index=data_row_index,
+            field_indexes=field_indexes,
+            source_file_name=source_file_name,
+        )
+        if normalized is not None:
+            normalized_rows.append(normalized)
+
+    if not normalized_rows:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_EMPTY_ROWS,
+            "Nenhuma linha válida encontrada no arquivo auditado.",
+        )
+
+    public_header_map = {
+        _AUDIT_FIELD_LABELS.get(field, field): field
+        for field in field_indexes
+        if field in _AUDIT_FIELD_LABELS
+    }
+    public_header_map.update(
+        {
+            source: target
+            for source, target in header_map.items()
+            if source and target
+        }
+    )
+    return normalized_rows, public_header_map, None
+
+
+def _parse_audit_csv_bytes(
+    file_bytes: bytes,
+    *,
+    source_file_name: str,
+    max_rows: int,
+) -> tuple[list[dict], dict[str, str], str | None]:
+    text = _decode_coverage_csv_bytes(file_bytes)
+    reader = csv.reader(io.StringIO(text))
+    raw_rows = [[cell for cell in row] for row in reader if row]
+    rows, header_map, _ = _parse_audit_tabular_rows(
+        raw_rows,
+        source_file_name=source_file_name,
+        max_rows=max_rows,
+    )
+    return rows, header_map, None
+
+
+def _parse_audit_xlsx_bytes(
+    file_bytes: bytes,
+    *,
+    source_file_name: str,
+    max_rows: int,
+) -> tuple[list[dict], dict[str, str], str]:
+    if not file_bytes:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_EMPTY_FILE,
+            "O arquivo auditado está vazio.",
+        )
+    if len(file_bytes) > AUDIT_UPLOAD_MAX_BYTES:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_PAYLOAD_TOO_LARGE,
+            "O arquivo auditado excede o limite de tamanho permitido.",
+        )
+    try:
+        if zipfile.is_zipfile(io.BytesIO(file_bytes)):
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+                if archive.testzip() is not None:
+                    raise CleideAuditBatchError(
+                        ERROR_AUDIT_PARSE_FAILED,
+                        "Arquivo XLSX auditado corrompido.",
+                    )
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    except CleideAuditBatchError:
+        raise
+    except Exception as exc:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_PARSE_FAILED,
+            "Não foi possível ler o arquivo XLSX auditado.",
+        ) from exc
+
+    sheet = None
+    try:
+        if AUDIT_BATCH_SHEET_NAME in workbook.sheetnames:
+            sheet = workbook[AUDIT_BATCH_SHEET_NAME]
+        else:
+            raise CleideAuditBatchError(
+                ERROR_AUDIT_INVALID_SHEET,
+                f"A aba '{AUDIT_BATCH_SHEET_NAME}' é obrigatória no arquivo XLSX auditado.",
+            )
+        raw_rows: list[list] = []
+        for row in sheet.iter_rows(values_only=True):
+            raw_rows.append(["" if cell is None else cell for cell in row])
+    finally:
+        workbook.close()
+
+    rows, header_map, _ = _parse_audit_tabular_rows(
+        raw_rows,
+        source_file_name=source_file_name,
+        max_rows=max_rows,
+    )
+    return rows, header_map, AUDIT_BATCH_SHEET_NAME
+
+
+def _empty_audit_batch_shell(*, uploaded_at: str | None = None) -> dict:
+    return {
+        "status": AUDIT_BATCH_STATUS_UPLOADED,
+        "audit_batch_id": None,
+        "temp_table_id": None,
+        "source_file_name": None,
+        "sheet_name": None,
+        "uploaded_at": uploaded_at,
+        "created_at": None,
+        "updated_at": None,
+        "expires_at": None,
+        "row_count": 0,
+        "max_rows": None,
+        "input_schema_version": AUDIT_INPUT_SCHEMA_VERSION,
+        "header_map": {},
+        "normalized_rows": [],
+        "results": [],
+        "summary": None,
+    }
+
+
+def _normalize_audit_lookup_text(value) -> str:
+    cleaned = _sanitize_cell_string(value)
+    if not cleaned:
+        return ""
+    text = unicodedata.normalize("NFKD", str(cleaned))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.upper().strip()
+    text = re.sub(r"[_\-\/.,:;]+", " ", text)
+    text = re.sub(r"[^A-Z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _coverage_lookup_key(destination_uf, destination_city) -> str | None:
+    uf = _normalize_destination_uf(destination_uf)
+    city = _normalize_audit_lookup_text(destination_city)
+    if not uf or not city:
+        return None
+    return f"{uf}|{city}"
+
+
+def build_coverage_index(coverage_table) -> dict:
+    rows = []
+    if isinstance(coverage_table, dict):
+        rows = coverage_table.get("rows") or []
+    elif isinstance(coverage_table, list):
+        rows = coverage_table
+    if not isinstance(rows, list):
+        return {}
+
+    grouped: dict[str, set[str]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = _coverage_lookup_key(row.get("destination_uf"), row.get("destination_city"))
+        region = _sanitize_cell_string(row.get("freight_region"))
+        if not key or not region:
+            continue
+        grouped.setdefault(key, set()).add(region)
+
+    index: dict[str, object] = {}
+    for key, regions in grouped.items():
+        ordered = sorted(regions)
+        if len(ordered) == 1:
+            index[key] = ordered[0]
+        else:
+            index[key] = {
+                "reason_code": AUDIT_STATUS_AMBIGUOUS_COVERAGE,
+                "regions": ordered,
+            }
+    return index
+
+
+def _parse_brazilian_money(value) -> float | None:
+    cleaned = _sanitize_cell_string(value)
+    if cleaned is None:
+        return None
+    text = cleaned.strip()
+    if not text:
+        return None
+    text = re.sub(r"(?i)\bR\$\b|R\$", "", text)
+    text = re.sub(r"[^0-9,\.\-]", "", text)
+    if not text or text in {"-", ".", ","}:
+        return None
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
+    try:
+        parsed = float(text)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def _parse_weight_number(value) -> float | None:
+    cleaned = _sanitize_cell_string(value)
+    if cleaned is None:
+        return None
+    text = cleaned.strip()
+    if not text:
+        return None
+    text = re.sub(r"[^0-9,\.\-]", "", text)
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
+    try:
+        parsed = float(text)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def _parse_range_from_label(label) -> tuple[float | None, float | None] | None:
+    normalized = _normalize_coverage_header(label)
+    if not normalized:
+        return None
+    numbers = [float(item.replace(",", ".")) for item in re.findall(r"\d+(?:[,.]\d+)?", normalized)]
+    if not numbers:
+        return None
+    if normalized.startswith("ate ") or normalized.startswith("ate"):
+        return (0.0, numbers[-1])
+    if len(numbers) >= 2 and (
+        " a " in f" {normalized} "
+        or normalized.startswith("de ")
+        or " ate " in f" {normalized} "
+    ):
+        return (numbers[0], numbers[1])
+    if len(numbers) == 1 and re.search(r"\bkg\b|\bpeso\b", normalized):
+        return (0.0, numbers[0])
+    return None
+
+
+def _normalize_brackets(brackets: list[dict]) -> list[dict]:
+    cleaned = [
+        bracket
+        for bracket in brackets
+        if isinstance(bracket.get("max_kg"), (int, float))
+        and isinstance(bracket.get("value"), (int, float))
+    ]
+    cleaned.sort(key=lambda item: (float(item.get("max_kg")), float(item.get("min_kg") or 0)))
+    previous_max = 0.0
+    normalized: list[dict] = []
+    for index, bracket in enumerate(cleaned):
+        max_kg = float(bracket["max_kg"])
+        if max_kg < previous_max:
+            continue
+        min_kg = 0.0 if index == 0 else previous_max
+        normalized.append(
+            {
+                "min_kg": min_kg,
+                "max_kg": max_kg,
+                "value": round(float(bracket["value"]), 2),
+                "label": bracket.get("label") or f"Faixa até {max_kg:g} kg",
+            }
+        )
+        previous_max = max_kg
+    return normalized
+
+
+def _is_region_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    return normalized in {
+        "uf cidades",
+        "uf cidade",
+        "regiao",
+        "regiao de frete",
+        "praca",
+        "rota",
+        "itinerario",
+        "destino",
+        "destino frete",
+        "cidade",
+        "cidades",
+        "cidade destino",
+        "municipio",
+        "municipio destino",
+    }
+
+
+def _is_destination_uf_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    return normalized in {
+        "uf",
+        "uf destino",
+        "uf de destino",
+        "uf dest",
+        "uf entrega",
+        "uf de entrega",
+    }
+
+
+def _is_city_destination_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    return normalized in {
+        "uf cidades",
+        "uf cidade",
+        "cidade",
+        "cidades",
+        "cidade destino",
+        "municipio",
+        "municipio destino",
+        "destino",
+    }
+
+
+def _is_value_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    if "pedagio" in normalized or "gris" in normalized or "seguro" in normalized:
+        return False
+    if "tso" in normalized or "tas" in normalized or "frete valor" in normalized:
+        return False
+    return normalized in {"frete", "valor", "valor frete", "frete peso", "tarifa"}
+
+
+def _is_excess_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    return "excedente" in normalized or "excesso" in normalized
+
+
+def _is_direct_kg_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    if "excedente" in normalized or "frete valor" in normalized:
+        return False
+    return (
+        normalized in {"kg", "por kg", "valor kg", "frete kg", "frete peso kg", "frete peso"}
+        or "r kg" in normalized
+        or "rs kg" in normalized
+    )
+
+
+def _is_direct_ton_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    return (
+        "tonelada" in normalized
+        or normalized in {"ton", "por ton", "valor ton", "frete ton"}
+        or "r ton" in normalized
+        or "rs ton" in normalized
+    )
+
+
+def _region_from_table_context(table: dict) -> str | None:
+    context = table.get("context") if isinstance(table.get("context"), dict) else {}
+    for key in ("route_label", "destination", "region", "freight_region", "praca", "rota"):
+        candidate = _sanitize_cell_string(context.get(key))
+        if candidate:
+            return candidate
+    return _sanitize_cell_string(table.get("table_title"))
+
+
+def _make_unsupported_rule(region: str, source_title: str | None, note: str) -> dict:
+    return {
+        "pricing_type": AUDIT_STATUS_UNSUPPORTED_PRICING,
+        "region": region,
+        "source_table_title": source_title,
+        "brackets": [],
+        "excess": None,
+        "unit": "kg",
+        "normalization_notes": [note],
+    }
+
+
+def _register_pricing_rule(index: dict, region: str | None, rule: dict) -> None:
+    if not region:
+        return
+    if region in index:
+        index[region] = _make_unsupported_rule(
+            region,
+            rule.get("source_table_title"),
+            "Mais de uma regra de frete para a mesma região.",
+        )
+        return
+    index[region] = rule
+
+
+def _pricing_rule_keys_for_row(
+    region: str,
+    destination_uf: str | None = None,
+    *,
+    include_normalized_region: bool = False,
+) -> list[str]:
+    keys = [region]
+    normalized_region = _normalize_audit_lookup_text(region)
+    if include_normalized_region and normalized_region:
+        keys.append(normalized_region)
+    uf = _normalize_destination_uf(destination_uf)
+    if uf and normalized_region:
+        keys.append(f"{uf}|{normalized_region}")
+    return list(dict.fromkeys(keys))
+
+
+def _build_rule_from_row_range_table(table: dict) -> dict | None:
+    rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+    columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+    if not rows or not columns:
+        return None
+    range_col = next((col for col in columns if _parse_range_from_label(col) is None and "peso" in _normalize_coverage_header(col)), None)
+    value_col = next((col for col in columns if _is_value_column(col)), None)
+    if not range_col or not value_col:
+        return None
+    region = _region_from_table_context(table)
+    if not region:
+        return None
+    brackets = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        parsed_range = _parse_range_from_label(row.get(range_col))
+        value = _parse_brazilian_money(row.get(value_col))
+        if parsed_range and value is not None:
+            brackets.append(
+                {
+                    "min_kg": parsed_range[0] or 0.0,
+                    "max_kg": parsed_range[1],
+                    "value": value,
+                    "label": _sanitize_cell_string(row.get(range_col)),
+                }
+            )
+    brackets = _normalize_brackets(brackets)
+    if not brackets:
+        return _make_unsupported_rule(region, table.get("table_title"), "Faixas por linha sem valor calculável.")
+    excess_col = next((col for col in columns if _is_excess_column(col)), None)
+    excess_rate = None
+    if excess_col:
+        for row in rows:
+            excess_rate = _parse_brazilian_money(row.get(excess_col))
+            if excess_rate is not None:
+                break
+    return {
+        "pricing_type": "range_plus_excess_per_kg" if excess_rate is not None else "fixed_range",
+        "region": region,
+        "source_table_title": table.get("table_title"),
+        "brackets": brackets,
+        "excess": {"rate_per_kg": excess_rate} if excess_rate is not None else None,
+        "unit": "kg",
+        "normalization_notes": [],
+    }
+
+
+def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
+    rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+    columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+    if not rows or not columns:
+        return []
+
+    region_col = next((col for col in columns if _is_region_column(col)), None)
+    uf_col = next((col for col in columns if _is_destination_uf_column(col)), None)
+    range_cols = [(col, _parse_range_from_label(col)) for col in columns]
+    range_cols = [(col, parsed) for col, parsed in range_cols if parsed is not None]
+    direct_kg_col = next((col for col in columns if _is_direct_kg_column(col)), None)
+    direct_ton_col = next((col for col in columns if _is_direct_ton_column(col)), None)
+    excess_col = next((col for col in columns if _is_excess_column(col)), None)
+    context_region = _region_from_table_context(table)
+    region_is_city_destination = bool(region_col and _is_city_destination_column(region_col))
+    rules: list[tuple[str, dict]] = []
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        region = _sanitize_cell_string(row.get(region_col)) if region_col else context_region
+        destination_uf = _sanitize_cell_string(row.get(uf_col)) if uf_col else None
+        if not region:
+            continue
+        if direct_ton_col:
+            value = _parse_brazilian_money(row.get(direct_ton_col))
+            if value is not None:
+                rule = {
+                    "pricing_type": "direct_weight_rate",
+                    "region": region,
+                    "source_table_title": table.get("table_title"),
+                    "brackets": [],
+                    "excess": None,
+                    "unit": "ton",
+                    "value_per_ton": value,
+                    "normalization_notes": [],
+                }
+                rules.extend(
+                    (key, rule)
+                    for key in _pricing_rule_keys_for_row(
+                        region,
+                        destination_uf,
+                        include_normalized_region=region_is_city_destination,
+                    )
+                )
+                continue
+        if direct_kg_col:
+            value = _parse_brazilian_money(row.get(direct_kg_col))
+            if value is not None:
+                rule = {
+                    "pricing_type": "direct_weight_rate",
+                    "region": region,
+                    "source_table_title": table.get("table_title"),
+                    "brackets": [],
+                    "excess": None,
+                    "unit": "kg",
+                    "value_per_kg": value,
+                    "normalization_notes": [],
+                }
+                rules.extend(
+                    (key, rule)
+                    for key in _pricing_rule_keys_for_row(
+                        region,
+                        destination_uf,
+                        include_normalized_region=region_is_city_destination,
+                    )
+                )
+                continue
+        brackets = []
+        for col, parsed_range in range_cols:
+            value = _parse_brazilian_money(row.get(col))
+            if value is None:
+                continue
+            brackets.append(
+                {
+                    "min_kg": parsed_range[0] or 0.0,
+                    "max_kg": parsed_range[1],
+                    "value": value,
+                    "label": col,
+                }
+            )
+        brackets = _normalize_brackets(brackets)
+        if brackets:
+            excess_rate = _parse_brazilian_money(row.get(excess_col)) if excess_col else None
+            rule = {
+                "pricing_type": "range_plus_excess_per_kg" if excess_rate is not None else "fixed_range",
+                "region": region,
+                "source_table_title": table.get("table_title"),
+                "brackets": brackets,
+                "excess": {"rate_per_kg": excess_rate} if excess_rate is not None else None,
+                "unit": "kg",
+                "normalization_notes": [],
+            }
+            rules.extend(
+                (key, rule)
+                for key in _pricing_rule_keys_for_row(
+                    region,
+                    destination_uf,
+                    include_normalized_region=region_is_city_destination,
+                )
+            )
+        elif region_col:
+            rule = _make_unsupported_rule(
+                region,
+                table.get("table_title"),
+                "Linha de destino sem modelo de peso/faixa reconhecido.",
+            )
+            rules.extend(
+                (key, rule)
+                for key in _pricing_rule_keys_for_row(
+                    region,
+                    destination_uf,
+                    include_normalized_region=region_is_city_destination,
+                )
+            )
+    return rules
+
+
+def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
+    region = _sanitize_cell_string(
+        route.get("destination")
+        or route.get("freight_region")
+        or route.get("region")
+        or route.get("route")
+    )
+    if not region:
+        return None
+    direct_kg = _parse_brazilian_money(route.get("freight_weight_kg") or route.get("frete_peso_kg"))
+    if direct_kg is not None:
+        return (
+            region,
+            {
+                "pricing_type": "direct_weight_rate",
+                "region": region,
+                "source_table_title": "freight_routes",
+                "brackets": [],
+                "excess": None,
+                "unit": "kg",
+                "value_per_kg": direct_kg,
+                "normalization_notes": [],
+            },
+        )
+    brackets = []
+    for limit in (10, 20, 30, 50, 70, 100):
+        value = _parse_brazilian_money(
+            route.get(f"weight_{limit}") or route.get(f"weight_{limit}kg")
+        )
+        if value is not None:
+            brackets.append(
+                {
+                    "min_kg": 0.0,
+                    "max_kg": float(limit),
+                    "value": value,
+                    "label": f"Até {limit} kg",
+                }
+            )
+    brackets = _normalize_brackets(brackets)
+    if not brackets:
+        return (region, _make_unsupported_rule(region, "freight_routes", "Rota sem faixa de peso calculável."))
+    return (
+        region,
+        {
+            "pricing_type": "fixed_range",
+            "region": region,
+            "source_table_title": "freight_routes",
+            "brackets": brackets,
+            "excess": None,
+            "unit": "kg",
+            "normalization_notes": [],
+        },
+    )
+
+
+def build_freight_pricing_index(temp_table) -> dict:
+    if not isinstance(temp_table, dict):
+        return {}
+    index: dict[str, dict] = {}
+
+    for table in temp_table.get("freight_tables") or []:
+        if not isinstance(table, dict):
+            continue
+        row_range_rule = _build_rule_from_row_range_table(table)
+        if row_range_rule is not None:
+            _register_pricing_rule(index, row_range_rule.get("region"), row_range_rule)
+            continue
+        matrix_rules = _build_rules_from_matrix_table(table)
+        if matrix_rules:
+            for region, rule in matrix_rules:
+                _register_pricing_rule(index, region, rule)
+            continue
+        region = _region_from_table_context(table)
+        if region:
+            _register_pricing_rule(
+                index,
+                region,
+                _make_unsupported_rule(region, table.get("table_title"), "Tabela sem modelo de peso/faixa reconhecido."),
+            )
+
+    for route in temp_table.get("freight_routes") or []:
+        if not isinstance(route, dict):
+            continue
+        route_rule = _build_rule_from_freight_route(route)
+        if route_rule is not None:
+            region, rule = route_rule
+            _register_pricing_rule(index, region, rule)
+
+    return index
+
+
+def calculate_weight_freight(weight_kg, pricing_rule) -> dict | None:
+    weight = _parse_weight_number(weight_kg)
+    if weight is None or not isinstance(pricing_rule, dict):
+        return None
+    pricing_type = pricing_rule.get("pricing_type")
+    if pricing_type == "fixed_range":
+        for bracket in pricing_rule.get("brackets") or []:
+            min_kg = float(bracket.get("min_kg") or 0)
+            max_kg = bracket.get("max_kg")
+            value = bracket.get("value")
+            if max_kg is None or value is None:
+                continue
+            max_kg = float(max_kg)
+            if (min_kg <= 0 and 0 <= weight <= max_kg) or (min_kg < weight <= max_kg):
+                return {
+                    "expected_freight": round(float(value), 2),
+                    "calculation_basis": "fixed_range",
+                    "calculation_details": bracket.get("label") or f"Faixa até {max_kg:g} kg",
+                }
+        return None
+    if pricing_type == "range_plus_excess_per_kg":
+        brackets = pricing_rule.get("brackets") or []
+        for bracket in brackets:
+            min_kg = float(bracket.get("min_kg") or 0)
+            max_kg = bracket.get("max_kg")
+            value = bracket.get("value")
+            if max_kg is None or value is None:
+                continue
+            max_kg = float(max_kg)
+            if (min_kg <= 0 and 0 <= weight <= max_kg) or (min_kg < weight <= max_kg):
+                return {
+                    "expected_freight": round(float(value), 2),
+                    "calculation_basis": "range_plus_excess_per_kg",
+                    "calculation_details": bracket.get("label") or f"Faixa até {max_kg:g} kg",
+                }
+        if not brackets:
+            return None
+        last = max(brackets, key=lambda item: float(item.get("max_kg") or 0))
+        last_max = float(last.get("max_kg") or 0)
+        last_value = last.get("value")
+        excess = pricing_rule.get("excess") if isinstance(pricing_rule.get("excess"), dict) else {}
+        excess_rate = excess.get("rate_per_kg")
+        if last_value is None or excess_rate is None or weight <= last_max:
+            return None
+        expected = float(last_value) + float(excess_rate) * (weight - last_max)
+        return {
+            "expected_freight": round(expected, 2),
+            "calculation_basis": "range_plus_excess_per_kg",
+            "calculation_details": f"Faixa até {last_max:g} kg + excedente por kg",
+        }
+    if pricing_type == "direct_weight_rate":
+        unit = str(pricing_rule.get("unit") or "kg").strip().lower()
+        if unit in {"ton", "tonelada", "toneladas", "t"}:
+            value = pricing_rule.get("value_per_ton")
+            if value is None:
+                return None
+            expected = (weight / 1000.0) * float(value)
+            return {
+                "expected_freight": round(expected, 2),
+                "calculation_basis": "direct_weight_rate",
+                "calculation_details": "Peso em toneladas x valor por tonelada",
+            }
+        value = pricing_rule.get("value_per_kg")
+        if value is None:
+            return None
+        expected = weight * float(value)
+        return {
+            "expected_freight": round(expected, 2),
+            "calculation_basis": "direct_weight_rate",
+            "calculation_details": "Peso em kg x valor por kg",
+        }
+    return None
+
+
+def compare_charged_vs_expected(charged_freight, expected_freight) -> dict:
+    charged = round(float(charged_freight), 2)
+    expected = round(float(expected_freight), 2)
+    divergence = round(charged - expected, 2)
+    return {
+        "charged_freight": charged,
+        "expected_freight": expected,
+        "divergence_value": divergence,
+        "status": AUDIT_STATUS_OK if divergence == 0 else AUDIT_STATUS_DIVERGENT,
+    }
+
+
+def _find_pricing_rule_match(
+    pricing_index: dict,
+    freight_region: str | None,
+    destination_uf: str | None = None,
+    destination_city: str | None = None,
+) -> tuple[dict, str, str] | None:
+    candidates: list[tuple[str, str]] = []
+    if freight_region:
+        candidates.append(("freight_region", freight_region))
+    uf_city_key = _coverage_lookup_key(destination_uf, destination_city)
+    if uf_city_key:
+        candidates.append(("destination_uf_city", uf_city_key))
+    city_key = _normalize_audit_lookup_text(destination_city)
+    if city_key:
+        candidates.append(("destination_city", city_key))
+
+    seen: set[str] = set()
+    for lookup_kind, lookup_key in candidates:
+        if not lookup_key or lookup_key in seen:
+            continue
+        seen.add(lookup_key)
+        if lookup_key in pricing_index:
+            return pricing_index[lookup_key], lookup_kind, lookup_key
+        wanted = _normalize_audit_lookup_text(lookup_key)
+        matches = [
+            (region, rule)
+            for region, rule in pricing_index.items()
+            if _normalize_audit_lookup_text(region) == wanted
+        ]
+        if len(matches) == 1:
+            matched_key, matched_rule = matches[0]
+            return matched_rule, lookup_kind, matched_key
+    return None
+
+
+def _find_pricing_rule(
+    pricing_index: dict,
+    freight_region: str | None,
+    destination_uf: str | None = None,
+    destination_city: str | None = None,
+) -> dict | None:
+    match = _find_pricing_rule_match(pricing_index, freight_region, destination_uf, destination_city)
+    return match[0] if match else None
+
+
+def _resolve_region_without_coverage(row: dict, pricing_index: dict) -> tuple[str | None, str | None]:
+    city = _normalize_audit_lookup_text(row.get("destination_city"))
+    uf = _normalize_destination_uf(row.get("destination_uf"))
+    if not city and not uf:
+        return None, AUDIT_STATUS_MISSING_COVERAGE
+    candidates = []
+    for region in pricing_index:
+        normalized_region = _normalize_audit_lookup_text(region)
+        if city and normalized_region == city:
+            candidates.append(region)
+        elif uf and normalized_region == uf:
+            candidates.append(region)
+        elif city and uf and normalized_region in {f"{uf} {city}", f"{city} {uf}", f"{uf}|{city}"}:
+            candidates.append(region)
+    unique = sorted(set(candidates))
+    if len(unique) == 1:
+        return unique[0], None
+    return None, AUDIT_STATUS_MISSING_COVERAGE
+
+
+def _base_audit_result(row: dict) -> dict:
+    return {
+        "row_index": row.get("row_index"),
+        "numero_documento": row.get("document_number"),
+        "destination_uf": row.get("destination_uf"),
+        "destination_city": row.get("destination_city"),
+        "freight_region": None,
+        "audited_weight": row.get("audited_weight"),
+        "charged_freight": row.get("charged_freight"),
+        "expected_freight": None,
+        "divergence_value": None,
+        "status": None,
+        "reason_code": None,
+        "calculation_basis": None,
+        "calculation_details": None,
+    }
+
+
+def _status_result(row: dict, status: str, *, freight_region: str | None = None) -> dict:
+    result = _base_audit_result(row)
+    result["freight_region"] = freight_region
+    result["status"] = status
+    result["reason_code"] = status
+    return result
+
+
+def _audit_single_row(row: dict, *, coverage_index: dict, pricing_index: dict, has_coverage: bool) -> dict:
+    weight = _parse_weight_number(row.get("audited_weight"))
+    if weight is None:
+        return _status_result(row, AUDIT_STATUS_INVALID_WEIGHT)
+    charged = _parse_brazilian_money(row.get("charged_freight"))
+    if charged is None:
+        return _status_result(row, AUDIT_STATUS_INVALID_CHARGED_FREIGHT)
+
+    freight_region = None
+    if has_coverage:
+        key = _coverage_lookup_key(row.get("destination_uf"), row.get("destination_city"))
+        match = coverage_index.get(key) if key else None
+        if isinstance(match, dict):
+            return _status_result(row, AUDIT_STATUS_AMBIGUOUS_COVERAGE)
+        if isinstance(match, str) and match.strip():
+            freight_region = match
+        else:
+            return _status_result(row, AUDIT_STATUS_MISSING_COVERAGE)
+    else:
+        freight_region, reason = _resolve_region_without_coverage(row, pricing_index)
+        if reason:
+            return _status_result(row, reason)
+
+    rule_match = _find_pricing_rule_match(
+        pricing_index,
+        freight_region,
+        row.get("destination_uf"),
+        row.get("destination_city"),
+    )
+    if rule_match is None:
+        return _status_result(row, AUDIT_STATUS_MISSING_FREIGHT_RULE, freight_region=freight_region)
+    rule, lookup_kind, lookup_key = rule_match
+    if rule.get("pricing_type") == AUDIT_STATUS_UNSUPPORTED_PRICING:
+        return _status_result(row, AUDIT_STATUS_UNSUPPORTED_PRICING, freight_region=freight_region)
+
+    calculated = calculate_weight_freight(weight, rule)
+    if calculated is None:
+        return _status_result(row, AUDIT_STATUS_UNSUPPORTED_PRICING, freight_region=freight_region)
+
+    comparison = compare_charged_vs_expected(charged, calculated["expected_freight"])
+    result = _base_audit_result(row)
+    result.update(comparison)
+    result["freight_region"] = freight_region
+    result["audited_weight"] = weight
+    result["reason_code"] = None if comparison["status"] == AUDIT_STATUS_OK else AUDIT_STATUS_DIVERGENT
+    result["calculation_basis"] = calculated["calculation_basis"]
+    result["calculation_details"] = calculated["calculation_details"]
+    if lookup_kind != "freight_region":
+        result["calculation_details"] = (
+            f"{result['calculation_details']} | regra localizada por cidade/destino: {lookup_key}"
+        )
+    return result
+
+
+def _build_audit_summary(results: list[dict], total_rows: int) -> dict:
+    summary = {
+        "total_rows": total_rows,
+        "processed_rows": 0,
+        "ok": 0,
+        "divergent": 0,
+        "missing_coverage_mapping": 0,
+        "ambiguous_coverage_mapping": 0,
+        "missing_freight_rule": 0,
+        "invalid_rows": 0,
+        "unsupported_pricing_model": 0,
+    }
+    for result in results:
+        status = result.get("status")
+        if status == AUDIT_STATUS_OK:
+            summary["ok"] += 1
+            summary["processed_rows"] += 1
+        elif status == AUDIT_STATUS_DIVERGENT:
+            summary["divergent"] += 1
+            summary["processed_rows"] += 1
+        elif status == AUDIT_STATUS_MISSING_COVERAGE:
+            summary["missing_coverage_mapping"] += 1
+        elif status == AUDIT_STATUS_AMBIGUOUS_COVERAGE:
+            summary["ambiguous_coverage_mapping"] += 1
+        elif status == AUDIT_STATUS_MISSING_FREIGHT_RULE:
+            summary["missing_freight_rule"] += 1
+        elif status in {AUDIT_STATUS_INVALID_WEIGHT, AUDIT_STATUS_INVALID_CHARGED_FREIGHT}:
+            summary["invalid_rows"] += 1
+        elif status == AUDIT_STATUS_UNSUPPORTED_PRICING:
+            summary["unsupported_pricing_model"] += 1
+    return summary
+
+
+def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict:
+    _require_session()
+    sync_temp_table_with_session_documents()
+    active_id = get_temp_table_id(session)
+    if not active_id:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_NO_TEMP_TABLE,
+            "Nenhuma tabela temporária ativa nesta sessão.",
+        )
+
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
+    if record is None:
+        clear_temp_table_session_refs(session)
+        _mark_session_modified()
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_NO_TEMP_TABLE,
+            "Tabela temporária ativa não encontrada.",
+        )
+    status = (record.get("status") or "").strip().lower()
+    if status == TEMP_TABLE_STATUS_EXPIRED:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_EXPIRED,
+            "A tabela temporária desta sessão expirou.",
+        )
+    if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_NO_TEMP_TABLE,
+            "Tabela temporária indisponível para processamento.",
+        )
+    _assert_temp_table_scope(record, user_scope=user_scope, franquia_scope=franquia_scope)
+
+    audit_batch = record.get("audit_batch")
+    if not isinstance(audit_batch, dict):
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_BATCH_NOT_FOUND,
+            "Nenhum lote auditado foi enviado nesta sessão.",
+        )
+    normalized_rows = audit_batch.get("normalized_rows")
+    if not isinstance(normalized_rows, list) or not normalized_rows:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_BATCH_EMPTY,
+            "O lote auditado não possui linhas normalizadas para processar.",
+        )
+
+    coverage_table = record.get("coverage_table") if isinstance(record.get("coverage_table"), dict) else None
+    has_coverage = bool(coverage_table and isinstance(coverage_table.get("rows"), list) and coverage_table.get("rows"))
+    coverage_index = build_coverage_index(coverage_table or {"rows": []})
+    pricing_index = build_freight_pricing_index(record)
+    results = [
+        _audit_single_row(
+            row if isinstance(row, dict) else {},
+            coverage_index=coverage_index,
+            pricing_index=pricing_index,
+            has_coverage=has_coverage,
+        )
+        for row in normalized_rows
+    ]
+    summary = _build_audit_summary(results, len(normalized_rows))
+
+    now = _utcnow().isoformat()
+    preserved_expires_at = record.get("expires_at")
+    updated_batch = dict(audit_batch)
+    updated_batch["status"] = AUDIT_BATCH_STATUS_PROCESSED
+    updated_batch["results"] = results
+    updated_batch["summary"] = summary
+    updated_batch["updated_at"] = now
+    updated_batch["processed_at"] = now
+    updated_batch["expires_at"] = audit_batch.get("expires_at") or preserved_expires_at
+
+    updated = dict(record)
+    updated["audit_batch"] = updated_batch
+    updated["updated_at"] = now
+    updated["expires_at"] = preserved_expires_at
+
+    saved = save_temp_table_record(updated)
+    public = _public_temp_table(saved)
+    if public is None:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_NO_TEMP_TABLE,
+            "Não foi possível retornar a tabela temporária processada.",
+        )
+    return public
+
+
+def _public_audit_batch(audit_batch) -> dict | None:
+    if not isinstance(audit_batch, dict):
+        return None
+    normalized_rows = audit_batch.get("normalized_rows")
+    row_count = audit_batch.get("row_count")
+    if row_count is None and isinstance(normalized_rows, list):
+        row_count = len(normalized_rows)
+    return {
+        "status": audit_batch.get("status"),
+        "audit_batch_id": audit_batch.get("audit_batch_id"),
+        "temp_table_id": audit_batch.get("temp_table_id"),
+        "source_file_name": audit_batch.get("source_file_name"),
+        "sheet_name": audit_batch.get("sheet_name"),
+        "uploaded_at": audit_batch.get("uploaded_at"),
+        "created_at": audit_batch.get("created_at"),
+        "updated_at": audit_batch.get("updated_at"),
+        "expires_at": audit_batch.get("expires_at"),
+        "row_count": row_count,
+        "max_rows": audit_batch.get("max_rows"),
+        "input_schema_version": audit_batch.get("input_schema_version"),
+        "header_map": dict(audit_batch.get("header_map") or {}),
+        "results": list(audit_batch.get("results") or []),
+        "summary": audit_batch.get("summary"),
+        "processed_at": audit_batch.get("processed_at"),
+    }
+
+
+def get_cleide_audit_template_path():
+    from pathlib import Path
+
+    from flask import current_app
+
+    template_path = (
+        Path(current_app.root_path)
+        / "protected_files"
+        / "templates"
+        / CLEIDE_AUDIT_TEMPLATE_FILENAME
+    )
+    return template_path
+
+
+def upload_audit_batch_from_file(
+    *,
+    display_name: str,
+    file_bytes: bytes,
+    extension: str | None,
+    user_scope=None,
+    franquia_scope=None,
+) -> dict:
+    """
+    Upload determinístico do arquivo auditado no tt_*.json ativo.
+
+    Não registra documento principal, não chama Gemini e não executa cálculo de auditoria.
+    """
+    _require_session()
+    if not file_bytes:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_EMPTY_FILE,
+            "O arquivo auditado está vazio.",
+        )
+    if len(file_bytes) > AUDIT_UPLOAD_MAX_BYTES:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_PAYLOAD_TOO_LARGE,
+            "O arquivo auditado excede o limite de tamanho permitido.",
+        )
+
+    ext = (extension or "").strip().lower()
+    if not ext.startswith("."):
+        ext = f".{ext}" if ext else ""
+    if ext == ".pdf":
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_INVALID_FORMAT,
+            "Upload do arquivo auditado aceita apenas CSV e XLSX nesta fase.",
+        )
+    if ext not in {".csv", ".xlsx"}:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_INVALID_FORMAT,
+            "Upload do arquivo auditado aceita apenas CSV e XLSX nesta fase.",
+        )
+
+    sync_temp_table_with_session_documents()
+    active_id = get_temp_table_id(session)
+    if not active_id:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_NO_TEMP_TABLE,
+            "Nenhuma tabela temporária ativa nesta sessão.",
+        )
+
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
+    if record is None:
+        clear_temp_table_session_refs(session)
+        _mark_session_modified()
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_NO_TEMP_TABLE,
+            "Tabela temporária ativa não encontrada.",
+        )
+    status = (record.get("status") or "").strip().lower()
+    if status == TEMP_TABLE_STATUS_EXPIRED:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_EXPIRED,
+            "A tabela temporária desta sessão expirou.",
+        )
+    if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_NO_TEMP_TABLE,
+            "Tabela temporária indisponível para upload do arquivo auditado.",
+        )
+    _assert_temp_table_scope(record, user_scope=user_scope, franquia_scope=franquia_scope)
+
+    audit_cfg = get_cleide_audit_config()
+    max_rows = int(audit_cfg.audited_file_max_rows)
+    safe_name = secure_filename(display_name or "auditado") or "auditado"
+    if ext == ".csv":
+        normalized_rows, header_map, sheet_name = _parse_audit_csv_bytes(
+            file_bytes,
+            source_file_name=safe_name,
+            max_rows=max_rows,
+        )
+    else:
+        normalized_rows, header_map, sheet_name = _parse_audit_xlsx_bytes(
+            file_bytes,
+            source_file_name=safe_name,
+            max_rows=max_rows,
+        )
+
+    now = _utcnow().isoformat()
+    preserved_expires_at = record.get("expires_at")
+    batch_id = uuid4().hex
+    audit_batch = {
+        "status": AUDIT_BATCH_STATUS_UPLOADED,
+        "audit_batch_id": batch_id,
+        "temp_table_id": active_id,
+        "source_file_name": safe_name,
+        "sheet_name": sheet_name,
+        "uploaded_at": now,
+        "created_at": now,
+        "updated_at": now,
+        "expires_at": preserved_expires_at,
+        "row_count": len(normalized_rows),
+        "max_rows": max_rows,
+        "input_schema_version": AUDIT_INPUT_SCHEMA_VERSION,
+        "header_map": header_map,
+        "normalized_rows": normalized_rows,
+        "results": [],
+        "summary": None,
+    }
+
+    updated = dict(record)
+    updated["audit_batch"] = audit_batch
+    updated["updated_at"] = now
+    updated["expires_at"] = preserved_expires_at
+
+    saved = save_temp_table_record(updated)
+    logger.info(
+        "Cleide audit batch upload: temp_table_id=%s user_id=%s rows=%s max_rows=%s",
+        saved.get("temp_table_id"),
+        user_scope,
+        len(normalized_rows),
+        max_rows,
+    )
+    public = _public_temp_table(saved)
+    if public is None:
+        raise CleideAuditBatchError(
+            ERROR_AUDIT_NO_TEMP_TABLE,
+            "Não foi possível retornar a tabela temporária atualizada.",
+        )
+    return public
+
+
 def _public_temp_table(record: dict | None) -> dict | None:
     if not record:
         return None
     ui = record.get("ui_visibility") if isinstance(record.get("ui_visibility"), dict) else {}
-    return {
+    public = {
         "temp_table_id": record.get("temp_table_id"),
         "status": record.get("status"),
         "source_documents": list(record.get("source_documents") or []),
@@ -725,6 +2967,13 @@ def _public_temp_table(record: dict | None) -> dict | None:
         "human_edited_by_user_id": record.get("human_edited_by_user_id"),
         "edit_version": record.get("edit_version"),
     }
+    coverage = _public_coverage_table(record.get("coverage_table"))
+    if coverage is not None:
+        public["coverage_table"] = coverage
+    audit_batch = _public_audit_batch(record.get("audit_batch"))
+    if audit_batch is not None:
+        public["audit_batch"] = audit_batch
+    return public
 
 
 def _sanitize_cell_string(value) -> str | None:
@@ -1001,15 +3250,65 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "review_action inválida.",
         )
-    freight_tables = _validate_freight_tables_for_save(edit_target.get("freight_tables"))
-    freight_routes = _validate_freight_routes_for_save(edit_target.get("freight_routes"))
-    accessorial_fees = _validate_accessorial_fees_for_save(edit_target.get("accessorial_fees"))
+
+    has_freight_tables_key = "freight_tables" in edit_target
+    has_freight_routes_key = "freight_routes" in edit_target
+    has_accessorial_fees_key = "accessorial_fees" in edit_target
+    has_coverage_table_key = "coverage_table" in edit_target
+
+    freight_tables = (
+        _validate_freight_tables_for_save(edit_target.get("freight_tables"))
+        if has_freight_tables_key
+        else None
+    )
+    freight_routes = (
+        _validate_freight_routes_for_save(edit_target.get("freight_routes"))
+        if has_freight_routes_key
+        else None
+    )
+    accessorial_fees = (
+        _validate_accessorial_fees_for_save(edit_target.get("accessorial_fees"))
+        if has_accessorial_fees_key
+        else None
+    )
+    coverage_table = (
+        _validate_coverage_table_for_save(edit_target.get("coverage_table"))
+        if has_coverage_table_key
+        else None
+    )
+
+    has_freight_structural_edit = bool(
+        (freight_tables if has_freight_tables_key else [])
+        or (freight_routes if has_freight_routes_key else [])
+        or (accessorial_fees if has_accessorial_fees_key else [])
+    )
+    has_coverage_structural_edit = bool(
+        coverage_table and coverage_table.get("rows") is not None
+    )
+    if not (
+        has_freight_tables_key
+        or has_freight_routes_key
+        or has_accessorial_fees_key
+        or has_coverage_table_key
+    ):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "edit_target deve conter ao menos uma seção editável.",
+        )
+
     return {
         "temp_table_id": temp_table_id.strip(),
         "freight_tables": freight_tables,
         "freight_routes": freight_routes,
         "accessorial_fees": accessorial_fees,
-        "has_structural_edit": bool(freight_tables or freight_routes or accessorial_fees),
+        "coverage_table": coverage_table,
+        "has_freight_tables_key": has_freight_tables_key,
+        "has_freight_routes_key": has_freight_routes_key,
+        "has_accessorial_fees_key": has_accessorial_fees_key,
+        "has_coverage_table_key": has_coverage_table_key,
+        "has_freight_structural_edit": has_freight_structural_edit,
+        "has_coverage_structural_edit": has_coverage_structural_edit,
+        "has_structural_edit": bool(has_freight_structural_edit or has_coverage_structural_edit),
         "review_action": review_action or TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE,
     }
 
@@ -1069,33 +3368,69 @@ def save_temp_table_edit(
         updated["freight_tables"] = validated["freight_tables"]
     if validated["freight_routes"]:
         updated["freight_routes"] = validated["freight_routes"]
-    if validated["accessorial_fees"] or "accessorial_fees" in (payload.get("edit_target") or {}):
+    if validated["has_accessorial_fees_key"] and validated["accessorial_fees"] is not None:
         updated["accessorial_fees"] = validated["accessorial_fees"]
+
+    has_freight_edit = (
+        validated["has_freight_tables_key"]
+        or validated["has_freight_routes_key"]
+        or validated["has_accessorial_fees_key"]
+    )
+    if has_freight_edit:
+        updated["human_review_status"] = (
+            HUMAN_REVIEW_STATUS_EDITED
+            if validated["has_freight_structural_edit"]
+            else HUMAN_REVIEW_STATUS_REVIEWED
+        )
+        updated["human_edited_at"] = now
+        if user_scope is not None:
+            updated["human_edited_by_user_id"] = user_scope
+        current_edit_version = updated.get("edit_version")
+        if isinstance(current_edit_version, int) and current_edit_version >= 0:
+            updated["edit_version"] = current_edit_version + 1
+        else:
+            updated["edit_version"] = 1
+
+    if validated["has_coverage_table_key"] and validated["coverage_table"] is not None:
+        existing_coverage = updated.get("coverage_table")
+        if not isinstance(existing_coverage, dict):
+            existing_coverage = _empty_coverage_table_shell()
+        coverage = dict(existing_coverage)
+        coverage["status"] = COVERAGE_TABLE_STATUS_NEEDS_REVIEW
+        coverage["columns"] = list(COVERAGE_TABLE_COLUMNS)
+        coverage["rows"] = validated["coverage_table"]["rows"]
+        coverage["human_review_status"] = (
+            HUMAN_REVIEW_STATUS_EDITED
+            if validated["has_coverage_structural_edit"]
+            else HUMAN_REVIEW_STATUS_REVIEWED
+        )
+        coverage["human_edited_at"] = now
+        if user_scope is not None:
+            coverage["human_edited_by_user_id"] = user_scope
+        current_coverage_version = coverage.get("edit_version")
+        if isinstance(current_coverage_version, int) and current_coverage_version >= 0:
+            coverage["edit_version"] = current_coverage_version + 1
+        else:
+            coverage["edit_version"] = 1
+        if "validation_warnings" not in coverage or not isinstance(coverage.get("validation_warnings"), list):
+            coverage["validation_warnings"] = []
+        if "uploaded_at" not in coverage:
+            coverage["uploaded_at"] = now
+        updated["coverage_table"] = coverage
+
     updated["updated_at"] = now
     updated["expires_at"] = preserved_expires_at
-    updated["human_review_status"] = (
-        HUMAN_REVIEW_STATUS_EDITED
-        if validated["has_structural_edit"]
-        else HUMAN_REVIEW_STATUS_REVIEWED
-    )
-    updated["human_edited_at"] = now
-    if user_scope is not None:
-        updated["human_edited_by_user_id"] = user_scope
-    current_edit_version = updated.get("edit_version")
-    if isinstance(current_edit_version, int) and current_edit_version >= 0:
-        updated["edit_version"] = current_edit_version + 1
-    else:
-        updated["edit_version"] = 1
 
     saved = save_temp_table_record(updated)
     logger.info(
-        "Cleide temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s",
+        "Cleide temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s coverage_rows=%s",
         saved.get("temp_table_id"),
         user_scope,
         updated.get("human_review_status"),
         len(saved.get("freight_tables") or []),
         len(saved.get("freight_routes") or []),
         len(saved.get("accessorial_fees") or []),
+        len((saved.get("coverage_table") or {}).get("rows") or []),
     )
     public = _public_temp_table(saved)
     if public is None:
@@ -1731,7 +4066,13 @@ def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
     temp_table_id = get_temp_table_id(session) or uuid4().hex
     existing = load_temp_table_record(temp_table_id, ttl_hours=get_cleiton_doc_config().upload_ttl_hours)
     created_at = (existing or {}).get("created_at") or now
-    return {
+    preserved_coverage = None
+    if existing and isinstance(existing.get("coverage_table"), dict):
+        preserved_coverage = existing.get("coverage_table")
+    preserved_audit_batch = None
+    if existing and isinstance(existing.get("audit_batch"), dict):
+        preserved_audit_batch = existing.get("audit_batch")
+    record = {
         "temp_table_id": temp_table_id,
         "status": status,
         "source_documents": _normalize_source_doc_ids(source_doc_ids),
@@ -1762,6 +4103,11 @@ def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
         },
         "version_marker": TEMP_TABLE_VERSION_MARKER,
     }
+    if preserved_coverage is not None:
+        record["coverage_table"] = preserved_coverage
+    if preserved_audit_batch is not None:
+        record["audit_batch"] = preserved_audit_batch
+    return record
 
 
 def _has_human_review_metadata(record: dict | None) -> bool:

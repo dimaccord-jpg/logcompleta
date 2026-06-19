@@ -66,12 +66,15 @@ Esta auditoria foi cruzada com:
 - `app/painel_admin/admin_routes.py`
 - `migrations/versions/r2s3t4u5v6w7_onboarding_word_cloud_hidden_term.py`
 
-## Complemento em 2026-06-16
+## Complemento em 2026-06-17
 
 Auditoria complementar aplicada apos a promocao da estabilizacao da auditoria documental da Cleide:
 
-- homolog aprovada no commit `c5a73e1`
-- producao aprovada apos merge `5f10f6d`
+- homolog aprovada no commit `80d5e73`
+- producao aprovada apos merge `284b340`
+- `origin/homolog` e `origin/producao` confirmadas sem diferenca real de arquivos
+- tree hash alinhado: `39da31eb877f6acc5b2ba34be98d3f0e70246664`
+- o `HEAD` de producao pode ser diferente apenas pelo merge commit
 - nenhuma migration criada
 - nenhuma alteracao estrutural em banco
 - nenhuma nova tabela de banco
@@ -100,9 +103,10 @@ Escopo corrigido neste complemento:
 - Cleide continua responsavel pela entrevista/chat de auditoria
 - a tabela continua temporaria, descartavel e sujeita a validacao humana
 - a UI oficial exibe card clicavel e modal readonly para a tabela temporaria
+- o endpoint `POST /api/cleide-auditoria/temp-table/save` faz parte do fluxo atual de revisao humana
 - nao houve migration, nova tabela de banco, novo campo ou schema novo
 - nao houve `.db` local versionado
 - `app/cleiton_doc_tmp/` permanece ignorada e local
 - `tt_*.json`, `.cleanup_meta.json`, demais `.json` residuais da pasta e `app/.tmp_repro_unit*` nao devem ser versionados
-- os testes direcionados da entrega foram registrados com `109 passed, 2 warnings`
-- a suite completa foi registrada com `1124 passed, 36 warnings`
+- os testes direcionados da entrega foram registrados com `178 passed, 2 warnings`
+- a suite completa foi registrada com `1160 passed, 36 warnings`

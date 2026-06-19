@@ -1,7 +1,7 @@
 # Deploy e Promocao
 
-Data de consolidacao: `2026-06-16`
-Commit de referencia em producao: `5f10f6d`
+Data de consolidacao: `2026-06-17`
+Commit de referencia em producao: `284b340`
 
 ## Ambientes
 
@@ -21,16 +21,18 @@ Variaveis contratuais:
 
 Entrega validada e promovida:
 
-- `c5a73e1 feat: estabiliza tabela temporaria da auditoria Cleide`
-- `5f10f6d merge: promove estabilizacao da auditoria Cleide para producao`
+- `80d5e73 feat: estabiliza chat de auditoria da Cleide em homologacao`
+- `284b340 merge: promove estabilizacao do chat de auditoria Cleide para producao`
 
 Confirmacoes operacionais:
 
-- `homolog -> c5a73e1`
-- `producao -> 5f10f6d`
+- `homolog -> 80d5e73`
+- `producao -> 284b340`
 - homologacao validada antes da promocao
 - producao aprovada apos o deploy
 - working tree limpo antes e depois dos pushes
+- tree hash alinhado entre `origin/homolog` e `origin/producao`: `39da31eb877f6acc5b2ba34be98d3f0e70246664`
+- `HEAD` de producao pode diferir por merge commit, mesmo com conteudo identico
 
 ## Migrations
 
@@ -57,24 +59,37 @@ Esta etapa continua obrigatoria para o ambiente, mas a entrega da estabilizacao 
 7. validar `/auditoria-frete` com upload, status documental e tabela temporaria extraida
 8. confirmar que a tabela temporaria aparece como card clicavel no painel de anexos/documentos
 9. abrir o modal e confirmar modo somente leitura com validacao humana obrigatoria
-10. confirmar que o chat da Cleide nao recria nem sobrescreve a tabela temporaria
-11. validar PDF governado com Gemini Files quando configurado
-12. validar bloqueios por autorizacao/plano/franquia
-13. validar `/admin/agentes-cleiton` e o bloco documental
-14. validar `/admin/dashboard`, `/fretes` e `/cleide-bi-frete`
+10. validar a revisao humana via `POST /api/cleide-auditoria/temp-table/save` quando o fluxo exigir ajuste
+11. confirmar que o chat da Cleide nao recria nem sobrescreve a tabela temporaria
+12. validar PDF governado com Gemini Files quando configurado
+13. validar bloqueios por autorizacao/plano/franquia
+14. validar `/admin/agentes-cleiton` e o bloco documental
+15. validar `/admin/dashboard`, `/fretes` e `/cleide-bi-frete`
 
 ## Regra de promocao
 
 Nao promover homolog -> producao sem:
 
 - migrations existentes aplicadas ate `head`
+- working tree limpo confirmado com `git status --short`
 - validacao da Home publica e da Home logada
 - validacao da Julia documental governada
 - validacao da Cleide Auditoria com tabela temporaria pos-upload
+- validacao da revisao humana da tabela temporaria quando aplicavel
 - confirmacao de que a tabela temporaria continua separada do chat
+- execucao dos testes especificos:
+  `python -m pytest tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
+- execucao da suite completa `python -m pytest` quando viavel
 - validacao da observabilidade
 - validacao de Roberto e Cleide
 - confirmacao de que nenhum temporario foi versionado
+- push controlado e validacao de `/health` no Render
+
+## Ponto de atencao Render
+
+- a documentacao operacional desta entrega usa `producao` como branch oficial de publicacao
+- o `render.yaml` versionado ainda referencia `branch: main` no servico `logcompleta-web-prod`
+- nao forcar alteracao de codigo so para alinhar esse ponto; confirmar a configuracao real do painel Render antes de uma nova promocao
 
 Temporarios que nao podem entrar em commit:
 

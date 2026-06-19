@@ -6,8 +6,11 @@ Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 ## Estado Atual Confirmado
 
 - pacote funcional da fase atual integrado localmente
-- homolog validada no commit `c5a73e1`
-- producao atualizada e aprovada apos merge `5f10f6d`
+- homolog validada no commit `80d5e73`
+- producao atualizada e aprovada apos merge `284b340`
+- `origin/homolog` e `origin/producao` estao alinhadas em conteudo de arquivos
+- tree hash confirmado: `39da31eb877f6acc5b2ba34be98d3f0e70246664`
+- diferenca de `HEAD` entre homolog e producao pode existir apenas por merge commit
 - estabilizacao da auditoria documental da Cleide promovida sem nova migration
 - tabela temporaria da auditoria Cleide estabilizada como artefato tecnico temporario, descartavel e sujeito a validacao humana
 - owner operacional da tabela temporaria: Cleiton
@@ -55,6 +58,12 @@ Somente quando todos forem verdadeiros:
 10. chat da Cleide validado sem recriar, alterar ou sobrescrever a `temp_table`
 11. nenhum temporario local entrou em commit
 12. producao aprovada apos deploy
+
+## Ponto de atencao Render
+
+- a configuracao versionada em `render.yaml` ainda aponta o servico de producao para `branch: main`
+- o fluxo operacional aprovado desta entrega usa `producao` como branch de producao
+- manter esse item documentado como divergencia a validar no painel do Render antes de nova publicacao, sem forcar alteracao de codigo nesta tarefa
 
 ## Referencia Principal
 

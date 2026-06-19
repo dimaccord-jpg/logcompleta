@@ -1,7 +1,7 @@
 # Execucao Local
 
-Data de consolidacao: `2026-06-16`
-Commit de referencia: `c5a73e1`
+Data de consolidacao: `2026-06-17`
+Commit de referencia: `80d5e73`
 
 ## Objetivo
 
@@ -29,7 +29,8 @@ Executar o projeto localmente e validar o estado atual de Home, onboarding, Juli
 11. validar que a tabela temporaria continua separada do chat da Cleide
 12. validar que a tabela temporaria aparece como card clicavel no painel de anexos/documentos
 13. abrir o modal e validar modo somente leitura com revisao/validacao humana
-14. validar `/admin/dashboard`, `/fretes` e `/cleide-bi-frete`
+14. validar revisao humana da tabela temporaria quando o fluxo exigir ajuste
+15. validar `/admin/dashboard`, `/fretes` e `/cleide-bi-frete`
 
 ## Pontos de atencao
 

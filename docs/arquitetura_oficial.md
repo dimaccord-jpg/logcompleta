@@ -1,7 +1,7 @@
 # Arquitetura Oficial
 
-Data de consolidacao: `2026-06-16`
-Commit de referencia: `5f10f6d`
+Data de consolidacao: `2026-06-17`
+Commit de referencia: `284b340`
 
 Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos a estabilizacao da auditoria documental da Cleide.
 
@@ -101,6 +101,7 @@ Tabela canonica:
 - `GET /api/cleide-auditoria/documents/status`
 - `DELETE /api/cleide-auditoria/documents/<doc_id>`
 - `POST /api/cleide-auditoria/documents/clear`
+- `POST /api/cleide-auditoria/temp-table/save`
 - `POST /api/cleide-auditoria/chat`
 
 ## Arquitetura documental da Cleide Auditoria
@@ -115,6 +116,7 @@ Contratos reais:
 - o prompt tecnico fica em `build_cleide_audit_temp_table_technical_prompt()`
 - a resposta esperada do modelo e JSON tecnico, sem auditoria final
 - o endpoint de status devolve `temp_table` quando houver artefato ativo
+- o endpoint `POST /api/cleide-auditoria/temp-table/save` registra revisao humana da tabela temporaria quando o artefato esta ativo
 - a UI exibe um card clicavel de tabela temporaria e abre modal somente leitura
 - a priorizacao visual e operacional recai sobre blocos operacionais, rotas/tabelas de frete e informacoes adicionais
 
@@ -128,6 +130,7 @@ Garantias:
 - invalidacoes ocorrem quando os documentos fonte mudam ou sao removidos
 - nao ha migration nova, nova tabela de banco, novo campo ou alteracao manual de schema para esse fluxo
 - nao ha conexao nova com APIs da Julia ou do BI nessa superficie documental
+- o conteudo real entre `origin/homolog` e `origin/producao` esta alinhado; diferenca de `HEAD` pode existir apenas pelo merge commit de publicacao
 
 ## Arquitetura documental da Julia
 

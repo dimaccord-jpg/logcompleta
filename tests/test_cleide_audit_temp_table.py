@@ -34,16 +34,21 @@ from app.cleide_audit_doc_service import (
     should_attempt_temp_table_extraction,
     split_temp_table_block_from_answer,
     temp_table_status_message,
+    CleideAuditCoverageError,
     CleideAuditTempTableError,
+    ERROR_COVERAGE_PARSE_FAILED,
     ERROR_TEMP_TABLE_INVALID_PAYLOAD,
     ERROR_TEMP_TABLE_NOT_FOUND,
     HUMAN_REVIEW_STATUS_EDITED,
     HUMAN_REVIEW_STATUS_REVIEWED,
     TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES,
+    _parse_coverage_tabular_rows,
+    _resolve_coverage_field,
 )
 from app.cleide_audit_prompt import build_cleide_audit_temp_table_technical_prompt
 from app.services.cleide_audit_config_service import CleideAuditConfig, DEFAULT_FALLBACK_MESSAGE
 from tests.cleiton_doc_fixtures import (
+    make_audit_xlsx,
     make_csv,
     make_docx,
     make_minimal_pdf,
@@ -68,6 +73,7 @@ def _default_audit_cfg(**overrides):
         "no_documents_behavior": "allow_guided",
         "show_documents_used": True,
         "no_hallucination_instruction_enabled": True,
+        "audited_file_max_rows": 2000,
     }
     defaults.update(overrides)
     return CleideAuditConfig(**defaults)
@@ -78,6 +84,7 @@ def _patch_audit_cfg(monkeypatch, **overrides):
     for target in (
         "app.cleide_audit_routes.get_cleide_audit_config",
         "app.cleide_audit_doc_context.get_cleide_audit_config",
+        "app.cleide_audit_doc_service.get_cleide_audit_config",
         "app.run_cleide_audit_chat.get_cleide_audit_config",
     ):
         monkeypatch.setattr(target, lambda _cfg=cfg: _cfg)
@@ -1937,3 +1944,1026 @@ def test_extraction_force_overwrite_bypasses_human_review_guard(web_client):
             )
     assert len(result["accessorial_fees"]) == 1
     assert result.get("human_review_status") is None
+
+
+def _sample_coverage_csv() -> bytes:
+    return make_csv(
+        [
+            ["uf_destino", "cidade_destino", "regiao_frete"],
+            ["SP", "Campinas", "SP-Interior 1"],
+            ["AM", "Manaus", "AM-Capital"],
+        ]
+    )
+
+
+def _sample_coverage_xlsx() -> bytes:
+    return make_xlsx(
+        [
+            ["UF destino", "Cidade destino", "Região de frete"],
+            ["SP", "Sorocaba", "SP-Interior 2"],
+        ]
+    )
+
+
+def _post_coverage_upload(web_client, filename: str, content: bytes, mime: str):
+    return web_client.post(
+        "/api/cleide-auditoria/coverage/upload",
+        data={"file": (io.BytesIO(content), filename, mime)},
+        content_type="multipart/form-data",
+    )
+
+
+def test_coverage_upload_requires_login(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    anon = SimpleNamespace(is_authenticated=False)
+    monkeypatch.setattr(web, "current_user", anon)
+    monkeypatch.setattr("app.cleide_audit_routes.current_user", anon)
+    client = web.app.test_client()
+    resp = _post_coverage_upload(client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    assert resp.status_code == 401
+    assert resp.get_json()["error_code"] == "auth_required"
+
+
+def test_coverage_upload_rejects_pdf(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_coverage_upload(
+        web_client,
+        "cidades.pdf",
+        make_minimal_pdf(),
+        "application/pdf",
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "cleide_audit_coverage_invalid_format"
+    assert saved["freight_tables"]
+
+
+def test_coverage_upload_accepts_csv(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    coverage = body["temp_table"]["coverage_table"]
+    assert coverage["rows"][0]["destination_city"] == "Campinas"
+    assert body["temp_table"]["freight_tables"] == saved["freight_tables"]
+
+
+def test_coverage_upload_accepts_xlsx(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_coverage_upload(
+        web_client,
+        "cidades.xlsx",
+        _sample_coverage_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    rows = resp.get_json()["temp_table"]["coverage_table"]["rows"]
+    assert rows[0]["destination_city"] == "Sorocaba"
+
+
+def test_coverage_upload_creates_coverage_table(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    coverage = resp.get_json()["temp_table"]["coverage_table"]
+    assert coverage["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert coverage["columns"] == ["UF destino", "Cidade destino", "Região de frete"]
+    assert len(coverage["rows"]) == 2
+
+
+def test_coverage_upload_does_not_alter_freight_tables(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    before = saved["freight_tables"]
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    assert resp.get_json()["temp_table"]["freight_tables"] == before
+
+
+def test_coverage_upload_does_not_alter_freight_routes(web_client):
+    payload = _sample_hengst_freight_tables_payload()
+    payload["freight_routes"] = [
+        {
+            "origin": "SP",
+            "destination": "RJ",
+            "freight_type": "Rodo",
+            "weight_30": "10",
+        }
+    ]
+    saved = _apply_payload(web_client, payload)
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    assert resp.get_json()["temp_table"]["freight_routes"] == saved["freight_routes"]
+
+
+def test_coverage_upload_does_not_alter_accessorial_fees(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    assert resp.get_json()["temp_table"]["accessorial_fees"] == saved["accessorial_fees"]
+
+
+def test_coverage_upload_preserves_expires_at(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    original_expires = saved["expires_at"]
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    assert resp.get_json()["temp_table"]["expires_at"] == original_expires
+
+
+def test_coverage_upload_does_not_call_trigger_extraction(web_client, monkeypatch):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    trigger_mock = MagicMock()
+    monkeypatch.setattr("app.cleide_audit_routes.trigger_temp_table_extraction_for_session", trigger_mock)
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    assert resp.status_code == 200
+    trigger_mock.assert_not_called()
+
+
+def test_coverage_upload_does_not_call_gemini(web_client, monkeypatch):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    gemini_mock = MagicMock()
+    monkeypatch.setattr(audit_temp_table, "cleiton_governed_generate_content", gemini_mock)
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    assert resp.status_code == 200
+    gemini_mock.assert_not_called()
+
+
+def test_coverage_save_preserves_ttl(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    upload_resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    original_expires = upload_resp.get_json()["temp_table"]["expires_at"]
+    rows = upload_resp.get_json()["temp_table"]["coverage_table"]["rows"]
+    rows[0] = dict(rows[0])
+    rows[0]["destination_city"] = "Campinas Alterada"
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {"coverage_table": {"rows": rows}},
+            "review_action": "save_and_advance",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["temp_table"]["expires_at"] == original_expires
+
+
+def test_coverage_save_updates_edit_version(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    upload_resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    rows = upload_resp.get_json()["temp_table"]["coverage_table"]["rows"]
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": upload_resp.get_json()["temp_table"]["temp_table_id"],
+            "edit_target": {"coverage_table": {"rows": rows}},
+            "review_action": "save_and_advance",
+        },
+    )
+    coverage = resp.get_json()["temp_table"]["coverage_table"]
+    assert coverage["edit_version"] == 1
+
+
+def test_coverage_save_marks_human_review_status(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    upload_resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    rows = upload_resp.get_json()["temp_table"]["coverage_table"]["rows"]
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": upload_resp.get_json()["temp_table"]["temp_table_id"],
+            "edit_target": {"coverage_table": {"rows": rows}},
+            "review_action": "save_and_advance",
+        },
+    )
+    coverage = resp.get_json()["temp_table"]["coverage_table"]
+    assert coverage["human_review_status"] == HUMAN_REVIEW_STATUS_EDITED
+
+
+def test_coverage_save_does_not_alter_freight(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    upload_resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    rows = upload_resp.get_json()["temp_table"]["coverage_table"]["rows"]
+    resp = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {"coverage_table": {"rows": rows}},
+            "review_action": "save_and_advance",
+        },
+    )
+    public = resp.get_json()["temp_table"]
+    assert public["freight_tables"] == saved["freight_tables"]
+    assert public["freight_routes"] == saved["freight_routes"]
+    assert public["accessorial_fees"] == saved["accessorial_fees"]
+
+
+def test_clear_documents_removes_coverage(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    clear_resp = web_client.post("/api/cleide-auditoria/documents/clear")
+    assert clear_resp.status_code == 200
+    status = web_client.get("/api/cleide-auditoria/documents/status").get_json()
+    assert status.get("temp_table") is None
+
+
+def test_absence_of_coverage_does_not_block_status(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    save_resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert save_resp.status_code == 200
+    body = save_resp.get_json()
+    assert body["ok"] is True
+    assert body["temp_table"] is not None
+    assert "coverage_table" not in body["temp_table"]
+
+
+def test_extraction_preserves_existing_coverage(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    upload_resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    coverage_before = upload_resp.get_json()["temp_table"]["coverage_table"]
+    result = _apply_extraction_with_client_session(
+        web_client,
+        _sample_hengst_freight_tables_payload(),
+    )
+    assert result["coverage_table"]["rows"] == coverage_before["rows"]
+
+
+def _coverage_tabular_rows(headers: list[str], data_rows: list[list[str]]) -> list[list[str]]:
+    return [headers, *data_rows]
+
+
+def _assert_coverage_row(row: dict, *, uf: str, city: str, region: str) -> None:
+    assert row["destination_uf"] == uf
+    assert row["destination_city"] == city
+    assert row["freight_region"] == region
+
+
+def test_coverage_parser_accepts_praca_uf_cidade_destino_real_case():
+    rows, warnings = _parse_coverage_tabular_rows(
+        _coverage_tabular_rows(
+            ["PRAÇA", "UF ", "CIDADE DESTINO"],
+            [["SP-Interior 1", "SP", "Campinas"], ["AM-Capital", "AM", "Manaus"]],
+        ),
+        source_file_name="teste cidade.xlsx",
+    )
+    assert not warnings
+    assert len(rows) == 2
+    _assert_coverage_row(rows[0], uf="SP", city="Campinas", region="SP-Interior 1")
+    assert _resolve_coverage_field("PRAÇA") == "freight_region"
+    assert _resolve_coverage_field("UF ") == "destination_uf"
+    assert _resolve_coverage_field("CIDADE DESTINO") == "destination_city"
+
+
+@pytest.mark.parametrize(
+    ("headers", "data"),
+    [
+        (["Região", "Estado", "Município"], [["Sul", "RS", "Porto Alegre"]]),
+        (["Rota", "UF destino", "Cidade destino"], [["SP-Metropolitana", "SP", "São Paulo"]]),
+        (["Itinerário", "Estado destino", "Cidade"], [["TO - Interior", "TO", "Palmas"]]),
+        (["Código região", "Unidade Federativa", "Localidade"], [["Norte", "PA", "Belém"]]),
+        (["Praça", "UF de entrega", "Cidade de entrega"], [["AM-Fluvias", "AM", "Manaus"]]),
+    ],
+)
+def test_coverage_parser_accepts_logistics_header_variations(headers, data):
+    rows, _ = _parse_coverage_tabular_rows(
+        _coverage_tabular_rows(headers, data),
+        source_file_name="variacoes.csv",
+    )
+    assert len(rows) == 1
+    assert rows[0]["destination_uf"] == data[0][1]
+    assert rows[0]["destination_city"] == data[0][2]
+    assert rows[0]["freight_region"] == data[0][0]
+
+
+@pytest.mark.parametrize(
+    ("headers", "data"),
+    [
+        (["Regiao Fret", "UF", "Cidade"], [["SP Interior 1", "SP", "Campinas"]]),
+        (["Praca", "Estado", "Municipo"], [["SP-Interior 1", "SP", "Campinas"]]),
+        (["Itinerarioo", "UF Destno", "Cidade Detino"], [["Norte", "SP", "Campinas"]]),
+    ],
+)
+def test_coverage_parser_accepts_common_header_typos(headers, data):
+    rows, _ = _parse_coverage_tabular_rows(
+        _coverage_tabular_rows(headers, data),
+        source_file_name="typos.csv",
+    )
+    assert len(rows) == 1
+    assert rows[0]["destination_uf"] == "SP"
+    assert rows[0]["destination_city"] == "Campinas"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        ["Região", "Cidade"],
+        ["Praça", "UF"],
+        ["Rota", "Itinerário"],
+    ],
+)
+def test_coverage_parser_rejects_missing_required_column(headers):
+    with pytest.raises(CleideAuditCoverageError) as exc:
+        _parse_coverage_tabular_rows(
+            _coverage_tabular_rows(headers, [["A", "B", "C"][: len(headers)]]),
+            source_file_name="missing.csv",
+        )
+    assert exc.value.error_code == ERROR_COVERAGE_PARSE_FAILED
+    assert "Colunas obrigatórias ausentes" in exc.value.message
+
+
+def test_coverage_parser_rejects_ambiguous_destino_headers():
+    with pytest.raises(CleideAuditCoverageError) as exc:
+        _parse_coverage_tabular_rows(
+            _coverage_tabular_rows(
+                ["Destino", "Destino 2", "Observação"],
+                [["valor-a", "valor-b", "valor-c"]],
+            ),
+            source_file_name="ambiguo.csv",
+        )
+    assert exc.value.error_code == ERROR_COVERAGE_PARSE_FAILED
+    assert "Colunas obrigatórias ausentes" in exc.value.message
+    assert "UF destino" in exc.value.message
+
+
+def test_coverage_missing_column_error_includes_hints():
+    with pytest.raises(CleideAuditCoverageError) as exc:
+        _parse_coverage_tabular_rows(
+            _coverage_tabular_rows(["UF", "Cidade"], [["SP", "Campinas"]]),
+            source_file_name="sem-regiao.csv",
+        )
+    message = exc.value.message
+    assert "Região de frete" in message
+    assert "Praça" in message or "Região" in message
+
+
+def test_coverage_upload_accepts_teste_cidade_xlsx_headers(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    content = make_xlsx(
+        [
+            ["PRAÇA", "UF ", "CIDADE DESTINO"],
+            ["SP-Interior 1", "SP", "Campinas"],
+            ["AM-Capital", "AM", "Manaus"],
+        ]
+    )
+    resp = _post_coverage_upload(
+        web_client,
+        "teste cidade.xlsx",
+        content,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    rows = resp.get_json()["temp_table"]["coverage_table"]["rows"]
+    assert len(rows) == 2
+    _assert_coverage_row(rows[0], uf="SP", city="Campinas", region="SP-Interior 1")
+
+
+def test_coverage_upload_accepts_praca_csv_variant(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    content = make_csv(
+        [
+            ["PRAÇA", "UF", "CIDADE DESTINO"],
+            ["SP-Interior 1", "SP", "Campinas"],
+        ]
+    )
+    resp = _post_coverage_upload(web_client, "teste cidade.csv", content, "text/csv")
+    assert resp.status_code == 200
+    row = resp.get_json()["temp_table"]["coverage_table"]["rows"][0]
+    _assert_coverage_row(row, uf="SP", city="Campinas", region="SP-Interior 1")
+
+
+AUDIT_TEMPLATE_HEADERS = [
+    "transportadora",
+    "numero_documento",
+    "cidade_origem",
+    "uf_origem",
+    "cidade_destino",
+    "uf_destino",
+    "valor_nf",
+    "valor_frete",
+    "peso",
+    "modal",
+    "data_emissao",
+    "data_entrega",
+]
+
+
+def _sample_audit_row(**overrides):
+    row = [
+        "Transportadora X",
+        "123",
+        "São Paulo",
+        "SP",
+        "Campinas",
+        "SP",
+        "1000",
+        "100.5",
+        "48",
+        "Rodo",
+        "2024-01-01",
+        "2024-01-05",
+    ]
+    if overrides:
+        header_index = {name: idx for idx, name in enumerate(AUDIT_TEMPLATE_HEADERS)}
+        for key, value in overrides.items():
+            if key in header_index:
+                row[header_index[key]] = value
+    return row
+
+
+def _sample_audit_xlsx(*rows, sheet_name: str = "Modelo Cleide") -> bytes:
+    data_rows = rows or [_sample_audit_row()]
+    return make_audit_xlsx([AUDIT_TEMPLATE_HEADERS, *data_rows], sheet_name=sheet_name)
+
+
+def _sample_audit_csv(*rows) -> bytes:
+    data_rows = rows or [_sample_audit_row()]
+    return make_csv([AUDIT_TEMPLATE_HEADERS, *data_rows])
+
+
+def _post_audit_upload(web_client, filename: str, content: bytes, mime: str):
+    return web_client.post(
+        "/api/cleide-auditoria/audit/upload",
+        data={"file": (io.BytesIO(content), filename, mime)},
+        content_type="multipart/form-data",
+    )
+
+
+def _post_audit_run(web_client):
+    return web_client.post("/api/cleide-auditoria/audit/run", json={})
+
+
+def _sample_pricing_payload() -> dict:
+    return {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "Tabela por região",
+                "table_type": "weight_range_table",
+                "columns": ["Região de frete", "Até 30 kg", "31 a 50 kg", "Excedente kg"],
+                "rows": [
+                    {
+                        "Região de frete": "SP-Interior 1",
+                        "Até 30 kg": "87,13",
+                        "31 a 50 kg": "100,50",
+                        "Excedente kg": "2,00",
+                    }
+                ],
+            }
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+
+
+def _sample_city_pricing_payload() -> dict:
+    return {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "Tabela por cidade",
+                "table_type": "weight_range_table",
+                "columns": ["UF", "UF Cidades", "151 a 200Kg", "Kg Excedente"],
+                "rows": [
+                    {
+                        "UF": "TO",
+                        "UF Cidades": "Palmas",
+                        "151 a 200Kg": "360,00",
+                        "Kg Excedente": "1,378340248",
+                    },
+                    {
+                        "UF": "AC",
+                        "UF Cidades": "Rio Branco",
+                        "151 a 200Kg": "399,16",
+                        "Kg Excedente": "1,38",
+                    },
+                ],
+            }
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+
+
+def test_build_coverage_index_resolves_uf_city():
+    index = audit_doc_service.build_coverage_index(
+        {"rows": [{"destination_uf": " sp ", "destination_city": " Campinas ", "freight_region": "SP-Interior 1"}]}
+    )
+    assert index["SP|CAMPINAS"] == "SP-Interior 1"
+
+
+def test_build_coverage_index_detects_duplicate_region():
+    index = audit_doc_service.build_coverage_index(
+        {
+            "rows": [
+                {"destination_uf": "SP", "destination_city": "Campinas", "freight_region": "SP-Interior 1"},
+                {"destination_uf": "SP", "destination_city": "Campinas", "freight_region": "SP-Interior 2"},
+            ]
+        }
+    )
+    assert index["SP|CAMPINAS"]["reason_code"] == "ambiguous_coverage_mapping"
+
+
+def test_build_freight_pricing_index_builds_fixed_range():
+    index = audit_doc_service.build_freight_pricing_index(_sample_pricing_payload())
+    rule = index["SP-Interior 1"]
+    assert rule["pricing_type"] == "range_plus_excess_per_kg"
+    assert rule["brackets"][0]["max_kg"] == 30.0
+
+
+def test_region_column_recognizes_uf_cidades():
+    assert audit_doc_service._is_region_column("UF Cidades") is True
+
+
+def test_build_freight_pricing_index_builds_city_destination_keys():
+    index = audit_doc_service.build_freight_pricing_index(_sample_city_pricing_payload())
+    assert index["Palmas"]["pricing_type"] == "range_plus_excess_per_kg"
+    assert index["PALMAS"]["region"] == "Palmas"
+    assert index["TO|PALMAS"]["region"] == "Palmas"
+
+
+def test_find_pricing_rule_falls_back_from_coverage_region_to_city():
+    pricing_index = audit_doc_service.build_freight_pricing_index(_sample_city_pricing_payload())
+    rule = audit_doc_service._find_pricing_rule(
+        pricing_index,
+        "TO - Capital",
+        "TO",
+        "Palmas",
+    )
+    assert rule is pricing_index["TO|PALMAS"]
+
+
+def test_calculate_weight_freight_fixed_range():
+    rule = {
+        "pricing_type": "fixed_range",
+        "brackets": [
+            {"min_kg": 0, "max_kg": 30, "value": 87.13, "label": "0 a 30 kg"},
+            {"min_kg": 30, "max_kg": 50, "value": 100.50, "label": "31 a 50 kg"},
+        ],
+    }
+    calculated = audit_doc_service.calculate_weight_freight(48, rule)
+    assert calculated["expected_freight"] == 100.50
+    assert calculated["calculation_basis"] == "fixed_range"
+
+
+def test_calculate_weight_freight_range_plus_excess():
+    rule = {
+        "pricing_type": "range_plus_excess_per_kg",
+        "brackets": [{"min_kg": 0, "max_kg": 100, "value": 200.00, "label": "Até 100 kg"}],
+        "excess": {"rate_per_kg": 3.5},
+    }
+    assert audit_doc_service.calculate_weight_freight(103, rule)["expected_freight"] == 210.50
+
+
+def test_calculate_weight_freight_direct_kg():
+    rule = {"pricing_type": "direct_weight_rate", "unit": "kg", "value_per_kg": 2.5}
+    assert audit_doc_service.calculate_weight_freight(10, rule)["expected_freight"] == 25.00
+
+
+def test_calculate_weight_freight_direct_ton():
+    rule = {"pricing_type": "direct_weight_rate", "unit": "ton", "value_per_ton": 800}
+    assert audit_doc_service.calculate_weight_freight(1500, rule)["expected_freight"] == 1200.00
+
+
+def test_compare_charged_vs_expected_ok():
+    result = audit_doc_service.compare_charged_vs_expected(87.13, 87.13)
+    assert result["status"] == "ok"
+    assert result["divergence_value"] == 0
+
+
+def test_compare_charged_vs_expected_divergent():
+    result = audit_doc_service.compare_charged_vs_expected(87.14, 87.13)
+    assert result["status"] == "divergent"
+    assert result["divergence_value"] == 0.01
+
+
+def test_audit_run_requires_login(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    anon = SimpleNamespace(is_authenticated=False)
+    monkeypatch.setattr(web, "current_user", anon)
+    monkeypatch.setattr("app.cleide_audit_routes.current_user", anon)
+    client = web.app.test_client()
+    resp = _post_audit_run(client)
+    assert resp.status_code == 401
+    assert resp.get_json()["error_code"] == "auth_required"
+
+
+def test_audit_run_requires_active_temp_table(web_client):
+    resp = _post_audit_run(web_client)
+    assert resp.status_code == 404
+    assert resp.get_json()["error_code"] == "cleide_audit_audit_no_temp_table"
+
+
+def test_audit_run_requires_audit_batch(web_client):
+    _apply_payload(web_client, _sample_pricing_payload())
+    resp = _post_audit_run(web_client)
+    assert resp.status_code == 404
+    assert resp.get_json()["error_code"] == "cleide_audit_audit_batch_not_found"
+
+
+def test_audit_run_records_results_summary_and_preserves_tables(web_client):
+    saved = _apply_payload(web_client, _sample_pricing_payload())
+    coverage = make_csv(
+        [
+            ["UF destino", "Cidade destino", "Região de frete"],
+            ["SP", "Campinas", "SP-Interior 1"],
+        ]
+    )
+    coverage_resp = _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv")
+    assert coverage_resp.status_code == 200
+    upload_resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(
+            _sample_audit_row(valor_frete="100.50", peso="48"),
+            _sample_audit_row(numero_documento="124", valor_frete="99.00", peso="48"),
+        ),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert upload_resp.status_code == 200
+
+    resp = _post_audit_run(web_client)
+    assert resp.status_code == 200
+    temp_table = resp.get_json()["temp_table"]
+    batch = temp_table["audit_batch"]
+    assert batch["status"] == "processed"
+    assert len(batch["results"]) == 2
+    assert batch["results"][0]["status"] == "ok"
+    assert batch["results"][1]["status"] == "divergent"
+    assert batch["summary"]["total_rows"] == 2
+    assert batch["summary"]["ok"] == 1
+    assert batch["summary"]["divergent"] == 1
+    assert temp_table["expires_at"] == saved["expires_at"]
+    assert temp_table["freight_tables"] == saved["freight_tables"]
+    assert temp_table["accessorial_fees"] == saved["accessorial_fees"]
+    assert temp_table["coverage_table"]["rows"][0]["freight_region"] == "SP-Interior 1"
+
+
+def test_audit_run_missing_coverage_mapping(web_client):
+    _apply_payload(web_client, _sample_pricing_payload())
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Sorocaba", "SP-Interior 1"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(web_client, "auditado.xlsx", _sample_audit_xlsx(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "missing_coverage_mapping"
+
+
+def test_audit_run_invalid_weight_and_charged_freight(web_client):
+    _apply_payload(web_client, _sample_pricing_payload())
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Campinas", "SP-Interior 1"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(web_client, "auditado.xlsx", _sample_audit_xlsx(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").status_code == 200
+    with web_client.session_transaction() as sess:
+        active_id = sess[audit_doc_service.CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY]
+    record = audit_doc_service.load_temp_table_record(active_id, ttl_hours=24)
+    record["audit_batch"]["normalized_rows"][0]["audited_weight"] = "x"
+    record["audit_batch"]["normalized_rows"].append(
+        {
+            **record["audit_batch"]["normalized_rows"][0],
+            "row_index": 2,
+            "audited_weight": 10,
+            "charged_freight": "x",
+        }
+    )
+    audit_doc_service._write_temp_table_atomic(audit_doc_service._temp_table_path(active_id), record)
+    resp = _post_audit_run(web_client)
+    statuses = [row["status"] for row in resp.get_json()["temp_table"]["audit_batch"]["results"]]
+    assert statuses == ["invalid_weight", "invalid_charged_freight"]
+
+
+def test_audit_run_missing_freight_rule(web_client):
+    _apply_payload(web_client, _sample_pricing_payload())
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Campinas", "SP-Interior 9"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(web_client, "auditado.xlsx", _sample_audit_xlsx(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").status_code == 200
+    resp = _post_audit_run(web_client)
+    assert resp.get_json()["temp_table"]["audit_batch"]["results"][0]["status"] == "missing_freight_rule"
+
+
+def test_audit_run_falls_back_to_city_destination_rule_when_coverage_region_has_no_rule(web_client):
+    _apply_payload(web_client, _sample_city_pricing_payload())
+    coverage = make_csv(
+        [
+            ["UF destino", "Cidade destino", "Região de frete"],
+            ["TO", "Palmas", "TO - Capital"],
+            ["AC", "Rio Branco", "AC - Capital"],
+        ]
+    )
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(
+            numero_documento="TO-1",
+            uf_destino="TO",
+            cidade_destino="Palmas",
+            peso="320,5",
+            valor_frete="760,40",
+        ),
+        _sample_audit_row(
+            numero_documento="AC-1",
+            uf_destino="AC",
+            cidade_destino="Rio Branco",
+            peso="201",
+            valor_frete="400,54",
+        ),
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+
+    resp = _post_audit_run(web_client)
+    assert resp.status_code == 200
+    results = resp.get_json()["temp_table"]["audit_batch"]["results"]
+    palmas = results[0]
+    rio_branco = results[1]
+    assert palmas["freight_region"] == "TO - Capital"
+    assert palmas["expected_freight"] == 526.09
+    assert palmas["status"] == "divergent"
+    assert palmas["divergence_value"] == 234.31
+    assert "regra localizada por cidade/destino" in palmas["calculation_details"]
+    assert rio_branco["freight_region"] == "AC - Capital"
+    assert rio_branco["expected_freight"] == 400.54
+    assert rio_branco["status"] == "ok"
+
+
+def test_audit_run_keeps_missing_coverage_before_city_fallback(web_client):
+    _apply_payload(web_client, _sample_city_pricing_payload())
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["TO", "Palmas", "TO - Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(
+            numero_documento="SP-1",
+            uf_destino="SP",
+            cidade_destino="Rio Branco",
+            peso="201",
+            valor_frete="400,54",
+        )
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "missing_coverage_mapping"
+
+
+def test_audit_run_unsupported_pricing_model(web_client):
+    payload = _sample_pricing_payload()
+    payload["freight_tables"] = [
+        {"table_title": "SP-Interior 1", "table_type": "texto", "columns": ["Observação"], "rows": [{"Observação": "Sem faixa"}]}
+    ]
+    _apply_payload(web_client, payload)
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Campinas", "SP-Interior 1"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(web_client, "auditado.xlsx", _sample_audit_xlsx(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").status_code == 200
+    resp = _post_audit_run(web_client)
+    assert resp.get_json()["temp_table"]["audit_batch"]["results"][0]["status"] == "unsupported_pricing_model"
+
+
+def test_audit_run_city_key_with_unsupported_model_is_not_missing_rule(web_client):
+    payload = _sample_city_pricing_payload()
+    payload["freight_tables"] = [
+        {
+            "table_title": "Tabela por cidade sem faixa",
+            "table_type": "texto",
+            "columns": ["UF", "UF Cidades", "Observação"],
+            "rows": [{"UF": "TO", "UF Cidades": "Palmas", "Observação": "Sem faixa"}],
+        }
+    ]
+    _apply_payload(web_client, payload)
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["TO", "Palmas", "TO - Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(uf_destino="TO", cidade_destino="Palmas", peso="201", valor_frete="400,54")
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "unsupported_pricing_model"
+
+
+def test_audited_file_max_rows_default_is_configurable(ctx):
+    from app.services import cleide_audit_config_service as svc
+
+    cfg = svc.get_cleide_audit_config()
+    assert cfg.audited_file_max_rows == svc.DEFAULT_AUDITED_FILE_MAX_ROWS
+
+
+def test_audit_upload_requires_login(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    anon = SimpleNamespace(is_authenticated=False)
+    monkeypatch.setattr(web, "current_user", anon)
+    monkeypatch.setattr("app.cleide_audit_routes.current_user", anon)
+    client = web.app.test_client()
+    resp = _post_audit_upload(
+        client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 401
+    assert resp.get_json()["error_code"] == "auth_required"
+
+
+def test_audit_upload_requires_active_temp_table(web_client):
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 404
+    assert resp.get_json()["error_code"] == "cleide_audit_audit_no_temp_table"
+
+
+def test_audit_upload_rejects_missing_required_columns(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    content = make_audit_xlsx(
+        [
+            ["transportadora", "cidade_destino", "uf_destino"],
+            ["Transp X", "Campinas", "SP"],
+        ]
+    )
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        content,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "cleide_audit_audit_missing_columns"
+
+
+def test_audit_upload_accepts_real_template(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    batch = resp.get_json()["temp_table"]["audit_batch"]
+    assert batch["status"] == "uploaded"
+    assert batch["row_count"] == 1
+    assert batch["source_file_name"] == "auditado.xlsx"
+    assert batch["sheet_name"] == "Modelo Cleide"
+
+
+def test_audit_upload_accepts_valor_frete_cobrado_alias(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    headers = list(AUDIT_TEMPLATE_HEADERS)
+    headers[7] = "valor_frete_cobrado"
+    content = make_audit_xlsx([headers, _sample_audit_row()])
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        content,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["temp_table"]["audit_batch"]["row_count"] == 1
+
+
+def test_audit_upload_accepts_peso_auditado_alias(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    headers = list(AUDIT_TEMPLATE_HEADERS)
+    headers[8] = "peso_auditado"
+    content = make_audit_xlsx([headers, _sample_audit_row()])
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        content,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["temp_table"]["audit_batch"]["row_count"] == 1
+
+
+def test_audit_upload_rejects_batch_above_configured_limit(web_client, monkeypatch):
+    _patch_audit_cfg(monkeypatch, audited_file_max_rows=1)
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    content = _sample_audit_xlsx(_sample_audit_row(), _sample_audit_row(numero_documento="456"))
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        content,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 413
+    assert resp.get_json()["error_code"] == "cleide_audit_audit_too_many_rows"
+
+
+def test_audit_upload_preserves_expires_at(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    original_expires = saved["expires_at"]
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["temp_table"]["expires_at"] == original_expires
+    assert resp.get_json()["temp_table"]["audit_batch"]["expires_at"] == original_expires
+
+
+def test_audit_upload_creates_audit_batch(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    batch = resp.get_json()["temp_table"]["audit_batch"]
+    assert batch["audit_batch_id"]
+    assert batch["temp_table_id"] == saved["temp_table_id"]
+    assert batch["max_rows"] == 2000
+    assert batch["input_schema_version"] == "cleide_audit_input_v1"
+    assert batch["results"] == []
+    assert batch["summary"] is None
+    assert batch["row_count"] == 1
+
+
+def test_audit_upload_does_not_alter_freight_tables(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    before = saved["freight_tables"]
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["temp_table"]["freight_tables"] == before
+
+
+def test_audit_upload_does_not_alter_coverage_table(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_coverage_upload(web_client, "cidades.csv", _sample_coverage_csv(), "text/csv")
+    coverage_before = resp.get_json()["temp_table"]["coverage_table"]
+    audit_resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert audit_resp.status_code == 200
+    assert audit_resp.get_json()["temp_table"]["coverage_table"] == coverage_before
+
+
+def test_audit_upload_does_not_call_gemini(web_client, monkeypatch):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    chat_mock = MagicMock()
+    extraction_mock = MagicMock()
+    monkeypatch.setattr("app.run_cleide_audit_chat.cleiton_governed_generate_content", chat_mock)
+    monkeypatch.setattr(
+        "app.run_cleide_audit_temp_table.cleiton_governed_generate_content",
+        extraction_mock,
+    )
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    chat_mock.assert_not_called()
+    extraction_mock.assert_not_called()
+
+
+def test_clear_documents_removes_audit_batch(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["temp_table"]["audit_batch"]["row_count"] == 1
+
+    clear_resp = web_client.post("/api/cleide-auditoria/documents/clear")
+    assert clear_resp.status_code == 200
+    status_after = web_client.get("/api/cleide-auditoria/documents/status").get_json()
+    assert status_after.get("temp_table") is None
