@@ -32,6 +32,7 @@ def _default_audit_cfg(**overrides):
         "no_documents_behavior": "allow_guided",
         "show_documents_used": True,
         "no_hallucination_instruction_enabled": True,
+        "audited_file_max_rows": 2000,
     }
     defaults.update(overrides)
     return CleideAuditConfig(**defaults)

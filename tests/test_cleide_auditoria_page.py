@@ -319,10 +319,20 @@ def test_cleide_auditoria_temp_table_modal_no_template():
     assert "Revise os dados extraídos antes de continuar." in source
     assert 'id="cleideAuditTempTableModalSave"' in source
     assert 'id="cleideAuditTempTableModalEdit"' in source
+    assert 'id="cleideAuditTempTableModalStartAudit"' in source
+    assert 'id="cleideAuditTempTableModalClose"' in source
     assert 'id="cleideAuditTempTableModalCancelEdit"' in source
     assert "Salvar e Avançar" in source
     assert "Editar" in source
+    assert "Iniciar Auditoria" in source
     assert "Validar e Salvar" not in source
+    header_block = source[source.index("cleide-audit-temp-table-modal-header"): source.index("cleide-audit-temp-table-modal-body")]
+    assert "cleide-audit-temp-table-modal-close-btn" in header_block
+    assert 'aria-label="Fechar modal"' in header_block
+    edit_pos = source.index('id="cleideAuditTempTableModalEdit"')
+    start_audit_pos = source.index('id="cleideAuditTempTableModalStartAudit"')
+    save_pos = source.index('id="cleideAuditTempTableModalSave"')
+    assert edit_pos < start_audit_pos < save_pos
 
 
 def test_cleide_auditoria_js_temp_table_modal_renderizacao():
@@ -459,7 +469,103 @@ def test_cleide_auditoria_template_temp_table_modal_layout():
     assert "position: sticky" in source
     assert "Salvar e Avançar" in source
     assert "Editar" in source
+    assert "Iniciar Auditoria" in source
+    assert "cleide-audit-temp-table-modal-start-audit-btn" in source
     assert "checklist" not in source.lower()
+
+
+def test_cleide_auditoria_js_start_audit_step():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "handleStartAudit" in js
+    assert "cleideAuditTempTableModalStartAudit" in js
+    assert "Arquivo para auditoria" in js
+    assert "/api/cleide-auditoria/audit-template" in js
+    assert "/api/cleide-auditoria/audit/upload" in js
+    assert "Baixe o modelo, preencha com os fretes cobrados e envie o arquivo para auditoria." in js
+    assert "Baixar modelo" in js
+    assert "Enviar arquivo preenchido" in js
+    assert "Arquivo recebido para auditoria" in js
+    assert "A auditoria será iniciada na próxima etapa." not in js
+    start_block = js[js.index("function handleStartAudit"): js.index("function appendOperationalMessage")]
+    assert "auditFileStepActive = true" in start_block
+    assert "tempTableModalActiveTab = 'audit'" in start_block
+    assert "appendOperationalMessage" not in start_block
+    init_block = js[js.index("function initTempTableModal"): js.index("function initDocuments")]
+    assert "handleStartAudit()" in init_block
+    footer_block = js[js.index("function updateTempTableModalFooter"): js.index("function canEditFreightTables")]
+    assert "cleideAuditTempTableModalStartAudit" in footer_block
+    assert "hasAuditBatch(currentTempTable)" in footer_block
+    assert "canStartAudit" in footer_block
+    assert "!onCoverageTab" in footer_block
+
+
+def test_cleide_auditoria_js_audit_upload_status():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "uploadAuditFile" in js
+    assert "setAuditUploadStatus" in js
+    assert "cleideAuditAuditUploadStatus" in js
+    upload_block = js[js.index("function uploadAuditFile"): js.index("function ensureCoverageTableShell")]
+    assert "formData.append('file', file)" in upload_block
+    assert "'success'" in upload_block
+    assert "'error'" in upload_block
+    assert "resultado" not in upload_block.lower()
+    assert "diverg" not in upload_block.lower()
+
+
+def test_cleide_auditoria_js_audit_run_step():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "/api/cleide-auditoria/audit/run" in js
+    assert "Processar auditoria" in js
+    assert "cleideAuditRunButton" in js
+    assert "runAuditProcessing" in js
+    run_block = js[js.index("function runAuditProcessing"): js.index("function renderCoverageUploadHint")]
+    assert "fetch(API_AUDIT_RUN" in run_block
+    assert "method: 'POST'" in run_block
+    assert "Processando auditoria..." in run_block
+    assert "Auditoria processada." in run_block
+    assert "toler" not in run_block.lower()
+    assert "generalidade" not in run_block.lower()
+
+
+def test_cleide_auditoria_js_audit_run_summary_and_results():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    summary_block = js[js.index("function renderAuditRunSummary"): js.index("function renderAuditRunResults")]
+    assert "Resumo da auditoria" in summary_block
+    assert "Total de linhas" in summary_block
+    assert "Ok" in summary_block
+    assert "Divergentes" in summary_block
+    assert "Sem mapeamento" in summary_block
+    assert "Sem regra" in summary_block
+    assert "Inválidas" in summary_block
+    results_block = js[js.index("function renderAuditRunResults"): js.index("function runAuditProcessing")]
+    assert "Resultados por linha" in results_block
+    assert "cleide-audit-run-results-table" in results_block
+    assert "Esperado" in results_block
+    assert "Diferença" in results_block
+
+
+def test_cleide_auditoria_html_audit_file_styles():
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    assert "cleide-audit-audit-file-card" in source
+    assert "cleide-audit-audit-file-status.is-success" in source
+    assert "cleide-audit-audit-file-summary" in source
+    assert "cleide-audit-run-btn" in source
+    assert "cleide-audit-run-status.is-loading" in source
+    assert "cleide-audit-run-summary" in source
+    assert "cleide-audit-run-results-table" in source
+
+
+def test_cleide_auditoria_js_temp_table_modal_close_button():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    assert "cleideAuditTempTableModalClose" in source
+    assert "cleide-audit-temp-table-modal-close-btn" in source
+    init_block = js[js.index("function initTempTableModal"): js.index("function initDocuments")]
+    assert "cleideAuditTempTableModalClose" in init_block
+    assert "closeTempTableModal()" in init_block
+    close_block = js[js.index("function closeTempTableModal"): js.index("function initTempTableModal")]
+    assert "tempTableEditMode = false" in close_block
+    assert "resetFreightTableOpenState()" in close_block
 
 
 def test_cleide_auditoria_js_painel_anexos_mantem_temp_table():
@@ -571,3 +677,246 @@ def test_cleide_auditoria_js_freight_table_open_state_does_not_affect_other_sect
     assert "openFreightTableKeys" not in routes_block
     accessorial_block = js[js.index("function renderAccessorialFeesSection"): js.index("function renderAccessorialFeesSection") + 1200]
     assert "openFreightTableKeys" not in accessorial_block
+
+
+def test_cleide_auditoria_js_coverage_prompt_after_save():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function saveTempTableAndAdvance") + 1400]
+    assert "coverageStepActive = true" in save_block
+    assert "tempTableModalActiveTab = 'coverage'" in save_block
+    assert "renderTempTableModalContent(currentTempTable)" in save_block
+    assert "closeTempTableModal" not in save_block
+    assert "appendCoveragePromptCTA" not in save_block
+    assert "Deseja informar a relação de cidades atendidas?" in js
+
+
+def test_cleide_auditoria_js_coverage_step_state_resets_without_persisting():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "var coverageStepActive = false" in js
+    reset_block = js[js.index("function resetCoveragePromptState"): js.index("function resetAuditFileStepState")]
+    assert "coverageStepActive = false" in reset_block
+    status_block = js[js.index("function handleTempTableFromStatus"): js.index("function formatBytes")]
+    assert "previousTempTableId" in status_block
+    assert "nextTempTableId" in status_block
+    assert "resetCoveragePromptState()" in status_block
+    payload_block = js[js.index("function collectTempTableSavePayload"): js.index("function saveTempTableAndAdvance")]
+    assert "coverageStepActive" not in payload_block
+
+
+def test_cleide_auditoria_js_coverage_cta_is_inside_modal_not_save_chat():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    coverage_block = js[js.index("function renderCoverageTabContent"): js.index("function renderFreightTabContent")]
+    assert "renderCoverageDecisionCard(section)" in coverage_block
+    assert "renderCoverageUploadCard(section, 'cleideAuditCoverageModal')" in coverage_block
+    save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function byId")]
+    assert "appendCoveragePromptCTA" not in save_block
+    assert "showCoverageUploadArea" not in save_block
+
+
+def test_cleide_auditoria_js_coverage_prompt_buttons():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "handleCoveragePromptAnswer" in js
+    assert "cleide-audit-coverage-prompt-yes" in js
+    assert "cleide-audit-coverage-prompt-no" in js
+    assert "renderCoverageDecisionCard" in js
+    prompt_block = js[js.index("function renderCoverageDecisionCard"): js.index("function renderCoverageSkippedState")]
+    assert "cleide-audit-coverage-prompt-card" in prompt_block
+    assert "cleide-audit-coverage-prompt-title" in prompt_block
+    assert "cleide-audit-coverage-prompt-description" in prompt_block
+    assert "cleide-audit-coverage-prompt-actions" in prompt_block
+    assert "Deseja informar a relação de cidades atendidas?" in prompt_block
+    assert "handleCoveragePromptAnswer(true)" in prompt_block
+    assert "handleCoveragePromptAnswer(false)" in prompt_block
+    assert "innerHTML" not in prompt_block
+
+
+def test_cleide_auditoria_js_coverage_prompt_card_does_not_touch_upload():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    upload_area_block = js[js.index("function renderCoverageUploadCard"): js.index("function setCoverageUploadFileName")]
+    upload_block = js[js.index("function uploadCoverageFile"): js.index("function collectCoverageSavePayload")]
+    assert "cleide-audit-coverage-upload-card" in upload_area_block
+    assert "formData.append('file', file)" in upload_block
+    prompt_block = js[js.index("function renderCoverageDecisionCard"): js.index("function renderCoverageSkippedState")]
+    assert "showCoverageUploadArea" not in prompt_block
+    assert "uploadCoverageFile" not in prompt_block
+    assert "formData" not in prompt_block
+
+
+def test_cleide_auditoria_html_coverage_prompt_card_styles():
+    web = _load_web_module()
+    html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
+    assert "cleide-audit-coverage-prompt-card" in html
+    assert "cleide-audit-coverage-prompt-title" in html
+    assert "cleide-audit-coverage-prompt-description" in html
+    assert "cleide-audit-coverage-prompt-btn-primary" in html
+    assert "cleide-audit-coverage-prompt-btn-secondary" in html
+
+
+def test_cleide_auditoria_js_modal_tabs_coverage():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "renderTempTableModalTabs" in js
+    assert "Tabela de frete" in js
+    assert "Cidades atendidas" in js
+    assert "renderCoverageTabContent" in js
+    assert "renderFreightTabContent" in js
+
+
+def test_cleide_auditoria_js_coverage_table_columns():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "destination_uf" in js
+    assert "destination_city" in js
+    assert "freight_region" in js
+    assert "renderEditableCoverageTable" in js
+
+
+def test_cleide_auditoria_js_coverage_edit_features():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "saveCoverageTableEdit" in js
+    assert "collectCoverageSavePayload" in js
+    cancel_block = js[js.index("function cancelTempTableEdit"): js.index("function cancelTempTableEdit") + 500]
+    assert "tempTableEditSnapshot" in cancel_block
+
+
+def test_cleide_auditoria_js_coverage_save_payload():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    payload_block = js[js.index("function collectCoverageSavePayload"): js.index("function collectCoverageSavePayload") + 500]
+    assert "coverage_table" in payload_block
+    assert "tempTableModalActiveTab" not in payload_block
+    assert "openFreightTableKeys" not in payload_block
+
+
+def test_cleide_auditoria_js_coverage_upload_api():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "/api/cleide-auditoria/coverage/upload" in js
+    assert "uploadCoverageFile" in js
+
+
+def test_cleide_auditoria_js_coverage_modal_upload_uses_unique_ids():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "renderCoverageUploadCard(section, 'cleideAuditCoverageModal')" in js
+    upload_area_block = js[js.index("function renderCoverageUploadCard"): js.index("function showCoverageUploadArea")]
+    assert "fileInputId = idPrefix + 'FileInput'" in upload_area_block
+    assert "idPrefix + 'UploadFileName'" in upload_area_block
+    assert "idPrefix + 'UploadStatus'" in upload_area_block
+    assert "cleideAuditCoverageFileInput" not in upload_area_block
+
+
+def test_cleide_auditoria_js_coverage_prompt_yes_does_not_open_modal():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    prompt_block = js[js.index("function handleCoveragePromptAnswer"): js.index("function uploadCoverageFile")]
+    assert "coverageStepActive" in prompt_block
+    assert "renderTempTableModalContent(currentTempTable)" in prompt_block
+    assert "openTempTableModal()" not in prompt_block
+    assert "tempTableModalActiveTab = 'coverage'" in prompt_block
+
+
+def test_cleide_auditoria_js_coverage_prompt_yes_shows_upload_area():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    prompt_block = js[js.index("function handleCoveragePromptAnswer"): js.index("function uploadCoverageFile")]
+    assert "coveragePromptAccepted = !!accepted" in prompt_block
+    assert "coveragePromptAnswered = true" in prompt_block
+    assert "renderTempTableModalContent(currentTempTable)" in prompt_block
+    assert "showCoverageUploadArea()" in prompt_block
+    assert "appendOperationalMessage" in prompt_block
+
+
+def test_cleide_auditoria_js_coverage_no_answer_releases_start_audit():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    skipped_block = js[js.index("function renderCoverageSkippedState"): js.index("function renderEditableCoverageTable")]
+    assert "Etapa ignorada. Você poderá iniciar a auditoria" in skipped_block
+    footer_block = js[js.index("function updateTempTableModalFooter"): js.index("function canEditFreightTables")]
+    assert "coveragePromptAnswered && !coveragePromptAccepted" in footer_block
+    prompt_block = js[js.index("function handleCoveragePromptAnswer"): js.index("function uploadCoverageFile")]
+    assert "coveragePromptAccepted = !!accepted" in prompt_block
+
+
+def test_cleide_auditoria_js_coverage_yes_requires_upload_before_start_audit():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    footer_block = js[js.index("function updateTempTableModalFooter"): js.index("function canEditFreightTables")]
+    assert "coverageHasRows || (coveragePromptAnswered && !coveragePromptAccepted)" in footer_block
+    assert "!canStartAudit" in footer_block
+    coverage_block = js[js.index("function renderCoverageTabContent"): js.index("function renderFreightTabContent")]
+    assert "coveragePromptAccepted" in coverage_block
+    assert "renderCoverageUploadCard(section, 'cleideAuditCoverageModal')" in coverage_block
+
+
+def test_cleide_auditoria_js_coverage_upload_opens_modal_only_with_rows():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    upload_block = js[js.index("function uploadCoverageFile"): js.index("function collectCoverageSavePayload")]
+    assert "formData.append('file', file)" in upload_block
+    assert "hasCoverageRows(currentTempTable)" in upload_block
+    assert upload_block.index("hasCoverageRows(currentTempTable)") < upload_block.index("renderTempTableModalContent(currentTempTable)")
+    assert "Nenhuma cidade foi identificada" in upload_block
+
+
+def test_cleide_auditoria_js_coverage_state_helpers():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function hasCoverageRows(tempTable)" in js
+    assert "function hasLoadedCoverageTable(tempTable)" in js
+    should_show_block = js[js.index("function shouldShowCoverageTab"): js.index("function canEditCoverageTable")]
+    assert "coverageStepActive" in should_show_block
+    assert "hasCoverageRows(tempTable)" in should_show_block
+    assert "coveragePromptAccepted" in should_show_block
+    assert "hasLoadedCoverageTable(tempTable)" in should_show_block
+    edit_block = js[js.index("function canEditCoverageTable"): js.index("function resetCoveragePromptState")]
+    assert "hasCoverageRows(tempTable)" in edit_block
+
+
+def test_cleide_auditoria_js_coverage_empty_tab_hides_edit():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    footer_block = js[js.index("function updateTempTableModalFooter"): js.index("function canEditFreightTables")]
+    assert "hideEditOnEmptyCoverage" in footer_block
+    assert "hasCoverageRows(currentTempTable)" in footer_block
+    hint_block = js[js.index("function renderCoverageUploadHint"): js.index("function renderEditableCoverageTable")]
+    assert "Faça upload do arquivo complementar CSV ou XLSX" in hint_block
+
+
+def test_cleide_auditoria_js_coverage_upload_custom_card():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    upload_area_block = js[js.index("function renderCoverageUploadCard"): js.index("function setCoverageUploadFileName")]
+    assert "cleide-audit-coverage-upload-card" in upload_area_block
+    assert "fileInputId" in upload_area_block
+    assert "visually-hidden" in upload_area_block
+    assert "cleide-audit-coverage-upload-button" in upload_area_block
+    assert "setAttribute('for', fileInputId)" in upload_area_block
+    assert "Selecionar arquivo" in upload_area_block
+    assert "Formatos aceitos: CSV ou XLSX." in upload_area_block
+    assert "idPrefix + 'UploadFileName'" in upload_area_block
+    assert "idPrefix + 'UploadStatus'" in upload_area_block
+    assert "setAttribute('role', 'status')" in upload_area_block
+    assert "setCoverageUploadFileName" in upload_area_block
+    assert "textContent" in upload_area_block
+    assert "innerHTML" not in upload_area_block
+
+
+def test_cleide_auditoria_js_coverage_upload_file_name_helper():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    name_block = js[js.index("function setCoverageUploadFileName"): js.index("function setCoverageUploadStatus")]
+    assert "activeCoverageUploadPrefix + 'UploadFileName'" in name_block
+    assert "cleideAuditCoverageModalUploadFileName" in name_block
+    assert "textContent" in name_block
+    assert "Nenhum arquivo selecionado" in name_block
+
+
+def test_cleide_auditoria_js_coverage_upload_status_states():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    status_block = js[js.index("function setCoverageUploadStatus"): js.index("function handleCoveragePromptAnswer")]
+    assert "is-loading" in status_block
+    assert "is-success" in status_block
+    assert "is-error" in status_block
+    upload_block = js[js.index("function uploadCoverageFile"): js.index("function collectCoverageSavePayload")]
+    assert "setCoverageUploadStatus('Enviando arquivo...', 'loading')" in upload_block
+    assert "'success'" in upload_block
+    assert "'error'" in upload_block
+    assert "formData.append('file', file)" in upload_block
+
+
+def test_cleide_auditoria_html_coverage_upload_card_styles():
+    web = _load_web_module()
+    html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
+    assert "cleide-audit-coverage-upload-card" in html
+    assert "cleide-audit-coverage-upload-button" in html
+    assert "cleide-audit-coverage-upload-status.is-loading" in html
+    assert "cleide-audit-coverage-upload-status.is-success" in html
+    assert "cleide-audit-coverage-upload-status.is-error" in html
+    assert "cleide-audit-coverage-upload-file-name" in html

@@ -14,7 +14,7 @@ Consulte este arquivo somente para detalhes especificos de execucao automatica e
 - `APP_BASE_URL` configurado no Cron Job
 - persistencia valida
 - migrations existentes ja tratadas no ambiente alvo
-- estado homologado de referencia: `c5a73e1`
+- estado homologado de referencia: `80d5e73`
 
 ## Comandos Render
 
@@ -49,6 +49,12 @@ curl -fsS -X POST "$APP_BASE_URL/cron/billing-snapshot" -H "X-Cron-Secret: $CRON
 - a tabela temporaria da auditoria continua fora do schema persistente
 - os cron jobs nao devem depender de `app/cleiton_doc_tmp/` nem versionar residuos locais
 - nenhum `.db` local ou artefato tecnico da temp table faz parte do deploy
+
+## Ponto de atencao de branch
+
+- a operacao aprovada desta entrega considera `homolog` para validacao e `producao` para publicacao
+- o `render.yaml` versionado ainda mostra `branch: main` no servico de producao
+- confirmar no painel do Render qual branch esta efetivamente conectada antes de promover
 
 ## Referencia Principal
 

@@ -6,8 +6,10 @@ Objetivo: validar comportamento real ponta-a-ponta antes da promocao definitiva,
 
 Estado desta entrega:
 
-- homolog aprovada no commit `c5a73e1`
-- producao aprovada apos merge `5f10f6d`
+- homolog aprovada no commit `80d5e73`
+- producao aprovada apos merge `284b340`
+- `origin/homolog` e `origin/producao` alinhadas em conteudo real de arquivos
+- tree hash alinhado: `39da31eb877f6acc5b2ba34be98d3f0e70246664`
 - sem migration nova
 - sem nova tabela de banco
 - sem novo campo
@@ -27,10 +29,10 @@ Estado desta entrega:
 
 Validacoes registradas antes da promocao:
 
-- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado: `109 passed, 2 warnings`
+- `python -m pytest tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
+- resultado: `178 passed, 2 warnings`
 - `python -m pytest`
-- resultado: `1124 passed, 36 warnings`
+- resultado: `1160 passed, 36 warnings`
 
 Cobertura automatizada ja existente no projeto:
 
@@ -70,6 +72,7 @@ Cobertura automatizada ja existente no projeto:
 | 18 | Mudanca ou remocao de documento fonte | Temp table anterior invalidada corretamente | Auto + manual | [ ] |
 | 19 | Extracao parcial | Estado `needs_review` ou `awaiting_validation`, sempre com validacao humana obrigatoria | Auto + manual | [ ] |
 | 20 | Conversa apos extracao | Chat usa contexto, mas nao recria nem sobrescreve a tabela temporaria | Auto + manual | [ ] |
+| 21 | Revisao humana da temp table | `POST /api/cleide-auditoria/temp-table/save` salva edicao governada sem quebrar escopo da sessao | Auto + manual | [ ] |
 
 ## Observabilidade a validar
 
@@ -107,7 +110,8 @@ Validar:
 8. Repetir com usuario nao-admin no admin e confirmar `403`.
 9. Remover ou trocar documento anexado e confirmar invalidacao da tabela temporaria anterior.
 10. Abrir o card da tabela temporaria e confirmar modal somente leitura.
-11. Conferir que nenhum `app/.tmp_repro_unit*`, `app/cleiton_doc_tmp/tt_*.json`, `.cleanup_meta.json`, residuo `.json` ou `.db` local entrou em versionamento.
+11. Validar revisao humana da tabela temporaria quando houver ajuste manual no fluxo.
+12. Conferir que nenhum `app/.tmp_repro_unit*`, `app/cleiton_doc_tmp/tt_*.json`, `.cleanup_meta.json`, residuo `.json` ou `.db` local entrou em versionamento.
 
 ## Registro final
 

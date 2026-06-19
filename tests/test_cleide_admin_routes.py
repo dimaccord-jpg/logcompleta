@@ -50,6 +50,7 @@ def _audit_cfg(**overrides):
         "no_documents_behavior": "allow_guided",
         "show_documents_used": True,
         "no_hallucination_instruction_enabled": True,
+        "audited_file_max_rows": 2000,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -179,6 +180,7 @@ def test_admin_agentes_cleide_get_campos_audit_no_form_correto(monkeypatch):
         "document_context_max_chars",
         "max_documents_considered",
         "question_max_chars",
+        "audited_file_max_rows",
         "no_documents_behavior",
         "show_documents_used",
         "no_hallucination_instruction_enabled",
@@ -186,6 +188,8 @@ def test_admin_agentes_cleide_get_campos_audit_no_form_correto(monkeypatch):
     ]
     for field in audit_fields:
         assert f'name="{field}"' in html
+    assert "Máximo de linhas por lote auditado" in html
+    assert "cleide_audit_cfg_audited_file_max_rows" in html
     assert "pdf_max_pages" not in html
     assert "upload_ttl_hours" not in html
 
@@ -260,8 +264,15 @@ def test_admin_agentes_cleide_post_audit_salva(monkeypatch):
         calls["saved"] = True
         assert payload["chat_max_history"] == "8"
         assert payload["question_max_chars"] == "3500"
+        assert payload["audited_file_max_rows"] == "10"
         assert payload["no_documents_behavior"] == "require_documents"
         assert payload["fallback_message"] == "Falha temporária da Cleide Auditoria."
+        assert payload["document_context_max_chars"] == "18000"
+        assert payload["max_documents_considered"] == "2"
+        assert payload["show_documents_used"] == "on"
+        assert payload["no_hallucination_instruction_enabled"] == "on"
+        assert payload["chat_enabled"] == "on"
+        assert payload["upload_enabled"] == "on"
 
     monkeypatch.setattr("app.services.cleide_config_service.salvar_cleide_config", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("bi save should not run")))
     monkeypatch.setattr(
@@ -280,6 +291,7 @@ def test_admin_agentes_cleide_post_audit_salva(monkeypatch):
             "document_context_max_chars": "18000",
             "max_documents_considered": "2",
             "question_max_chars": "3500",
+            "audited_file_max_rows": "10",
             "no_documents_behavior": "require_documents",
             "show_documents_used": "on",
             "no_hallucination_instruction_enabled": "on",
@@ -294,6 +306,67 @@ def test_admin_agentes_cleide_post_audit_salva(monkeypatch):
     assert resp.status_code == 302
     assert calls["saved"] is True
     assert any("Cleide Auditoria documental" in msg for _, msg in msgs)
+
+
+def test_admin_agentes_cleide_post_audit_persiste_audited_file_max_rows(app, ctx, monkeypatch):
+    from app.painel_admin import admin_routes
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data={
+            "form_name": "cleide_audit",
+            "chat_enabled": "on",
+            "upload_enabled": "on",
+            "chat_max_history": "8",
+            "document_context_max_chars": "18000",
+            "max_documents_considered": "2",
+            "question_max_chars": "3500",
+            "audited_file_max_rows": "10",
+            "no_documents_behavior": "allow_guided",
+            "show_documents_used": "on",
+            "no_hallucination_instruction_enabled": "on",
+            "fallback_message": "Falha temporária da Cleide Auditoria.",
+        },
+    ):
+        admin_routes.agentes_cleide.__wrapped__()
+
+    row = ConfigRegras.query.filter_by(chave="cleide_audit_cfg_audited_file_max_rows").first()
+    assert row is not None
+    assert row.valor_inteiro == 10
+    assert cleide_audit_config_service.get_cleide_audit_config().audited_file_max_rows == 10
+
+
+def test_admin_agentes_cleide_get_renderiza_audited_file_max_rows_salvo(monkeypatch):
+    web = _load_web_module()
+    admin_routes = _patch_admin_access(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.cleide_config_service.get_cleide_config",
+        lambda: _bi_cfg(),
+    )
+    monkeypatch.setattr(
+        "app.services.cleide_audit_config_service.get_cleide_audit_config",
+        lambda: _audit_cfg(audited_file_max_rows=10),
+    )
+
+    with web.app.test_request_context("/admin/agentes/cleide"):
+        html = admin_routes.agentes_cleide.__wrapped__()
+
+    assert 'id="cleideAuditAuditedFileMaxRows"' in html
+    assert 'name="audited_file_max_rows"' in html
+    field_html = html.split('id="cleideAuditAuditedFileMaxRows"')[1].split(">", 1)[0]
+    assert 'value="10"' in field_html
+
+
+def test_admin_agentes_cleide_get_audited_file_max_rows_default_2000(monkeypatch):
+    html = _render_cleide_admin(monkeypatch)
+    field_html = html.split('id="cleideAuditAuditedFileMaxRows"')[1].split(">", 1)[0]
+    assert 'value="2000"' in field_html
 
 
 def test_admin_agentes_cleide_post_audit_invalido_nao_quebra(monkeypatch):
@@ -321,6 +394,7 @@ def test_admin_agentes_cleide_post_audit_invalido_nao_quebra(monkeypatch):
             "document_context_max_chars": "18000",
             "max_documents_considered": "2",
             "question_max_chars": "3500",
+            "audited_file_max_rows": "2000",
             "no_documents_behavior": "allow_guided",
             "fallback_message": "ok",
         },
@@ -393,6 +467,7 @@ def test_admin_agentes_cleide_post_audit_nao_altera_cleide_cfg(app, ctx, monkeyp
             "document_context_max_chars": "15000",
             "max_documents_considered": "2",
             "question_max_chars": "3000",
+            "audited_file_max_rows": "2000",
             "no_documents_behavior": "allow_guided",
             "fallback_message": "fallback audit",
         },
@@ -471,6 +546,7 @@ def test_admin_agentes_cleide_post_audit_invalido_nao_altera_bi(app, ctx, monkey
             "document_context_max_chars": "18000",
             "max_documents_considered": "2",
             "question_max_chars": "3500",
+            "audited_file_max_rows": "2000",
             "no_documents_behavior": "allow_guided",
             "fallback_message": "ok",
         },

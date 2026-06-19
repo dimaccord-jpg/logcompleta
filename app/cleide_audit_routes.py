@@ -8,12 +8,34 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request, send_file, session
 from flask_login import current_user
 
 from app.cleide_audit_doc_context import build_cleide_audit_document_context_for_chat
 from app.cleide_audit_doc_service import (
     CLEIDE_AUDIT_CHAT_FLOW_TYPE,
+    CLEIDE_AUDIT_TEMPLATE_FILENAME,
+    CleideAuditBatchError,
+    CleideAuditCoverageError,
+    ERROR_AUDIT_EMPTY_FILE,
+    ERROR_AUDIT_EXPIRED,
+    ERROR_AUDIT_INVALID_FORMAT,
+    ERROR_AUDIT_INVALID_SHEET,
+    ERROR_AUDIT_BATCH_EMPTY,
+    ERROR_AUDIT_BATCH_NOT_FOUND,
+    ERROR_AUDIT_MISSING_COLUMNS,
+    ERROR_AUDIT_NO_TEMP_TABLE,
+    ERROR_AUDIT_PARSE_FAILED,
+    ERROR_AUDIT_PAYLOAD_TOO_LARGE,
+    ERROR_AUDIT_SCOPE_MISMATCH,
+    ERROR_AUDIT_TOO_MANY_ROWS,
+    ERROR_COVERAGE_EMPTY_FILE,
+    ERROR_COVERAGE_EXPIRED,
+    ERROR_COVERAGE_INVALID_FORMAT,
+    ERROR_COVERAGE_NO_TEMP_TABLE,
+    ERROR_COVERAGE_PARSE_FAILED,
+    ERROR_COVERAGE_PAYLOAD_TOO_LARGE,
+    ERROR_COVERAGE_SCOPE_MISMATCH,
     ERROR_TEMP_TABLE_EXPIRED,
     ERROR_TEMP_TABLE_ID_MISMATCH,
     ERROR_TEMP_TABLE_INVALID_PAYLOAD,
@@ -30,7 +52,11 @@ from app.cleide_audit_doc_service import (
     maybe_cleanup_expired_cleiton_docs,
     prepare_and_register_document,
     remove_document_from_session,
+    run_audit_batch_for_session,
     save_temp_table_edit,
+    upload_audit_batch_from_file,
+    upload_coverage_table_from_file,
+    get_cleide_audit_template_path,
 )
 from app.run_cleide_audit_temp_table import trigger_temp_table_extraction_for_session
 from app.run_cleide_audit_chat import (
@@ -152,6 +178,30 @@ def _http_status_for_temp_table_error(error_code: str) -> int:
         return 403
     if error_code in {ERROR_TEMP_TABLE_NOT_FOUND, ERROR_TEMP_TABLE_EXPIRED}:
         return 404
+    return 400
+
+
+def _http_status_for_coverage_error(error_code: str) -> int:
+    if error_code == ERROR_COVERAGE_PAYLOAD_TOO_LARGE:
+        return 413
+    if error_code == ERROR_COVERAGE_SCOPE_MISMATCH:
+        return 403
+    if error_code in {ERROR_COVERAGE_NO_TEMP_TABLE, ERROR_COVERAGE_EXPIRED}:
+        return 404
+    return 400
+
+
+def _http_status_for_audit_batch_error(error_code: str) -> int:
+    if error_code == ERROR_AUDIT_PAYLOAD_TOO_LARGE:
+        return 413
+    if error_code == ERROR_AUDIT_TOO_MANY_ROWS:
+        return 413
+    if error_code == ERROR_AUDIT_SCOPE_MISMATCH:
+        return 403
+    if error_code in {ERROR_AUDIT_NO_TEMP_TABLE, ERROR_AUDIT_EXPIRED, ERROR_AUDIT_BATCH_NOT_FOUND}:
+        return 404
+    if error_code == ERROR_AUDIT_BATCH_EMPTY:
+        return 409
     return 400
 
 
@@ -389,6 +439,205 @@ def cleide_audit_temp_table_save():
                     "ok": False,
                     "error_code": "temp_table_save_failed",
                     "message": "Não foi possível salvar a revisão da tabela temporária.",
+                }
+            ),
+            500,
+        )
+
+    return jsonify({"ok": True, "temp_table": temp_table})
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/coverage/upload", methods=["POST"])
+def cleide_audit_coverage_upload():
+    unauthorized = _authorize_cleide_audit_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    audit_cfg = get_cleide_audit_config()
+    if not audit_cfg.upload_enabled:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_UPLOAD_DISABLED,
+                    "message": AUDIT_UPLOAD_DISABLED_MESSAGE,
+                }
+            ),
+            403,
+        )
+
+    upload = request.files.get("file")
+    if upload is None or not getattr(upload, "filename", "").strip():
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_MISSING_FILE,
+                    "message": "Nenhum arquivo enviado no campo 'file'.",
+                }
+            ),
+            400,
+        )
+
+    display_name = (upload.filename or "coverage").strip()
+    file_bytes = upload.read() or b""
+    extension = Path(display_name).suffix.lower() or None
+
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        temp_table = upload_coverage_table_from_file(
+            display_name=display_name,
+            file_bytes=file_bytes,
+            extension=extension,
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+        )
+    except CleideAuditCoverageError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_coverage_error(exc.error_code),
+        )
+    except Exception:
+        logger.exception("Falha inesperada no upload complementar de coverage da Cleide Auditoria.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_UPLOAD_FAILED,
+                    "message": "Não foi possível processar o upload complementar de cobertura.",
+                }
+            ),
+            500,
+        )
+
+    return jsonify({"ok": True, "temp_table": temp_table})
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/audit-template", methods=["GET"])
+def cleide_audit_template_download():
+    template_path = get_cleide_audit_template_path()
+    if not template_path.exists() or not template_path.is_file():
+        return "Arquivo de modelo indisponível no momento.", 404
+    return send_file(
+        template_path,
+        as_attachment=True,
+        download_name=CLEIDE_AUDIT_TEMPLATE_FILENAME,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/audit/upload", methods=["POST"])
+def cleide_audit_batch_upload():
+    unauthorized = _authorize_cleide_audit_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    audit_cfg = get_cleide_audit_config()
+    if not audit_cfg.upload_enabled:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_UPLOAD_DISABLED,
+                    "message": AUDIT_UPLOAD_DISABLED_MESSAGE,
+                }
+            ),
+            403,
+        )
+
+    upload = request.files.get("file")
+    if upload is None or not getattr(upload, "filename", "").strip():
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_MISSING_FILE,
+                    "message": "Nenhum arquivo enviado no campo 'file'.",
+                }
+            ),
+            400,
+        )
+
+    display_name = (upload.filename or "auditado").strip()
+    file_bytes = upload.read() or b""
+    extension = Path(display_name).suffix.lower() or None
+
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        temp_table = upload_audit_batch_from_file(
+            display_name=display_name,
+            file_bytes=file_bytes,
+            extension=extension,
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+        )
+    except CleideAuditBatchError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_audit_batch_error(exc.error_code),
+        )
+    except Exception:
+        logger.exception("Falha inesperada no upload do arquivo auditado da Cleide Auditoria.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_UPLOAD_FAILED,
+                    "message": "Não foi possível processar o arquivo auditado.",
+                }
+            ),
+            500,
+        )
+
+    return jsonify({"ok": True, "temp_table": temp_table})
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/audit/run", methods=["POST"])
+def cleide_audit_batch_run():
+    unauthorized = _authorize_cleide_audit_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        temp_table = run_audit_batch_for_session(
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+        )
+    except CleideAuditBatchError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_audit_batch_error(exc.error_code),
+        )
+    except Exception:
+        logger.exception("Falha inesperada ao processar lote auditado da Cleide Auditoria.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "cleide_audit_run_failed",
+                    "message": "Não foi possível processar a auditoria neste momento.",
                 }
             ),
             500,

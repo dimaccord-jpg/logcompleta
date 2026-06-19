@@ -6,6 +6,10 @@
   var API_CLEAR = '/api/cleide-auditoria/documents/clear';
   var API_CHAT = '/api/cleide-auditoria/chat';
   var API_TEMP_TABLE_SAVE = '/api/cleide-auditoria/temp-table/save';
+  var API_COVERAGE_UPLOAD = '/api/cleide-auditoria/coverage/upload';
+  var API_AUDIT_TEMPLATE = '/api/cleide-auditoria/audit-template';
+  var API_AUDIT_UPLOAD = '/api/cleide-auditoria/audit/upload';
+  var API_AUDIT_RUN = '/api/cleide-auditoria/audit/run';
   var uploadInFlight = false;
   var chatInFlight = false;
   var chatHistory = [];
@@ -59,6 +63,23 @@
   var tempTableSaveInFlight = false;
   var openFreightTableKeys = new Set();
   var hasUserTouchedFreightTableOpenState = false;
+  var tempTableModalActiveTab = 'freight';
+  var coverageStepActive = false;
+  var coveragePromptAnswered = false;
+  var coveragePromptAccepted = false;
+  var coverageUploadInFlight = false;
+  var activeCoverageUploadPrefix = 'cleideAuditCoverage';
+  var coverageSaveInFlight = false;
+  var auditFileStepActive = false;
+  var auditUploadInFlight = false;
+  var auditRunInFlight = false;
+
+  var COVERAGE_TABLE_HEADERS = [
+    { key: 'destination_uf', label: 'UF destino' },
+    { key: 'destination_city', label: 'Cidade destino' },
+    { key: 'freight_region', label: 'Região de frete' },
+    { key: 'notes', label: 'Observações' }
+  ];
 
   function deepCloneValue(value) {
     if (value === null || typeof value !== 'object') return value;
@@ -89,18 +110,407 @@
     el.textContent = message;
   }
 
+  function hasCoverageRows(tempTable) {
+    if (!tempTable || !tempTable.coverage_table) return false;
+    var rows = tempTable.coverage_table.rows;
+    return Array.isArray(rows) && rows.length > 0;
+  }
+
+  function hasLoadedCoverageTable(tempTable) {
+    return !!(tempTable && tempTable.coverage_table && typeof tempTable.coverage_table === 'object');
+  }
+
+  function shouldShowCoverageTab(tempTable) {
+    if (coverageStepActive) return true;
+    if (hasCoverageRows(tempTable)) return true;
+    if (coveragePromptAccepted) return true;
+    if (hasLoadedCoverageTable(tempTable)) return true;
+    return false;
+  }
+
+  function canEditCoverageTable(tempTable) {
+    return hasCoverageRows(tempTable);
+  }
+
+  function resetCoveragePromptState() {
+    coverageStepActive = false;
+    coveragePromptAnswered = false;
+    coveragePromptAccepted = false;
+    tempTableModalActiveTab = 'freight';
+  }
+
+  function resetAuditFileStepState() {
+    auditFileStepActive = false;
+    auditUploadInFlight = false;
+    auditRunInFlight = false;
+    if (tempTableModalActiveTab === 'audit') {
+      tempTableModalActiveTab = 'freight';
+    }
+  }
+
+  function hasAuditBatch(tempTable) {
+    if (!tempTable || !tempTable.audit_batch) return false;
+    var status = String(tempTable.audit_batch.status || '').toLowerCase();
+    return status === 'uploaded' || status === 'processed';
+  }
+
+  function shouldShowAuditTab(tempTable) {
+    if (auditFileStepActive) return true;
+    return hasAuditBatch(tempTable);
+  }
+
+  function appendCoveragePromptCTA() {
+    var container = byId('cleideAuditoriaMessages');
+    if (!container) return;
+
+    var msg = document.createElement('div');
+    msg.className = 'cleide-auditoria-chat-msg cleide-auditoria-chat-msg-bot cleide-audit-coverage-prompt-msg';
+    msg.setAttribute('data-chat-role', 'assistant');
+
+    var inner = document.createElement('div');
+    inner.className = 'cleide-auditoria-chat-msg-inner cleide-audit-coverage-prompt-panel';
+
+    var card = document.createElement('div');
+    card.className = 'cleide-audit-coverage-prompt-card';
+
+    var title = document.createElement('span');
+    title.className = 'cleide-audit-coverage-prompt-title';
+    title.textContent = 'Cidades atendidas';
+    card.appendChild(title);
+
+    var description = document.createElement('p');
+    description.className = 'cleide-audit-coverage-prompt-description';
+    description.textContent = 'Deseja informar a relação de cidades atendidas?';
+    card.appendChild(description);
+
+    var support = document.createElement('p');
+    support.className = 'cleide-audit-coverage-prompt-support';
+    support.textContent = 'Use essa etapa quando a tabela de frete trabalhar com regiões, praças, rotas ou itinerários.';
+    card.appendChild(support);
+
+    var actions = document.createElement('div');
+    actions.className = 'cleide-audit-coverage-prompt-actions';
+
+    var yesBtn = document.createElement('button');
+    yesBtn.type = 'button';
+    yesBtn.className = 'cleide-audit-coverage-prompt-yes cleide-audit-coverage-prompt-btn cleide-audit-coverage-prompt-btn-primary';
+    yesBtn.textContent = 'Sim, enviar planilha';
+    yesBtn.addEventListener('click', function () {
+      handleCoveragePromptAnswer(true);
+    });
+
+    var noBtn = document.createElement('button');
+    noBtn.type = 'button';
+    noBtn.className = 'cleide-audit-coverage-prompt-no cleide-audit-coverage-prompt-btn cleide-audit-coverage-prompt-btn-secondary';
+    noBtn.textContent = 'Agora não';
+    noBtn.addEventListener('click', function () {
+      handleCoveragePromptAnswer(false);
+    });
+
+    actions.appendChild(yesBtn);
+    actions.appendChild(noBtn);
+    card.appendChild(actions);
+    inner.appendChild(card);
+    msg.appendChild(inner);
+    container.appendChild(msg);
+    container.scrollTop = container.scrollHeight;
+
+    chatHistory.push({ role: 'assistant', content: 'Deseja informar a relação de cidades atendidas?' });
+    chatHistory = trimChatHistory(chatHistory);
+  }
+
+  function renderCoverageUploadCard(container, prefix) {
+    if (!container) return;
+    var idPrefix = prefix || 'cleideAuditCoverage';
+    var fileInputId = idPrefix + 'FileInput';
+    activeCoverageUploadPrefix = idPrefix;
+    var card = document.createElement('div');
+    card.className = 'cleide-audit-coverage-upload-card';
+
+    var header = document.createElement('div');
+    header.className = 'cleide-audit-coverage-upload-header';
+
+    var title = document.createElement('span');
+    title.className = 'cleide-audit-coverage-upload-title';
+    title.textContent = 'Cidades atendidas';
+
+    var badge = document.createElement('span');
+    badge.className = 'cleide-audit-coverage-upload-badge';
+    badge.textContent = 'CSV ou XLSX';
+
+    header.appendChild(title);
+    header.appendChild(badge);
+    card.appendChild(header);
+
+    var description = document.createElement('p');
+    description.className = 'cleide-audit-coverage-upload-description';
+    description.textContent = 'Envie uma planilha com UF, cidade e região de frete.';
+    card.appendChild(description);
+
+    var actions = document.createElement('div');
+    actions.className = 'cleide-audit-coverage-upload-actions';
+
+    var fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv';
+    fileInput.className = 'visually-hidden cleide-audit-coverage-upload-input';
+    fileInput.id = fileInputId;
+
+    var selectBtn = document.createElement('label');
+    selectBtn.className = 'cleide-audit-coverage-upload-button';
+    selectBtn.setAttribute('for', fileInputId);
+    selectBtn.textContent = 'Selecionar arquivo';
+
+    var fileName = document.createElement('span');
+    fileName.className = 'cleide-audit-coverage-upload-file-name';
+    fileName.id = idPrefix + 'UploadFileName';
+    fileName.textContent = 'Nenhum arquivo selecionado';
+
+    actions.appendChild(fileInput);
+    actions.appendChild(selectBtn);
+    actions.appendChild(fileName);
+    card.appendChild(actions);
+
+    var help = document.createElement('p');
+    help.className = 'cleide-audit-coverage-upload-help';
+    help.textContent = 'Formatos aceitos: CSV ou XLSX.';
+    card.appendChild(help);
+
+    var status = document.createElement('p');
+    status.className = 'cleide-audit-coverage-upload-status';
+    status.id = idPrefix + 'UploadStatus';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    card.appendChild(status);
+
+    fileInput.addEventListener('change', function () {
+      activeCoverageUploadPrefix = idPrefix;
+      var file = fileInput.files && fileInput.files[0];
+      if (file) {
+        setCoverageUploadFileName(file.name);
+      } else {
+        setCoverageUploadFileName('');
+      }
+      fileInput.value = '';
+      if (!file) return;
+      uploadCoverageFile(file);
+    });
+
+    container.appendChild(card);
+  }
+
+  function showCoverageUploadArea() {
+    var container = byId('cleideAuditoriaMessages');
+    if (!container) return;
+    if (byId('cleideAuditCoverageUploadPanel')) return;
+
+    var msg = document.createElement('div');
+    msg.className = 'cleide-auditoria-chat-msg cleide-auditoria-chat-msg-bot cleide-audit-coverage-upload-msg';
+    msg.id = 'cleideAuditCoverageUploadPanel';
+
+    var inner = document.createElement('div');
+    inner.className = 'cleide-auditoria-chat-msg-inner cleide-audit-coverage-upload-panel';
+
+    renderCoverageUploadCard(inner, 'cleideAuditCoverage');
+    msg.appendChild(inner);
+    container.appendChild(msg);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function setCoverageUploadFileName(name) {
+    var el = byId(activeCoverageUploadPrefix + 'UploadFileName') || byId('cleideAuditCoverageModalUploadFileName') || byId('cleideAuditCoverageUploadFileName');
+    if (el) el.textContent = name || 'Nenhum arquivo selecionado';
+  }
+
+  function setCoverageUploadStatus(message, state) {
+    var el = byId(activeCoverageUploadPrefix + 'UploadStatus') || byId('cleideAuditCoverageModalUploadStatus') || byId('cleideAuditCoverageUploadStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cleide-audit-coverage-upload-status';
+    if (state === 'loading') {
+      el.classList.add('is-loading');
+    } else if (state === 'success') {
+      el.classList.add('is-success');
+    } else if (state === 'error') {
+      el.classList.add('is-error');
+    }
+  }
+
+  function handleCoveragePromptAnswer(accepted) {
+    if (coveragePromptAnswered) return;
+    coveragePromptAnswered = true;
+    coveragePromptAccepted = !!accepted;
+    if (coverageStepActive) {
+      tempTableModalActiveTab = 'coverage';
+      setTempTableModalError('');
+      renderTempTableModalContent(currentTempTable);
+      updateTempTableModalFooter();
+      return;
+    }
+    if (accepted) {
+      appendOperationalMessage('Certo. Você pode enviar o arquivo complementar com as cidades atendidas.');
+      showCoverageUploadArea();
+    } else {
+      appendOperationalMessage('Sem problemas. Você pode continuar o fluxo normalmente.');
+    }
+  }
+
+  function uploadCoverageFile(file) {
+    if (!file || coverageUploadInFlight) return;
+    coverageUploadInFlight = true;
+    setCoverageUploadStatus('Enviando arquivo...', 'loading');
+
+    var formData = new FormData();
+    formData.append('file', file);
+
+    fetch(API_COVERAGE_UPLOAD, {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: formData
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true) {
+          setCoverageUploadStatus(
+            (res.data && res.data.message) || 'Não foi possível carregar o arquivo. Verifique o formato.',
+            'error'
+          );
+          return;
+        }
+        if (res.data.temp_table) {
+          currentTempTable = res.data.temp_table;
+        }
+        if (hasCoverageRows(currentTempTable)) {
+          coverageStepActive = true;
+          coveragePromptAnswered = true;
+          coveragePromptAccepted = true;
+          tempTableModalActiveTab = 'coverage';
+          setCoverageUploadStatus('Arquivo carregado. Revise a aba Cidades atendidas.', 'success');
+          if (!isTempTableModalOpen()) {
+            appendOperationalMessage('Relação de cidades atendidas carregada. Revise na aba Cidades atendidas.');
+          }
+          fetchDocuments();
+          if (isTempTableModalOpen()) {
+            renderTempTableModalContent(currentTempTable);
+            updateTempTableModalFooter();
+          } else {
+            openTempTableModal();
+          }
+        } else {
+          setCoverageUploadStatus('Nenhuma cidade foi identificada no arquivo. Verifique o formato e tente novamente.', 'error');
+          if (!isTempTableModalOpen()) {
+            appendOperationalMessage('Nenhuma cidade foi identificada no arquivo complementar. Envie um CSV ou XLSX com UF, cidade e região de frete.');
+          }
+        }
+      })
+      .catch(function () {
+        setCoverageUploadStatus('Não foi possível enviar o arquivo. Verifique sua conexão e tente novamente.', 'error');
+      })
+      .finally(function () {
+        coverageUploadInFlight = false;
+      });
+  }
+
+  function collectCoverageSavePayload() {
+    if (!currentTempTable || !currentTempTable.temp_table_id) return null;
+    var coverage = currentTempTable.coverage_table || { rows: [] };
+    return {
+      temp_table_id: currentTempTable.temp_table_id,
+      edit_target: {
+        coverage_table: {
+          rows: deepCloneValue(coverage.rows || [])
+        }
+      },
+      review_action: 'save_and_advance'
+    };
+  }
+
+  function saveCoverageTableEdit() {
+    if (!currentTempTable || coverageSaveInFlight) return;
+    var payload = collectCoverageSavePayload();
+    if (!payload) {
+      setTempTableModalError('Nenhuma tabela de cobertura disponível para salvar.');
+      return;
+    }
+    coverageSaveInFlight = true;
+    tempTableSaveInFlight = true;
+    updateTempTableModalFooter();
+    setTempTableModalError('');
+
+    fetch(API_TEMP_TABLE_SAVE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload)
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true) {
+          var errMsg = (res.data && res.data.message) || 'Não foi possível salvar a cobertura temporária.';
+          setTempTableModalError(errMsg);
+          return;
+        }
+        if (res.data.temp_table) {
+          currentTempTable = res.data.temp_table;
+        }
+        tempTableEditMode = false;
+        tempTableEditSnapshot = null;
+        renderTempTableModalContent(currentTempTable);
+        appendOperationalMessage('Relação de cidades atendidas salva temporariamente.');
+        fetchDocuments();
+      })
+      .catch(function () {
+        setTempTableModalError('Não foi possível salvar a cobertura. Verifique sua conexão e tente novamente.');
+      })
+      .finally(function () {
+        coverageSaveInFlight = false;
+        tempTableSaveInFlight = false;
+        updateTempTableModalFooter();
+      });
+  }
+
   function updateTempTableModalFooter() {
     var editBtn = byId('cleideAuditTempTableModalEdit');
     var cancelBtn = byId('cleideAuditTempTableModalCancelEdit');
     var saveBtn = byId('cleideAuditTempTableModalSave');
+    var startAuditBtn = byId('cleideAuditTempTableModalStartAudit');
     var banner = byId('cleideAuditTempTableModalEditBanner');
-    if (editBtn) editBtn.hidden = !!tempTableEditMode;
+    var onCoverageTab = tempTableModalActiveTab === 'coverage' && shouldShowCoverageTab(currentTempTable);
+    var onAuditTab = tempTableModalActiveTab === 'audit' && shouldShowAuditTab(currentTempTable);
+    var coverageHasRows = hasCoverageRows(currentTempTable);
+    var canStartAudit = coverageHasRows || (coveragePromptAnswered && !coveragePromptAccepted);
+    var hideEditOnEmptyCoverage = onCoverageTab && !coverageHasRows;
+    var hideEditOnAuditTab = onAuditTab;
+    if (editBtn) {
+      editBtn.hidden = !!tempTableEditMode || hideEditOnEmptyCoverage || hideEditOnAuditTab;
+      editBtn.disabled = hideEditOnEmptyCoverage || hideEditOnAuditTab;
+    }
+    if (startAuditBtn) {
+      startAuditBtn.hidden = !!tempTableEditMode || !onCoverageTab || !canStartAudit || onAuditTab || hasAuditBatch(currentTempTable);
+    }
     if (cancelBtn) cancelBtn.hidden = !tempTableEditMode;
     if (banner) banner.hidden = !tempTableEditMode;
     document.body.classList.toggle('cleide-audit-temp-table-modal-editing', !!tempTableEditMode);
     if (saveBtn) {
-      saveBtn.disabled = !!tempTableSaveInFlight;
-      saveBtn.setAttribute('aria-busy', tempTableSaveInFlight ? 'true' : 'false');
+      saveBtn.disabled = !!(tempTableSaveInFlight || coverageSaveInFlight);
+      saveBtn.setAttribute('aria-busy', (tempTableSaveInFlight || coverageSaveInFlight) ? 'true' : 'false');
+      if (onCoverageTab) {
+        saveBtn.textContent = 'Salvar';
+        saveBtn.hidden = !tempTableEditMode;
+      } else if (onAuditTab) {
+        saveBtn.hidden = true;
+      } else {
+        saveBtn.textContent = 'Salvar e Avançar';
+        saveBtn.hidden = false;
+      }
     }
   }
 
@@ -199,10 +609,10 @@
         }
         tempTableEditMode = false;
         tempTableEditSnapshot = null;
-        closeTempTableModal();
-        appendOperationalMessage(
-          'Tabela temporária revisada e salva. A próxima etapa da auditoria ainda será habilitada.'
-        );
+        coverageStepActive = true;
+        tempTableModalActiveTab = 'coverage';
+        renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
         fetchDocuments();
       })
       .catch(function () {
@@ -216,6 +626,15 @@
 
   function byId(id) {
     return document.getElementById(id);
+  }
+
+  function handleStartAudit() {
+    if (!currentTempTable) return;
+    auditFileStepActive = true;
+    tempTableModalActiveTab = 'audit';
+    setTempTableModalError('');
+    renderTempTableModalContent(currentTempTable);
+    updateTempTableModalFooter();
   }
 
   function appendOperationalMessage(text) {
@@ -262,6 +681,15 @@
   function handleTempTableFromStatus(data) {
     if (!data) return;
     var tempTable = data.temp_table || null;
+    var previousTempTableId = currentTempTable && currentTempTable.temp_table_id;
+    var nextTempTableId = tempTable && tempTable.temp_table_id;
+    if (previousTempTableId && nextTempTableId && previousTempTableId !== nextTempTableId) {
+      resetCoveragePromptState();
+      resetAuditFileStepState();
+    } else if (previousTempTableId && !nextTempTableId) {
+      resetCoveragePromptState();
+      resetAuditFileStepState();
+    }
     if (tempTable && tempTable.temp_table_id) {
       currentTempTable = tempTable;
     } else {
@@ -544,6 +972,8 @@ function renderDocumentItem(doc) {
             setError(friendlyError(errData));
           }
           currentTempTable = null;
+          resetCoveragePromptState();
+          resetAuditFileStepState();
           renderDocuments([], null);
           return null;
         }
@@ -648,6 +1078,8 @@ function renderDocumentItem(doc) {
         currentTempTable = null;
         lastAnnouncedTempTableStatus = null;
         stopTempTablePolling();
+        resetCoveragePromptState();
+        resetAuditFileStepState();
         setStatus('');
       })
       .catch(function () {
@@ -1870,6 +2302,592 @@ function renderDocumentItem(doc) {
     });
   }
 
+  function renderTempTableModalTabs(container, tempTable) {
+    var tabs = document.createElement('div');
+    tabs.className = 'cleide-audit-temp-table-modal-tabs';
+    tabs.setAttribute('role', 'tablist');
+
+    function makeTab(id, label, active) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cleide-audit-temp-table-modal-tab' + (active ? ' is-active' : '');
+      btn.id = id;
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      btn.textContent = label;
+      return btn;
+    }
+
+    var freightTab = makeTab('cleideAuditTempTableTabFreight', 'Tabela de frete', tempTableModalActiveTab === 'freight');
+    freightTab.addEventListener('click', function () {
+      tempTableModalActiveTab = 'freight';
+      renderTempTableModalContent(tempTable);
+      updateTempTableModalFooter();
+    });
+
+    var coverageTab = makeTab('cleideAuditTempTableTabCoverage', 'Cidades atendidas', tempTableModalActiveTab === 'coverage');
+    coverageTab.addEventListener('click', function () {
+      tempTableModalActiveTab = 'coverage';
+      renderTempTableModalContent(tempTable);
+      updateTempTableModalFooter();
+    });
+
+    tabs.appendChild(freightTab);
+    if (shouldShowCoverageTab(tempTable)) {
+      tabs.appendChild(coverageTab);
+    }
+    if (shouldShowAuditTab(tempTable)) {
+      var auditTab = makeTab('cleideAuditTempTableTabAudit', 'Arquivo para auditoria', tempTableModalActiveTab === 'audit');
+      auditTab.addEventListener('click', function () {
+        tempTableModalActiveTab = 'audit';
+        renderTempTableModalContent(tempTable);
+        updateTempTableModalFooter();
+      });
+      tabs.appendChild(auditTab);
+    }
+    container.appendChild(tabs);
+  }
+
+  function renderAuditFileTabContent(container, tempTable) {
+    appendSectionTitle(container, 'Arquivo para auditoria');
+
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-temp-table-modal-section cleide-audit-audit-file-section';
+
+    var card = document.createElement('div');
+    card.className = 'cleide-audit-audit-file-card';
+
+    var intro = document.createElement('p');
+    intro.className = 'cleide-audit-audit-file-description';
+    intro.textContent = 'Baixe o modelo, preencha com os fretes cobrados e envie o arquivo para auditoria.';
+    card.appendChild(intro);
+
+    var actions = document.createElement('div');
+    actions.className = 'cleide-audit-audit-file-actions';
+
+    var downloadBtn = document.createElement('a');
+    downloadBtn.className = 'cleide-audit-audit-file-download-btn';
+    downloadBtn.href = API_AUDIT_TEMPLATE;
+    downloadBtn.setAttribute('download', '');
+    downloadBtn.textContent = 'Baixar modelo';
+    actions.appendChild(downloadBtn);
+
+    var fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.id = 'cleideAuditAuditFileInput';
+    fileInput.className = 'visually-hidden';
+    fileInput.accept = '.csv,.xlsx';
+    fileInput.setAttribute('tabindex', '-1');
+    fileInput.setAttribute('aria-hidden', 'true');
+
+    var uploadLabel = document.createElement('label');
+    uploadLabel.className = 'cleide-audit-audit-file-upload-btn';
+    uploadLabel.setAttribute('for', 'cleideAuditAuditFileInput');
+    uploadLabel.textContent = 'Enviar arquivo preenchido';
+    actions.appendChild(uploadLabel);
+    actions.appendChild(fileInput);
+    card.appendChild(actions);
+
+    var fileName = document.createElement('span');
+    fileName.className = 'cleide-audit-audit-file-name';
+    fileName.id = 'cleideAuditAuditUploadFileName';
+    fileName.textContent = 'Nenhum arquivo selecionado';
+    card.appendChild(fileName);
+
+    var status = document.createElement('p');
+    status.className = 'cleide-audit-audit-file-status';
+    status.id = 'cleideAuditAuditUploadStatus';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    card.appendChild(status);
+
+    if (hasAuditBatch(tempTable)) {
+      var summary = document.createElement('div');
+      summary.className = 'cleide-audit-audit-file-summary';
+      var batch = tempTable.audit_batch;
+      var summaryTitle = document.createElement('p');
+      summaryTitle.className = 'cleide-audit-audit-file-summary-title';
+      summaryTitle.textContent = 'Arquivo recebido para auditoria';
+      summary.appendChild(summaryTitle);
+      appendDetailRow(summary, 'Arquivo', batch.source_file_name || '—');
+      appendDetailRow(summary, 'Linhas', batch.row_count != null ? String(batch.row_count) : '—');
+      appendDetailRow(summary, 'Limite configurado', batch.max_rows != null ? String(batch.max_rows) : '—');
+      appendDetailRow(summary, 'Status', 'Arquivo recebido para auditoria');
+      card.appendChild(summary);
+
+      var runActions = document.createElement('div');
+      runActions.className = 'cleide-audit-run-actions';
+      var runBtn = document.createElement('button');
+      runBtn.type = 'button';
+      runBtn.className = 'cleide-audit-run-btn';
+      runBtn.id = 'cleideAuditRunButton';
+      runBtn.textContent = batch.summary ? 'Processar auditoria novamente' : 'Processar auditoria';
+      runBtn.disabled = auditRunInFlight;
+      runBtn.addEventListener('click', function () {
+        runAuditProcessing();
+      });
+      runActions.appendChild(runBtn);
+      card.appendChild(runActions);
+
+      var runStatus = document.createElement('p');
+      runStatus.className = 'cleide-audit-run-status';
+      runStatus.id = 'cleideAuditRunStatus';
+      runStatus.setAttribute('role', 'status');
+      runStatus.setAttribute('aria-live', 'polite');
+      card.appendChild(runStatus);
+
+      renderAuditRunSummary(card, batch.summary);
+      renderAuditRunResults(card, batch.results);
+    }
+
+    fileInput.addEventListener('change', function () {
+      var file = fileInput.files && fileInput.files[0];
+      if (file) {
+        setAuditUploadFileName(file.name);
+      } else {
+        setAuditUploadFileName('');
+      }
+      fileInput.value = '';
+      if (!file) return;
+      uploadAuditFile(file);
+    });
+
+    section.appendChild(card);
+    container.appendChild(section);
+  }
+
+  function setAuditUploadFileName(name) {
+    var el = byId('cleideAuditAuditUploadFileName');
+    if (el) el.textContent = name || 'Nenhum arquivo selecionado';
+  }
+
+  function setAuditUploadStatus(message, state) {
+    var el = byId('cleideAuditAuditUploadStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cleide-audit-audit-file-status';
+    if (state === 'loading') {
+      el.classList.add('is-loading');
+    } else if (state === 'success') {
+      el.classList.add('is-success');
+    } else if (state === 'error') {
+      el.classList.add('is-error');
+    }
+  }
+
+  function setAuditRunStatus(message, state) {
+    var el = byId('cleideAuditRunStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cleide-audit-run-status';
+    if (state === 'loading') {
+      el.classList.add('is-loading');
+    } else if (state === 'success') {
+      el.classList.add('is-success');
+    } else if (state === 'error') {
+      el.classList.add('is-error');
+    }
+  }
+
+  function uploadAuditFile(file) {
+    if (!file || auditUploadInFlight) return;
+    auditUploadInFlight = true;
+    setAuditUploadStatus('Enviando arquivo...', 'loading');
+
+    var formData = new FormData();
+    formData.append('file', file);
+
+    fetch(API_AUDIT_UPLOAD, {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: formData
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true) {
+          setAuditUploadStatus(
+            (res.data && res.data.message) || 'Não foi possível enviar o arquivo. Verifique o formato.',
+            'error'
+          );
+          return;
+        }
+        if (res.data.temp_table) {
+          currentTempTable = res.data.temp_table;
+        }
+        if (hasAuditBatch(currentTempTable)) {
+          auditFileStepActive = true;
+          tempTableModalActiveTab = 'audit';
+          setAuditUploadStatus('Arquivo recebido para auditoria.', 'success');
+          renderTempTableModalContent(currentTempTable);
+          updateTempTableModalFooter();
+        } else {
+          setAuditUploadStatus('Não foi possível registrar o arquivo auditado.', 'error');
+        }
+      })
+      .catch(function () {
+        setAuditUploadStatus('Não foi possível enviar o arquivo. Verifique sua conexão e tente novamente.', 'error');
+      })
+      .finally(function () {
+        auditUploadInFlight = false;
+      });
+  }
+
+  function ensureCoverageTableShell(tempTable) {
+    if (!tempTable.coverage_table || typeof tempTable.coverage_table !== 'object') {
+      tempTable.coverage_table = {
+        status: 'needs_review',
+        columns: ['UF destino', 'Cidade destino', 'Região de frete'],
+        rows: [],
+        validation_warnings: [],
+        notes: ''
+      };
+    }
+    if (!Array.isArray(tempTable.coverage_table.rows)) {
+      tempTable.coverage_table.rows = [];
+    }
+  }
+
+  function formatAuditMoney(value) {
+    if (!hasFieldValue(value)) return '—';
+    var n = Number(value);
+    if (!isFinite(n)) return String(value);
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function auditStatusLabel(status) {
+    var key = String(status || '');
+    var labels = {
+      ok: 'ok',
+      divergent: 'divergente',
+      missing_coverage_mapping: 'sem mapeamento',
+      ambiguous_coverage_mapping: 'mapeamento ambíguo',
+      missing_freight_rule: 'sem regra',
+      invalid_weight: 'peso inválido',
+      invalid_charged_freight: 'frete cobrado inválido',
+      unsupported_pricing_model: 'modelo não suportado'
+    };
+    return labels[key] || key || '—';
+  }
+
+  function appendAuditSummaryItem(container, label, value) {
+    var item = document.createElement('div');
+    item.className = 'cleide-audit-run-summary-item';
+    var labelEl = document.createElement('span');
+    labelEl.className = 'cleide-audit-run-summary-label';
+    labelEl.textContent = label;
+    var valueEl = document.createElement('strong');
+    valueEl.className = 'cleide-audit-run-summary-value';
+    valueEl.textContent = String(value == null ? 0 : value);
+    item.appendChild(labelEl);
+    item.appendChild(valueEl);
+    container.appendChild(item);
+  }
+
+  function renderAuditRunSummary(container, summary) {
+    if (!summary || typeof summary !== 'object') return;
+    var block = document.createElement('div');
+    block.className = 'cleide-audit-run-summary';
+    var title = document.createElement('p');
+    title.className = 'cleide-audit-run-summary-title';
+    title.textContent = 'Resumo da auditoria';
+    block.appendChild(title);
+    appendAuditSummaryItem(block, 'Total de linhas', summary.total_rows);
+    appendAuditSummaryItem(block, 'Ok', summary.ok);
+    appendAuditSummaryItem(block, 'Divergentes', summary.divergent);
+    appendAuditSummaryItem(block, 'Sem mapeamento', (summary.missing_coverage_mapping || 0) + (summary.ambiguous_coverage_mapping || 0));
+    appendAuditSummaryItem(block, 'Sem regra', summary.missing_freight_rule);
+    appendAuditSummaryItem(block, 'Inválidas', summary.invalid_rows);
+    container.appendChild(block);
+  }
+
+  function renderAuditRunResults(container, results) {
+    var rows = Array.isArray(results) ? results : [];
+    if (!rows.length) return;
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-run-results';
+    var title = document.createElement('p');
+    title.className = 'cleide-audit-run-results-title';
+    title.textContent = 'Resultados por linha';
+    section.appendChild(title);
+
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll cleide-audit-run-results-scroll';
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-freight-table cleide-audit-run-results-table';
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    ['Linha', 'Documento', 'UF', 'Cidade', 'Região', 'Peso', 'Cobrado', 'Esperado', 'Diferença', 'Status'].forEach(function (label) {
+      appendTableCell(headerRow, label, true, false);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    rows.slice(0, 200).forEach(function (row) {
+      if (!row || typeof row !== 'object') return;
+      var tr = document.createElement('tr');
+      appendTableCell(tr, row.row_index, false, false);
+      appendTableCell(tr, row.numero_documento, false, true);
+      appendTableCell(tr, row.destination_uf, false, true);
+      appendTableCell(tr, row.destination_city, false, true);
+      appendTableCell(tr, row.freight_region, false, true);
+      appendTableCell(tr, row.audited_weight, false, true);
+      appendTableCell(tr, formatAuditMoney(row.charged_freight), false, true);
+      appendTableCell(tr, formatAuditMoney(row.expected_freight), false, true);
+      appendTableCell(tr, formatAuditMoney(row.divergence_value), false, true);
+      appendTableCell(tr, auditStatusLabel(row.status), false, false);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    section.appendChild(scrollWrap);
+    container.appendChild(section);
+  }
+
+  function runAuditProcessing() {
+    if (!hasAuditBatch(currentTempTable) || auditRunInFlight) return;
+    auditRunInFlight = true;
+    setAuditRunStatus('Processando auditoria...', 'loading');
+    updateTempTableModalFooter();
+
+    fetch(API_AUDIT_RUN, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true) {
+          setAuditRunStatus(
+            (res.data && res.data.message) || 'Não foi possível processar a auditoria.',
+            'error'
+          );
+          return;
+        }
+        if (res.data.temp_table) {
+          currentTempTable = res.data.temp_table;
+        }
+        auditFileStepActive = true;
+        tempTableModalActiveTab = 'audit';
+        setAuditRunStatus('Auditoria processada.', 'success');
+        renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
+      })
+      .catch(function () {
+        setAuditRunStatus('Não foi possível processar a auditoria. Verifique sua conexão e tente novamente.', 'error');
+      })
+      .finally(function () {
+        auditRunInFlight = false;
+        updateTempTableModalFooter();
+      });
+  }
+
+  function renderCoverageUploadHint(container) {
+    var hint = document.createElement('p');
+    hint.className = 'cleide-audit-temp-table-modal-empty';
+    hint.textContent = 'Faça upload do arquivo complementar CSV ou XLSX para carregar UF, cidade e região de frete.';
+    container.appendChild(hint);
+  }
+
+  function renderCoverageDecisionCard(container) {
+    var card = document.createElement('div');
+    card.className = 'cleide-audit-coverage-prompt-card';
+
+    var title = document.createElement('span');
+    title.className = 'cleide-audit-coverage-prompt-title';
+    title.textContent = 'Cidades atendidas';
+    card.appendChild(title);
+
+    var description = document.createElement('p');
+    description.className = 'cleide-audit-coverage-prompt-description';
+    description.textContent = 'Deseja informar a relação de cidades atendidas?';
+    card.appendChild(description);
+
+    var support = document.createElement('p');
+    support.className = 'cleide-audit-coverage-prompt-support';
+    support.textContent = 'Use essa etapa quando a tabela de frete trabalhar com regiões, praças, rotas ou itinerários.';
+    card.appendChild(support);
+
+    var actions = document.createElement('div');
+    actions.className = 'cleide-audit-coverage-prompt-actions';
+
+    var yesBtn = document.createElement('button');
+    yesBtn.type = 'button';
+    yesBtn.className = 'cleide-audit-coverage-prompt-yes cleide-audit-coverage-prompt-btn cleide-audit-coverage-prompt-btn-primary';
+    yesBtn.textContent = 'Sim, enviar planilha';
+    yesBtn.addEventListener('click', function () {
+      handleCoveragePromptAnswer(true);
+    });
+
+    var noBtn = document.createElement('button');
+    noBtn.type = 'button';
+    noBtn.className = 'cleide-audit-coverage-prompt-no cleide-audit-coverage-prompt-btn cleide-audit-coverage-prompt-btn-secondary';
+    noBtn.textContent = 'Agora não';
+    noBtn.addEventListener('click', function () {
+      handleCoveragePromptAnswer(false);
+    });
+
+    actions.appendChild(yesBtn);
+    actions.appendChild(noBtn);
+    card.appendChild(actions);
+    container.appendChild(card);
+  }
+
+  function renderCoverageSkippedState(container) {
+    var info = document.createElement('p');
+    info.className = 'cleide-audit-temp-table-modal-empty cleide-audit-coverage-skipped-state';
+    info.textContent = 'Etapa ignorada. Você poderá iniciar a auditoria, mas linhas que dependam de regiões sem cidade podem ficar sem mapeamento.';
+    container.appendChild(info);
+  }
+
+  function renderEditableCoverageTable(container, tempTable) {
+    ensureCoverageTableShell(tempTable);
+    var rows = tempTable.coverage_table.rows;
+
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll';
+
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-freight-table';
+
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    COVERAGE_TABLE_HEADERS.forEach(function (field) {
+      appendTableCell(headerRow, field.label, true, false);
+    });
+    var actionsHeader = document.createElement('th');
+    actionsHeader.scope = 'col';
+    actionsHeader.className = 'cleide-audit-temp-table-modal-actions-col';
+    actionsHeader.textContent = 'Ações';
+    headerRow.appendChild(actionsHeader);
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    rows.forEach(function (row, rowIndex) {
+      if (!row || typeof row !== 'object') return;
+      var tr = document.createElement('tr');
+      COVERAGE_TABLE_HEADERS.forEach(function (field) {
+        appendEditableCell(tr, row[field.key], function (newValue) {
+          if (!currentTempTable.coverage_table.rows[rowIndex]) return;
+          currentTempTable.coverage_table.rows[rowIndex][field.key] = newValue;
+        });
+      });
+      appendRowDeleteCell(tr, function () {
+        if (!currentTempTable.coverage_table || !Array.isArray(currentTempTable.coverage_table.rows)) return;
+        currentTempTable.coverage_table.rows.splice(rowIndex, 1);
+        renderTempTableModalContent(currentTempTable);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    container.appendChild(scrollWrap);
+
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn btn-sm cleide-audit-temp-table-modal-add-btn';
+    addBtn.textContent = 'Adicionar linha';
+    addBtn.addEventListener('click', function () {
+      ensureCoverageTableShell(currentTempTable);
+      currentTempTable.coverage_table.rows.push({
+        destination_uf: '',
+        destination_city: '',
+        freight_region: '',
+        notes: ''
+      });
+      renderTempTableModalContent(currentTempTable);
+    });
+    container.appendChild(addBtn);
+  }
+
+  function renderReadonlyCoverageTable(container, tempTable) {
+    ensureCoverageTableShell(tempTable);
+    var rows = tempTable.coverage_table.rows;
+    if (!rows.length) {
+      renderCoverageUploadHint(container);
+      return;
+    }
+
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll';
+
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-freight-table';
+
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    COVERAGE_TABLE_HEADERS.forEach(function (field) {
+      appendTableCell(headerRow, field.label, true, false);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    rows.forEach(function (row) {
+      if (!row || typeof row !== 'object') return;
+      var tr = document.createElement('tr');
+      COVERAGE_TABLE_HEADERS.forEach(function (field) {
+        appendTableCell(tr, row[field.key], false, field.key === 'notes');
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    container.appendChild(scrollWrap);
+
+    var warnings = tempTable.coverage_table.validation_warnings;
+    if (Array.isArray(warnings) && warnings.length) {
+      appendSimpleListSection(container, 'Avisos de validação', warnings);
+    }
+  }
+
+  function renderCoverageTabContent(container, tempTable) {
+    appendSectionTitle(container, 'Cidades atendidas');
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-temp-table-modal-section cleide-audit-temp-table-modal-coverage-section';
+
+    if (!hasCoverageRows(tempTable) && !coveragePromptAnswered) {
+      renderCoverageDecisionCard(section);
+    } else if (!hasCoverageRows(tempTable) && coveragePromptAccepted) {
+      renderCoverageUploadCard(section, 'cleideAuditCoverageModal');
+    } else if (!hasCoverageRows(tempTable) && coveragePromptAnswered && !coveragePromptAccepted) {
+      renderCoverageSkippedState(section);
+    } else if (tempTableEditMode && canEditCoverageTable(tempTable)) {
+      renderEditableCoverageTable(section, tempTable);
+    } else {
+      renderReadonlyCoverageTable(section, tempTable);
+    }
+    container.appendChild(section);
+  }
+
+  function renderFreightTabContent(container, tempTable) {
+    var meta = document.createElement('div');
+    meta.className = 'cleide-audit-temp-table-modal-meta';
+    appendMetaRow(meta, 'Status', tempTableStatusLabel(tempTable.status));
+    var sourceDocs = Array.isArray(tempTable.source_documents) ? tempTable.source_documents : [];
+    appendMetaRow(meta, 'Documento(s) de origem', sourceDocs.length ? sourceDocs.join(', ') : null);
+    appendMetaRow(meta, 'Criado em', formatDateTime(tempTable.created_at));
+    appendMetaRow(meta, 'Atualizado em', formatDateTime(tempTable.updated_at));
+    appendMetaRow(meta, 'Expira em', formatDateTime(tempTable.expires_at));
+    container.appendChild(meta);
+
+    renderMainFreightSection(container, tempTable);
+    renderAccessorialFeesSection(container, tempTable.accessorial_fees);
+    renderAdditionalInfoSection(container, tempTable);
+    appendSimpleListSection(container, 'Alertas de leitura', tempTable.reading_alerts);
+    appendSimpleListSection(container, 'Evidências/referências', tempTable.evidence_refs);
+  }
+
   function renderTempTableModalContent(tempTable) {
     var body = byId('cleideAuditTempTableModalBody');
     if (!body) return;
@@ -1892,21 +2910,23 @@ function renderDocumentItem(doc) {
       return;
     }
 
-    var meta = document.createElement('div');
-    meta.className = 'cleide-audit-temp-table-modal-meta';
-    appendMetaRow(meta, 'Status', tempTableStatusLabel(tempTable.status));
-    var sourceDocs = Array.isArray(tempTable.source_documents) ? tempTable.source_documents : [];
-    appendMetaRow(meta, 'Documento(s) de origem', sourceDocs.length ? sourceDocs.join(', ') : null);
-    appendMetaRow(meta, 'Criado em', formatDateTime(tempTable.created_at));
-    appendMetaRow(meta, 'Atualizado em', formatDateTime(tempTable.updated_at));
-    appendMetaRow(meta, 'Expira em', formatDateTime(tempTable.expires_at));
-    body.appendChild(meta);
+    var showTabs = shouldShowCoverageTab(tempTable) || shouldShowAuditTab(tempTable);
+    if (showTabs) {
+      renderTempTableModalTabs(body, tempTable);
+      var panel = document.createElement('div');
+      panel.className = 'cleide-audit-temp-table-modal-tab-panel';
+      if (tempTableModalActiveTab === 'audit') {
+        renderAuditFileTabContent(panel, tempTable);
+      } else if (tempTableModalActiveTab === 'coverage') {
+        renderCoverageTabContent(panel, tempTable);
+      } else {
+        renderFreightTabContent(panel, tempTable);
+      }
+      body.appendChild(panel);
+      return;
+    }
 
-    renderMainFreightSection(body, tempTable);
-    renderAccessorialFeesSection(body, tempTable.accessorial_fees);
-    renderAdditionalInfoSection(body, tempTable);
-    appendSimpleListSection(body, 'Alertas de leitura', tempTable.reading_alerts);
-    appendSimpleListSection(body, 'Evidências/referências', tempTable.evidence_refs);
+    renderFreightTabContent(body, tempTable);
   }
 
   function isTempTableModalOpen() {
@@ -1945,12 +2965,18 @@ function renderDocumentItem(doc) {
     var modal = byId('cleideAuditTempTableModal');
     var saveBtn = byId('cleideAuditTempTableModalSave');
     var editBtn = byId('cleideAuditTempTableModalEdit');
+    var startAuditBtn = byId('cleideAuditTempTableModalStartAudit');
+    var closeBtn = byId('cleideAuditTempTableModalClose');
     var cancelEditBtn = byId('cleideAuditTempTableModalCancelEdit');
     var backdrop = byId('cleideAuditTempTableModalBackdrop');
     if (!modal) return;
 
     if (saveBtn) {
       saveBtn.addEventListener('click', function () {
+        if (tempTableModalActiveTab === 'coverage' && shouldShowCoverageTab(currentTempTable)) {
+          saveCoverageTableEdit();
+          return;
+        }
         saveTempTableAndAdvance();
       });
     }
@@ -1959,9 +2985,19 @@ function renderDocumentItem(doc) {
         enterTempTableEditMode();
       });
     }
+    if (startAuditBtn) {
+      startAuditBtn.addEventListener('click', function () {
+        handleStartAudit();
+      });
+    }
     if (cancelEditBtn) {
       cancelEditBtn.addEventListener('click', function () {
         cancelTempTableEdit();
+      });
+    }
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function () {
+        closeTempTableModal();
       });
     }
     if (backdrop) {

@@ -1,11 +1,11 @@
 # Runtime IA e Observabilidade
 
-Data de consolidacao: `2026-06-16`
-Commit de referencia: `5f10f6d`
+Data de consolidacao: `2026-06-17`
+Commit de referencia: `284b340`
 
 ## Objetivo
 
-Consolidar o runtime oficial de IA, consumo tecnico e governanca documental no estado homologado em `c5a73e1` e promovido em producao por `5f10f6d`.
+Consolidar o runtime oficial de IA, consumo tecnico e governanca documental no estado homologado em `80d5e73` e promovido em producao por `284b340`.
 
 ## Eventos oficiais
 
@@ -78,6 +78,7 @@ Pontos observaveis:
 
 - upload/status documental podem expor `temp_table` quando houver artefato ativo
 - a extracao da tabela temporaria ocorre no fluxo pos-upload/status
+- a revisao humana governada pode salvar alteracoes da `temp_table` via endpoint dedicado
 - o chat da Cleide consome contexto, mas nao deve alterar o ciclo de vida da `temp_table`
 - a tabela temporaria continua descartavel, sujeita a TTL e a validacao humana
 - a visualizacao da `temp_table` na UI e readonly e nao representa persistencia de banco

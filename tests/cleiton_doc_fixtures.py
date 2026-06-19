@@ -161,6 +161,20 @@ def make_xlsx(rows: list[list[str]]) -> bytes:
     return buffer.getvalue()
 
 
+def make_audit_xlsx(rows: list[list], sheet_name: str = "Modelo Cleide") -> bytes:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+    for row_idx, row in enumerate(rows, start=1):
+        for col_idx, value in enumerate(row, start=1):
+            ws.cell(row=row_idx, column=col_idx, value=value)
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 def make_corrupted_xlsx() -> bytes:
     return b"PK\x03\x04corrupted-xlsx"
 

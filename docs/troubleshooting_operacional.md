@@ -1,7 +1,7 @@
 # Troubleshooting Operacional
 
-Data de consolidacao: `2026-06-16`
-Commit de referencia: `5f10f6d`
+Data de consolidacao: `2026-06-17`
+Commit de referencia: `284b340`
 
 ## 1. Home publica sem responder
 
@@ -106,7 +106,22 @@ Regra oficial:
 - `temp_table` pode nao existir se a extracao falhar, expirar ou se os documentos fonte mudarem
 - o modal da tabela temporaria permanece somente leitura
 
-## 10. Tabela temporaria sumiu depois de remover ou trocar documentos
+## 10. Revisao humana da tabela temporaria falhou
+
+Conferir:
+
+1. `POST /api/cleide-auditoria/temp-table/save`
+2. escopo de sessao, usuario e franquia do artefato ativo
+3. tamanho do payload enviado
+4. se a `temp_table` ainda existe e nao expirou
+
+Regra oficial:
+
+- a revisao humana e permitida apenas para a `temp_table` ativa da sessao
+- erro de escopo, expiracao ou `temp_table_id` divergente deve bloquear a operacao
+- o chat da Cleide nao substitui esse fluxo de revisao
+
+## 11. Tabela temporaria sumiu depois de remover ou trocar documentos
 
 Comportamento esperado:
 
@@ -116,7 +131,7 @@ Comportamento esperado:
 
 Isso nao e regressao por si so. E o comportamento oficial do ciclo temporario governado.
 
-## 11. Chat da Cleide alterou a tabela temporaria
+## 12. Chat da Cleide alterou a tabela temporaria
 
 Isso deve ser tratado como regressao.
 
@@ -131,7 +146,7 @@ Regra oficial:
 - o chat consulta contexto documental
 - o chat nao deve recriar, alterar ou sobrescrever a tabela temporaria
 
-## 12. Arquivos temporarios tecnicos apareceram no Git
+## 13. Arquivos temporarios tecnicos apareceram no Git
 
 Conferir:
 

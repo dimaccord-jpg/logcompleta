@@ -147,7 +147,7 @@ Júlia pode aceitar documentos no chat logado para **apoio consultivo**, mas **n
 
 ### 5.2 Auditoria da Cleide (`/auditoria-frete`)
 
-**Auditoria da Cleide** (`/auditoria-frete`) já opera como trilho documental governado para auditoria assistida e reflete o estado estabilizado promovido em homolog/producao sem migration adicional.
+**Auditoria da Cleide** (`/auditoria-frete`) ja opera como trilho documental governado para auditoria assistida e reflete o estado estabilizado promovido de `homolog` para `producao`, sem migration adicional.
 
 Contrato real da experiência:
 
@@ -155,6 +155,7 @@ Contrato real da experiência:
 - possui chat assistido na própria experiência;
 - tenta extrair uma **tabela temporária extraída** após upload válido;
 - expõe `temp_table` no status documental quando houver artefato ativo;
+- permite revisao humana governada da `temp_table` via endpoint dedicado quando necessario;
 - mantém a extração técnica separada do chat conversacional;
 - exibe a tabela temporária como card clicável com modal somente leitura.
 

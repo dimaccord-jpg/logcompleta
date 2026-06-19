@@ -264,9 +264,20 @@
 
     <div class="cleide-audit-temp-table-modal-header">
 
-      <h2 class="cleide-audit-temp-table-modal-title" id="cleideAuditTempTableModalTitle">Tabela temporária gerada</h2>
+      <div class="cleide-audit-temp-table-modal-header-main">
 
-      <p class="cleide-audit-temp-table-modal-subtitle" id="cleideAuditTempTableModalSubtitle">Revise os dados extraídos antes de continuar.</p>
+        <h2 class="cleide-audit-temp-table-modal-title" id="cleideAuditTempTableModalTitle">Tabela temporária gerada</h2>
+
+        <p class="cleide-audit-temp-table-modal-subtitle" id="cleideAuditTempTableModalSubtitle">Revise os dados extraídos antes de continuar.</p>
+
+      </div>
+
+      <button type="button"
+              class="cleide-audit-temp-table-modal-close-btn"
+              id="cleideAuditTempTableModalClose"
+              aria-label="Fechar modal">
+        <span aria-hidden="true">&times;</span>
+      </button>
 
     </div>
 
@@ -297,6 +308,12 @@
               class="btn btn-sm cleide-audit-temp-table-modal-edit-btn"
               id="cleideAuditTempTableModalEdit">
         Editar
+      </button>
+
+      <button type="button"
+              class="btn btn-sm cleide-audit-temp-table-modal-start-audit-btn"
+              id="cleideAuditTempTableModalStartAudit">
+        Iniciar Auditoria
       </button>
 
       <button type="button"
@@ -1117,8 +1134,52 @@
   }
 
   .cleide-audit-temp-table-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
     padding: 1rem 1.15rem 0.65rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .cleide-audit-temp-table-modal-header-main {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .cleide-audit-temp-table-modal-close-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    margin-top: 0.05rem;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--af-text-secondary, #8A8AA3);
+    font-size: 1.35rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .cleide-audit-temp-table-modal-close-btn span {
+    display: block;
+    margin-top: -0.08rem;
+  }
+
+  .cleide-audit-temp-table-modal-close-btn:hover {
+    background: rgba(255, 77, 106, 0.12);
+    border-color: rgba(255, 77, 106, 0.35);
+    color: #ff8a9a;
+  }
+
+  .cleide-audit-temp-table-modal-close-btn:focus-visible {
+    outline: 2px solid var(--af-cyan, #00BFFF);
+    outline-offset: 2px;
   }
 
   .cleide-audit-temp-table-modal-title {
@@ -1181,7 +1242,8 @@
 
   .cleide-audit-temp-table-modal-save-btn,
   .cleide-audit-temp-table-modal-edit-btn,
-  .cleide-audit-temp-table-modal-cancel-edit-btn {
+  .cleide-audit-temp-table-modal-cancel-edit-btn,
+  .cleide-audit-temp-table-modal-start-audit-btn {
     border-radius: 999px !important;
   }
 
@@ -1193,6 +1255,489 @@
 
   .cleide-audit-temp-table-modal-save-btn:hover {
     background: rgba(0, 191, 255, 0.22) !important;
+  }
+
+  .cleide-audit-temp-table-modal-start-audit-btn {
+    border: 1px solid rgba(0, 191, 255, 0.45) !important;
+    background: rgba(0, 191, 255, 0.2) !important;
+    color: var(--af-text-primary, #F0F0F5) !important;
+    font-weight: 600;
+  }
+
+  .cleide-audit-temp-table-modal-start-audit-btn:hover {
+    background: rgba(0, 191, 255, 0.32) !important;
+    border-color: rgba(0, 191, 255, 0.6) !important;
+  }
+
+  .cleide-audit-temp-table-modal-start-audit-btn:focus-visible {
+    outline: 2px solid var(--af-cyan, #00BFFF);
+    outline-offset: 2px;
+  }
+
+  .cleide-audit-temp-table-modal-tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 0.35rem;
+  }
+
+  .cleide-audit-temp-table-modal-tab {
+    border: none;
+    background: transparent;
+    color: var(--af-text-secondary, #8A8AA3);
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .cleide-audit-temp-table-modal-tab.is-active {
+    color: var(--af-text-primary, #F0F0F5);
+    background: rgba(0, 191, 255, 0.14);
+  }
+
+  .cleide-audit-temp-table-modal-tab-panel {
+    min-height: 0;
+  }
+
+  .cleide-audit-coverage-prompt-panel {
+    padding: 0;
+    background: transparent;
+    border: none;
+  }
+
+  .cleide-audit-coverage-prompt-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.65rem;
+    border: 1px solid rgba(0, 191, 255, 0.22);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .cleide-audit-coverage-prompt-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-coverage-prompt-description {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 500;
+    line-height: 1.4;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-coverage-prompt-support {
+    margin: 0;
+    font-size: 0.76rem;
+    line-height: 1.4;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-coverage-prompt-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-top: 0.15rem;
+  }
+
+  .cleide-audit-coverage-prompt-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .cleide-audit-coverage-prompt-btn:focus-visible {
+    outline: 2px solid var(--af-cyan, #00BFFF);
+    outline-offset: 2px;
+  }
+
+  .cleide-audit-coverage-prompt-btn-primary {
+    border: 1px solid rgba(0, 191, 255, 0.35);
+    background: rgba(0, 191, 255, 0.12);
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-coverage-prompt-btn-primary:hover {
+    background: rgba(0, 191, 255, 0.22);
+    border-color: rgba(0, 191, 255, 0.5);
+  }
+
+  .cleide-audit-coverage-prompt-btn-secondary {
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--af-text-secondary, #C8CCE5);
+  }
+
+  .cleide-audit-coverage-prompt-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.28);
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  @media (max-width: 480px) {
+    .cleide-audit-coverage-prompt-actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .cleide-audit-coverage-prompt-btn {
+      width: 100%;
+      text-align: center;
+    }
+  }
+
+  .cleide-audit-coverage-upload-panel {
+    padding: 0;
+    background: transparent;
+    border: none;
+  }
+
+  .cleide-audit-coverage-upload-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.65rem;
+    border: 1px solid rgba(0, 191, 255, 0.22);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .cleide-audit-coverage-upload-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .cleide-audit-coverage-upload-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-coverage-upload-badge {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    border: 1px solid rgba(0, 191, 255, 0.35);
+    color: var(--af-cyan, #00BFFF);
+    background: rgba(0, 191, 255, 0.1);
+    white-space: nowrap;
+  }
+
+  .cleide-audit-coverage-upload-description,
+  .cleide-audit-coverage-upload-help {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-coverage-upload-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .cleide-audit-coverage-upload-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 191, 255, 0.35);
+    background: rgba(0, 191, 255, 0.12);
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .cleide-audit-coverage-upload-button:hover {
+    background: rgba(0, 191, 255, 0.22);
+    border-color: rgba(0, 191, 255, 0.5);
+  }
+
+  .cleide-audit-coverage-upload-button:focus-visible {
+    outline: 2px solid var(--af-cyan, #00BFFF);
+    outline-offset: 2px;
+  }
+
+  .cleide-audit-coverage-upload-file-name {
+    flex: 1 1 8rem;
+    min-width: 0;
+    font-size: 0.76rem;
+    color: var(--af-text-muted, #5A5A72);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cleide-audit-coverage-upload-status {
+    margin: 0;
+    font-size: 0.76rem;
+    line-height: 1.35;
+    min-height: 0;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-coverage-upload-status:not(:empty) {
+    min-height: 1rem;
+    margin-top: 0.1rem;
+  }
+
+  .cleide-audit-coverage-upload-status.is-loading {
+    color: var(--af-cyan, #00BFFF);
+  }
+
+  .cleide-audit-coverage-upload-status.is-success {
+    color: #00c48c;
+    background: rgba(0, 196, 140, 0.1);
+    border: 1px solid rgba(0, 196, 140, 0.25);
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.55rem;
+  }
+
+  .cleide-audit-coverage-upload-status.is-error {
+    color: #ff8a9a;
+    background: rgba(255, 77, 106, 0.1);
+    border: 1px solid rgba(255, 77, 106, 0.25);
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.55rem;
+  }
+
+  @media (max-width: 480px) {
+    .cleide-audit-coverage-upload-actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .cleide-audit-coverage-upload-button {
+      width: 100%;
+      text-align: center;
+    }
+
+    .cleide-audit-coverage-upload-file-name {
+      text-align: center;
+      white-space: normal;
+      word-break: break-word;
+    }
+  }
+
+  .cleide-audit-audit-file-section {
+    padding: 0;
+  }
+
+  .cleide-audit-audit-file-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.65rem;
+    border: 1px solid rgba(0, 191, 255, 0.22);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .cleide-audit-audit-file-description {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-audit-file-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+  }
+
+  .cleide-audit-audit-file-download-btn,
+  .cleide-audit-audit-file-upload-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 191, 255, 0.35);
+    background: rgba(0, 191, 255, 0.12);
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .cleide-audit-audit-file-download-btn:hover,
+  .cleide-audit-audit-file-upload-btn:hover {
+    background: rgba(0, 191, 255, 0.22);
+    border-color: rgba(0, 191, 255, 0.5);
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-audit-file-name {
+    font-size: 0.76rem;
+    color: var(--af-text-muted, #5A5A72);
+    word-break: break-word;
+  }
+
+  .cleide-audit-audit-file-status {
+    margin: 0;
+    font-size: 0.76rem;
+    line-height: 1.35;
+    min-height: 0;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-audit-file-status.is-loading {
+    color: var(--af-cyan, #00BFFF);
+  }
+
+  .cleide-audit-audit-file-status.is-success {
+    color: #00c48c;
+    background: rgba(0, 196, 140, 0.1);
+    border: 1px solid rgba(0, 196, 140, 0.25);
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.55rem;
+  }
+
+  .cleide-audit-audit-file-status.is-error {
+    color: #ff8a9a;
+    background: rgba(255, 77, 106, 0.1);
+    border: 1px solid rgba(255, 77, 106, 0.25);
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.55rem;
+  }
+
+  .cleide-audit-audit-file-summary {
+    margin-top: 0.35rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .cleide-audit-audit-file-summary-title {
+    margin: 0 0 0.35rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #00c48c;
+  }
+
+  .cleide-audit-run-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .cleide-audit-run-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.38rem 0.9rem;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 196, 140, 0.38);
+    background: rgba(0, 196, 140, 0.14);
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .cleide-audit-run-btn:hover {
+    background: rgba(0, 196, 140, 0.24);
+  }
+
+  .cleide-audit-run-btn:disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
+  }
+
+  .cleide-audit-run-status {
+    margin: 0;
+    font-size: 0.76rem;
+    line-height: 1.35;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-run-status.is-loading {
+    color: var(--af-cyan, #00BFFF);
+  }
+
+  .cleide-audit-run-status.is-success {
+    color: #00c48c;
+  }
+
+  .cleide-audit-run-status.is-error {
+    color: #ff8a9a;
+  }
+
+  .cleide-audit-run-summary,
+  .cleide-audit-run-results {
+    margin-top: 0.45rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .cleide-audit-run-summary-title,
+  .cleide-audit-run-results-title {
+    margin: 0 0 0.45rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-run-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 0.45rem;
+  }
+
+  .cleide-audit-run-summary-title {
+    grid-column: 1 / -1;
+  }
+
+  .cleide-audit-run-summary-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border-radius: 0.45rem;
+    background: rgba(255, 255, 255, 0.035);
+  }
+
+  .cleide-audit-run-summary-label {
+    color: var(--af-text-secondary, #8A8AA3);
+    font-size: 0.74rem;
+  }
+
+  .cleide-audit-run-summary-value {
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.78rem;
+  }
+
+  .cleide-audit-run-results-table {
+    min-width: 980px;
   }
 
   .cleide-audit-temp-table-modal-edit-btn {

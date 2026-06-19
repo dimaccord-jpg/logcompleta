@@ -53,6 +53,7 @@ def test_defaults_carregam_corretamente(ctx):
     assert cfg.no_documents_behavior == "allow_guided"
     assert cfg.show_documents_used is True
     assert cfg.no_hallucination_instruction_enabled is True
+    assert cfg.audited_file_max_rows == svc.DEFAULT_AUDITED_FILE_MAX_ROWS
 
 
 def test_gravacao_e_leitura_via_config_regras(ctx):
@@ -68,6 +69,7 @@ def test_gravacao_e_leitura_via_config_regras(ctx):
             "no_documents_behavior": "require_documents",
             "show_documents_used": "0",
             "no_hallucination_instruction_enabled": "1",
+            "audited_file_max_rows": "1500",
         }
     )
 
@@ -81,6 +83,7 @@ def test_gravacao_e_leitura_via_config_regras(ctx):
     assert saved.no_documents_behavior == "require_documents"
     assert saved.show_documents_used is False
     assert saved.no_hallucination_instruction_enabled is True
+    assert saved.audited_file_max_rows == 1500
 
     rows = ConfigRegras.query.filter(ConfigRegras.chave.like("cleide_audit_cfg_%")).all()
     assert len(rows) == len(svc.DEFAULTS)
@@ -89,6 +92,21 @@ def test_gravacao_e_leitura_via_config_regras(ctx):
     assert loaded.chat_enabled is False
     assert loaded.question_max_chars == 3500
     assert loaded.no_documents_behavior == "require_documents"
+
+
+def test_audited_file_max_rows_fora_da_faixa_rejeitado(ctx):
+    with pytest.raises(ValueError, match="audited_file_max_rows"):
+        svc.parsear_cleide_audit_config({"audited_file_max_rows": "0"})
+    with pytest.raises(ValueError, match="audited_file_max_rows"):
+        svc.parsear_cleide_audit_config({"audited_file_max_rows": "50001"})
+
+
+def test_audited_file_max_rows_chave_isolada(ctx):
+    saved = svc.salvar_cleide_audit_config({"audited_file_max_rows": "2500"})
+    assert saved.audited_file_max_rows == 2500
+    row = ConfigRegras.query.filter_by(chave="cleide_audit_cfg_audited_file_max_rows").first()
+    assert row is not None
+    assert row.valor_inteiro == 2500
 
 
 def test_no_documents_behavior_invalido_volta_para_default(ctx):

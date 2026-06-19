@@ -44,6 +44,7 @@ def _default_audit_cfg(**overrides):
         "no_documents_behavior": "allow_guided",
         "show_documents_used": True,
         "no_hallucination_instruction_enabled": True,
+        "audited_file_max_rows": 2000,
     }
     defaults.update(overrides)
     return CleideAuditConfig(**defaults)
@@ -54,6 +55,7 @@ def _patch_audit_cfg(monkeypatch, **overrides):
     targets = [
         "app.cleide_audit_routes.get_cleide_audit_config",
         "app.cleide_audit_doc_context.get_cleide_audit_config",
+        "app.cleide_audit_doc_service.get_cleide_audit_config",
         "app.run_cleide_audit_chat.get_cleide_audit_config",
     ]
     for target in targets:
@@ -144,6 +146,7 @@ def test_anonymous_receives_401_on_all_endpoints(app, ctx, monkeypatch, tmp_path
         content_type="application/json",
     ).status_code == 401
     assert _post_temp_table_save(client, {"temp_table_id": "x", "edit_target": {}}).status_code == 401
+    assert client.post("/api/cleide-auditoria/audit/run", json={}).status_code == 401
 
     body = client.get("/api/cleide-auditoria/documents/status").get_json()
     assert body["error_code"] == "auth_required"
@@ -384,6 +387,10 @@ def test_blueprint_exposes_cleide_auditoria_routes():
     assert routes_mod.cleide_audit_documents_delete.__name__ == "cleide_audit_documents_delete"
     assert routes_mod.cleide_audit_documents_clear.__name__ == "cleide_audit_documents_clear"
     assert routes_mod.cleide_audit_chat.__name__ == "cleide_audit_chat"
+    assert routes_mod.cleide_audit_coverage_upload.__name__ == "cleide_audit_coverage_upload"
+    assert routes_mod.cleide_audit_batch_upload.__name__ == "cleide_audit_batch_upload"
+    assert routes_mod.cleide_audit_batch_run.__name__ == "cleide_audit_batch_run"
+    assert routes_mod.cleide_audit_template_download.__name__ == "cleide_audit_template_download"
 
 
 def test_registered_routes_use_cleide_auditoria_namespace(app, ctx, monkeypatch, tmp_path):
@@ -395,6 +402,10 @@ def test_registered_routes_use_cleide_auditoria_namespace(app, ctx, monkeypatch,
     assert "/api/cleide-auditoria/documents/status" in rules
     assert "/api/cleide-auditoria/documents/clear" in rules
     assert "/api/cleide-auditoria/chat" in rules
+    assert "/api/cleide-auditoria/coverage/upload" in rules
+    assert "/api/cleide-auditoria/audit/upload" in rules
+    assert "/api/cleide-auditoria/audit/run" in rules
+    assert "/api/cleide-auditoria/audit-template" in rules
     assert not any(rule.startswith("/api/cleide/documents") for rule in rules)
 
 
@@ -530,3 +541,27 @@ def test_cleide_legacy_route_still_registered(app, ctx, monkeypatch, tmp_path):
     rules = {rule.rule for rule in web.app.url_map.iter_rules()}
     assert "/cleide-bi-frete" in rules
     assert "/auditoria-frete" in rules
+
+
+def test_audit_template_download_returns_xlsx(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    client = web.app.test_client()
+    resp = client.get("/api/cleide-auditoria/audit-template")
+    assert resp.status_code == 200
+    assert (
+        resp.headers.get("Content-Type")
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert resp.data.startswith(b"PK")
+
+
+def test_cleide_bi_template_route_unchanged(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    client = web.app.test_client()
+    resp = client.get("/api/cleide/template")
+    assert resp.status_code == 200
+    assert resp.data.startswith(b"PK")

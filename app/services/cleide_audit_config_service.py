@@ -39,6 +39,8 @@ DEFAULT_FALLBACK_MESSAGE = (
     "Não foi possível obter resposta da Cleide no momento. Tente novamente em instantes."
 )
 
+DEFAULT_AUDITED_FILE_MAX_ROWS = 2000
+
 DEFAULTS: dict[str, int | str] = {
     "chat_enabled": 1,
     "upload_enabled": 1,
@@ -50,6 +52,7 @@ DEFAULTS: dict[str, int | str] = {
     "no_documents_behavior": "allow_guided",
     "show_documents_used": 1,
     "no_hallucination_instruction_enabled": 1,
+    "audited_file_max_rows": DEFAULT_AUDITED_FILE_MAX_ROWS,
 }
 
 DESCRICOES: dict[str, str] = {
@@ -64,6 +67,9 @@ DESCRICOES: dict[str, str] = {
     "show_documents_used": "Exibe metadados dos documentos usados na resposta ao usuário.",
     "no_hallucination_instruction_enabled": (
         "Reforça instrução anti-alucinação no prompt da Cleide Auditoria."
+    ),
+    "audited_file_max_rows": (
+        "Define o limite de linhas aceitas no arquivo enviado para auditoria de frete."
     ),
 }
 
@@ -80,6 +86,7 @@ class CleideAuditConfig:
     no_documents_behavior: str
     show_documents_used: bool
     no_hallucination_instruction_enabled: bool
+    audited_file_max_rows: int
 
 
 def _cfg_key(nome: str) -> str:
@@ -133,6 +140,8 @@ def _bounded(nome: str, valor: int) -> int:
         return min(max(1, valor), 10)
     if nome == "question_max_chars":
         return min(max(500, valor), 12000)
+    if nome == "audited_file_max_rows":
+        return min(max(1, valor), 50000)
     return valor
 
 
@@ -234,6 +243,7 @@ def get_cleide_audit_config() -> CleideAuditConfig:
         no_hallucination_instruction_enabled=_parse_bool(
             cfg_map, "no_hallucination_instruction_enabled"
         ),
+        audited_file_max_rows=_parse_int(cfg_map, "audited_file_max_rows"),
     )
     cfg = _apply_global_doc_limits(cfg)
     if has_request_context():
@@ -308,6 +318,10 @@ def parsear_cleide_audit_config(raw_values: dict[str, Any]) -> CleideAuditConfig
             "no_hallucination_instruction_enabled",
             raw_values,
             cfg_atual,
+        ),
+        audited_file_max_rows=_parse_bounded_positive_int_strict(
+            _raw("audited_file_max_rows"),
+            "audited_file_max_rows",
         ),
     )
     return _apply_global_doc_limits(parsed)

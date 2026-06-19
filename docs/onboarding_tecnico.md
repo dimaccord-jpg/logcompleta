@@ -1,7 +1,7 @@
 # Onboarding Tecnico
 
-Data de consolidacao: `2026-06-16`
-Commit de referencia: `c5a73e1`
+Data de consolidacao: `2026-06-17`
+Commit de referencia: `80d5e73`
 
 ## Objetivo
 
@@ -26,6 +26,7 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - `app/julia_documents_routes.py`: API documental da Julia
 - `app/julia_doc_context.py`: montagem do contexto documental para o chat
 - `app/cleide_audit_routes.py`: upload, status e chat da Cleide Auditoria
+- `app/cleide_routes.py`: superficies visuais da Cleide, incluindo `/auditoria-frete`
 - `app/cleide_audit_doc_service.py`: sessao documental e ciclo de vida da tabela temporaria
 - `app/run_cleide_audit_temp_table.py`: extracao tecnica pos-upload da tabela temporaria
 - `app/cleide_audit_prompt.py`: prompt tecnico e prompt conversacional da Cleide Auditoria
@@ -69,5 +70,6 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - validar `/auditoria-frete`, upload da Cleide Auditoria e status com `temp_table`
 - validar que a tabela temporaria aparece como artefato temporario sujeito a revisao humana
 - validar o modal da tabela temporaria em modo somente leitura
+- validar a revisao humana da tabela temporaria via endpoint dedicado quando aplicavel
 - validar admin do Cleiton
 - validar Roberto e Cleide

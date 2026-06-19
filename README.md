@@ -1,19 +1,22 @@
 # Agentefrete / Log Completa
 
-Data de consolidacao: `2026-06-16`
-Estado de referencia: `producao` / merge `5f10f6d`
+Data de consolidacao: `2026-06-17`
+Estado de referencia: `producao` / merge `284b340`
 
 Este `README.md` resume o estado real homologado e promovido apos a estabilizacao da auditoria documental da Cleide:
 
-- `c5a73e1 feat: estabiliza tabela temporaria da auditoria Cleide`
-- `5f10f6d merge: promove estabilizacao da auditoria Cleide para producao`
+- `80d5e73 feat: estabiliza chat de auditoria da Cleide em homologacao`
+- `284b340 merge: promove estabilizacao do chat de auditoria Cleide para producao`
 
 Confirmacoes operacionais:
 
-- `homolog` contem `c5a73e1`
-- `producao` contem merge `5f10f6d`
+- `homolog` contem `80d5e73`
+- `producao` contem merge `284b340`
 - homolog foi validada antes da promocao
 - producao foi validada e aprovada apos deploy
+- `origin/homolog` e `origin/producao` possuem o mesmo conteudo real de arquivos
+- o tree hash alinhado entre `origin/homolog` e `origin/producao` e `39da31eb877f6acc5b2ba34be98d3f0e70246664`
+- o `HEAD` de producao pode ser diferente do `HEAD` de homolog por causa do merge commit, mesmo com o mesmo conteudo
 - nao houve migration nova, nova tabela, novo campo ou alteracao manual de schema
 
 ## Estado atual do produto
@@ -57,6 +60,7 @@ Contratos oficiais do fluxo:
 - status documental: `GET /api/cleide-auditoria/documents/status`
 - remocao: `DELETE /api/cleide-auditoria/documents/<doc_id>`
 - limpeza: `POST /api/cleide-auditoria/documents/clear`
+- revisao humana da tabela temporaria: `POST /api/cleide-auditoria/temp-table/save`
 - chat: `POST /api/cleide-auditoria/chat`
 
 Tabela temporaria extraida:
@@ -219,16 +223,26 @@ Migration relevante ja existente e mantida:
 
 Cobertura diretamente relacionada:
 
+- `tests/test_cleide_audit_doc_routes.py`
 - `tests/test_cleide_audit_temp_table.py`
 - `tests/test_cleide_auditoria_page.py`
 
 Validacoes registradas antes da promocao:
 
-- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado: `109 passed, 2 warnings`
+- `python -m pytest tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
+- resultado: `178 passed, 2 warnings`
 - `python -m pytest`
-- resultado: `1124 passed, 36 warnings`
+- resultado: `1160 passed, 36 warnings`
 - warnings conhecidos de dependencia/uso legado, sem bloqueio da entrega
+
+## Deploy e branches
+
+- o fluxo aprovado e `homolog -> producao`
+- validar `git status --short` limpo antes de promover
+- rodar primeiro os testes especificos da Cleide Auditoria e, quando possivel, a suite completa
+- confirmar que residuos como `.tmp_*`, `*_tmp`, uploads locais e JSONs ficticios nao entraram no versionamento
+- validar Render e `/health` apos o push controlado
+- ponto de atencao: o `render.yaml` do repositorio ainda referencia `branch: main` no servico `logcompleta-web-prod`, enquanto a documentacao operacional desta entrega usa `producao`; tratar isso como divergencia a confirmar no Render antes de qualquer nova promocao
 
 ## Documentos oficiais de apoio
 

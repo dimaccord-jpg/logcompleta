@@ -160,6 +160,13 @@
                         <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_question_max_chars</code></div>
                     </div>
                     <div class="col-md-4">
+                        <label class="form-label" for="cleideAuditAuditedFileMaxRows">Máximo de linhas por lote auditado</label>
+                        <input type="number" min="1" max="50000" step="1" name="audited_file_max_rows" id="cleideAuditAuditedFileMaxRows" class="form-control"
+                               value="{{ audit_cfg.audited_file_max_rows }}">
+                        <small class="text-muted">Define o limite de linhas aceitas no arquivo enviado para auditoria de frete.</small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_audited_file_max_rows</code></div>
+                    </div>
+                    <div class="col-md-4">
                         <label class="form-label" for="cleideAuditNoDocumentsBehavior">Comportamento sem documentos</label>
                         <select name="no_documents_behavior" id="cleideAuditNoDocumentsBehavior" class="form-select">
                             <option value="allow_guided" {{ 'selected' if audit_cfg.no_documents_behavior == 'allow_guided' else '' }}>Permitir conversa orientativa</option>
