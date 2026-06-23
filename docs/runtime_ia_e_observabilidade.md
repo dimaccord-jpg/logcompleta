@@ -1,11 +1,11 @@
 # Runtime IA e Observabilidade
 
-Data de consolidacao: `2026-06-17`
-Commit de referencia: `284b340`
+Data de consolidacao: `2026-06-19`
+Commit de referencia: `bad8990`
 
 ## Objetivo
 
-Consolidar o runtime oficial de IA, consumo tecnico e governanca documental no estado homologado em `80d5e73` e promovido em producao por `284b340`.
+Consolidar o runtime oficial de IA, consumo tecnico e governanca documental no estado homologado em `17675d0` e promovido em producao por `bad8990`.
 
 ## Eventos oficiais
 
@@ -82,6 +82,7 @@ Pontos observaveis:
 - o chat da Cleide consome contexto, mas nao deve alterar o ciclo de vida da `temp_table`
 - a tabela temporaria continua descartavel, sujeita a TTL e a validacao humana
 - a visualizacao da `temp_table` na UI e readonly e nao representa persistencia de banco
+- o status tecnico da extracao pode transitar entre `processing`, `awaiting_validation`, `validated`, `needs_review`, `failed`, `expired` e `discarded`
 
 ## Metricas administrativas
 

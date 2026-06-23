@@ -166,6 +166,44 @@ def test_authorized_user_accesses_status(web_client):
         body["cleiton_upload_enabled"] and body["cleide_audit_upload_enabled"]
     )
     assert isinstance(body["allowed_formats"], list)
+    assert isinstance(body["calculation_bases"], list)
+
+
+def test_status_returns_only_active_calculation_bases(web_client, monkeypatch):
+    _patch_audit_cfg(
+        monkeypatch,
+        calculation_bases=[
+            {
+                "id": "inactive_base",
+                "label": "base inativa",
+                "aliases": [],
+                "unit": "R$",
+                "calculation_type": "fixed_amount",
+                "audit_variable": None,
+                "operation": "fixed_amount",
+                "parameters": {},
+                "is_active": False,
+                "display_order": 1,
+            },
+            {
+                "id": "pct_nota_fiscal",
+                "label": "% por nota fiscal",
+                "aliases": ["valor nf"],
+                "unit": "%",
+                "calculation_type": "invoice_percentage",
+                "audit_variable": "valor_nf",
+                "operation": "percentage_of_variable",
+                "parameters": {},
+                "is_active": True,
+                "display_order": 2,
+            },
+        ],
+    )
+    body = web_client.get("/api/cleide-auditoria/documents/status").get_json()
+    ids = [base["id"] for base in body["calculation_bases"]]
+    assert ids == ["pct_nota_fiscal"]
+    assert body["calculation_bases"][0]["parameters"] == {}
+    assert body["calculation_bases"][0]["audit_variable"] == "valor_nf"
 
 
 def test_status_exposes_combined_upload_flags(web_client, monkeypatch):

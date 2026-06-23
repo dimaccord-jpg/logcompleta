@@ -78,6 +78,7 @@ from app.cleiton_doc_contracts import (
 from app.cleiton_doc_prepare import CleitonDocSecurityError
 from app.cleiton_doc_service import CleitonDocSessionError
 from app.services.cleide_audit_config_service import get_cleide_audit_config
+from app.services.cleide_audit_config_service import get_active_calculation_bases_for_runtime
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
 from app.services.cleiton_operacao_autorizacao_service import (
     avaliar_autorizacao_operacao_por_franquia,
@@ -323,6 +324,9 @@ def cleide_audit_documents_upload():
             "document": document,
             "session": _session_payload(),
             "allowed_formats": get_allowed_document_formats(),
+            "calculation_bases": get_active_calculation_bases_for_runtime(
+                audit_cfg.calculation_bases
+            ),
             "temp_table": temp_table,
         }
     )
@@ -344,6 +348,7 @@ def cleide_audit_documents_status():
             "ok": True,
             "documents": metadata["documents"],
             "temp_table": metadata.get("temp_table"),
+            "calculation_bases": metadata.get("calculation_bases") or [],
             "session": metadata["session"],
             "allowed_formats": metadata["allowed_formats"],
             "upload_enabled": cleiton_upload_enabled and cleide_audit_upload_enabled,
@@ -421,14 +426,15 @@ def cleide_audit_temp_table_save():
             content_length=request.content_length,
         )
     except CleideAuditTempTableError as exc:
+        payload = {
+            "ok": False,
+            "error_code": exc.error_code,
+            "message": exc.message,
+        }
+        if exc.errors:
+            payload["errors"] = exc.errors
         return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error_code": exc.error_code,
-                    "message": exc.message,
-                }
-            ),
+            jsonify(payload),
             _http_status_for_temp_table_error(exc.error_code),
         )
     except Exception:

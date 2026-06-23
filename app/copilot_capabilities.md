@@ -120,7 +120,7 @@ A Cleide possui **duas superfícies visuais distintas** e a experiência de Audi
 | Superfície | Rota | Estado atual |
 |---|---|---|
 | **BI Cleide** | `/cleide-bi-frete` | Operacional: upload de base, KPIs, filtros, dashboard e chat contextual sobre o dataset da sessão |
-| **Auditoria da Cleide** | `/auditoria-frete` | Operacional: upload documental, chat assistido e exibição de tabela temporária extraída para validação humana |
+| **Auditoria da Cleide** | `/auditoria-frete` | Operacional: página pública com upload autenticado, chat assistido e exibição de tabela temporária extraída para validação humana |
 | **APIs documentais** | `/api/cleide-auditoria/...` | Endpoints governados conectados à experiência de `/auditoria-frete`, sem criar produto paralelo fora da governança existente |
 
 ### 5.1 BI Cleide (`/cleide-bi-frete`)
@@ -151,6 +151,7 @@ Júlia pode aceitar documentos no chat logado para **apoio consultivo**, mas **n
 
 Contrato real da experiência:
 
+- a página visual é pública, mas upload, processamento e contexto privado exigem login;
 - possui upload documental conectado ao backend;
 - possui chat assistido na própria experiência;
 - tenta extrair uma **tabela temporária extraída** após upload válido;
@@ -164,8 +165,10 @@ Guardrails obrigatórios:
 - a tabela temporária não é auditoria final;
 - o usuário precisa validar a extração humanamente;
 - a responsabilidade operacional da tabela temporária é do **Cleiton**;
-- a Cleide continua responsável pela entrevista/chat de auditoria;
+- a Cleide continua responsável por apresentar contexto e orientar a auditoria de forma conversacional;
+- a Cleide não é camada de persistência da `temp_table`;
 - o chat não deve recriar, alterar ou sobrescrever a tabela temporária;
+- a validação da `temp_table` não deve ser descrita como nova conversa de IA;
 - a extração é temporária, descartável e não cria nova tabela de banco;
 - nenhuma API da Júlia ou do BI deve ser acoplada à página de auditoria para governar a `temp_table`.
 

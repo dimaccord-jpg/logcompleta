@@ -208,9 +208,258 @@
                     <button type="submit" class="btn btn-primary">Salvar Cleide Auditoria</button>
                 </div>
             </form>
+
+            <hr class="my-4">
+
+            <form method="post" action="{{ url_for('admin.agentes_cleide') }}">
+                <input type="hidden" name="form_name" value="cleide_audit_calculation_bases">
+                <h5 class="mb-2">Bases de cálculo da auditoria</h5>
+                <p class="text-muted small mb-3">
+                    Cadastre uma base por linha para orientar a interpretação administrativa de taxas por base,
+                    unidade, variável auditada e operação.
+                </p>
+                <div class="alert alert-info small" role="alert">
+                    Use campos separados. Se houver linha inválida, a configuração anterior será preservada.
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered align-middle" id="cleideAuditCalculationBasesTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Ativo</th>
+                                <th>Nome da base</th>
+                                <th>Unidade</th>
+                                <th>Tipo de cálculo</th>
+                                <th>Operação</th>
+                                <th>Variável auditada</th>
+                                <th>Tamanho da fração</th>
+                                <th>Aliases</th>
+                                <th>Permite mínimo</th>
+                                <th>Permite máximo</th>
+                                <th>Exige condição estruturada</th>
+                                <th>Ordem</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cleideAuditCalculationBasesRows">
+                            {% for base in audit_cfg.calculation_bases %}
+                            {% set row_index = loop.index0 %}
+                            <tr data-calculation-base-row>
+                                <td class="text-center">
+                                    <input type="hidden" name="calculation_base_row_index" value="{{ row_index }}">
+                                    <input type="hidden" name="calculation_base_id_{{ row_index }}" value="{{ base.id }}">
+                                    <input class="form-check-input" type="checkbox" name="calculation_base_is_active_{{ row_index }}" value="1"
+                                           {{ 'checked' if base.is_active else '' }}>
+                                </td>
+                                <td style="min-width: 180px;">
+                                    <input type="text" class="form-control form-control-sm" name="calculation_base_label_{{ row_index }}"
+                                           value="{{ base.label }}" required placeholder="% por nota fiscal">
+                                </td>
+                                <td style="min-width: 90px;">
+                                    <select class="form-select form-select-sm" name="calculation_base_unit_{{ row_index }}" required>
+                                        <option value="" {{ 'selected' if not base.unit else '' }}>sem unidade</option>
+                                        <option value="%" {{ 'selected' if base.unit == '%' else '' }}>%</option>
+                                        <option value="R$" {{ 'selected' if base.unit == 'R$' else '' }}>R$</option>
+                                        <option value="kg" {{ 'selected' if base.unit == 'kg' else '' }}>kg</option>
+                                        <option value="dias" {{ 'selected' if base.unit == 'dias' else '' }}>dias</option>
+                                    </select>
+                                </td>
+                                <td style="min-width: 170px;">
+                                    <select class="form-select form-select-sm" name="calculation_base_calculation_type_{{ row_index }}" required>
+                                        <option value="invoice_percentage" {{ 'selected' if base.calculation_type == 'invoice_percentage' else '' }}>invoice_percentage</option>
+                                        <option value="fixed_amount" {{ 'selected' if base.calculation_type == 'fixed_amount' else '' }}>fixed_amount</option>
+                                        <option value="weight_rate" {{ 'selected' if base.calculation_type == 'weight_rate' else '' }}>weight_rate</option>
+                                        <option value="weight_fraction" {{ 'selected' if base.calculation_type == 'weight_fraction' else '' }}>weight_fraction</option>
+                                        <option value="minimum_amount" {{ 'selected' if base.calculation_type == 'minimum_amount' else '' }}>minimum_amount</option>
+                                        <option value="maximum_amount" {{ 'selected' if base.calculation_type == 'maximum_amount' else '' }}>maximum_amount</option>
+                                        <option value="conditional" {{ 'selected' if base.calculation_type == 'conditional' else '' }}>conditional</option>
+                                        <option value="unknown" {{ 'selected' if base.calculation_type == 'unknown' else '' }}>unknown</option>
+                                        <option value="weight" {{ 'selected' if base.calculation_type == 'weight' else '' }}>weight</option>
+                                    </select>
+                                </td>
+                                <td style="min-width: 190px;">
+                                    <select class="form-select form-select-sm" name="calculation_base_operation_{{ row_index }}" required>
+                                        <option value="percentage_of_variable" {{ 'selected' if base.operation == 'percentage_of_variable' else '' }}>percentage_of_variable</option>
+                                        <option value="fixed_amount" {{ 'selected' if base.operation == 'fixed_amount' else '' }}>fixed_amount</option>
+                                        <option value="weight_rate" {{ 'selected' if base.operation == 'weight_rate' else '' }}>weight_rate</option>
+                                        <option value="ceil_fraction" {{ 'selected' if base.operation == 'ceil_fraction' else '' }}>ceil_fraction</option>
+                                        <option value="minimum_amount" {{ 'selected' if base.operation == 'minimum_amount' else '' }}>minimum_amount</option>
+                                        <option value="maximum_amount" {{ 'selected' if base.operation == 'maximum_amount' else '' }}>maximum_amount</option>
+                                        <option value="do_not_calculate" {{ 'selected' if base.operation == 'do_not_calculate' else '' }}>do_not_calculate</option>
+                                        <option value="multiply_by_variable" {{ 'selected' if base.operation == 'multiply_by_variable' else '' }}>multiply_by_variable</option>
+                                    </select>
+                                </td>
+                                <td style="min-width: 140px;">
+                                    <select class="form-select form-select-sm" name="calculation_base_audit_variable_{{ row_index }}">
+                                        <option value="" {{ 'selected' if not base.audit_variable else '' }}>não aplicável</option>
+                                        <option value="valor_nf" {{ 'selected' if base.audit_variable == 'valor_nf' else '' }}>valor_nf</option>
+                                        <option value="peso" {{ 'selected' if base.audit_variable == 'peso' else '' }}>peso</option>
+                                        <option value="valor_frete" {{ 'selected' if base.audit_variable == 'valor_frete' else '' }}>valor_frete</option>
+                                    </select>
+                                </td>
+                                <td style="min-width: 120px;">
+                                    <input type="number" min="1" step="1" class="form-control form-control-sm" name="calculation_base_fraction_size_{{ row_index }}"
+                                           value="{{ base.get('parameters', {}).get('fraction_size', '') }}" placeholder="100">
+                                </td>
+                                <td style="min-width: 240px;">
+                                    <textarea class="form-control form-control-sm" name="calculation_base_aliases_{{ row_index }}" rows="2"
+                                              placeholder="valor da nf; sobre nf">{{ (base.aliases or [])|join('; ') }}</textarea>
+                                </td>
+                                <td class="text-center">
+                                    <input class="form-check-input" type="checkbox" name="calculation_base_allows_minimum_{{ row_index }}" value="1"
+                                           {{ 'checked' if base.allows_minimum else '' }}>
+                                </td>
+                                <td class="text-center">
+                                    <input class="form-check-input" type="checkbox" name="calculation_base_allows_maximum_{{ row_index }}" value="1"
+                                           {{ 'checked' if base.allows_maximum else '' }}>
+                                </td>
+                                <td class="text-center">
+                                    <input class="form-check-input" type="checkbox" name="calculation_base_requires_structured_condition_{{ row_index }}" value="1"
+                                           {{ 'checked' if base.requires_structured_condition else '' }}>
+                                </td>
+                                <td style="min-width: 90px;">
+                                    <input type="number" step="1" class="form-control form-control-sm" name="calculation_base_display_order_{{ row_index }}"
+                                           value="{{ base.display_order }}" required>
+                                </td>
+                                <td>
+                                    <button type="button" class="btn btn-sm btn-outline-danger" data-remove-calculation-base>Excluir</button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <button type="button" class="btn btn-outline-primary btn-sm" id="addCleideAuditCalculationBase">
+                    Adicionar base de cálculo
+                </button>
+                <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_calculation_bases</code></div>
+                <details class="mt-3">
+                    <summary class="small text-muted">Avançado/Debug: JSON persistido atual</summary>
+                    <textarea id="cleideAuditCalculationBasesJsonDebug" class="form-control font-monospace mt-2" rows="8" spellcheck="false" readonly>{{ audit_calculation_bases_json }}</textarea>
+                </details>
+                <div class="mt-4">
+                    <button type="submit" class="btn btn-primary">Salvar bases de cálculo</button>
+                </div>
+            </form>
         </div>
     </div>
 
     <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-secondary">Dashboard</a>
 </div>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const tbody = document.getElementById("cleideAuditCalculationBasesRows");
+    const addButton = document.getElementById("addCleideAuditCalculationBase");
+    if (!tbody || !addButton) {
+        return;
+    }
+
+    function nextIndex() {
+        const indices = Array.from(tbody.querySelectorAll('input[name="calculation_base_row_index"]'))
+            .map((input) => Number.parseInt(input.value, 10))
+            .filter((value) => Number.isFinite(value));
+        return indices.length ? Math.max.apply(null, indices) + 1 : 0;
+    }
+
+    function nextDisplayOrder() {
+        const orders = Array.from(tbody.querySelectorAll('input[name^="calculation_base_display_order_"]'))
+            .map((input) => Number.parseInt(input.value, 10))
+            .filter((value) => Number.isFinite(value));
+        return orders.length ? Math.max.apply(null, orders) + 10 : 10;
+    }
+
+    function wireRemoveButtons(scope) {
+        scope.querySelectorAll("[data-remove-calculation-base]").forEach((button) => {
+            button.addEventListener("click", function () {
+                if (window.confirm("Excluir esta base de cálculo?")) {
+                    button.closest("tr").remove();
+                }
+            });
+        });
+    }
+
+    addButton.addEventListener("click", function () {
+        const rowIndex = nextIndex();
+        const displayOrder = nextDisplayOrder();
+        const row = document.createElement("tr");
+        row.setAttribute("data-calculation-base-row", "");
+        row.innerHTML = `
+            <td class="text-center">
+                <input type="hidden" name="calculation_base_row_index" value="${rowIndex}">
+                <input type="hidden" name="calculation_base_id_${rowIndex}" value="">
+                <input class="form-check-input" type="checkbox" name="calculation_base_is_active_${rowIndex}" value="1" checked>
+            </td>
+            <td style="min-width: 180px;">
+                <input type="text" class="form-control form-control-sm" name="calculation_base_label_${rowIndex}" required placeholder="% por nota fiscal">
+            </td>
+            <td style="min-width: 90px;">
+                <select class="form-select form-select-sm" name="calculation_base_unit_${rowIndex}" required>
+                    <option value="">sem unidade</option>
+                    <option value="%">%</option>
+                    <option value="R$" selected>R$</option>
+                    <option value="kg">kg</option>
+                    <option value="dias">dias</option>
+                </select>
+            </td>
+            <td style="min-width: 170px;">
+                <select class="form-select form-select-sm" name="calculation_base_calculation_type_${rowIndex}" required>
+                    <option value="invoice_percentage">invoice_percentage</option>
+                    <option value="fixed_amount" selected>fixed_amount</option>
+                    <option value="weight_rate">weight_rate</option>
+                    <option value="weight_fraction">weight_fraction</option>
+                    <option value="minimum_amount">minimum_amount</option>
+                    <option value="maximum_amount">maximum_amount</option>
+                    <option value="conditional">conditional</option>
+                    <option value="unknown">unknown</option>
+                    <option value="weight">weight</option>
+                </select>
+            </td>
+            <td style="min-width: 190px;">
+                <select class="form-select form-select-sm" name="calculation_base_operation_${rowIndex}" required>
+                    <option value="percentage_of_variable">percentage_of_variable</option>
+                    <option value="fixed_amount" selected>fixed_amount</option>
+                    <option value="weight_rate">weight_rate</option>
+                    <option value="ceil_fraction">ceil_fraction</option>
+                    <option value="minimum_amount">minimum_amount</option>
+                    <option value="maximum_amount">maximum_amount</option>
+                    <option value="do_not_calculate">do_not_calculate</option>
+                    <option value="multiply_by_variable">multiply_by_variable</option>
+                </select>
+            </td>
+            <td style="min-width: 140px;">
+                <select class="form-select form-select-sm" name="calculation_base_audit_variable_${rowIndex}">
+                    <option value="" selected>não aplicável</option>
+                    <option value="valor_nf">valor_nf</option>
+                    <option value="peso">peso</option>
+                    <option value="valor_frete">valor_frete</option>
+                </select>
+            </td>
+            <td style="min-width: 120px;">
+                <input type="number" min="1" step="1" class="form-control form-control-sm" name="calculation_base_fraction_size_${rowIndex}" placeholder="100">
+            </td>
+            <td style="min-width: 240px;">
+                <textarea class="form-control form-control-sm" name="calculation_base_aliases_${rowIndex}" rows="2" placeholder="valor da nf; sobre nf"></textarea>
+            </td>
+            <td class="text-center">
+                <input class="form-check-input" type="checkbox" name="calculation_base_allows_minimum_${rowIndex}" value="1">
+            </td>
+            <td class="text-center">
+                <input class="form-check-input" type="checkbox" name="calculation_base_allows_maximum_${rowIndex}" value="1">
+            </td>
+            <td class="text-center">
+                <input class="form-check-input" type="checkbox" name="calculation_base_requires_structured_condition_${rowIndex}" value="1">
+            </td>
+            <td style="min-width: 90px;">
+                <input type="number" step="1" class="form-control form-control-sm" name="calculation_base_display_order_${rowIndex}" value="${displayOrder}" required>
+            </td>
+            <td>
+                <button type="button" class="btn btn-sm btn-outline-danger" data-remove-calculation-base>Excluir</button>
+            </td>
+        `;
+        tbody.appendChild(row);
+        wireRemoveButtons(row);
+    });
+
+    wireRemoveButtons(document);
+});
+</script>
 {% endblock %}

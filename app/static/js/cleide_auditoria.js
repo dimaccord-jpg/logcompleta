@@ -57,10 +57,12 @@
   var tempTablePollTimer = null;
   var TEMP_TABLE_POLL_MS = 2500;
   var currentTempTable = null;
+  var currentCalculationBases = [];
   var lastTempTableCardButton = null;
   var tempTableEditMode = false;
   var tempTableEditSnapshot = null;
   var tempTableSaveInFlight = false;
+  var tempTableValidationErrors = [];
   var openFreightTableKeys = new Set();
   var hasUserTouchedFreightTableOpenState = false;
   var tempTableModalActiveTab = 'freight';
@@ -98,6 +100,24 @@
     return deepCloneValue(tempTable);
   }
 
+  function normalizeCalculationUnit(value) {
+    var text = normalizeTextKey(value).replace(/\s+/g, '');
+    if (text === '%' || text === 'percent' || text === 'percentual' || text === 'porcentagem') return '%';
+    if (text === 'r$' || text === 'rs' || text === 'brl' || text === 'real' || text === 'reais') return 'R$';
+    if (text === 'kg' || text === 'quilo' || text === 'quilos') return 'kg';
+    return text;
+  }
+
+  function getCalculationBaseById(baseId) {
+    var wanted = String(baseId || '').trim();
+    if (!wanted) return null;
+    for (var i = 0; i < currentCalculationBases.length; i += 1) {
+      var base = currentCalculationBases[i];
+      if (base && String(base.id || '').trim() === wanted) return base;
+    }
+    return null;
+  }
+
   function setTempTableModalError(message) {
     var el = byId('cleideAuditTempTableModalError');
     if (!el) return;
@@ -108,6 +128,10 @@
     }
     el.hidden = false;
     el.textContent = message;
+  }
+
+  function clearTempTableValidationErrors() {
+    tempTableValidationErrors = [];
   }
 
   function hasCoverageRows(tempTable) {
@@ -533,6 +557,7 @@
     if (!currentTempTable || tempTableEditMode) return;
     tempTableEditSnapshot = deepCloneTempTable(currentTempTable);
     tempTableEditMode = true;
+    clearTempTableValidationErrors();
     setTempTableModalError('');
     renderTempTableModalContent(currentTempTable);
     updateTempTableModalFooter();
@@ -547,6 +572,7 @@
     }
     tempTableEditMode = false;
     tempTableEditSnapshot = null;
+    clearTempTableValidationErrors();
     setTempTableModalError('');
     renderTempTableModalContent(currentTempTable);
     updateTempTableModalFooter();
@@ -576,8 +602,218 @@
     return payload;
   }
 
+  function accessorialFeeHasRequiredValue(fee) {
+    var operation = String((fee && fee.operation) || '');
+    var value = String((fee && fee.value) || '').trim();
+    if (!operation) return false;
+    if (operation === 'percentage_of_variable') return /%|[0-9]/.test(value) && /\d/.test(value);
+    if (operation === 'fixed_amount' || operation === 'ceil_fraction' || operation === 'multiply_by_variable') {
+      return /[0-9]/.test(value);
+    }
+    return false;
+  }
+
+  function accessorialFeeOperationIsComplete(fee) {
+    var operation = String((fee && fee.operation) || '');
+    if (
+      operation !== 'fixed_amount'
+      && operation !== 'percentage_of_variable'
+      && operation !== 'multiply_by_variable'
+      && operation !== 'ceil_fraction'
+    ) {
+      return false;
+    }
+    if (
+      operation === 'percentage_of_variable'
+      || operation === 'multiply_by_variable'
+      || operation === 'ceil_fraction'
+    ) {
+      if (!String((fee && fee.audit_variable) || '').trim()) return false;
+    }
+    if (operation !== 'ceil_fraction') return true;
+    var params = fee && fee.operation_parameters;
+    var fractionSize = params && params.fraction_size;
+    if (fractionSize === null || fractionSize === undefined || String(fractionSize).trim() === '') return false;
+    var parsed = parseFloat(String(fractionSize).replace(',', '.'));
+    return isFinite(parsed) && parsed > 0;
+  }
+
+  function accessorialFeeUnitMatchesBase(fee, base) {
+    if (!base || !base.unit) return true;
+    return normalizeCalculationUnit(fee && fee.unit) === normalizeCalculationUnit(base.unit);
+  }
+
+  function accessorialFeeMissingCalculationBase(fee) {
+    var baseId = String((fee && fee.calculation_base_id) || '').trim();
+    var base = getCalculationBaseById(baseId);
+    var basis = normalizeTextKey(fee && fee.calculation_basis);
+    return !baseId || !base || basis === normalizeTextKey('não mapeado / revisar');
+  }
+
+  function accessorialCalculationBaseErrorMessage() {
+    return 'Selecione uma base de cálculo ou exclua a linha.';
+  }
+
+  function accessorialValueErrorMessage() {
+    return 'Preencha um valor válido para esta taxa ou exclua a linha.';
+  }
+
+  function accessorialUnitErrorMessage() {
+    return 'A unidade não é compatível com a base selecionada.';
+  }
+
+  function accessorialOperationErrorMessage() {
+    return 'Revise a operação da base de cálculo selecionada.';
+  }
+
+  function accessorialFieldErrorMessage(error) {
+    if (!error) return '';
+    if (error.reason_code === 'incompatible_accessorial_unit') {
+      return 'Ajuste a unidade para a base selecionada.';
+    }
+    return error.message || '';
+  }
+
+  function accessorialAdvanceValidationCountMessage(count) {
+    if (count === 1) {
+      return '1 item precisa de revisão. Corrija os campos destacados ou exclua a linha.';
+    }
+    return count + ' itens precisam de revisão. Corrija os campos destacados ou exclua as linhas.';
+  }
+
+  function collectTempTableAdvanceValidationErrors() {
+    var fees = currentTempTable && Array.isArray(currentTempTable.accessorial_fees)
+      ? currentTempTable.accessorial_fees
+      : [];
+    var errors = [];
+    fees.forEach(function (fee, feeIndex) {
+      if (!fee || typeof fee !== 'object' || isPrimaryFreightAccessorialFee(fee)) return;
+      var error = null;
+      if (accessorialFeeMissingCalculationBase(fee)) {
+        error = {
+          section: 'accessorial_fees',
+          index: feeIndex,
+          name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+          field: 'calculation_base_id',
+          reason_code: 'missing_calculation_base',
+          message: accessorialCalculationBaseErrorMessage()
+        };
+      } else if (!accessorialFeeOperationIsComplete(fee)) {
+        error = {
+          section: 'accessorial_fees',
+          index: feeIndex,
+          name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+          field: 'calculation_base_id',
+          reason_code: 'unsupported_or_incomplete_operation',
+          message: accessorialOperationErrorMessage()
+        };
+      } else if (!accessorialFeeHasRequiredValue(fee)) {
+        error = {
+          section: 'accessorial_fees',
+          index: feeIndex,
+          name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+          field: 'value',
+          reason_code: 'invalid_accessorial_value',
+          message: accessorialValueErrorMessage()
+        };
+      } else {
+        var base = getCalculationBaseById(String(fee.calculation_base_id || '').trim());
+        if (!accessorialFeeUnitMatchesBase(fee, base)) {
+          error = {
+            section: 'accessorial_fees',
+            index: feeIndex,
+            name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+            field: 'unit',
+            reason_code: 'incompatible_accessorial_unit',
+            message: accessorialUnitErrorMessage()
+          };
+        }
+      }
+      if (error) errors.push(error);
+    });
+    return errors;
+  }
+
+  function getAccessorialFeeValidationError(feeIndex, field) {
+    for (var i = 0; i < tempTableValidationErrors.length; i += 1) {
+      var error = tempTableValidationErrors[i];
+      if (
+        error
+        && error.section === 'accessorial_fees'
+        && Number(error.index) === feeIndex
+        && (!field || error.field === field)
+      ) {
+        return error;
+      }
+    }
+    return null;
+  }
+
+  function accessorialFeeHasValidationError(feeIndex) {
+    return !!getAccessorialFeeValidationError(feeIndex);
+  }
+
+  function setTempTableValidationErrors(errors) {
+    tempTableValidationErrors = Array.isArray(errors) ? errors.slice() : [];
+    if (tempTableValidationErrors.length) {
+      setTempTableModalError(accessorialAdvanceValidationCountMessage(tempTableValidationErrors.length));
+    } else {
+      setTempTableModalError('');
+    }
+  }
+
+  function refreshTempTableValidationErrorsAfterAccessorialEdit() {
+    if (!tempTableValidationErrors.length) return;
+    setTempTableValidationErrors(collectTempTableAdvanceValidationErrors());
+  }
+
+  function focusFirstTempTableValidationError() {
+    if (!tempTableValidationErrors.length) return;
+    var first = tempTableValidationErrors[0];
+    if (!first || first.section !== 'accessorial_fees') return;
+    window.setTimeout(function () {
+      var row = document.querySelector('[data-accessorial-fee-index="' + first.index + '"]');
+      if (!row) return;
+      if (typeof row.scrollIntoView === 'function') {
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+      var field = row.querySelector('[data-field="' + (first.field || 'calculation_base_id') + '"]');
+      if (field && typeof field.focus === 'function') field.focus();
+    }, 0);
+  }
+
+  function ensureTempTableEditModeForValidation() {
+    if (!currentTempTable || tempTableEditMode) return;
+    tempTableEditSnapshot = deepCloneTempTable(currentTempTable);
+    tempTableEditMode = true;
+    tempTableModalActiveTab = 'freight';
+    updateTempTableModalFooter();
+  }
+
+  function validateTempTableBeforeAdvance() {
+    var errors = collectTempTableAdvanceValidationErrors();
+    setTempTableValidationErrors(errors);
+    if (errors.length) {
+      ensureTempTableEditModeForValidation();
+      renderTempTableModalContent(currentTempTable);
+      focusFirstTempTableValidationError();
+      return false;
+    }
+    return true;
+  }
+
+  function handleBackendTempTableValidationErrors(data) {
+    if (!data || !Array.isArray(data.errors) || !data.errors.length) return false;
+    setTempTableValidationErrors(data.errors);
+    ensureTempTableEditModeForValidation();
+    renderTempTableModalContent(currentTempTable);
+    focusFirstTempTableValidationError();
+    return true;
+  }
+
   function saveTempTableAndAdvance() {
     if (!currentTempTable || tempTableSaveInFlight) return;
+    if (!validateTempTableBeforeAdvance()) return;
     var payload = collectTempTableSavePayload();
     if (!payload) {
       setTempTableModalError('Nenhuma tabela temporária disponível para salvar.');
@@ -600,6 +836,7 @@
       })
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
+          if (handleBackendTempTableValidationErrors(res.data)) return;
           var errMsg = (res.data && res.data.message) || 'Não foi possível salvar a revisão da tabela temporária.';
           setTempTableModalError(errMsg);
           return;
@@ -607,6 +844,7 @@
         if (res.data.temp_table) {
           currentTempTable = res.data.temp_table;
         }
+        clearTempTableValidationErrors();
         tempTableEditMode = false;
         tempTableEditSnapshot = null;
         coverageStepActive = true;
@@ -632,6 +870,7 @@
     if (!currentTempTable) return;
     auditFileStepActive = true;
     tempTableModalActiveTab = 'audit';
+    clearTempTableValidationErrors();
     setTempTableModalError('');
     renderTempTableModalContent(currentTempTable);
     updateTempTableModalFooter();
@@ -680,6 +919,7 @@
 
   function handleTempTableFromStatus(data) {
     if (!data) return;
+    currentCalculationBases = Array.isArray(data.calculation_bases) ? data.calculation_bases : [];
     var tempTable = data.temp_table || null;
     var previousTempTableId = currentTempTable && currentTempTable.temp_table_id;
     var nextTempTableId = tempTable && tempTable.temp_table_id;
@@ -1022,7 +1262,8 @@ function renderDocumentItem(doc) {
           if (res.data.temp_table) {
             handleTempTableFromStatus({
               documents: [],
-              temp_table: res.data.temp_table
+              temp_table: res.data.temp_table,
+              calculation_bases: res.data.calculation_bases || []
             });
           }
           return res.data;
@@ -2151,7 +2392,7 @@ function renderDocumentItem(doc) {
       appendTableCell(tr, displayFieldValue(item.name), false, false);
       appendTableCell(tr, displayFieldValue(item.value), false, false);
       appendTableCell(tr, displayFieldValue(item.unit), false, false);
-      appendTableCell(tr, displayFieldValue(item.calculation_basis), false, false);
+      appendReadonlyCalculationBasisCell(tr, item);
       appendTableCell(tr, hasFieldValue(item.notes) ? String(item.notes) : displayFieldValue(null), false, false);
       if (showScope) {
         appendTableCell(tr, hasFieldValue(item.scope) ? String(item.scope) : displayFieldValue(null), false, false);
@@ -2162,17 +2403,131 @@ function renderDocumentItem(doc) {
     container.appendChild(table);
   }
 
-  function appendAccessorialFieldCell(tr, value, onChange, placeholder) {
+  function appendAccessorialFieldCell(tr, value, onChange, placeholder, options) {
+    options = options || {};
     var td = document.createElement('td');
+    if (options.validationError) td.className = 'accessorial-field-cell accessorial-field-cell--invalid';
     var input = document.createElement('input');
     input.type = 'text';
     input.className = 'cleide-audit-temp-table-modal-cell-input';
+    if (options.field) input.setAttribute('data-field', options.field);
     input.value = hasFieldValue(value) ? String(value) : '';
     if (placeholder) input.placeholder = placeholder;
+    if (options.validationError) {
+      input.className += ' field-invalid';
+      input.setAttribute('aria-invalid', 'true');
+    }
     input.addEventListener('input', function () {
       if (typeof onChange === 'function') onChange(input.value);
     });
     td.appendChild(input);
+    if (options.validationError) {
+      var icon = document.createElement('span');
+      icon.className = 'accessorial-field-error-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = '⚠';
+      td.appendChild(icon);
+      var hint = document.createElement('div');
+      hint.className = 'accessorial-field-error';
+      hint.setAttribute('role', 'note');
+      hint.textContent = accessorialFieldErrorMessage(options.validationError);
+      td.appendChild(hint);
+    }
+    tr.appendChild(td);
+  }
+
+  function appendReadonlyCalculationBasisCell(tr, item) {
+    var td = document.createElement('td');
+    var baseId = String((item && item.calculation_base_id) || '').trim();
+    var resolvedBase = baseId ? getCalculationBaseById(baseId) : null;
+    if (resolvedBase) {
+      td.textContent = hasFieldValue(item.calculation_base_label)
+        ? String(item.calculation_base_label)
+        : String(resolvedBase.label || '');
+    } else {
+      var extracted = hasFieldValue(item.raw_calculation_basis)
+        ? String(item.raw_calculation_basis)
+        : (hasFieldValue(item.calculation_basis) ? String(item.calculation_basis) : '');
+      td.textContent = 'não mapeado / revisar';
+      if (extracted && normalizeTextKey(extracted) !== normalizeTextKey('não mapeado / revisar')) {
+        var extra = document.createElement('div');
+        extra.className = 'accessorial-basis-extracted-text';
+        extra.textContent = 'texto extraído: ' + extracted;
+        td.appendChild(extra);
+      }
+    }
+    tr.appendChild(td);
+  }
+
+  function calculationBaseOptionLabel(base) {
+    var label = String((base && base.label) || '');
+    var unit = String((base && base.unit) || '').trim();
+    return unit ? label + ' (' + unit + ')' : label;
+  }
+
+  function markAccessorialFeeAsUnmapped(fee) {
+    if (!fee) return;
+    fee.calculation_base_id = null;
+    fee.calculation_base_label = null;
+    fee.calculation_basis = 'não mapeado / revisar';
+    fee.calculation_type = 'unknown';
+    fee.audit_variable = null;
+    fee.operation = null;
+    fee.operation_parameters = {};
+    fee.classification_source = 'manual_unmapped_calculation_base';
+  }
+
+  function applyCalculationBaseToAccessorialFee(fee, base) {
+    if (!fee || !base) return;
+    fee.calculation_base_id = base.id || null;
+    fee.calculation_base_label = base.label || '';
+    fee.calculation_basis = base.label || '';
+    fee.calculation_type = base.calculation_type || 'unknown';
+    fee.audit_variable = base.audit_variable || null;
+    fee.operation = base.operation || null;
+    fee.operation_parameters = deepCloneValue(base.parameters || {});
+    fee.classification_source = 'manual_configured_calculation_base';
+    if (base.unit) fee.unit = base.unit;
+  }
+
+  function appendCalculationBaseSelectCell(tr, item, onChange, validationError) {
+    var td = document.createElement('td');
+    td.className = validationError ? 'calculation-base-cell calculation-base-cell--invalid' : 'calculation-base-cell';
+    var select = document.createElement('select');
+    select.className = 'cleide-audit-temp-table-modal-cell-input';
+    select.setAttribute('data-field', 'calculation_base_id');
+    if (validationError) {
+      select.className += ' field-invalid';
+      select.setAttribute('aria-invalid', 'true');
+    }
+    var placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'não mapeado / revisar';
+    select.appendChild(placeholder);
+    currentCalculationBases.forEach(function (base) {
+      if (!base || !base.id) return;
+      var option = document.createElement('option');
+      option.value = String(base.id);
+      option.textContent = calculationBaseOptionLabel(base);
+      select.appendChild(option);
+    });
+    select.value = item && item.calculation_base_id ? String(item.calculation_base_id) : '';
+    select.addEventListener('change', function () {
+      if (typeof onChange === 'function') onChange(select.value);
+    });
+    td.appendChild(select);
+    if (validationError) {
+      var icon = document.createElement('span');
+      icon.className = 'accessorial-field-error-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = '⚠';
+      td.appendChild(icon);
+      var hint = document.createElement('div');
+      hint.className = 'accessorial-field-error';
+      hint.setAttribute('role', 'note');
+      hint.textContent = accessorialFieldErrorMessage(validationError);
+      td.appendChild(hint);
+    }
     tr.appendChild(td);
   }
 
@@ -2193,14 +2548,7 @@ function renderDocumentItem(doc) {
     addBtn.textContent = 'Adicionar item';
     addBtn.addEventListener('click', function () {
       if (!Array.isArray(currentTempTable.accessorial_fees)) currentTempTable.accessorial_fees = [];
-      currentTempTable.accessorial_fees.push({
-        name: '',
-        value: '',
-        unit: '',
-        calculation_basis: '',
-        notes: '',
-        scope: 'general'
-      });
+      currentTempTable.accessorial_fees.push({ name: '', value: '', unit: '', calculation_basis: 'não mapeado / revisar', calculation_base_id: null, calculation_base_label: null, raw_calculation_basis: '', notes: '', scope: 'general' });
       renderTempTableModalContent(currentTempTable);
     });
     actions.appendChild(addBtn);
@@ -2223,18 +2571,38 @@ function renderDocumentItem(doc) {
     (currentTempTable.accessorial_fees || []).forEach(function (item, feeIndex) {
       if (!item || typeof item !== 'object' || isPrimaryFreightAccessorialFee(item)) return;
       var tr = document.createElement('tr');
+      tr.setAttribute('data-accessorial-fee-index', String(feeIndex));
+      var validationError = getAccessorialFeeValidationError(feeIndex);
+      if (accessorialFeeHasValidationError(feeIndex)) tr.className = 'accessorial-row--invalid';
       appendAccessorialFieldCell(tr, item.name, function (newValue) {
         if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].name = newValue;
       }, 'Ex.: Pedágio geral');
       appendAccessorialFieldCell(tr, item.value, function (newValue) {
         if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].value = newValue;
-      }, 'Ex.: conforme tabela');
+        refreshTempTableValidationErrorsAfterAccessorialEdit();
+      }, 'Ex.: conforme tabela', {
+        field: 'value',
+        validationError: getAccessorialFeeValidationError(feeIndex, 'value')
+      });
       appendAccessorialFieldCell(tr, item.unit, function (newValue) {
         if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].unit = newValue;
-      }, 'R$, %, texto');
-      appendAccessorialFieldCell(tr, item.calculation_basis, function (newValue) {
-        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].calculation_basis = newValue;
-      }, 'Base de cálculo');
+        refreshTempTableValidationErrorsAfterAccessorialEdit();
+      }, 'R$, %, texto', {
+        field: 'unit',
+        validationError: getAccessorialFeeValidationError(feeIndex, 'unit')
+      });
+      appendCalculationBaseSelectCell(tr, item, function (baseId) {
+        var fee = currentTempTable.accessorial_fees[feeIndex];
+        if (!fee) return;
+        var base = getCalculationBaseById(baseId);
+        if (base) {
+          applyCalculationBaseToAccessorialFee(fee, base);
+        } else {
+          markAccessorialFeeAsUnmapped(fee);
+        }
+        refreshTempTableValidationErrorsAfterAccessorialEdit();
+        renderTempTableModalContent(currentTempTable);
+      }, getAccessorialFeeValidationError(feeIndex, 'calculation_base_id'));
       appendAccessorialFieldCell(tr, item.notes, function (newValue) {
         if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].notes = newValue;
       }, 'Observações');
@@ -2244,6 +2612,7 @@ function renderDocumentItem(doc) {
       appendRowDeleteCell(tr, function () {
         if (!Array.isArray(currentTempTable.accessorial_fees)) return;
         currentTempTable.accessorial_fees.splice(feeIndex, 1);
+        refreshTempTableValidationErrorsAfterAccessorialEdit();
         renderTempTableModalContent(currentTempTable);
       });
       tbody.appendChild(tr);
@@ -2937,6 +3306,7 @@ function renderDocumentItem(doc) {
   function openTempTableModal() {
     var modal = byId('cleideAuditTempTableModal');
     if (!modal) return;
+    clearTempTableValidationErrors();
     setTempTableModalError('');
     renderTempTableModalContent(currentTempTable);
     updateTempTableModalFooter();
@@ -2954,6 +3324,7 @@ function renderDocumentItem(doc) {
     resetFreightTableOpenState();
     tempTableEditMode = false;
     tempTableEditSnapshot = null;
+    clearTempTableValidationErrors();
     setTempTableModalError('');
     updateTempTableModalFooter();
     if (lastTempTableCardButton && typeof lastTempTableCardButton.focus === 'function') {

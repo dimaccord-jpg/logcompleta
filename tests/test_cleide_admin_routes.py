@@ -1,7 +1,10 @@
 import importlib
+import json
 import os
 import pathlib
 from types import SimpleNamespace
+
+from werkzeug.datastructures import MultiDict
 
 from app.extensions import db
 from app.models import ConfigRegras
@@ -51,6 +54,7 @@ def _audit_cfg(**overrides):
         "show_documents_used": True,
         "no_hallucination_instruction_enabled": True,
         "audited_file_max_rows": 2000,
+        "calculation_bases": cleide_audit_config_service.DEFAULT_CALCULATION_BASES,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -69,6 +73,41 @@ def _register_admin_blueprint(app):
 
     if "admin" not in app.blueprints:
         app.register_blueprint(admin_bp)
+
+
+def _calculation_bases_form_rows(rows):
+    data = [("form_name", "cleide_audit_calculation_bases")]
+    for index, row in enumerate(rows):
+        parameters = row.get("parameters") or {}
+        data.extend(
+            [
+                ("calculation_base_row_index", str(index)),
+                (f"calculation_base_id_{index}", row.get("id", "")),
+                (f"calculation_base_label_{index}", row.get("label", "")),
+                (f"calculation_base_unit_{index}", row.get("unit", "")),
+                (
+                    f"calculation_base_calculation_type_{index}",
+                    row.get("calculation_type", "fixed_amount"),
+                ),
+                (f"calculation_base_operation_{index}", row.get("operation", "fixed_amount")),
+                (f"calculation_base_audit_variable_{index}", row.get("audit_variable") or ""),
+                (f"calculation_base_fraction_size_{index}", str(parameters.get("fraction_size", ""))),
+                (f"calculation_base_display_order_{index}", str(row.get("display_order", (index + 1) * 10))),
+            ]
+        )
+        aliases = row.get("aliases", "")
+        if isinstance(aliases, list):
+            aliases = "; ".join(aliases)
+        data.append((f"calculation_base_aliases_{index}", aliases))
+        if row.get("is_active", True):
+            data.append((f"calculation_base_is_active_{index}", "1"))
+        if row.get("allows_minimum", False):
+            data.append((f"calculation_base_allows_minimum_{index}", "1"))
+        if row.get("allows_maximum", False):
+            data.append((f"calculation_base_allows_maximum_{index}", "1"))
+        if row.get("requires_structured_condition", False):
+            data.append((f"calculation_base_requires_structured_condition_{index}", "1"))
+    return MultiDict(data)
 
 
 def _render_cleide_admin(monkeypatch):
@@ -160,6 +199,13 @@ def test_admin_agentes_cleide_get_mostra_bloco_auditoria(monkeypatch):
     assert "cleide_audit_cfg_chat_enabled" in html
     assert "cleide_audit_cfg_fallback_message" in html
     assert 'name="form_name" value="cleide_audit"' in html
+    assert "Bases de cálculo da auditoria" in html
+    assert "cleide_audit_cfg_calculation_bases" in html
+    assert 'name="form_name" value="cleide_audit_calculation_bases"' in html
+    assert 'id="cleideAuditCalculationBasesTable"' in html
+    assert 'name="calculation_base_label_0"' in html
+    assert 'name="calculation_bases_json"' not in html
+    assert "% por nota fiscal" in html
 
 
 def test_admin_agentes_cleide_get_mostra_aviso_limites_cleiton(monkeypatch):
@@ -340,6 +386,243 @@ def test_admin_agentes_cleide_post_audit_persiste_audited_file_max_rows(app, ctx
     assert row is not None
     assert row.valor_inteiro == 10
     assert cleide_audit_config_service.get_cleide_audit_config().audited_file_max_rows == 10
+
+
+def test_admin_agentes_cleide_post_calculation_bases_tabular_salva_duas_bases(
+    app,
+    ctx,
+    monkeypatch,
+):
+    from app.painel_admin import admin_routes
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data=_calculation_bases_form_rows(
+            [
+                cleide_audit_config_service.DEFAULT_CALCULATION_BASES[0],
+                cleide_audit_config_service.DEFAULT_CALCULATION_BASES[1],
+            ]
+        ),
+    ):
+        resp = admin_routes.agentes_cleide.__wrapped__()
+        from flask import get_flashed_messages
+
+        msgs = get_flashed_messages(with_categories=True)
+
+    assert resp.status_code == 302
+    assert any("Bases de cálculo da Cleide Auditoria" in msg for _, msg in msgs)
+    row = ConfigRegras.query.filter_by(chave="cleide_audit_cfg_calculation_bases").first()
+    assert row is not None
+    persisted = json.loads(row.valor_texto)
+    assert [base["label"] for base in persisted] == [
+        "% por nota fiscal",
+        "por CTe",
+    ]
+    assert [base["id"] for base in persisted] == ["pct_nota_fiscal", "por_cte"]
+
+
+def test_admin_agentes_cleide_post_calculation_bases_tabular_aliases_e_fracao(
+    app,
+    ctx,
+    monkeypatch,
+):
+    from app.painel_admin import admin_routes
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data=_calculation_bases_form_rows(
+            [
+                {
+                    "id": "pct_nota_fiscal",
+                    "label": "% por nota fiscal",
+                    "aliases": "valor da nf; sobre nf; nota fiscal",
+                    "unit": "%",
+                    "calculation_type": "invoice_percentage",
+                    "audit_variable": "valor_nf",
+                    "operation": "percentage_of_variable",
+                    "display_order": 10,
+                    "is_active": True,
+                },
+                {
+                    "id": "fracao_100kg",
+                    "label": "por fração de 100kg",
+                    "aliases": "100kg ou fração, cada 100kg",
+                    "unit": "R$",
+                    "calculation_type": "weight_fraction",
+                    "audit_variable": "peso",
+                    "operation": "ceil_fraction",
+                    "parameters": {"fraction_size": 100},
+                    "display_order": 20,
+                    "is_active": True,
+                },
+            ]
+        ),
+    ):
+        admin_routes.agentes_cleide.__wrapped__()
+
+    row = ConfigRegras.query.filter_by(chave="cleide_audit_cfg_calculation_bases").first()
+    persisted = json.loads(row.valor_texto)
+    assert persisted[0]["aliases"] == ["valor da nf", "sobre nf", "nota fiscal"]
+    assert persisted[1]["parameters"] == {"fraction_size": 100}
+
+
+def test_admin_agentes_cleide_post_calculation_bases_excluir_remove_linha(
+    app,
+    ctx,
+    monkeypatch,
+):
+    from app.painel_admin import admin_routes
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+    cleide_audit_config_service.salvar_cleide_audit_calculation_bases(
+        [
+            cleide_audit_config_service.DEFAULT_CALCULATION_BASES[0],
+            cleide_audit_config_service.DEFAULT_CALCULATION_BASES[1],
+        ]
+    )
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data=_calculation_bases_form_rows([cleide_audit_config_service.DEFAULT_CALCULATION_BASES[0]]),
+    ):
+        admin_routes.agentes_cleide.__wrapped__()
+
+    persisted = cleide_audit_config_service.carregar_cleide_audit_calculation_bases()
+    assert [base["id"] for base in persisted] == ["pct_nota_fiscal"]
+
+
+def test_admin_agentes_cleide_post_calculation_bases_adicionar_gera_id(
+    app,
+    ctx,
+    monkeypatch,
+):
+    from app.painel_admin import admin_routes
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data=_calculation_bases_form_rows(
+            [
+                {
+                    "label": "Taxa administrativa",
+                    "aliases": "taxa adm",
+                    "unit": "R$",
+                    "calculation_type": "fixed_amount",
+                    "operation": "fixed_amount",
+                    "display_order": 10,
+                    "is_active": True,
+                }
+            ]
+        ),
+    ):
+        admin_routes.agentes_cleide.__wrapped__()
+
+    persisted = cleide_audit_config_service.carregar_cleide_audit_calculation_bases()
+    assert persisted[0]["id"] == "taxa_administrativa"
+    assert persisted[0]["label"] == "Taxa administrativa"
+
+
+def test_admin_agentes_cleide_post_calculation_bases_invalido_preserva_anterior(
+    app,
+    ctx,
+    monkeypatch,
+):
+    from app.painel_admin import admin_routes
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+    cleide_audit_config_service.salvar_cleide_audit_calculation_bases(
+        [cleide_audit_config_service.DEFAULT_CALCULATION_BASES[1]]
+    )
+    before = ConfigRegras.query.filter_by(
+        chave="cleide_audit_cfg_calculation_bases"
+    ).first().valor_texto
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data=_calculation_bases_form_rows(
+            [
+                {
+                    "id": "base_invalida",
+                    "label": "",
+                    "unit": "R$",
+                    "calculation_type": "fixed_amount",
+                    "operation": "fixed_amount",
+                    "display_order": 10,
+                    "is_active": True,
+                }
+            ]
+        ),
+    ):
+        resp = admin_routes.agentes_cleide.__wrapped__()
+        from flask import get_flashed_messages
+
+        msgs = get_flashed_messages(with_categories=True)
+
+    after = ConfigRegras.query.filter_by(
+        chave="cleide_audit_cfg_calculation_bases"
+    ).first().valor_texto
+    assert resp.status_code == 302
+    assert any("nome da base é obrigatório" in msg for _, msg in msgs)
+    assert after == before
+
+
+def test_admin_agentes_cleide_post_calculation_bases_nao_altera_cleide_bi(
+    app,
+    ctx,
+    monkeypatch,
+):
+    from app.painel_admin import admin_routes
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+    db.session.add(ConfigRegras(chave="cleide_cfg_upload_total_max", valor_inteiro=9876))
+    db.session.commit()
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data=_calculation_bases_form_rows([cleide_audit_config_service.DEFAULT_CALCULATION_BASES[0]]),
+    ):
+        admin_routes.agentes_cleide.__wrapped__()
+
+    bi_upload = ConfigRegras.query.filter_by(chave="cleide_cfg_upload_total_max").first()
+    assert bi_upload.valor_inteiro == 9876
+
+
+def test_admin_agentes_cleide_get_carrega_calculation_bases_salvas(monkeypatch):
+    html = _render_cleide_admin(monkeypatch)
+    table = html.split('id="cleideAuditCalculationBasesTable"')[1]
+    assert 'name="calculation_base_id_0" value="pct_nota_fiscal"' in table
+    assert "percentage_of_variable" in table
+    assert 'value="fracao_100kg"' in table
+    assert "Avançado/Debug" in html
 
 
 def test_admin_agentes_cleide_get_renderiza_audited_file_max_rows_salvo(monkeypatch):

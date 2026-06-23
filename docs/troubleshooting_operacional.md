@@ -1,7 +1,7 @@
 # Troubleshooting Operacional
 
-Data de consolidacao: `2026-06-17`
-Commit de referencia: `284b340`
+Data de consolidacao: `2026-06-19`
+Commit de referencia: `bad8990`
 
 ## 1. Home publica sem responder
 
@@ -120,6 +120,7 @@ Regra oficial:
 - a revisao humana e permitida apenas para a `temp_table` ativa da sessao
 - erro de escopo, expiracao ou `temp_table_id` divergente deve bloquear a operacao
 - o chat da Cleide nao substitui esse fluxo de revisao
+- a revisao humana nao deve ser tratada como nova conversa de IA
 
 ## 11. Tabela temporaria sumiu depois de remover ou trocar documentos
 
