@@ -1,9 +1,11 @@
 import importlib
+import json
 import pathlib
 from unittest.mock import patch
 
 import pytest
 from flask import g
+from werkzeug.datastructures import MultiDict
 
 from app.extensions import db
 from app.models import ConfigRegras
@@ -54,6 +56,15 @@ def test_defaults_carregam_corretamente(ctx):
     assert cfg.show_documents_used is True
     assert cfg.no_hallucination_instruction_enabled is True
     assert cfg.audited_file_max_rows == svc.DEFAULT_AUDITED_FILE_MAX_ROWS
+    assert cfg.calculation_bases == svc.DEFAULT_CALCULATION_BASES
+    assert [base["label"] for base in cfg.calculation_bases] == [
+        "% por nota fiscal",
+        "por CTe",
+        "por conhecimento",
+        "por documento",
+        "por kg",
+        "por fração de 100kg",
+    ]
 
 
 def test_gravacao_e_leitura_via_config_regras(ctx):
@@ -92,6 +103,208 @@ def test_gravacao_e_leitura_via_config_regras(ctx):
     assert loaded.chat_enabled is False
     assert loaded.question_max_chars == 3500
     assert loaded.no_documents_behavior == "require_documents"
+    assert loaded.calculation_bases == svc.DEFAULT_CALCULATION_BASES
+
+
+def test_salvar_calculation_bases_validas(ctx):
+    bases = [
+        svc.DEFAULT_CALCULATION_BASES[0],
+        svc.DEFAULT_CALCULATION_BASES[1],
+        svc.DEFAULT_CALCULATION_BASES[5],
+    ]
+
+    saved = svc.salvar_cleide_audit_calculation_bases(bases)
+
+    assert [base["label"] for base in saved] == [
+        "% por nota fiscal",
+        "por CTe",
+        "por fração de 100kg",
+    ]
+    row = ConfigRegras.query.filter_by(chave="cleide_audit_cfg_calculation_bases").first()
+    assert row is not None
+    assert row.valor_texto
+    persisted = json.loads(row.valor_texto)
+    assert persisted[0]["id"] == "pct_nota_fiscal"
+    assert persisted[2]["parameters"] == {"fraction_size": 100}
+    assert svc.carregar_cleide_audit_calculation_bases() == saved
+
+
+def test_parsear_calculation_bases_form_aliases_fracao_e_resolvedor(ctx):
+    form = MultiDict(
+        [
+            ("calculation_base_row_index", "0"),
+            ("calculation_base_id_0", "pct_nota_fiscal"),
+            ("calculation_base_label_0", "% por nota fiscal"),
+            ("calculation_base_unit_0", "%"),
+            ("calculation_base_calculation_type_0", "invoice_percentage"),
+            ("calculation_base_operation_0", "percentage_of_variable"),
+            ("calculation_base_audit_variable_0", "valor_nf"),
+            ("calculation_base_aliases_0", "valor da nf; sobre nf, nota fiscal"),
+            ("calculation_base_is_active_0", "1"),
+            ("calculation_base_allows_minimum_0", "1"),
+            ("calculation_base_allows_maximum_0", "1"),
+            ("calculation_base_display_order_0", "10"),
+            ("calculation_base_row_index", "1"),
+            ("calculation_base_id_1", "fracao_100kg"),
+            ("calculation_base_label_1", "por fração de 100kg"),
+            ("calculation_base_unit_1", "R$"),
+            ("calculation_base_calculation_type_1", "weight_fraction"),
+            ("calculation_base_operation_1", "ceil_fraction"),
+            ("calculation_base_audit_variable_1", "peso"),
+            ("calculation_base_aliases_1", "100kg ou fração"),
+            ("calculation_base_fraction_size_1", "100"),
+            ("calculation_base_is_active_1", "1"),
+            ("calculation_base_display_order_1", "20"),
+        ]
+    )
+
+    bases = svc.parsear_calculation_bases_form(form)
+    saved = svc.salvar_cleide_audit_calculation_bases(bases)
+
+    assert saved[0]["aliases"] == ["valor da nf", "sobre nf", "nota fiscal"]
+    assert saved[1]["parameters"] == {"fraction_size": 100}
+    assert svc.resolve_calculation_base("sobre nf", "%", saved)["id"] == "pct_nota_fiscal"
+    assert svc.resolve_calculation_base("100kg ou fração", "R$", saved)["id"] == "fracao_100kg"
+
+
+def test_parsear_calculation_bases_form_gera_id_para_nova_base():
+    form = MultiDict(
+        [
+            ("calculation_base_row_index", "0"),
+            ("calculation_base_label_0", "Taxa administrativa"),
+            ("calculation_base_unit_0", "R$"),
+            ("calculation_base_calculation_type_0", "fixed_amount"),
+            ("calculation_base_operation_0", "fixed_amount"),
+            ("calculation_base_aliases_0", "taxa adm"),
+            ("calculation_base_is_active_0", "1"),
+            ("calculation_base_display_order_0", "10"),
+        ]
+    )
+
+    bases = svc.parsear_calculation_bases_form(form)
+
+    assert bases[0]["id"] == "taxa_administrativa"
+    assert bases[0]["parameters"] == {}
+
+
+def test_salvar_calculation_bases_json_invalido_nao_apaga_config_anterior(ctx):
+    original = [svc.DEFAULT_CALCULATION_BASES[1]]
+    svc.salvar_cleide_audit_calculation_bases(original)
+    before = ConfigRegras.query.filter_by(
+        chave="cleide_audit_cfg_calculation_bases"
+    ).first().valor_texto
+
+    with pytest.raises(ValueError, match="JSON inválido"):
+        svc.salvar_cleide_audit_calculation_bases_json("{invalid")
+
+    after = ConfigRegras.query.filter_by(
+        chave="cleide_audit_cfg_calculation_bases"
+    ).first().valor_texto
+    assert after == before
+    assert svc.carregar_cleide_audit_calculation_bases()[0]["id"] == "por_cte"
+
+
+def test_config_antiga_sem_calculation_bases_recebe_default(ctx):
+    svc.salvar_cleide_audit_config({"chat_max_history": "7"})
+    row = ConfigRegras.query.filter_by(chave="cleide_audit_cfg_calculation_bases").first()
+    assert row is not None
+
+    row.valor_texto = None
+    db.session.commit()
+    if hasattr(g, "_cleide_audit_cfg"):
+        delattr(g, "_cleide_audit_cfg")
+
+    loaded = svc.get_cleide_audit_config()
+    assert loaded.chat_max_history == 7
+    assert loaded.calculation_bases == svc.DEFAULT_CALCULATION_BASES
+
+
+def test_salvar_calculation_bases_preserva_outras_configs_auditoria(ctx):
+    svc.salvar_cleide_audit_config(
+        {
+            "chat_max_history": "6",
+            "fallback_message": "fallback preservado",
+            "upload_enabled": "0",
+        }
+    )
+
+    svc.salvar_cleide_audit_calculation_bases([svc.DEFAULT_CALCULATION_BASES[0]])
+
+    loaded = svc.get_cleide_audit_config()
+    assert loaded.chat_max_history == 6
+    assert loaded.fallback_message == "fallback preservado"
+    assert loaded.upload_enabled is False
+    assert [base["id"] for base in loaded.calculation_bases] == ["pct_nota_fiscal"]
+
+
+@pytest.mark.parametrize(
+    ("basis", "unit", "expected_id"),
+    [
+        ("valor da nota fiscal", "%", "pct_nota_fiscal"),
+        ("por Cte", "R$", "por_cte"),
+        ("por conhecimento", "R$", "por_conhecimento"),
+        ("100Kg ou fração", "R$", "fracao_100kg"),
+        ("sobre NF", "%", "pct_nota_fiscal"),
+        ("sobre o valor da Nota Fiscal", "%", "pct_nota_fiscal"),
+        ("sobre o valor da NF", "%", "pct_nota_fiscal"),
+        ("sobre o valor de N.Fiscal", "%", "pct_nota_fiscal"),
+        ("S/ Valor da Nota Fiscal", "%", "pct_nota_fiscal"),
+        ("sobre nota fiscal", "%", "pct_nota_fiscal"),
+        ("para cada 100Kg ou fração", "R$", "fracao_100kg"),
+    ],
+)
+def test_resolve_calculation_base_defaults_por_basis_e_unit(basis, unit, expected_id):
+    match = svc.resolve_calculation_base(basis, unit, svc.DEFAULT_CALCULATION_BASES)
+    assert match is not None
+    assert match["id"] == expected_id
+
+
+def test_parse_calculation_bases_persistida_antiga_recebe_aliases_default(ctx):
+    old_pct_base = dict(svc.DEFAULT_CALCULATION_BASES[0], aliases=["valor da nota fiscal"])
+    svc.salvar_cleide_audit_calculation_bases([old_pct_base])
+
+    if hasattr(g, "_cleide_audit_cfg"):
+        delattr(g, "_cleide_audit_cfg")
+
+    loaded = svc.get_cleide_audit_config()
+    assert svc.resolve_calculation_base(
+        "sobre o valor de N.Fiscal",
+        "%",
+        loaded.calculation_bases,
+    )["id"] == "pct_nota_fiscal"
+
+
+def test_resolve_calculation_base_exige_unidade_compativel():
+    match = svc.resolve_calculation_base(
+        "valor da nota fiscal",
+        "R$",
+        svc.DEFAULT_CALCULATION_BASES,
+    )
+    assert match is None
+
+
+def test_resolve_calculation_base_ignora_inativas():
+    bases = [dict(svc.DEFAULT_CALCULATION_BASES[0], is_active=False)]
+    match = svc.resolve_calculation_base("valor da nota fiscal", "%", bases)
+    assert match is None
+
+
+def test_resolve_calculation_base_ambigua_nao_escolhe():
+    bases = [
+        dict(svc.DEFAULT_CALCULATION_BASES[0]),
+        dict(
+            svc.DEFAULT_CALCULATION_BASES[0],
+            id="pct_nota_fiscal_2",
+            label="% por NF duplicada",
+            aliases=["valor da nota fiscal"],
+        ),
+    ]
+
+    result = svc.resolve_calculation_base_status("valor da nota fiscal", "%", bases)
+
+    assert result["status"] == "ambiguous"
+    assert result["base"] is None
+    assert svc.resolve_calculation_base("valor da nota fiscal", "%", bases) is None
 
 
 def test_audited_file_max_rows_fora_da_faixa_rejeitado(ctx):

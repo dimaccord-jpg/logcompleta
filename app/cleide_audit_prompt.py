@@ -5,6 +5,8 @@ Define identidade e orientacoes para o chat documental sem acoplamento com outra
 """
 from __future__ import annotations
 
+import json
+
 
 def build_cleide_audit_system_prompt() -> str:
     """Prompt de sistema da Cleide, Auditora Virtual de AgenteFrete."""
@@ -58,9 +60,38 @@ Orientacao sobre documentos anexados nesta sessao de auditoria de frete:
 """.strip()
 
 
-def build_cleide_audit_temp_table_technical_prompt() -> str:
+def _format_temp_table_calculation_bases_prompt(calculation_bases: list[dict] | None) -> str:
+    bases = [base for base in calculation_bases or [] if isinstance(base, dict)]
+    if not bases:
+        return """
+Bases de cálculo cadastradas:
+- Nenhuma base ativa foi enviada. Extraia o texto bruto encontrado em raw_calculation_basis e marque calculation_base_id como null.
+""".strip()
+    compact = []
+    for base in bases:
+        compact.append(
+            {
+                "id": base.get("id"),
+                "label": base.get("label"),
+                "unit": base.get("unit"),
+                "aliases": base.get("aliases") or [],
+                "calculation_type": base.get("calculation_type"),
+                "operation": base.get("operation"),
+                "audit_variable": base.get("audit_variable"),
+            }
+        )
+    return (
+        "Bases de cálculo ativas cadastradas no Admin da Cleide Auditoria:\n"
+        f"{json.dumps(compact, ensure_ascii=False, separators=(',', ':'))}"
+    )
+
+
+def build_cleide_audit_temp_table_technical_prompt(
+    calculation_bases: list[dict] | None = None,
+) -> str:
     """Prompt técnico exclusivo para extração pós-upload (sem conversa)."""
-    return """
+    calculation_bases_block = _format_temp_table_calculation_bases_prompt(calculation_bases)
+    prompt = """
 Voce e um extrator tecnico de custos de frete para a Cleide Auditoria.
 
 Objetivo:
@@ -92,6 +123,12 @@ Regras obrigatorias:
 - Nao coloque servicos adicionais em freight_routes.
 - Mantenha generalidades e servicos adicionais em accessorial_fees.
 - Mantenha faixas gerais em weight_ranges.
+- O nome da taxa e apenas rotulo comercial; a base de calculo define a regra matematica.
+- Para cada item de accessorial_fees, tente escolher uma das bases de calculo cadastradas abaixo.
+- Nao invente base nova se houver uma equivalente cadastrada.
+- Quando houver match, retorne calculation_base_id com o id cadastrado e calculation_base_label com o label cadastrado.
+- Preserve o texto original encontrado no documento em raw_calculation_basis.
+- Se nenhuma base for compativel, retorne calculation_base_id null, calculation_basis "não mapeado / revisar" e raw_calculation_basis com o texto original quando existir.
 - Se origem, destino ou tipo nao estiverem claros em freight_routes, preencha com null e adicione alerta em reading_alerts.
 - Se a linha estiver parcialmente legivel, ainda assim retorne com confidence "needs_review".
 - Nao falhe se conseguir extrair pelo menos parte dos dados.
@@ -99,6 +136,8 @@ Regras obrigatorias:
 - Use status "failed" somente se nao encontrar nenhum dado util de frete.
 - Quando houver duvida, mantenha o item com descricao simples e registre alerta em reading_alerts.
 - Limite evidence_refs ao minimo necessario.
+
+{calculation_bases_block}
 
 Retorne exatamente um objeto JSON neste formato:
 
@@ -191,7 +230,10 @@ Formato sugerido para accessorial_fees (generalidades e servicos adicionais):
     "name": "Pedagio",
     "value": null,
     "unit": "",
-    "calculation_basis": "",
+    "calculation_basis": "% por nota fiscal",
+    "calculation_base_id": "pct_nota_fiscal",
+    "calculation_base_label": "% por nota fiscal",
+    "raw_calculation_basis": "sobre o valor da Nota Fiscal",
     "notes": ""
   }
 ]
@@ -211,3 +253,4 @@ Status permitidos:
 - needs_review
 - failed
 """.strip()
+    return prompt.replace("{calculation_bases_block}", calculation_bases_block)

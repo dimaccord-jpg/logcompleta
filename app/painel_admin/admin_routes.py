@@ -509,12 +509,20 @@ def agentes_roberto():
 def _render_agentes_cleide_page(cleide_config_service, cleide_audit_config_service):
     cfg = cleide_config_service.get_cleide_config()
     audit_cfg = cleide_audit_config_service.get_cleide_audit_config()
+    audit_calculation_bases_json = cleide_audit_config_service.formatar_calculation_bases_json(
+        getattr(
+            audit_cfg,
+            "calculation_bases",
+            cleide_audit_config_service.DEFAULT_CALCULATION_BASES,
+        )
+    )
     return render_template(
         "agentes_cleide.html",
         cfg=cfg,
         defaults=cleide_config_service.DEFAULTS,
         audit_cfg=audit_cfg,
         audit_defaults=cleide_audit_config_service.DEFAULTS,
+        audit_calculation_bases_json=audit_calculation_bases_json,
     )
 
 
@@ -529,7 +537,27 @@ def agentes_cleide():
     if request.method == "POST":
         form_name = (request.form.get("form_name") or "").strip()
 
-        if form_name == "cleide_audit":
+        if form_name == "cleide_audit_calculation_bases":
+            try:
+                if request.form.getlist("calculation_base_row_index"):
+                    bases = cleide_audit_config_service.parsear_calculation_bases_form(
+                        request.form
+                    )
+                    cleide_audit_config_service.salvar_cleide_audit_calculation_bases(bases)
+                else:
+                    cleide_audit_config_service.salvar_cleide_audit_calculation_bases_json(
+                        request.form.get("calculation_bases_json") or ""
+                    )
+                flash("Bases de cálculo da Cleide Auditoria salvas com sucesso.", "success")
+            except ValueError as e:
+                flash(str(e), "warning")
+            except Exception as e:
+                _log.exception("Erro ao salvar bases de cálculo da Cleide Auditoria: %s", e)
+                flash(
+                    "Não foi possível salvar as bases de cálculo da Cleide Auditoria.",
+                    "danger",
+                )
+        elif form_name == "cleide_audit":
             campos = {
                 "chat_enabled": request.form.get("chat_enabled"),
                 "upload_enabled": request.form.get("upload_enabled"),

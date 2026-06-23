@@ -459,6 +459,108 @@ def test_cleide_auditoria_js_temp_table_edit_features():
     assert "window.confirm" in js
 
 
+def test_cleide_auditoria_js_base_calculo_renderiza_select():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "currentCalculationBases" in js
+    assert "function appendCalculationBaseSelectCell" in js
+    assert "document.createElement('select')" in js
+    assert "não mapeado / revisar" in js
+    assert "calculationBaseOptionLabel" in js
+    assert "calculation_base_id" in js
+    assert "applyCalculationBaseToAccessorialFee" in js
+    assert "manual_configured_calculation_base" in js
+
+
+def test_cleide_auditoria_js_bloqueia_avanco_com_base_nao_mapeada():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function validateTempTableBeforeAdvance" in js
+    assert "function collectTempTableAdvanceValidationErrors" in js
+    assert "errors.push(" in js
+    assert "section: 'accessorial_fees'" in js
+    assert "reason_code: 'missing_calculation_base'" in js
+    assert "reason_code: 'invalid_accessorial_value'" in js
+    assert "reason_code: 'incompatible_accessorial_unit'" in js
+    assert "reason_code: 'unsupported_or_incomplete_operation'" in js
+    assert "Selecione uma base de cálculo ou exclua a linha." in js
+    assert "Preencha um valor válido para esta taxa ou exclua a linha." in js
+    assert "Ajuste a unidade para a base selecionada." in js
+    assert "1 item precisa de revisão. Corrija os campos destacados ou exclua a linha." in js
+    assert "itens precisam de revisão. Corrija os campos destacados ou exclua as linhas." in js
+    save_block = js[js.index("function saveTempTableAndAdvance"): js.index("fetch(API_TEMP_TABLE_SAVE", js.index("function saveTempTableAndAdvance"))]
+    assert "validateTempTableBeforeAdvance()" in save_block
+    assert "accessorialFeeHasRequiredValue" in js
+    assert "accessorialFeeUnitMatchesBase" in js
+    assert "accessorialFeeOperationIsComplete" in js
+    assert "multiply_by_variable" in js
+
+
+def test_cleide_auditoria_js_destaca_base_calculo_invalida():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    assert "tempTableValidationErrors" in js
+    assert "getAccessorialFeeValidationError(feeIndex" in js
+    assert "accessorial-row--invalid" in js
+    assert "data-accessorial-fee-index" in js
+    assert "field-invalid" in js
+    assert "aria-invalid" in js
+    assert "data-field', 'calculation_base_id'" in js
+    assert "field: 'value'" in js
+    assert "field: 'unit'" in js
+    assert "accessorial-field-error" in js
+    assert "accessorial-field-error-icon" in js
+    assert "⚠" in js
+    assert ".accessorial-row--invalid" in source
+    assert ".cleide-audit-temp-table-modal-cell-input.field-invalid" in source
+    assert ".accessorial-field-error" in source
+
+
+def test_cleide_auditoria_js_foca_primeiro_erro_base_calculo():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function focusFirstTempTableValidationError" in js
+    focus_block = js[js.index("function focusFirstTempTableValidationError"): js.index("function ensureTempTableEditModeForValidation")]
+    assert "scrollIntoView({ block: 'center', behavior: 'smooth' })" in focus_block
+    assert "first.field || 'calculation_base_id'" in focus_block
+    assert "field.focus()" in focus_block
+    assert "ensureTempTableEditModeForValidation()" in js
+    edit_block = js[js.index("function ensureTempTableEditModeForValidation"): js.index("function validateTempTableBeforeAdvance")]
+    assert "tempTableEditMode = true" in edit_block
+    assert "tempTableModalActiveTab = 'freight'" in edit_block
+
+
+def test_cleide_auditoria_js_limpa_erro_ao_corrigir_ou_excluir_base_calculo():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function refreshTempTableValidationErrorsAfterAccessorialEdit" in js
+    select_block = js[js.index("appendCalculationBaseSelectCell(tr, item, function (baseId)"): js.index("appendAccessorialFieldCell(tr, item.notes")]
+    delete_block = js[js.index("appendRowDeleteCell(tr, function () {", js.index("function renderEditableAccessorialFeesSection")): js.index("appendRowDeleteCell(tr, function () {", js.index("function renderEditableAccessorialFeesSection")) + 500]
+    assert "refreshTempTableValidationErrorsAfterAccessorialEdit()" in select_block
+    assert "refreshTempTableValidationErrorsAfterAccessorialEdit()" in delete_block
+    assert "setTempTableValidationErrors(collectTempTableAdvanceValidationErrors())" in js
+    assert "setTempTableModalError('')" in js
+
+
+def test_cleide_auditoria_js_aplica_errors_backend_base_calculo():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    handler_block = js[js.index("function handleBackendTempTableValidationErrors"): js.index("function saveTempTableAndAdvance")]
+    response_block = js[js.index(".then(function (res) {", js.index("function saveTempTableAndAdvance")): js.index("if (res.data.temp_table)", js.index("function saveTempTableAndAdvance"))]
+    assert "Array.isArray(data.errors)" in handler_block
+    assert "setTempTableValidationErrors(data.errors)" in handler_block
+    assert "ensureTempTableEditModeForValidation()" in handler_block
+    assert "focusFirstTempTableValidationError()" in handler_block
+    assert "handleBackendTempTableValidationErrors(res.data)" in response_block
+
+
+def test_cleide_auditoria_js_readonly_base_calculo_diferencia_resolvida_de_extraida():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function appendReadonlyCalculationBasisCell" in js
+    assert "calculation_base_label" in js
+    assert "raw_calculation_basis" in js
+    assert "texto extraído:" in js
+    assert "accessorial-basis-extracted-text" in js
+    readonly_block = js[js.index("function appendReadonlyCalculationBasisCell"): js.index("function calculationBaseOptionLabel")]
+    assert "getCalculationBaseById(baseId)" in readonly_block
+    assert "não mapeado / revisar" in readonly_block
+
+
 def test_cleide_auditoria_template_temp_table_modal_layout():
     source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
     assert "cleide-audit-temp-table-modal-freight-scroll" in source
@@ -681,7 +783,7 @@ def test_cleide_auditoria_js_freight_table_open_state_does_not_affect_other_sect
 
 def test_cleide_auditoria_js_coverage_prompt_after_save():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
-    save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function saveTempTableAndAdvance") + 1400]
+    save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function byId")]
     assert "coverageStepActive = true" in save_block
     assert "tempTableModalActiveTab = 'coverage'" in save_block
     assert "renderTempTableModalContent(currentTempTable)" in save_block

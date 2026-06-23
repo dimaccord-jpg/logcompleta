@@ -1,7 +1,7 @@
 # Estado Oficial Consolidado
 
-Data de consolidacao: `2026-06-17`
-Commit de referencia: `284b340`
+Data de consolidacao: `2026-06-19`
+Commit de referencia: `bad8990`
 
 ## Escopo promovido
 
@@ -16,11 +16,11 @@ Estado confirmado no codigo e na promocao:
 
 ## Estado oficial de ambiente
 
-- `homolog` contem `80d5e73`
-- `producao` contem merge `284b340`
+- `homolog` contem `17675d0`
+- `producao` contem merge `bad8990`
 - producao foi validada e aprovada apos deploy
-- `origin/homolog` e `origin/producao` possuem tree hash igual: `39da31eb877f6acc5b2ba34be98d3f0e70246664`
-- `HEAD` diferente entre branches pode ocorrer apenas por merge commit, sem diferenca de conteudo
+- apos o push, `origin/producao` ficou em `bad8990`
+- o ambiente local voltou para `homolog`, limpo e sincronizado
 - nao houve migration nova
 - nao houve schema novo
 - nao houve campos novos
@@ -102,6 +102,7 @@ Estado promovido:
 - o chat consulta o contexto, mas nao deve recriar, alterar ou sobrescrever a tabela temporaria
 - a interface exibe card clicavel da tabela temporaria no painel de anexos/documentos
 - o modal da tabela temporaria e somente leitura
+- a validacao da `temp_table` e humana e governada, nao uma nova conversa de IA
 
 Garantias:
 
@@ -142,11 +143,9 @@ Esta entrega:
 
 Validacoes registradas para a promocao:
 
-- `python -m pytest tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado: `178 passed, 2 warnings`
-- `python -m pytest`
-- resultado: `1160 passed, 36 warnings`
-- warnings conhecidos de dependencia/uso legado, sem falha funcional
+- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py`
+- resultado: `341 passed, 2 warnings`
+- warnings conhecidos de `flask_session` e `google.genai`, sem falha funcional e sem bloqueio da promocao
 
 ## Ponto de atencao operacional
 

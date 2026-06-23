@@ -1,7 +1,7 @@
 # Deploy e Promocao
 
-Data de consolidacao: `2026-06-17`
-Commit de referencia em producao: `284b340`
+Data de consolidacao: `2026-06-19`
+Commit de referencia em producao: `bad8990`
 
 ## Ambientes
 
@@ -21,18 +21,18 @@ Variaveis contratuais:
 
 Entrega validada e promovida:
 
-- `80d5e73 feat: estabiliza chat de auditoria da Cleide em homologacao`
-- `284b340 merge: promove estabilizacao do chat de auditoria Cleide para producao`
+- `17675d0 feat: estabiliza auditoria documental da Cleide`
+- `bad8990 merge: promove auditoria documental da Cleide para producao`
 
 Confirmacoes operacionais:
 
-- `homolog -> 80d5e73`
-- `producao -> 284b340`
+- `homolog -> 17675d0`
+- `producao -> bad8990`
 - homologacao validada antes da promocao
 - producao aprovada apos o deploy
+- apos o push, `origin/producao` ficou em `bad8990`
+- o ambiente local retornou para `homolog`, limpo e sincronizado
 - working tree limpo antes e depois dos pushes
-- tree hash alinhado entre `origin/homolog` e `origin/producao`: `39da31eb877f6acc5b2ba34be98d3f0e70246664`
-- `HEAD` de producao pode diferir por merge commit, mesmo com conteudo identico
 
 ## Migrations
 
@@ -47,6 +47,7 @@ alembic -c migrations/alembic.ini upgrade head
 ```
 
 Esta etapa continua obrigatoria para o ambiente, mas a entrega da estabilizacao da auditoria Cleide nao adiciona migration propria.
+As migrations citadas aqui sao preexistentes do ambiente e nao pertencem a esta promocao.
 
 ## Smoke checks obrigatorios
 
@@ -59,7 +60,7 @@ Esta etapa continua obrigatoria para o ambiente, mas a entrega da estabilizacao 
 7. validar `/auditoria-frete` com upload, status documental e tabela temporaria extraida
 8. confirmar que a tabela temporaria aparece como card clicavel no painel de anexos/documentos
 9. abrir o modal e confirmar modo somente leitura com validacao humana obrigatoria
-10. validar a revisao humana via `POST /api/cleide-auditoria/temp-table/save` quando o fluxo exigir ajuste
+10. validar a revisao humana governada via `POST /api/cleide-auditoria/temp-table/save` quando o fluxo exigir ajuste
 11. confirmar que o chat da Cleide nao recria nem sobrescreve a tabela temporaria
 12. validar PDF governado com Gemini Files quando configurado
 13. validar bloqueios por autorizacao/plano/franquia
@@ -78,8 +79,8 @@ Nao promover homolog -> producao sem:
 - validacao da revisao humana da tabela temporaria quando aplicavel
 - confirmacao de que a tabela temporaria continua separada do chat
 - execucao dos testes especificos:
-  `python -m pytest tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- execucao da suite completa `python -m pytest` quando viavel
+  `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py`
+- confirmacao do resultado aprovado: `341 passed, 2 warnings`
 - validacao da observabilidade
 - validacao de Roberto e Cleide
 - confirmacao de que nenhum temporario foi versionado

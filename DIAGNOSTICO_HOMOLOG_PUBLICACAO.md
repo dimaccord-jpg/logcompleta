@@ -6,16 +6,16 @@ Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 ## Estado Atual Confirmado
 
 - pacote funcional da fase atual integrado localmente
-- homolog validada no commit `80d5e73`
-- producao atualizada e aprovada apos merge `284b340`
-- `origin/homolog` e `origin/producao` estao alinhadas em conteudo de arquivos
-- tree hash confirmado: `39da31eb877f6acc5b2ba34be98d3f0e70246664`
-- diferenca de `HEAD` entre homolog e producao pode existir apenas por merge commit
+- homolog validada no commit `17675d0`
+- producao atualizada e aprovada apos merge `bad8990`
+- apos o push, `origin/producao` ficou no commit `bad8990`
+- o ambiente local retornou para `homolog`, limpo e sincronizado
 - estabilizacao da auditoria documental da Cleide promovida sem nova migration
 - tabela temporaria da auditoria Cleide estabilizada como artefato tecnico temporario, descartavel e sujeito a validacao humana
 - owner operacional da tabela temporaria: Cleiton
 - chat da Cleide permanece separado da extracao/atualizacao da tabela temporaria
 - modal da tabela temporaria mantido em modo somente leitura
+- a validacao da tabela temporaria e humana e governada; nao e uma nova conversa de IA
 - documentos legais estabilizados com storage persistente em `settings.data_dir`, sem dependencia operacional de `app/static/...`
 - rota publica `/termos-de-uso` restaurada como entrada canonica para fluxo publico
 
@@ -46,7 +46,7 @@ Nao tratar como opcional:
 
 Somente quando todos forem verdadeiros:
 
-1. migrations existentes aplicadas sem erro
+1. migrations existentes preexistentes aplicadas sem erro
 2. schema validado no banco alvo
 3. health checks ok
 4. cron protegido validado

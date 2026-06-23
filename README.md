@@ -1,22 +1,21 @@
 # Agentefrete / Log Completa
 
-Data de consolidacao: `2026-06-17`
-Estado de referencia: `producao` / merge `284b340`
+Data de consolidacao: `2026-06-19`
+Estado de referencia: `producao` / merge `bad8990`
 
 Este `README.md` resume o estado real homologado e promovido apos a estabilizacao da auditoria documental da Cleide:
 
-- `80d5e73 feat: estabiliza chat de auditoria da Cleide em homologacao`
-- `284b340 merge: promove estabilizacao do chat de auditoria Cleide para producao`
+- `17675d0 feat: estabiliza auditoria documental da Cleide`
+- `bad8990 merge: promove auditoria documental da Cleide para producao`
 
 Confirmacoes operacionais:
 
-- `homolog` contem `80d5e73`
-- `producao` contem merge `284b340`
+- `homolog` contem `17675d0`
+- `producao` contem merge `bad8990`
 - homolog foi validada antes da promocao
 - producao foi validada e aprovada apos deploy
-- `origin/homolog` e `origin/producao` possuem o mesmo conteudo real de arquivos
-- o tree hash alinhado entre `origin/homolog` e `origin/producao` e `39da31eb877f6acc5b2ba34be98d3f0e70246664`
-- o `HEAD` de producao pode ser diferente do `HEAD` de homolog por causa do merge commit, mesmo com o mesmo conteudo
+- apos o push, `origin/producao` ficou no commit `bad8990`
+- o ambiente local retornou para `homolog`, limpo e sincronizado
 - nao houve migration nova, nova tabela, novo campo ou alteracao manual de schema
 
 ## Estado atual do produto
@@ -38,7 +37,7 @@ Superficies oficiais ativas:
 - Julia: assistente estrategica e operacional logada, com suporte documental governado
 - Cleiton: governanca operacional, autorizacao, observabilidade, upload documental, limites e integracao com IA
 - Roberto: BI, previsoes e leitura forward-looking de fretes
-- Cleide: entrevista de auditoria, conferencia e leitura retrospectiva
+- Cleide: auditoria documental assistida, conferencia retrospectiva e orientacao operacional
 
 ## Cleide Auditoria documental
 
@@ -52,6 +51,7 @@ Estado atual promovido:
 - o chat consulta contexto documental, mas nao deve criar, alterar ou sobrescrever a tabela temporaria
 - a interface exibe a tabela temporaria na area de documentos anexados/estado documental como card clicavel
 - o modal da tabela temporaria opera em modo somente leitura, com revisao e validacao humana
+- a validacao humana da tabela temporaria nao deve ser tratada como nova conversa de IA
 - a extracao nao cria rota paralela de produto nem nova tabela de banco
 
 Contratos oficiais do fluxo:
@@ -60,7 +60,7 @@ Contratos oficiais do fluxo:
 - status documental: `GET /api/cleide-auditoria/documents/status`
 - remocao: `DELETE /api/cleide-auditoria/documents/<doc_id>`
 - limpeza: `POST /api/cleide-auditoria/documents/clear`
-- revisao humana da tabela temporaria: `POST /api/cleide-auditoria/temp-table/save`
+- revisao humana governada da tabela temporaria ativa: `POST /api/cleide-auditoria/temp-table/save`
 - chat: `POST /api/cleide-auditoria/chat`
 
 Tabela temporaria extraida:
@@ -223,17 +223,17 @@ Migration relevante ja existente e mantida:
 
 Cobertura diretamente relacionada:
 
+- `tests/test_cleide_audit_config_service.py`
+- `tests/test_cleide_admin_routes.py`
 - `tests/test_cleide_audit_doc_routes.py`
 - `tests/test_cleide_audit_temp_table.py`
 - `tests/test_cleide_auditoria_page.py`
 
 Validacoes registradas antes da promocao:
 
-- `python -m pytest tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado: `178 passed, 2 warnings`
-- `python -m pytest`
-- resultado: `1160 passed, 36 warnings`
-- warnings conhecidos de dependencia/uso legado, sem bloqueio da entrega
+- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py`
+- resultado validado: `341 passed, 2 warnings`
+- warnings conhecidos de dependencia em `flask_session` e `google.genai`, sem bloqueio da promocao
 
 ## Deploy e branches
 

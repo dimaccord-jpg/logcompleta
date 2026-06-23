@@ -1,7 +1,7 @@
 # Arquitetura Oficial
 
-Data de consolidacao: `2026-06-17`
-Commit de referencia: `284b340`
+Data de consolidacao: `2026-06-19`
+Commit de referencia: `bad8990`
 
 Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos a estabilizacao da auditoria documental da Cleide.
 
@@ -55,7 +55,7 @@ Sempre:
 
 - superficie BI atual: `/cleide-bi-frete`
 - superficie documental atual: `/auditoria-frete`
-- papel: auditoria, conferencia, desvios e horizonte historico
+- papel: auditoria documental assistida, conferencia, desvios e horizonte historico
 - na superficie documental, o chat e separado da extracao tecnica de tabela temporaria
 
 ## Regra-mae de handoff
@@ -116,7 +116,7 @@ Contratos reais:
 - o prompt tecnico fica em `build_cleide_audit_temp_table_technical_prompt()`
 - a resposta esperada do modelo e JSON tecnico, sem auditoria final
 - o endpoint de status devolve `temp_table` quando houver artefato ativo
-- o endpoint `POST /api/cleide-auditoria/temp-table/save` registra revisao humana da tabela temporaria quando o artefato esta ativo
+- o endpoint `POST /api/cleide-auditoria/temp-table/save` registra revisao humana governada da tabela temporaria quando o artefato esta ativo
 - a UI exibe um card clicavel de tabela temporaria e abre modal somente leitura
 - a priorizacao visual e operacional recai sobre blocos operacionais, rotas/tabelas de frete e informacoes adicionais
 
@@ -125,12 +125,13 @@ Garantias:
 - a tabela temporaria e separada do chat conversacional
 - a tabela temporaria e temporaria, descartavel e sujeita a validacao humana
 - a tabela temporaria e readonly na experiencia da Cleide
+- a validacao da tabela temporaria nao e modelada como nova conversa de IA
 - o `operational_owner` e `cleiton`
 - o ciclo de vida depende do TTL dos documentos da sessao
 - invalidacoes ocorrem quando os documentos fonte mudam ou sao removidos
 - nao ha migration nova, nova tabela de banco, novo campo ou alteracao manual de schema para esse fluxo
 - nao ha conexao nova com APIs da Julia ou do BI nessa superficie documental
-- o conteudo real entre `origin/homolog` e `origin/producao` esta alinhado; diferenca de `HEAD` pode existir apenas pelo merge commit de publicacao
+- a promocao aprovada desta entrega foi `17675d0 -> bad8990`, sem alteracao estrutural de banco
 
 ## Arquitetura documental da Julia
 

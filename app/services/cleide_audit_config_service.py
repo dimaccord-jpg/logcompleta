@@ -9,7 +9,10 @@ Fase 1:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+import json
+import re
+import unicodedata
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from flask import g, has_request_context
@@ -41,7 +44,127 @@ DEFAULT_FALLBACK_MESSAGE = (
 
 DEFAULT_AUDITED_FILE_MAX_ROWS = 2000
 
-DEFAULTS: dict[str, int | str] = {
+DEFAULT_CALCULATION_BASES: list[dict[str, Any]] = [
+    {
+        "id": "pct_nota_fiscal",
+        "label": "% por nota fiscal",
+        "aliases": [
+            "valor da nf",
+            "valor da nota fiscal",
+            "valor_nf",
+            "nota fiscal",
+            "sobre nf",
+            "sobre nota fiscal",
+            "sobre o valor da nf",
+            "sobre o valor da nota fiscal",
+            "sobre o valor de nf",
+            "sobre o valor de n fiscal",
+            "sobre o valor de n.fiscal",
+            "s/ valor da nf",
+            "s/ valor da nota fiscal",
+            "valor de n.fiscal",
+            "valor da n.fiscal",
+        ],
+        "unit": "%",
+        "calculation_type": "invoice_percentage",
+        "audit_variable": "valor_nf",
+        "operation": "percentage_of_variable",
+        "parameters": {},
+        "allows_minimum": True,
+        "allows_maximum": True,
+        "requires_structured_condition": False,
+        "is_active": True,
+        "display_order": 10,
+    },
+    {
+        "id": "por_cte",
+        "label": "por CTe",
+        "aliases": ["cte", "por cte", "conhecimento", "documento"],
+        "unit": "R$",
+        "calculation_type": "fixed_amount",
+        "audit_variable": None,
+        "operation": "fixed_amount",
+        "parameters": {},
+        "allows_minimum": False,
+        "allows_maximum": False,
+        "requires_structured_condition": False,
+        "is_active": True,
+        "display_order": 20,
+    },
+    {
+        "id": "por_conhecimento",
+        "label": "por conhecimento",
+        "aliases": ["conhecimento", "por conhecimento", "cte", "documento"],
+        "unit": "R$",
+        "calculation_type": "fixed_amount",
+        "audit_variable": None,
+        "operation": "fixed_amount",
+        "parameters": {},
+        "allows_minimum": False,
+        "allows_maximum": False,
+        "requires_structured_condition": False,
+        "is_active": True,
+        "display_order": 30,
+    },
+    {
+        "id": "por_documento",
+        "label": "por documento",
+        "aliases": ["documento", "por documento", "doc", "por doc"],
+        "unit": "R$",
+        "calculation_type": "fixed_amount",
+        "audit_variable": None,
+        "operation": "fixed_amount",
+        "parameters": {},
+        "allows_minimum": False,
+        "allows_maximum": False,
+        "requires_structured_condition": False,
+        "is_active": True,
+        "display_order": 40,
+    },
+    {
+        "id": "por_kg",
+        "label": "por kg",
+        "aliases": ["kg", "quilo", "quilograma", "por kg", "peso"],
+        "unit": "R$",
+        "calculation_type": "weight",
+        "audit_variable": "peso",
+        "operation": "multiply_by_variable",
+        "parameters": {},
+        "allows_minimum": False,
+        "allows_maximum": False,
+        "requires_structured_condition": False,
+        "is_active": True,
+        "display_order": 50,
+    },
+    {
+        "id": "fracao_100kg",
+        "label": "por fração de 100kg",
+        "aliases": [
+            "100kg ou fração",
+            "100kg ou fracao",
+            "cada 100kg",
+            "para cada 100kg",
+            "para cada 100kg ou fração",
+            "para cada 100kg ou fracao",
+            "fração de 100kg",
+            "fracao de 100kg",
+            "por fração de 100kg",
+            "por fracao de 100kg",
+        ],
+        "unit": "R$",
+        "calculation_type": "weight_fraction",
+        "audit_variable": "peso",
+        "operation": "ceil_fraction",
+        "parameters": {"fraction_size": 100},
+        "allows_minimum": False,
+        "allows_maximum": False,
+        "requires_structured_condition": False,
+        "is_active": True,
+        "display_order": 60,
+    },
+]
+
+DEFAULTS: dict[str, Any] = {
     "chat_enabled": 1,
     "upload_enabled": 1,
     "chat_max_history": 10,
@@ -53,6 +176,7 @@ DEFAULTS: dict[str, int | str] = {
     "show_documents_used": 1,
     "no_hallucination_instruction_enabled": 1,
     "audited_file_max_rows": DEFAULT_AUDITED_FILE_MAX_ROWS,
+    "calculation_bases": DEFAULT_CALCULATION_BASES,
 }
 
 DESCRICOES: dict[str, str] = {
@@ -71,6 +195,9 @@ DESCRICOES: dict[str, str] = {
     "audited_file_max_rows": (
         "Define o limite de linhas aceitas no arquivo enviado para auditoria de frete."
     ),
+    "calculation_bases": (
+        "Bases de cálculo administrativas da Cleide Auditoria para futura classificação de taxas."
+    ),
 }
 
 
@@ -87,6 +214,11 @@ class CleideAuditConfig:
     show_documents_used: bool
     no_hallucination_instruction_enabled: bool
     audited_file_max_rows: int
+    calculation_bases: list[dict[str, Any]] = field(
+        default_factory=lambda: json.loads(
+            json.dumps(DEFAULT_CALCULATION_BASES, ensure_ascii=False)
+        )
+    )
 
 
 def _cfg_key(nome: str) -> str:
@@ -122,6 +254,396 @@ def _coerce_bool_checkbox(value: Any) -> bool:
     if isinstance(value, str) and not value.strip():
         return False
     return _coerce_bool(value, False)
+
+
+def _clone_default_calculation_bases() -> list[dict[str, Any]]:
+    return json.loads(json.dumps(DEFAULT_CALCULATION_BASES, ensure_ascii=False))
+
+
+def _coerce_aliases(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [part.strip() for part in re.split(r"[;,]", value)]
+    elif isinstance(value, list):
+        items = [str(part or "").strip() for part in value]
+    else:
+        raise ValueError("aliases deve ser uma lista de textos.")
+    return [item for item in items if item]
+
+
+def _coerce_optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _coerce_display_order(value: Any, fallback: int) -> int:
+    if value is None or str(value).strip() == "":
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("display_order deve ser um inteiro.") from exc
+
+
+def _slugify_calculation_base_id(label: str, fallback: str) -> str:
+    text = unicodedata.normalize("NFKD", label)
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = re.sub(r"[^a-zA-Z0-9]+", "_", text).strip("_").lower()
+    if not text:
+        text = fallback
+    if text[0].isdigit():
+        text = f"base_{text}"
+    return text
+
+
+def _parse_fraction_size(value: Any, base_label: str) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError(f"Base de cálculo '{base_label}': fraction_size deve ser informado.")
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Base de cálculo '{base_label}': fraction_size deve ser inteiro.") from exc
+    if parsed <= 0:
+        raise ValueError(f"Base de cálculo '{base_label}': fraction_size deve ser maior que zero.")
+    return parsed
+
+
+def _get_form_value(raw_values: Any, name: str, default: Any = None) -> Any:
+    getter = getattr(raw_values, "get", None)
+    if callable(getter):
+        return getter(name, default)
+    if isinstance(raw_values, dict):
+        return raw_values.get(name, default)
+    return default
+
+
+def _get_form_list(raw_values: Any, name: str) -> list[str]:
+    getlist = getattr(raw_values, "getlist", None)
+    if callable(getlist):
+        return [str(item) for item in getlist(name)]
+    if isinstance(raw_values, dict):
+        value = raw_values.get(name, [])
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        if value in (None, ""):
+            return []
+        return [str(value)]
+    return []
+
+
+def _form_has_name(raw_values: Any, name: str) -> bool:
+    try:
+        return name in raw_values
+    except TypeError:
+        return False
+
+
+def parsear_calculation_bases_form(raw_values: Any) -> list[dict[str, Any]]:
+    row_indices = [
+        index.strip()
+        for index in _get_form_list(raw_values, "calculation_base_row_index")
+        if index.strip()
+    ]
+    bases: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+
+    for position, row_index in enumerate(row_indices):
+        label = str(_get_form_value(raw_values, f"calculation_base_label_{row_index}") or "").strip()
+        if not label:
+            raise ValueError(f"Base de cálculo #{position + 1}: nome da base é obrigatório.")
+
+        base_id = str(_get_form_value(raw_values, f"calculation_base_id_{row_index}") or "").strip()
+        if not base_id:
+            base_id = _slugify_calculation_base_id(label, f"base_{position + 1}")
+
+        if base_id in used_ids:
+            suffix = 2
+            original_id = base_id
+            while f"{original_id}_{suffix}" in used_ids:
+                suffix += 1
+            base_id = f"{original_id}_{suffix}"
+        used_ids.add(base_id)
+
+        calculation_type = str(
+            _get_form_value(raw_values, f"calculation_base_calculation_type_{row_index}") or ""
+        ).strip()
+        operation = str(
+            _get_form_value(raw_values, f"calculation_base_operation_{row_index}") or ""
+        ).strip()
+        parameters: dict[str, Any] = {}
+        if operation == "ceil_fraction":
+            parameters["fraction_size"] = _parse_fraction_size(
+                _get_form_value(raw_values, f"calculation_base_fraction_size_{row_index}"),
+                label,
+            )
+
+        raw_base = {
+            "id": base_id,
+            "label": label,
+            "aliases": _get_form_value(raw_values, f"calculation_base_aliases_{row_index}") or "",
+            "unit": str(_get_form_value(raw_values, f"calculation_base_unit_{row_index}") or "").strip(),
+            "calculation_type": calculation_type,
+            "audit_variable": _get_form_value(
+                raw_values,
+                f"calculation_base_audit_variable_{row_index}",
+            ),
+            "operation": operation,
+            "parameters": parameters,
+            "allows_minimum": _form_has_name(
+                raw_values,
+                f"calculation_base_allows_minimum_{row_index}",
+            ),
+            "allows_maximum": _form_has_name(
+                raw_values,
+                f"calculation_base_allows_maximum_{row_index}",
+            ),
+            "requires_structured_condition": _form_has_name(
+                raw_values,
+                f"calculation_base_requires_structured_condition_{row_index}",
+            ),
+            "is_active": _form_has_name(raw_values, f"calculation_base_is_active_{row_index}"),
+            "display_order": _get_form_value(
+                raw_values,
+                f"calculation_base_display_order_{row_index}",
+                (position + 1) * 10,
+            ),
+        }
+        bases.append(raw_base)
+
+    return validar_calculation_bases(bases)
+
+
+def _validate_calculation_base(raw: Any, index: int) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError(f"Base de cálculo #{index + 1} deve ser um objeto JSON.")
+
+    required_fields = ("id", "label", "unit", "calculation_type", "operation", "is_active")
+    missing = [field for field in required_fields if field not in raw]
+    if missing:
+        raise ValueError(
+            f"Base de cálculo #{index + 1} sem campos obrigatórios: {', '.join(missing)}."
+        )
+
+    base_id = str(raw.get("id") or "").strip()
+    label = str(raw.get("label") or "").strip()
+    unit = str(raw.get("unit") or "").strip()
+    calculation_type = str(raw.get("calculation_type") or "").strip()
+    operation = str(raw.get("operation") or "").strip()
+    if not base_id or not label or not unit or not calculation_type or not operation:
+        raise ValueError(
+            f"Base de cálculo #{index + 1} deve informar id, label, unit, "
+            "calculation_type e operation."
+        )
+
+    parameters = raw.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        raise ValueError(f"Base de cálculo {base_id}: parameters deve ser um objeto JSON.")
+
+    return {
+        "id": base_id,
+        "label": label,
+        "aliases": _coerce_aliases(raw.get("aliases")),
+        "unit": unit,
+        "calculation_type": calculation_type,
+        "audit_variable": _coerce_optional_str(raw.get("audit_variable")),
+        "operation": operation,
+        "parameters": parameters,
+        "allows_minimum": _coerce_bool(raw.get("allows_minimum"), False),
+        "allows_maximum": _coerce_bool(raw.get("allows_maximum"), False),
+        "requires_structured_condition": _coerce_bool(
+            raw.get("requires_structured_condition"),
+            False,
+        ),
+        "is_active": _coerce_bool(raw.get("is_active"), True),
+        "display_order": _coerce_display_order(raw.get("display_order"), (index + 1) * 10),
+    }
+
+
+def validar_calculation_bases(raw_bases: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_bases, list):
+        raise ValueError("calculation_bases deve ser uma lista JSON.")
+    bases = [_validate_calculation_base(raw, index) for index, raw in enumerate(raw_bases)]
+    ids = [base["id"] for base in bases]
+    if len(ids) != len(set(ids)):
+        raise ValueError("calculation_bases não pode conter ids duplicados.")
+    return sorted(bases, key=lambda base: (base["display_order"], base["label"].lower()))
+
+
+def _merge_default_calculation_base_aliases(bases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    default_aliases_by_id = {
+        base["id"]: list(base.get("aliases") or [])
+        for base in DEFAULT_CALCULATION_BASES
+        if isinstance(base, dict) and base.get("id")
+    }
+    merged: list[dict[str, Any]] = []
+    for base in bases:
+        item = dict(base)
+        default_aliases = default_aliases_by_id.get(str(item.get("id") or ""))
+        if default_aliases:
+            aliases = list(item.get("aliases") or [])
+            normalized_existing = {normalize_calculation_base_text(alias) for alias in aliases}
+            for alias in default_aliases:
+                normalized_alias = normalize_calculation_base_text(alias)
+                if normalized_alias and normalized_alias not in normalized_existing:
+                    aliases.append(alias)
+                    normalized_existing.add(normalized_alias)
+            item["aliases"] = aliases
+        merged.append(item)
+    return merged
+
+
+def parsear_calculation_bases_json(raw_json: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(raw_json or "[]")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON inválido em calculation_bases: {exc.msg}.") from exc
+    return validar_calculation_bases(payload)
+
+
+def _parse_calculation_bases(cfg_map: dict[str, ConfigRegras]) -> list[dict[str, Any]]:
+    row = cfg_map.get(_cfg_key("calculation_bases"))
+    if row is None or not row.valor_texto:
+        return _clone_default_calculation_bases()
+    try:
+        return _merge_default_calculation_base_aliases(parsear_calculation_bases_json(row.valor_texto))
+    except ValueError:
+        logger.warning(
+            "Cleide audit config: calculation_bases inválido em ConfigRegras; usando defaults."
+        )
+        return _clone_default_calculation_bases()
+
+
+def formatar_calculation_bases_json(bases: list[dict[str, Any]] | None = None) -> str:
+    normalized = validar_calculation_bases(
+        _clone_default_calculation_bases() if bases is None else bases
+    )
+    return json.dumps(normalized, ensure_ascii=False, indent=2)
+
+
+def normalize_calculation_base_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = re.sub(r"[_\-\/]+", " ", text)
+    text = re.sub(r"[^\w%$]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def normalize_calculation_base_unit(value: Any) -> str:
+    text = normalize_calculation_base_text(value)
+    compact = text.replace(" ", "")
+    if compact in {"%", "percent", "percentual", "porcentagem"}:
+        return "%"
+    if compact in {"r$", "rs", "brl", "real", "reais"}:
+        return "R$"
+    if compact in {"kg", "quilo", "quilos", "quilograma", "quilogramas"}:
+        return "kg"
+    return compact
+
+
+def _calculation_base_match_tokens(base: dict[str, Any]) -> set[str]:
+    tokens = {normalize_calculation_base_text(base.get("label"))}
+    tokens.update(normalize_calculation_base_text(alias) for alias in base.get("aliases") or [])
+    return {token for token in tokens if token}
+
+
+def resolve_calculation_base_status(
+    calculation_basis: Any,
+    unit: Any,
+    calculation_bases: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    basis_text = normalize_calculation_base_text(calculation_basis)
+    if not basis_text:
+        return {"status": "not_found", "base": None}
+
+    fee_unit = normalize_calculation_base_unit(unit)
+    matches: list[dict[str, Any]] = []
+    for raw_base in calculation_bases or []:
+        if not isinstance(raw_base, dict) or not _coerce_bool(raw_base.get("is_active"), True):
+            continue
+        base_unit = normalize_calculation_base_unit(raw_base.get("unit"))
+        if base_unit and fee_unit != base_unit:
+            continue
+        if basis_text in _calculation_base_match_tokens(raw_base):
+            matches.append(raw_base)
+
+    if len(matches) == 1:
+        return {"status": "matched", "base": matches[0]}
+    if len(matches) > 1:
+        return {"status": "ambiguous", "base": None, "matches": matches}
+    return {"status": "not_found", "base": None}
+
+
+def resolve_calculation_base(
+    calculation_basis: Any,
+    unit: Any,
+    calculation_bases: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    result = resolve_calculation_base_status(calculation_basis, unit, calculation_bases)
+    base = result.get("base")
+    return base if result.get("status") == "matched" and isinstance(base, dict) else None
+
+
+def get_active_calculation_bases(
+    calculation_bases: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    bases = calculation_bases
+    if bases is None:
+        bases = get_cleide_audit_config().calculation_bases
+    active = [
+        dict(base)
+        for base in bases or []
+        if isinstance(base, dict) and _coerce_bool(base.get("is_active"), True)
+    ]
+    return sorted(
+        active,
+        key=lambda base: (
+            _coerce_display_order(base.get("display_order"), 0),
+            str(base.get("label") or "").lower(),
+        ),
+    )
+
+
+def get_active_calculation_base_by_id(
+    calculation_base_id: Any,
+    calculation_bases: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    wanted = str(calculation_base_id or "").strip()
+    if not wanted:
+        return None
+    for base in get_active_calculation_bases(calculation_bases):
+        if str(base.get("id") or "").strip() == wanted:
+            return base
+    return None
+
+
+def serialize_calculation_base_for_runtime(base: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(base.get("id") or "").strip(),
+        "label": str(base.get("label") or "").strip(),
+        "unit": str(base.get("unit") or "").strip(),
+        "aliases": list(base.get("aliases") or []),
+        "calculation_type": str(base.get("calculation_type") or "").strip(),
+        "audit_variable": _coerce_optional_str(base.get("audit_variable")),
+        "operation": str(base.get("operation") or "").strip(),
+        "parameters": dict(base.get("parameters") or {}),
+    }
+
+
+def get_active_calculation_bases_for_runtime(
+    calculation_bases: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        serialize_calculation_base_for_runtime(base)
+        for base in get_active_calculation_bases(calculation_bases)
+    ]
 
 
 def _coerce_no_documents_behavior(value: Any, default: str) -> str:
@@ -244,6 +766,7 @@ def get_cleide_audit_config() -> CleideAuditConfig:
             cfg_map, "no_hallucination_instruction_enabled"
         ),
         audited_file_max_rows=_parse_int(cfg_map, "audited_file_max_rows"),
+        calculation_bases=_parse_calculation_bases(cfg_map),
     )
     cfg = _apply_global_doc_limits(cfg)
     if has_request_context():
@@ -323,6 +846,7 @@ def parsear_cleide_audit_config(raw_values: dict[str, Any]) -> CleideAuditConfig
             _raw("audited_file_max_rows"),
             "audited_file_max_rows",
         ),
+        calculation_bases=validar_calculation_bases(_raw("calculation_bases")),
     )
     return _apply_global_doc_limits(parsed)
 
@@ -336,6 +860,9 @@ def persistir_cleide_audit_config(parsed: CleideAuditConfig, *, commit: bool = T
         if isinstance(valor, bool):
             row.valor_inteiro = 1 if valor else 0
             row.valor_texto = None
+        elif isinstance(valor, list):
+            row.valor_texto = json.dumps(valor, ensure_ascii=False, indent=2)
+            row.valor_inteiro = None
         elif isinstance(valor, str):
             row.valor_texto = valor
             row.valor_inteiro = None
@@ -354,3 +881,22 @@ def salvar_cleide_audit_config(raw_values: dict[str, Any]) -> CleideAuditConfig:
     if has_request_context():
         g._cleide_audit_cfg = parsed
     return parsed
+
+
+def carregar_cleide_audit_calculation_bases() -> list[dict[str, Any]]:
+    return get_cleide_audit_config().calculation_bases
+
+
+def salvar_cleide_audit_calculation_bases(raw_bases: Any) -> list[dict[str, Any]]:
+    bases = validar_calculation_bases(raw_bases)
+    cfg_atual = get_cleide_audit_config()
+    parsed = replace(cfg_atual, calculation_bases=bases)
+    persistir_cleide_audit_config(parsed, commit=True)
+    if has_request_context():
+        g._cleide_audit_cfg = parsed
+    return bases
+
+
+def salvar_cleide_audit_calculation_bases_json(raw_json: str) -> list[dict[str, Any]]:
+    bases = parsear_calculation_bases_json(raw_json)
+    return salvar_cleide_audit_calculation_bases(bases)

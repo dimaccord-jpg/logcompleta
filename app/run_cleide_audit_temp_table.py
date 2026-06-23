@@ -27,6 +27,7 @@ from app.cleide_audit_doc_service import (
 )
 from app.cleide_audit_prompt import build_cleide_audit_temp_table_technical_prompt
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
+from app.services.cleide_audit_config_service import get_active_calculation_bases_for_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,14 @@ def _build_extraction_contents(
     document_context_block: str | None,
     document_file_parts: list | None,
 ) -> str | list:
-    system_prompt = build_cleide_audit_temp_table_technical_prompt().strip()
+    try:
+        calculation_bases = get_active_calculation_bases_for_runtime()
+    except Exception:
+        logger.exception("Cleide temp_table extraction: falha ao carregar bases de cálculo ativas.")
+        calculation_bases = []
+    system_prompt = build_cleide_audit_temp_table_technical_prompt(
+        calculation_bases=calculation_bases,
+    ).strip()
     parts = [system_prompt, "\n\n---\n\n"]
     doc_block = (document_context_block or "").strip()
     if doc_block:

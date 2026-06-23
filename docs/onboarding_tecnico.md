@@ -1,7 +1,7 @@
 # Onboarding Tecnico
 
-Data de consolidacao: `2026-06-17`
-Commit de referencia: `80d5e73`
+Data de consolidacao: `2026-06-19`
+Commit de referencia: `17675d0`
 
 ## Objetivo
 
@@ -44,9 +44,10 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - upload documental da Julia nao e produto paralelo
 - Cleiton e camada central de governanca operacional
 - a tabela temporaria da Cleide Auditoria e fluxo temporario governado, nao persistencia definitiva
-- Cleide continua responsavel pela entrevista/chat de auditoria
+- Cleide continua responsavel pela orientacao conversacional da auditoria
 - Cleiton e o owner operacional da tabela temporaria
 - a tabela temporaria e exibida em card/modal somente leitura
+- a validacao da tabela temporaria e humana e governada, nao uma nova conversa de IA
 
 ## Regras que nao podem ser quebradas
 

@@ -6,10 +6,10 @@ Objetivo: validar comportamento real ponta-a-ponta antes da promocao definitiva,
 
 Estado desta entrega:
 
-- homolog aprovada no commit `80d5e73`
-- producao aprovada apos merge `284b340`
-- `origin/homolog` e `origin/producao` alinhadas em conteudo real de arquivos
-- tree hash alinhado: `39da31eb877f6acc5b2ba34be98d3f0e70246664`
+- homolog aprovada no commit `17675d0`
+- producao aprovada apos merge `bad8990`
+- apos o push, `origin/producao` ficou em `bad8990`
+- o ambiente local voltou para `homolog`, limpo e sincronizado
 - sem migration nova
 - sem nova tabela de banco
 - sem novo campo
@@ -29,10 +29,8 @@ Estado desta entrega:
 
 Validacoes registradas antes da promocao:
 
-- `python -m pytest tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado: `178 passed, 2 warnings`
-- `python -m pytest`
-- resultado: `1160 passed, 36 warnings`
+- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py`
+- resultado: `341 passed, 2 warnings`
 
 Cobertura automatizada ja existente no projeto:
 
@@ -72,7 +70,7 @@ Cobertura automatizada ja existente no projeto:
 | 18 | Mudanca ou remocao de documento fonte | Temp table anterior invalidada corretamente | Auto + manual | [ ] |
 | 19 | Extracao parcial | Estado `needs_review` ou `awaiting_validation`, sempre com validacao humana obrigatoria | Auto + manual | [ ] |
 | 20 | Conversa apos extracao | Chat usa contexto, mas nao recria nem sobrescreve a tabela temporaria | Auto + manual | [ ] |
-| 21 | Revisao humana da temp table | `POST /api/cleide-auditoria/temp-table/save` salva edicao governada sem quebrar escopo da sessao | Auto + manual | [ ] |
+| 21 | Revisao humana da temp table | `POST /api/cleide-auditoria/temp-table/save` salva revisao humana governada sem quebrar escopo da sessao | Auto + manual | [ ] |
 
 ## Observabilidade a validar
 

@@ -1,7 +1,7 @@
 # Execucao Local
 
-Data de consolidacao: `2026-06-17`
-Commit de referencia: `80d5e73`
+Data de consolidacao: `2026-06-19`
+Commit de referencia: `17675d0`
 
 ## Objetivo
 
@@ -39,6 +39,7 @@ Executar o projeto localmente e validar o estado atual de Home, onboarding, Juli
 - `/chat_julia?mode=operational` continua valido para handoff e acesso direto
 - documentos da Julia dependem de autenticacao e autorizacao operacional
 - a Cleide Auditoria tenta extrair tabela temporaria apos upload e exige validacao humana
+- a validacao da tabela temporaria e humana e governada; nao e uma nova conversa de IA
 - o chat da Cleide consulta contexto, mas nao e owner da tabela temporaria
 - `app/cleiton_doc_tmp/` e temporario, local e ignorado no Git
 - o `.gitignore` protege `app/cleiton_doc_tmp/`

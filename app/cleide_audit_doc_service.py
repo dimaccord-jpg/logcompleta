@@ -15,6 +15,7 @@ import re
 import unicodedata
 import zipfile
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from uuid import uuid4
 
 from flask import has_request_context, session
@@ -81,7 +82,13 @@ from app.cleiton_doc_store import (
     save_document_record,
 )
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
-from app.services.cleide_audit_config_service import get_cleide_audit_config
+from app.services.cleide_audit_config_service import (
+    get_active_calculation_base_by_id,
+    get_active_calculation_bases_for_runtime,
+    get_cleide_audit_config,
+    normalize_calculation_base_unit,
+    resolve_calculation_base_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,11 +121,18 @@ TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES = 512 * 1024
 TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE = "save_and_advance"
 HUMAN_REVIEW_STATUS_REVIEWED = "reviewed"
 HUMAN_REVIEW_STATUS_EDITED = "edited"
+UNMAPPED_CALCULATION_BASIS_LABEL = "não mapeado / revisar"
+ERROR_ACCESSORIAL_CALCULATION_BASE_MESSAGE = "Selecione uma base de cálculo ou exclua a linha."
+ERROR_ACCESSORIAL_VALUE_MESSAGE = "Preencha um valor válido para esta taxa ou exclua a linha."
+ERROR_ACCESSORIAL_UNIT_MESSAGE = "A unidade não é compatível com a base selecionada."
+ERROR_ACCESSORIAL_OPERATION_MESSAGE = "Revise a operação da base de cálculo selecionada."
+ERROR_ACCESSORIAL_ADVANCE_MESSAGE = "Revise as generalidades antes de avançar."
 
 ERROR_TEMP_TABLE_NOT_FOUND = "cleide_audit_temp_table_not_found"
 ERROR_TEMP_TABLE_ID_MISMATCH = "cleide_audit_temp_table_id_mismatch"
 ERROR_TEMP_TABLE_EXPIRED = "cleide_audit_temp_table_expired"
 ERROR_TEMP_TABLE_INVALID_PAYLOAD = "cleide_audit_temp_table_invalid_payload"
+ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES = "invalid_accessorial_fees"
 ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE = "cleide_audit_temp_table_payload_too_large"
 ERROR_TEMP_TABLE_SCOPE_MISMATCH = "cleide_audit_temp_table_scope_mismatch"
 
@@ -164,7 +178,23 @@ AUDIT_STATUS_AMBIGUOUS_COVERAGE = "ambiguous_coverage_mapping"
 AUDIT_STATUS_MISSING_FREIGHT_RULE = "missing_freight_rule"
 AUDIT_STATUS_INVALID_WEIGHT = "invalid_weight"
 AUDIT_STATUS_INVALID_CHARGED_FREIGHT = "invalid_charged_freight"
+AUDIT_STATUS_INVALID_INVOICE_VALUE = "invalid_invoice_value"
 AUDIT_STATUS_UNSUPPORTED_PRICING = "unsupported_pricing_model"
+AUDIT_REASON_ACCESSORIAL_PERCENTAGE_CALCULATED = "accessorial_percentage_calculated"
+AUDIT_REASON_DUPLICATE_INVOICE_PERCENTAGE_FEE_IGNORED = "duplicate_invoice_percentage_fee_ignored"
+AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE = "ambiguous_accessorial_percentage"
+AUDIT_REASON_UNSUPPORTED_ACCESSORIAL_CONDITION = "unsupported_accessorial_condition"
+AUDIT_REASON_ACCESSORIAL_FEE_NOT_APPLIED = "accessorial_fee_not_applied"
+AUDIT_REASON_ACCESSORIAL_MINIMUM_WITHOUT_BASE_IGNORED = "accessorial_minimum_without_base_ignored"
+AUDIT_REASON_CONFIGURED_ACCESSORIAL_CALCULATED = "configured_accessorial_fee_calculated"
+AUDIT_REASON_LEGACY_CLASSIFIER_NOT_CALCULATED = "legacy_classifier_not_calculated"
+AUDIT_REASON_NOT_CONFIGURED_CALCULATION_BASE = "not_configured_calculation_base"
+AUDIT_REASON_UNSUPPORTED_CONFIGURED_OPERATION = "unsupported_operation"
+AUDIT_REASON_MISSING_AUDIT_VARIABLE = "missing_audit_variable"
+AUDIT_REASON_INVALID_CONFIGURED_AMOUNT = "invalid_amount"
+AUDIT_REASON_CONDITIONS_PRESENT = "conditions_present"
+AUDIT_REASON_UNSUPPORTED_REASON_PRESENT = "unsupported_reason_present"
+AUDIT_REASON_CLASSIFICATION_WARNING_PRESENT = "classification_warning_present"
 
 _AUDIT_REQUIRED_FIELDS = (
     "destination_city",
@@ -243,10 +273,11 @@ SOURCE_AGENT_CLEIDE_AUDIT = "cleide_audit"
 
 
 class CleideAuditTempTableError(ValueError):
-    def __init__(self, error_code: str, message: str):
+    def __init__(self, error_code: str, message: str, *, errors: list[dict] | None = None):
         super().__init__(message)
         self.error_code = error_code
         self.message = message
+        self.errors = list(errors or [])
 
 
 class CleideAuditCoverageError(ValueError):
@@ -2102,6 +2133,658 @@ def _is_direct_ton_column(column_name) -> bool:
     )
 
 
+def _is_freight_value_percent_column(column_name) -> bool:
+    raw = _sanitize_cell_string(column_name) or ""
+    normalized = _normalize_coverage_header(raw)
+    if not normalized or "seguro" in normalized:
+        return False
+
+    has_percent_marker = "%" in raw or "pct" in normalized or "percentual" in normalized or "perc" in normalized
+    if normalized in {
+        "sobre nf",
+        "sob nf",
+        "s nf",
+        "percentual nf",
+        "perc nf",
+    }:
+        return True
+    if normalized in {
+        "nf",
+        "nota",
+        "nota fiscal",
+        "valor nf",
+        "frete valor",
+        "freight value pct",
+        "sobre nf",
+        "fv",
+        "f v",
+        "ad valorem",
+    }:
+        return has_percent_marker
+    return False
+
+
+def _parse_decimal_number(value) -> Decimal | None:
+    cleaned = _sanitize_cell_string(value)
+    if cleaned is None:
+        return None
+    text = cleaned.strip()
+    if not text:
+        return None
+    text = re.sub(r"(?i)\bR\$\b|R\$", "", text)
+    text = re.sub(r"[^0-9,\.\-]", "", text)
+    if not text or text in {"-", ".", ","}:
+        return None
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
+    try:
+        parsed = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def _parse_percentage_rate(value) -> Decimal | None:
+    parsed = _parse_decimal_number(value)
+    if parsed is None:
+        return None
+    return parsed / Decimal("100")
+
+
+def _parse_freight_value_rate(value) -> Decimal | None:
+    return _parse_percentage_rate(value)
+
+
+def _extract_freight_value_from_row(columns: list, row: dict) -> dict | None:
+    for column in columns:
+        if not _is_freight_value_percent_column(column):
+            continue
+        source_value = _sanitize_cell_string(row.get(column))
+        rate = _parse_freight_value_rate(source_value)
+        if rate is None:
+            continue
+        return {
+            "rate": float(rate),
+            "source_column": column,
+            "source_value": source_value,
+            "calculation_base": "invoice_value",
+        }
+    return None
+
+
+_ACCESSORIAL_NOT_APPLIED_ALIASES = {
+    "gris",
+    "gerenciamento de risco",
+    "taxa de risco",
+    "adicional de risco",
+    "risco",
+    "seguro",
+    "seguro carga",
+    "seguro rctr c",
+    "seguro ad valorem",
+    "frete valor seguro",
+}
+
+_ACCESSORIAL_AMBIGUOUS_ALIASES = {
+    "valor frete",
+    "taxa",
+    "outras taxas",
+    "generalidades",
+    "valor",
+    "taxa administrativa",
+    "minimo",
+    "minimo nf",
+    "minimo por conhecimento",
+}
+
+_ACCESSORIAL_BASE_ALIASES = {
+    "nf",
+    "nota",
+    "nota fiscal",
+    "valor nf",
+    "valor nota",
+    "valor da nota",
+    "valor nota fiscal",
+    "valor da nota fiscal",
+    "sobre nf",
+    "sob nf",
+    "s nf",
+    "sobre nota",
+    "sobre nota fiscal",
+    "sobre valor da nota fiscal",
+    "percentual nf",
+    "perc nf",
+}
+
+_ACCESSORIAL_PERCENTUAL_NF_ALIASES = {
+    "nf",
+    "nota",
+    "nota fiscal",
+    "valor nf",
+    "sobre nf",
+    "sob nf",
+    "s nf",
+    "percentual nf",
+    "perc nf",
+    "taxa sobre nf",
+    "taxa valor nf",
+}
+
+
+def _has_percent_marker(*values) -> bool:
+    for value in values:
+        raw = _sanitize_cell_string(value)
+        if not raw:
+            continue
+        normalized = _normalize_coverage_header(raw)
+        if "%" in raw or "pct" in normalized or "percentual" in normalized or "perc" in normalized:
+            return True
+    return False
+
+
+def _is_invoice_value_basis(value) -> bool:
+    normalized = _normalize_coverage_header(value)
+    return not normalized or normalized in _ACCESSORIAL_BASE_ALIASES
+
+
+def _classify_accessorial_invoice_percentage_fee(fee: dict) -> tuple[str | None, str | None]:
+    label = _sanitize_cell_string(fee.get("name")) or ""
+    normalized = _normalize_coverage_header(label)
+    if not normalized:
+        return None, AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE
+    if normalized in _ACCESSORIAL_NOT_APPLIED_ALIASES:
+        return normalized.replace(" ", "_"), AUDIT_REASON_ACCESSORIAL_FEE_NOT_APPLIED
+    if normalized in _ACCESSORIAL_AMBIGUOUS_ALIASES:
+        return None, AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE
+    if not _is_invoice_value_basis(fee.get("calculation_basis")):
+        return None, AUDIT_REASON_UNSUPPORTED_ACCESSORIAL_CONDITION
+
+    has_percent_marker = _has_percent_marker(label, fee.get("value"), fee.get("unit"))
+    if normalized in {"ad valorem", "advalorem", "ad val"}:
+        if has_percent_marker:
+            return "ad_valorem", None
+        return "ad_valorem", AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE
+    if normalized in {"frete valor", "fv", "f v"}:
+        if has_percent_marker:
+            return "freight_value", None
+        return "freight_value", AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE
+    if normalized in _ACCESSORIAL_PERCENTUAL_NF_ALIASES:
+        return "invoice_percentage", None
+    return None, AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE
+
+
+def _accessorial_ignored_component(fee: dict, canonical_name: str | None, reason_code: str) -> dict:
+    canonical_component = fee.get("canonical_component") or canonical_name
+    component = {
+        "label": _sanitize_cell_string(fee.get("name")),
+        "canonical_name": canonical_name,
+        "canonical_component": canonical_component,
+        "component_group": fee.get("component_group"),
+        "calculation_type": fee.get("calculation_type"),
+        "source_value": _sanitize_cell_string(fee.get("value")),
+        "source_unit": _sanitize_cell_string(fee.get("unit")),
+        "source_block": "accessorial_fees",
+        "reason_code": reason_code,
+    }
+    return {key: value for key, value in component.items() if value is not None}
+
+
+def _accessorial_runtime_rate(fee: dict) -> Decimal | None:
+    rate = _parse_decimal_number(fee.get("rate"))
+    if rate is None:
+        rate = _parse_percentage_rate(fee.get("value"))
+    if rate is None or rate <= 0:
+        return None
+    return rate
+
+
+def _accessorial_runtime_minimum_amount(fee: dict) -> Decimal | None:
+    amount = _decimal_money(fee.get("minimum_amount"))
+    if amount is None or amount <= 0:
+        return None
+    return amount
+
+
+def _accessorial_uses_invoice_value_base(fee: dict) -> bool:
+    calculation_base = _normalize_coverage_header(fee.get("calculation_base"))
+    if calculation_base in {"invoice value", "valor invoice", "valor da invoice"}:
+        return True
+    if calculation_base and calculation_base not in {"invoice", "nota", "nota fiscal", "valor nf"}:
+        return False
+    return _is_invoice_value_basis(fee.get("calculation_basis"))
+
+
+def _accessorial_fee_component_ref(fee: dict) -> set[str]:
+    refs = {
+        fee.get("component_group"),
+        fee.get("canonical_component"),
+        fee.get("related_to"),
+    }
+    return {str(ref) for ref in refs if ref}
+
+
+def _accessorial_is_duplicate_of_tariff_freight_value(fee: dict, has_tariff_freight_value: bool) -> bool:
+    if not has_tariff_freight_value:
+        return False
+    refs = _accessorial_fee_component_ref(fee)
+    return bool(refs & {"freight_value", "ad_valorem"})
+
+
+def _accessorial_is_calculable_invoice_percentage(fee: dict) -> bool:
+    return (
+        fee.get("calculation_type") == "invoice_percentage"
+        and fee.get("status") == "calculable"
+        and fee.get("classification_confidence") == "high"
+        and not fee.get("conditions")
+        and not fee.get("unsupported_reason")
+        and _accessorial_uses_invoice_value_base(fee)
+        and _accessorial_runtime_rate(fee) is not None
+    )
+
+
+def _accessorial_runtime_ignored_reason(fee: dict) -> str:
+    if fee.get("conditions") or fee.get("unsupported_reason"):
+        return AUDIT_REASON_UNSUPPORTED_ACCESSORIAL_CONDITION
+    if fee.get("calculation_type") in {"invoice_percentage", "unknown"}:
+        return AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE
+    return AUDIT_REASON_UNSUPPORTED_ACCESSORIAL_CONDITION
+
+
+_CONFIGURED_ACCESSORIAL_OPERATIONS = {
+    "percentage_of_variable",
+    "fixed_amount",
+    "ceil_fraction",
+}
+
+
+def _accessorial_is_configured_calculation_base(fee: dict) -> bool:
+    return (
+        fee.get("classification_source") == "configured_calculation_base"
+        and bool(fee.get("calculation_base_id"))
+    )
+
+
+def _configured_accessorial_ignored_reason(fee: dict) -> str | None:
+    if not _accessorial_is_configured_calculation_base(fee):
+        return AUDIT_REASON_NOT_CONFIGURED_CALCULATION_BASE
+    if fee.get("conditions"):
+        return AUDIT_REASON_CONDITIONS_PRESENT
+    if fee.get("unsupported_reason"):
+        return AUDIT_REASON_UNSUPPORTED_REASON_PRESENT
+    if fee.get("classification_warning"):
+        return AUDIT_REASON_CLASSIFICATION_WARNING_PRESENT
+    if fee.get("status") != "calculable" or fee.get("classification_confidence") != "high":
+        return AUDIT_REASON_LEGACY_CLASSIFIER_NOT_CALCULATED
+    if fee.get("operation") not in _CONFIGURED_ACCESSORIAL_OPERATIONS:
+        return AUDIT_REASON_UNSUPPORTED_CONFIGURED_OPERATION
+    return None
+
+
+def _accessorial_configured_ignored_component(fee: dict, reason_code: str) -> dict:
+    component = _accessorial_ignored_component(
+        fee,
+        fee.get("canonical_component"),
+        reason_code,
+    )
+    component.update(
+        {
+            "calculation_base_id": fee.get("calculation_base_id"),
+            "calculation_base_label": fee.get("calculation_base_label"),
+            "operation": fee.get("operation"),
+            "audit_variable": fee.get("audit_variable"),
+            "classification_source": fee.get("classification_source"),
+        }
+    )
+    return {key: value for key, value in component.items() if value is not None}
+
+
+def _accessorial_runtime_amount(fee: dict) -> Decimal | None:
+    amount = _decimal_money(fee.get("amount"))
+    if amount is not None and amount > 0:
+        return amount
+    parsed = _parse_single_accessorial_money(
+        fee.get("value"),
+        allow_bare_number=bool(fee.get("unit")),
+    )
+    if parsed is not None and parsed > 0:
+        return parsed
+    return None
+
+
+def _audit_variable_decimal(audit_variables: dict[str, Decimal | None], variable: str | None) -> Decimal | None:
+    if not variable:
+        return None
+    value = audit_variables.get(variable)
+    if value is None or value < 0:
+        return None
+    return value
+
+
+def _configured_accessorial_common_component(fee: dict, *, amount: Decimal) -> dict:
+    return {
+        "label": _sanitize_cell_string(fee.get("name")),
+        "canonical_name": fee.get("canonical_component"),
+        "canonical_component": fee.get("canonical_component"),
+        "component_group": fee.get("component_group"),
+        "calculation_type": fee.get("calculation_type"),
+        "calculation_base_id": fee.get("calculation_base_id"),
+        "calculation_base_label": fee.get("calculation_base_label"),
+        "operation": fee.get("operation"),
+        "audit_variable": fee.get("audit_variable"),
+        "value": _sanitize_cell_string(fee.get("value")),
+        "amount": _round_money(amount),
+        "source_block": "accessorial_fees",
+        "classification_source": "configured_calculation_base",
+        "reason_code": AUDIT_REASON_CONFIGURED_ACCESSORIAL_CALCULATED,
+    }
+
+
+def _configured_percentage_component(
+    fee: dict,
+    audit_variables: dict[str, Decimal | None],
+) -> tuple[dict | None, dict | None, Decimal]:
+    variable_name = fee.get("audit_variable")
+    variable_value = _audit_variable_decimal(audit_variables, variable_name)
+    if variable_value is None:
+        return None, _accessorial_configured_ignored_component(
+            fee,
+            AUDIT_REASON_MISSING_AUDIT_VARIABLE,
+        ), Decimal("0")
+
+    rate = _accessorial_runtime_rate(fee)
+    if rate is None:
+        return None, _accessorial_configured_ignored_component(
+            fee,
+            AUDIT_REASON_INVALID_CONFIGURED_AMOUNT,
+        ), Decimal("0")
+
+    amount = variable_value * rate
+    component = _configured_accessorial_common_component(fee, amount=amount)
+    component.update(
+        {
+            "rate": float(rate),
+            "variable_value": _round_money(variable_value),
+            "details": (
+                f"{variable_name}: {_format_brazilian_decimal(variable_value)} x "
+                f"{_format_brazilian_decimal(rate * Decimal('100'))}% = "
+                f"{_format_brazilian_decimal(amount)}"
+            ),
+        }
+    )
+    if variable_name == "valor_nf":
+        component["invoice_value"] = _round_money(variable_value)
+    return component, None, amount
+
+
+def _configured_fixed_amount_component(fee: dict) -> tuple[dict | None, dict | None, Decimal]:
+    amount = _accessorial_runtime_amount(fee)
+    if amount is None:
+        return None, _accessorial_configured_ignored_component(
+            fee,
+            AUDIT_REASON_INVALID_CONFIGURED_AMOUNT,
+        ), Decimal("0")
+    component = _configured_accessorial_common_component(fee, amount=amount)
+    component["details"] = f"valor fixo = {_format_brazilian_decimal(amount)}"
+    return component, None, amount
+
+
+def _configured_ceil_fraction_component(
+    fee: dict,
+    audit_variables: dict[str, Decimal | None],
+) -> tuple[dict | None, dict | None, Decimal]:
+    variable_name = fee.get("audit_variable")
+    variable_value = _audit_variable_decimal(audit_variables, variable_name)
+    if variable_value is None:
+        return None, _accessorial_configured_ignored_component(
+            fee,
+            AUDIT_REASON_MISSING_AUDIT_VARIABLE,
+        ), Decimal("0")
+
+    base_amount = _accessorial_runtime_amount(fee)
+    parameters = fee.get("operation_parameters") if isinstance(fee.get("operation_parameters"), dict) else {}
+    fraction_size = _parse_decimal_number(parameters.get("fraction_size"))
+    if base_amount is None or fraction_size is None or fraction_size <= 0:
+        return None, _accessorial_configured_ignored_component(
+            fee,
+            AUDIT_REASON_INVALID_CONFIGURED_AMOUNT,
+        ), Decimal("0")
+
+    fractions = int((variable_value / fraction_size).to_integral_value(rounding=ROUND_CEILING))
+    amount = base_amount * Decimal(fractions)
+    component = _configured_accessorial_common_component(fee, amount=amount)
+    component.update(
+        {
+            "fraction_size": _round_money(fraction_size),
+            "weight": _round_money(variable_value) if variable_name == "peso" else _round_money(variable_value),
+            "base_amount": _round_money(base_amount),
+            "fractions": fractions,
+            "details": (
+                f"{variable_name}: ceil({_format_brazilian_decimal(variable_value)} / "
+                f"{_format_brazilian_decimal(fraction_size)}) x "
+                f"{_format_brazilian_decimal(base_amount)} = {_format_brazilian_decimal(amount)}"
+            ),
+        }
+    )
+    return component, None, amount
+
+
+def _build_configured_accessorial_fee_component(
+    fee: dict,
+    audit_variables: dict[str, Decimal | None],
+) -> tuple[dict | None, dict | None, Decimal]:
+    reason = _configured_accessorial_ignored_reason(fee)
+    if reason is not None:
+        return None, _accessorial_configured_ignored_component(fee, reason), Decimal("0")
+
+    operation = fee.get("operation")
+    if operation == "percentage_of_variable":
+        return _configured_percentage_component(fee, audit_variables)
+    if operation == "fixed_amount":
+        return _configured_fixed_amount_component(fee)
+    if operation == "ceil_fraction":
+        return _configured_ceil_fraction_component(fee, audit_variables)
+    return None, _accessorial_configured_ignored_component(
+        fee,
+        AUDIT_REASON_UNSUPPORTED_CONFIGURED_OPERATION,
+    ), Decimal("0")
+
+
+def _accessorial_find_linked_minimum(fee: dict, minimum_fees: list[dict]) -> Decimal | None:
+    refs = _accessorial_fee_component_ref(fee)
+    if not refs:
+        return None
+    matches: list[Decimal] = []
+    for minimum_fee in minimum_fees:
+        minimum_refs = _accessorial_fee_component_ref(minimum_fee)
+        if not refs & minimum_refs:
+            continue
+        amount = _accessorial_runtime_minimum_amount(minimum_fee)
+        if amount is not None:
+            matches.append(amount)
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _accessorial_component_details(
+    fee: dict,
+    *,
+    invoice_value: Decimal,
+    rate: Decimal,
+    calculated_amount: Decimal,
+    minimum_amount: Decimal | None,
+    amount: Decimal,
+    minimum_applied: bool,
+) -> str:
+    label = _sanitize_cell_string(fee.get("name")) or "Generalidade"
+    details = (
+        f"{label}: {_format_brazilian_decimal(invoice_value)} x "
+        f"{_format_brazilian_decimal(rate * Decimal('100'))}% = "
+        f"{_format_brazilian_decimal(calculated_amount)}"
+    )
+    if minimum_amount is not None:
+        suffix = "mínimo aplicado" if minimum_applied else "mínimo não aplicado"
+        details = f"{details}; {suffix} = {_format_brazilian_decimal(minimum_amount)}"
+    return details
+
+
+def _build_accessorial_percent_fee_components(
+    accessorial_fees,
+    *,
+    invoice_value: Decimal | None,
+    audit_variables: dict[str, Decimal | None] | None = None,
+    has_tariff_freight_value: bool,
+) -> tuple[list[dict], list[dict], Decimal]:
+    calculated: list[dict] = []
+    ignored: list[dict] = []
+    total = Decimal("0")
+    audit_variables = audit_variables or {}
+
+    if not isinstance(accessorial_fees, list):
+        return calculated, ignored, total
+
+    normalized_fees = _normalize_accessorial_fees(accessorial_fees)
+    minimum_fee_items = [
+        fee
+        for fee in normalized_fees
+        if fee.get("calculation_type") == "minimum_amount"
+        and fee.get("modifier_type") == "minimum_amount"
+    ]
+    minimum_fees = [
+        fee
+        for fee in minimum_fee_items
+        if fee.get("status") == "calculable"
+        and _accessorial_runtime_minimum_amount(fee) is not None
+    ]
+    consumed_minimum_ids: set[int] = set()
+
+    for fee in normalized_fees:
+        canonical_component = fee.get("canonical_component")
+        if fee.get("calculation_type") == "minimum_amount":
+            continue
+        if _accessorial_is_configured_calculation_base(fee):
+            component, ignored_component, amount = _build_configured_accessorial_fee_component(
+                fee,
+                audit_variables,
+            )
+            if component is not None:
+                calculated.append(component)
+                total += amount
+            elif ignored_component is not None:
+                ignored.append(ignored_component)
+            continue
+        if not _accessorial_is_calculable_invoice_percentage(fee):
+            ignored.append(
+                _accessorial_ignored_component(
+                    fee,
+                    canonical_component,
+                    _accessorial_runtime_ignored_reason(fee),
+                )
+            )
+            continue
+        if _accessorial_is_duplicate_of_tariff_freight_value(fee, has_tariff_freight_value):
+            ignored.append(
+                _accessorial_ignored_component(
+                    fee,
+                    canonical_component,
+                    AUDIT_REASON_DUPLICATE_INVOICE_PERCENTAGE_FEE_IGNORED,
+                )
+            )
+            continue
+
+        rate = _accessorial_runtime_rate(fee)
+        if rate is None:
+            continue
+        if invoice_value is None:
+            ignored.append(
+                _accessorial_ignored_component(
+                    fee,
+                    canonical_component,
+                    AUDIT_STATUS_INVALID_INVOICE_VALUE,
+                )
+            )
+            continue
+
+        calculated_amount = invoice_value * rate
+        minimum_amount = _accessorial_find_linked_minimum(fee, minimum_fees)
+        minimum_applied = minimum_amount is not None and minimum_amount > calculated_amount
+        amount = minimum_amount if minimum_applied else calculated_amount
+        total += amount
+        if minimum_amount is not None:
+            for minimum_fee in minimum_fees:
+                if _accessorial_runtime_minimum_amount(minimum_fee) == minimum_amount and (
+                    _accessorial_fee_component_ref(fee) & _accessorial_fee_component_ref(minimum_fee)
+                ):
+                    consumed_minimum_ids.add(id(minimum_fee))
+                    break
+        calculated.append(
+            {
+                "label": _sanitize_cell_string(fee.get("name")),
+                "canonical_name": canonical_component,
+                "canonical_component": canonical_component,
+                "component_group": fee.get("component_group"),
+                "calculation_type": "invoice_percentage",
+                "calculated_amount": _round_money(calculated_amount),
+                "minimum_amount": _round_money(minimum_amount) if minimum_amount is not None else None,
+                "minimum_applied": minimum_applied,
+                "amount": _round_money(amount),
+                "rate": float(rate),
+                "source_value": _sanitize_cell_string(fee.get("value")),
+                "invoice_value": _round_money(invoice_value),
+                "details": _accessorial_component_details(
+                    fee,
+                    invoice_value=invoice_value,
+                    rate=rate,
+                    calculated_amount=calculated_amount,
+                    minimum_amount=minimum_amount,
+                    amount=amount,
+                    minimum_applied=minimum_applied,
+                ),
+                "source_block": "accessorial_fees",
+                "reason_code": AUDIT_REASON_ACCESSORIAL_PERCENTAGE_CALCULATED,
+            }
+        )
+
+    for minimum_fee in minimum_fee_items:
+        if id(minimum_fee) not in consumed_minimum_ids:
+            ignored.append(
+                _accessorial_ignored_component(
+                    minimum_fee,
+                    minimum_fee.get("canonical_component"),
+                    AUDIT_REASON_ACCESSORIAL_MINIMUM_WITHOUT_BASE_IGNORED,
+                )
+            )
+
+    return calculated, ignored, total
+
+
+def _decimal_money(value) -> Decimal | None:
+    if isinstance(value, Decimal):
+        return value if value >= 0 else None
+    parsed = _parse_brazilian_money(value)
+    if parsed is None:
+        return None
+    try:
+        return Decimal(str(parsed))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _round_money(value: Decimal) -> float:
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _format_brazilian_decimal(value: Decimal) -> str:
+    text = f"{value.normalize():f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text.replace(".", ",") if text else "0"
+
+
 def _region_from_table_context(table: dict) -> str | None:
     context = table.get("context") if isinstance(table.get("context"), dict) else {}
     for key in ("route_label", "destination", "region", "freight_region", "praca", "rota"):
@@ -2165,12 +2848,16 @@ def _build_rule_from_row_range_table(table: dict) -> dict | None:
     if not region:
         return None
     brackets = []
+    freight_value = None
     for row in rows:
         if not isinstance(row, dict):
             continue
         parsed_range = _parse_range_from_label(row.get(range_col))
         value = _parse_brazilian_money(row.get(value_col))
         if parsed_range and value is not None:
+            row_freight_value = _extract_freight_value_from_row(columns, row)
+            if freight_value is None and row_freight_value is not None:
+                freight_value = row_freight_value
             brackets.append(
                 {
                     "min_kg": parsed_range[0] or 0.0,
@@ -2195,6 +2882,7 @@ def _build_rule_from_row_range_table(table: dict) -> dict | None:
         "source_table_title": table.get("table_title"),
         "brackets": brackets,
         "excess": {"rate_per_kg": excess_rate} if excess_rate is not None else None,
+        "freight_value": freight_value,
         "unit": "kg",
         "normalization_notes": [],
     }
@@ -2227,6 +2915,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
         if direct_ton_col:
             value = _parse_brazilian_money(row.get(direct_ton_col))
             if value is not None:
+                freight_value = _extract_freight_value_from_row(columns, row)
                 rule = {
                     "pricing_type": "direct_weight_rate",
                     "region": region,
@@ -2235,6 +2924,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                     "excess": None,
                     "unit": "ton",
                     "value_per_ton": value,
+                    "freight_value": freight_value,
                     "normalization_notes": [],
                 }
                 rules.extend(
@@ -2249,6 +2939,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
         if direct_kg_col:
             value = _parse_brazilian_money(row.get(direct_kg_col))
             if value is not None:
+                freight_value = _extract_freight_value_from_row(columns, row)
                 rule = {
                     "pricing_type": "direct_weight_rate",
                     "region": region,
@@ -2257,6 +2948,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                     "excess": None,
                     "unit": "kg",
                     "value_per_kg": value,
+                    "freight_value": freight_value,
                     "normalization_notes": [],
                 }
                 rules.extend(
@@ -2284,12 +2976,14 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
         brackets = _normalize_brackets(brackets)
         if brackets:
             excess_rate = _parse_brazilian_money(row.get(excess_col)) if excess_col else None
+            freight_value = _extract_freight_value_from_row(columns, row)
             rule = {
                 "pricing_type": "range_plus_excess_per_kg" if excess_rate is not None else "fixed_range",
                 "region": region,
                 "source_table_title": table.get("table_title"),
                 "brackets": brackets,
                 "excess": {"rate_per_kg": excess_rate} if excess_rate is not None else None,
+                "freight_value": freight_value,
                 "unit": "kg",
                 "normalization_notes": [],
             }
@@ -2495,6 +3189,107 @@ def compare_charged_vs_expected(charged_freight, expected_freight) -> dict:
     }
 
 
+def _apply_freight_value_component(
+    calculated: dict,
+    row: dict,
+    pricing_rule: dict,
+    accessorial_fees=None,
+) -> dict | None:
+    weight_freight = _decimal_money(calculated.get("expected_freight"))
+    if weight_freight is None:
+        return None
+
+    components = {
+        "weight_freight": {
+            "amount": _round_money(weight_freight),
+            "basis": calculated.get("calculation_basis"),
+            "details": calculated.get("calculation_details"),
+        }
+    }
+    result = {
+        **calculated,
+        "weight_freight": _round_money(weight_freight),
+        "freight_value_amount": None,
+        "accessorial_fees_amount": None,
+        "accessorial_percent_fees_amount": None,
+        "calculation_components": components,
+    }
+
+    freight_value = pricing_rule.get("freight_value")
+    has_tariff_freight_value = isinstance(freight_value, dict)
+    invoice_value = _decimal_money(row.get("invoice_value"))
+    audited_weight = _parse_weight_number(row.get("audited_weight"))
+    audit_variables = {
+        "valor_nf": invoice_value,
+        "peso": Decimal(str(audited_weight)) if audited_weight is not None else None,
+    }
+    expected = weight_freight
+
+    if has_tariff_freight_value:
+        if invoice_value is None:
+            return None
+        rate = _parse_decimal_number(freight_value.get("rate"))
+        if rate is not None:
+            freight_value_amount = invoice_value * rate
+            expected += freight_value_amount
+            result["freight_value_amount"] = _round_money(freight_value_amount)
+            result["expected_freight"] = _round_money(expected)
+            tariff_component = {
+                "amount": _round_money(freight_value_amount),
+                "rate": float(rate),
+                "source_column": freight_value.get("source_column"),
+                "source_value": freight_value.get("source_value"),
+                "invoice_value": _round_money(invoice_value),
+                "details": (
+                    f"Valor NF {_format_brazilian_decimal(invoice_value)} x "
+                    f"{_format_brazilian_decimal(rate * Decimal('100'))}%"
+                ),
+            }
+            components["freight_value"] = tariff_component
+            components["tariff_freight_value"] = dict(tariff_component)
+
+    accessorial_components, ignored_accessorial_fees, accessorial_total = _build_accessorial_percent_fee_components(
+        accessorial_fees,
+        invoice_value=invoice_value,
+        audit_variables=audit_variables,
+        has_tariff_freight_value=has_tariff_freight_value,
+    )
+    accessorial_percent_total = sum(
+        (
+            _decimal_money(item.get("amount")) or Decimal("0")
+            for item in accessorial_components
+            if item.get("operation") == "percentage_of_variable"
+            or item.get("calculation_type") == "invoice_percentage"
+        ),
+        Decimal("0"),
+    )
+    accessorial_percent_components = [
+        item
+        for item in accessorial_components
+        if item.get("operation") == "percentage_of_variable"
+        or item.get("calculation_type") == "invoice_percentage"
+    ]
+    if accessorial_components:
+        expected += accessorial_total
+        result["accessorial_fees_amount"] = _round_money(accessorial_total)
+        result["accessorial_percent_fees_amount"] = (
+            _round_money(accessorial_percent_total)
+            if accessorial_percent_components
+            else None
+        )
+        result["expected_freight"] = _round_money(expected)
+    elif any(
+        item.get("reason_code") == AUDIT_STATUS_INVALID_INVOICE_VALUE
+        for item in ignored_accessorial_fees
+    ):
+        result["accessorial_fees_amount"] = _round_money(accessorial_total)
+        result["accessorial_percent_fees_amount"] = _round_money(accessorial_total)
+    components["accessorial_fees"] = accessorial_components
+    components["accessorial_percent_fees"] = accessorial_percent_components
+    components["ignored_accessorial_fees"] = ignored_accessorial_fees
+    return result
+
+
 def _find_pricing_rule_match(
     pricing_index: dict,
     freight_region: str | None,
@@ -2570,11 +3365,16 @@ def _base_audit_result(row: dict) -> dict:
         "audited_weight": row.get("audited_weight"),
         "charged_freight": row.get("charged_freight"),
         "expected_freight": None,
+        "weight_freight": None,
+        "freight_value_amount": None,
+        "accessorial_fees_amount": None,
+        "accessorial_percent_fees_amount": None,
         "divergence_value": None,
         "status": None,
         "reason_code": None,
         "calculation_basis": None,
         "calculation_details": None,
+        "calculation_components": {},
     }
 
 
@@ -2586,7 +3386,14 @@ def _status_result(row: dict, status: str, *, freight_region: str | None = None)
     return result
 
 
-def _audit_single_row(row: dict, *, coverage_index: dict, pricing_index: dict, has_coverage: bool) -> dict:
+def _audit_single_row(
+    row: dict,
+    *,
+    coverage_index: dict,
+    pricing_index: dict,
+    has_coverage: bool,
+    accessorial_fees=None,
+) -> dict:
     weight = _parse_weight_number(row.get("audited_weight"))
     if weight is None:
         return _status_result(row, AUDIT_STATUS_INVALID_WEIGHT)
@@ -2624,15 +3431,23 @@ def _audit_single_row(row: dict, *, coverage_index: dict, pricing_index: dict, h
     calculated = calculate_weight_freight(weight, rule)
     if calculated is None:
         return _status_result(row, AUDIT_STATUS_UNSUPPORTED_PRICING, freight_region=freight_region)
+    calculated = _apply_freight_value_component(calculated, row, rule, accessorial_fees=accessorial_fees)
+    if calculated is None:
+        return _status_result(row, AUDIT_STATUS_INVALID_INVOICE_VALUE, freight_region=freight_region)
 
     comparison = compare_charged_vs_expected(charged, calculated["expected_freight"])
     result = _base_audit_result(row)
     result.update(comparison)
     result["freight_region"] = freight_region
     result["audited_weight"] = weight
+    result["weight_freight"] = calculated.get("weight_freight")
+    result["freight_value_amount"] = calculated.get("freight_value_amount")
+    result["accessorial_fees_amount"] = calculated.get("accessorial_fees_amount")
+    result["accessorial_percent_fees_amount"] = calculated.get("accessorial_percent_fees_amount")
     result["reason_code"] = None if comparison["status"] == AUDIT_STATUS_OK else AUDIT_STATUS_DIVERGENT
     result["calculation_basis"] = calculated["calculation_basis"]
     result["calculation_details"] = calculated["calculation_details"]
+    result["calculation_components"] = calculated.get("calculation_components") or {}
     if lookup_kind != "freight_region":
         result["calculation_details"] = (
             f"{result['calculation_details']} | regra localizada por cidade/destino: {lookup_key}"
@@ -2666,7 +3481,11 @@ def _build_audit_summary(results: list[dict], total_rows: int) -> dict:
             summary["ambiguous_coverage_mapping"] += 1
         elif status == AUDIT_STATUS_MISSING_FREIGHT_RULE:
             summary["missing_freight_rule"] += 1
-        elif status in {AUDIT_STATUS_INVALID_WEIGHT, AUDIT_STATUS_INVALID_CHARGED_FREIGHT}:
+        elif status in {
+            AUDIT_STATUS_INVALID_WEIGHT,
+            AUDIT_STATUS_INVALID_CHARGED_FREIGHT,
+            AUDIT_STATUS_INVALID_INVOICE_VALUE,
+        }:
             summary["invalid_rows"] += 1
         elif status == AUDIT_STATUS_UNSUPPORTED_PRICING:
             summary["unsupported_pricing_model"] += 1
@@ -2722,12 +3541,14 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
     has_coverage = bool(coverage_table and isinstance(coverage_table.get("rows"), list) and coverage_table.get("rows"))
     coverage_index = build_coverage_index(coverage_table or {"rows": []})
     pricing_index = build_freight_pricing_index(record)
+    accessorial_fees = record.get("accessorial_fees") if isinstance(record.get("accessorial_fees"), list) else []
     results = [
         _audit_single_row(
             row if isinstance(row, dict) else {},
             coverage_index=coverage_index,
             pricing_index=pricing_index,
             has_coverage=has_coverage,
+            accessorial_fees=accessorial_fees,
         )
         for row in normalized_rows
     ]
@@ -3125,6 +3946,713 @@ def _validate_freight_routes_for_save(raw_routes) -> list[dict]:
     return sanitized
 
 
+ACCESSORIAL_FEE_LEGACY_FIELDS = (
+    "name",
+    "value",
+    "unit",
+    "calculation_basis",
+    "notes",
+    "scope",
+)
+ACCESSORIAL_FEE_CALCULATION_TYPES = {
+    "invoice_percentage",
+    "fixed_amount",
+    "weight_rate",
+    "weight",
+    "weight_fraction",
+    "freight_percentage",
+    "minimum_amount",
+    "maximum_amount",
+    "conditional",
+    "unknown",
+}
+ACCESSORIAL_FEE_CANONICAL_COMPONENTS = {
+    "freight_value",
+    "ad_valorem",
+    "risk_management",
+    "insurance",
+    "toll",
+    "administrative_fee",
+    "operational_fee",
+    "generic_accessorial",
+}
+ACCESSORIAL_FEE_CLASSIFICATION_CONFIDENCES = {"high", "medium", "low"}
+ACCESSORIAL_FEE_STATUSES = {"calculable", "needs_review", "unsupported", "unknown"}
+ACCESSORIAL_FEE_MODIFIER_TYPES = {"base_fee", "minimum_amount", "maximum_amount"}
+ACCESSORIAL_FEE_OPTIONAL_FIELDS = (
+    "rate",
+    "amount",
+    "minimum_amount",
+    "maximum_amount",
+    "conditions",
+    "unsupported_reason",
+    "calculation_base",
+    "calculation_base_id",
+    "calculation_base_label",
+    "audit_variable",
+    "operation",
+    "operation_parameters",
+    "classification_source",
+    "classification_warning",
+    "raw_calculation_basis",
+    "source_block",
+    "original_text",
+    "evidence_ref",
+)
+ACCESSORIAL_FEE_NULLABLE_OPTIONAL_FIELDS = {
+    "calculation_base_id",
+    "calculation_base_label",
+    "audit_variable",
+    "operation",
+    "classification_warning",
+}
+
+
+_ACCESSORIAL_CONDITIONAL_MARKERS = (
+    "somente",
+    "apenas",
+    "acima de",
+    "abaixo de",
+    "conforme operacao",
+    "sob consulta",
+    "entrega agendada",
+    "regiao norte",
+)
+
+
+_ACCESSORIAL_OPERATIONAL_UNIT_MARKERS = (
+    "por dia",
+    "por diaria",
+    "por pallet",
+    "kg dia",
+    "por veiculo",
+    "por ajudante",
+    "por hora",
+)
+
+
+_ACCESSORIAL_INVOICE_PERCENT_BASIS_MARKERS = {
+    "% nf",
+    "% valor nf",
+    "% nota fiscal",
+    "percentual nf",
+    "perc nf",
+    "sobre nf",
+    "sob nf",
+    "s nf",
+    "sobre nota",
+    "sobre nota fiscal",
+    "sobre valor da nota fiscal",
+    "valor nf",
+    "nf",
+    "nota",
+    "nota fiscal",
+    "valor da nota",
+    "valor da mercadoria",
+    "valor da carga",
+    "mercadoria",
+    "carga",
+    "por nota",
+}
+
+
+_ACCESSORIAL_FREIGHT_VALUE_PERCENT_MARKERS = {
+    "frete valor",
+    "frete valor %",
+    "fv",
+    "fv %",
+    "f v",
+    "f v %",
+}
+
+
+_BRAZILIAN_UF_CODES = (
+    "AC",
+    "AL",
+    "AM",
+    "AP",
+    "BA",
+    "CE",
+    "DF",
+    "ES",
+    "GO",
+    "MA",
+    "MG",
+    "MS",
+    "MT",
+    "PA",
+    "PB",
+    "PE",
+    "PI",
+    "PR",
+    "RJ",
+    "RN",
+    "RO",
+    "RR",
+    "RS",
+    "SC",
+    "SE",
+    "SP",
+    "TO",
+)
+
+
+def _accessorial_text_parts(item: dict) -> dict[str, str]:
+    return {
+        field: _sanitize_cell_string(item.get(field)) or ""
+        for field in (
+            "name",
+            "value",
+            "unit",
+            "calculation_basis",
+            "notes",
+            "scope",
+            "raw_calculation_basis",
+            "original_text",
+        )
+    }
+
+
+def _accessorial_joined_text(parts: dict[str, str], fields: tuple[str, ...] | None = None) -> str:
+    selected = fields or tuple(parts.keys())
+    return " ".join(parts.get(field, "") for field in selected if parts.get(field, "")).strip()
+
+
+def _accessorial_normalized_text(parts: dict[str, str], fields: tuple[str, ...] | None = None) -> str:
+    return _normalize_coverage_header(_accessorial_joined_text(parts, fields))
+
+
+def _accessorial_contains_any(text: str, markers: tuple[str, ...] | set[str]) -> bool:
+    normalized_markers = tuple(_normalize_coverage_header(marker) for marker in markers)
+    return any(marker and marker in text for marker in normalized_markers)
+
+
+def _accessorial_token_set(text: str) -> set[str]:
+    return {token for token in text.split() if token}
+
+
+def _infer_accessorial_component_group(parts: dict[str, str]) -> str | None:
+    text = _accessorial_normalized_text(parts, ("name", "notes", "original_text"))
+    tokens = _accessorial_token_set(text)
+    if "gris" in tokens:
+        return "gris"
+    if "trt" in tokens:
+        return "trt"
+    if "tde" in tokens:
+        return "tde"
+    if {"agendamento", "agendada", "agendado"} & tokens:
+        return "agendamento"
+    return None
+
+
+def _infer_accessorial_modifier_type(calculation_type: str) -> str | None:
+    if calculation_type == "minimum_amount":
+        return "minimum_amount"
+    if calculation_type == "maximum_amount":
+        return "maximum_amount"
+    if calculation_type in {
+        "invoice_percentage",
+        "freight_percentage",
+        "fixed_amount",
+        "weight_rate",
+        "weight",
+        "weight_fraction",
+    }:
+        return "base_fee"
+    return None
+
+
+def _accessorial_has_freight_value_alias(text: str) -> bool:
+    if _accessorial_contains_any(text, _ACCESSORIAL_FREIGHT_VALUE_PERCENT_MARKERS):
+        return True
+    return bool(re.search(r"\bf\s*v\b", text))
+
+
+def _accessorial_has_invoice_percent_basis(text: str) -> bool:
+    if _accessorial_contains_any(
+        text,
+        {
+            "percentual nf",
+            "perc nf",
+            "sobre nf",
+            "sob nf",
+            "s nf",
+            "sobre nota",
+            "sobre nota fiscal",
+            "sobre valor da nota fiscal",
+            "valor da nota",
+            "valor da mercadoria",
+            "valor da carga",
+            "mercadoria",
+            "carga",
+            "por nota",
+        },
+    ):
+        return True
+    return bool(re.search(r"\b(?:nf|nota|nota fiscal|valor nf)\b", text))
+
+
+def _classify_accessorial_canonical_component(parts: dict[str, str]) -> str:
+    text = _accessorial_normalized_text(parts, ("name", "notes", "original_text"))
+    if "gris" in text or "gerenciamento de risco" in text or "taxa de risco" in text or "risco" in text:
+        return "risk_management"
+    if "seguro" in text or "rctr c" in text or "rctrc" in text:
+        return "insurance"
+    if _accessorial_has_freight_value_alias(text):
+        return "freight_value"
+    if "ad valorem" in text or "advalorem" in text or "ad val" in text:
+        return "ad_valorem"
+    if "pedagio" in text:
+        return "toll"
+    if "tas" in text or "taxa administrativa" in text:
+        return "administrative_fee"
+    if "tso" in text or "taxa operacional" in text:
+        return "operational_fee"
+    return "generic_accessorial"
+
+
+def _accessorial_has_percent_signal(parts: dict[str, str]) -> bool:
+    if _has_percent_marker(
+        parts.get("name"),
+        parts.get("value"),
+        parts.get("unit"),
+        parts.get("calculation_basis"),
+        parts.get("notes"),
+        parts.get("original_text"),
+    ):
+        return True
+    text = _accessorial_normalized_text(parts)
+    return _accessorial_has_invoice_percent_basis(text) or _accessorial_has_freight_value_alias(text)
+
+
+def _accessorial_has_money_signal(parts: dict[str, str]) -> bool:
+    raw = _accessorial_joined_text(parts)
+    normalized_unit = _normalize_coverage_header(parts.get("unit"))
+    return "R$" in raw or normalized_unit in {"r", "rs", "brl"}
+
+
+def _parse_single_accessorial_money(value, *, allow_bare_number: bool = False) -> Decimal | None:
+    text = _sanitize_cell_string(value)
+    if not text:
+        return None
+    money_match = re.search(r"(?i)R\$\s*\d{1,3}(?:\.\d{3})*(?:,\d{1,4})?|\d+(?:[,.]\d{1,4})?\s*(?:reais|real)\b", text)
+    if money_match:
+        return _decimal_money(money_match.group(0))
+    if not allow_bare_number:
+        return None
+    numbers = re.findall(r"\d+(?:[,.]\d+)?", text)
+    if len(numbers) != 1:
+        return None
+    return _decimal_money(numbers[0])
+
+
+def _accessorial_first_money(parts: dict[str, str]) -> Decimal | None:
+    value_allows_bare_number = bool(parts.get("unit")) or _accessorial_contains_any(
+        _accessorial_normalized_text(parts, ("calculation_basis", "name")),
+        {"conhecimento", "cte", "ct e", "nf", "nota fiscal", "entrega", "ocorrencia", "documento", "tde"},
+    )
+    parsed = _parse_single_accessorial_money(parts.get("value"), allow_bare_number=value_allows_bare_number)
+    if parsed is not None:
+        return parsed
+    for field in ("original_text", "name"):
+        parsed = _parse_single_accessorial_money(parts.get(field), allow_bare_number=True)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _accessorial_first_rate(parts: dict[str, str]) -> Decimal | None:
+    for field in ("value", "notes", "original_text", "name"):
+        parsed = _parse_percentage_rate(parts.get(field))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _accessorial_unit_for_configured_base(parts: dict[str, str]) -> str:
+    unit = _sanitize_cell_string(parts.get("unit")) or ""
+    if unit.strip():
+        return unit
+    if _has_percent_marker(parts.get("value")):
+        return "%"
+    return unit
+
+
+def _accessorial_percent_values(parts: dict[str, str]) -> list[str]:
+    text = _accessorial_joined_text(parts)
+    matches = re.findall(r"\d+(?:[,.]\d+)?\s*%", text)
+    return list(dict.fromkeys(_normalize_coverage_header(match) for match in matches))
+
+
+def _accessorial_has_uf_condition(parts: dict[str, str]) -> bool:
+    text = _accessorial_joined_text(parts)
+    if not text:
+        return False
+    uf_pattern = "|".join(_BRAZILIAN_UF_CODES)
+    return bool(re.search(rf"\b(?:{uf_pattern})(?:\s*/\s*(?:{uf_pattern}))?\b", text.upper()))
+
+
+def _accessorial_is_compound_rule(parts: dict[str, str]) -> bool:
+    all_text = _accessorial_normalized_text(parts)
+    has_percent = _accessorial_has_percent_signal(parts)
+    percent_values = _accessorial_percent_values(parts)
+    has_minimum_or_maximum = (
+        "minimo" in all_text
+        or "minima" in all_text
+        or "cobranca minima" in all_text
+        or "teto" in all_text
+        or "maximo" in all_text
+    )
+    return bool(
+        (has_percent and has_minimum_or_maximum)
+        or len(percent_values) > 1
+        or (has_percent and _accessorial_has_uf_condition(parts))
+    )
+
+
+def _accessorial_has_non_priced_day_condition(parts: dict[str, str]) -> bool:
+    text = _accessorial_normalized_text(parts, ("notes", "original_text"))
+    return bool(re.search(r"\bapos\b.*\bdia\b", text) or re.search(r"\b\d+\s*o?\s*dia\b", text))
+
+
+def _classify_accessorial_calculation_type(parts: dict[str, str]) -> tuple[str, str, str | None]:
+    all_text = _accessorial_normalized_text(parts)
+    basis_text = _accessorial_normalized_text(
+        parts,
+        ("name", "calculation_basis", "notes", "original_text", "value", "unit"),
+    )
+    name_text = _accessorial_normalized_text(parts, ("name",))
+    percent_signal = _accessorial_has_percent_signal(parts)
+    money_signal = _accessorial_has_money_signal(parts)
+
+    has_condition = _accessorial_contains_any(all_text, _ACCESSORIAL_CONDITIONAL_MARKERS)
+    minimum_signal = "minimo" in all_text or "minima" in all_text or "cobranca minima" in all_text
+    maximum_signal = "teto" in all_text or "maximo" in all_text
+    operational_signal = _accessorial_contains_any(all_text, _ACCESSORIAL_OPERATIONAL_UNIT_MARKERS)
+    compound_signal = _accessorial_is_compound_rule(parts)
+
+    if has_condition:
+        return "conditional", "medium", "textual_condition"
+    if _accessorial_has_non_priced_day_condition(parts) and not money_signal:
+        return "conditional", "medium", "missing_monetary_amount"
+    if compound_signal:
+        if percent_signal and _accessorial_has_invoice_percent_basis(basis_text):
+            return "invoice_percentage", "medium", "compound_accessorial_rule"
+        return "conditional", "medium", "compound_accessorial_rule"
+    if minimum_signal and maximum_signal:
+        return "conditional", "medium", "combined_minimum_maximum"
+    if minimum_signal:
+        confidence = "high" if money_signal else "medium"
+        return "minimum_amount", confidence, None
+    if maximum_signal:
+        confidence = "high" if money_signal else "medium"
+        return "maximum_amount", confidence, None
+
+    if percent_signal and _accessorial_has_invoice_percent_basis(basis_text):
+        return "invoice_percentage", "high", None
+
+    if percent_signal and _accessorial_has_freight_value_alias(name_text):
+        return "invoice_percentage", "high", None
+
+    if percent_signal and _accessorial_contains_any(
+        basis_text,
+        {"frete", "valor frete", "valor do frete", "sobre frete"},
+    ):
+        return "freight_percentage", "high", None
+
+    if operational_signal and money_signal:
+        return "fixed_amount", "medium", "operational_unit_rate"
+
+    if money_signal and _accessorial_contains_any(basis_text, {"kg", "quilo", "quilograma"}):
+        return "weight_rate", "high", None
+
+    if money_signal and _accessorial_contains_any(
+        basis_text,
+        {"conhecimento", "cte", "ct e", "nf", "nota fiscal", "entrega", "ocorrencia", "documento"},
+    ):
+        return "fixed_amount", "high", None
+
+    if _accessorial_first_money(parts) is not None and _accessorial_contains_any(name_text, {"tde"}):
+        return "fixed_amount", "medium", "missing_application_basis"
+
+    if percent_signal:
+        if _accessorial_contains_any(name_text, {"gris", "seguro", "ad valorem", "advalorem"}) or _accessorial_has_freight_value_alias(name_text):
+            return "invoice_percentage", "high", None
+        if _accessorial_contains_any(name_text, {"tso", "taxa operacional"}):
+            return "freight_percentage", "low", None
+        return "unknown", "low", None
+
+    if money_signal:
+        if _accessorial_contains_any(name_text, {"tas", "taxa administrativa", "pedagio"}):
+            return "fixed_amount", "low", None
+        return "unknown", "low", None
+
+    if operational_signal:
+        return "conditional", "medium", "missing_monetary_amount"
+
+    return "unknown", "low", None
+
+
+def _configured_base_fields_from_base(base: dict, *, source: str) -> dict:
+    label = _sanitize_cell_string(base.get("label"))
+    calculation_type = _sanitize_cell_string(base.get("calculation_type")) or "unknown"
+    return {
+        "calculation_basis": label,
+        "calculation_base_id": _sanitize_cell_string(base.get("id")),
+        "calculation_base_label": label,
+        "calculation_type": calculation_type,
+        "audit_variable": _sanitize_cell_string(base.get("audit_variable")),
+        "operation": _sanitize_cell_string(base.get("operation")),
+        "operation_parameters": base.get("parameters") if isinstance(base.get("parameters"), dict) else {},
+        "classification_source": source,
+        "classification_confidence": "high",
+        "modifier_type": _infer_accessorial_modifier_type(calculation_type),
+    }
+
+
+def _unmapped_calculation_base_fields(*, warning: str | None = None) -> dict:
+    fields = {
+        "calculation_basis": UNMAPPED_CALCULATION_BASIS_LABEL,
+        "calculation_base_id": None,
+        "calculation_base_label": None,
+        "audit_variable": None,
+        "operation": None,
+        "operation_parameters": {},
+        "classification_source": "unmapped_calculation_base",
+    }
+    if warning:
+        fields["classification_warning"] = warning
+    return fields
+
+
+def _derive_accessorial_fee_fields(item: dict) -> dict:
+    parts = _accessorial_text_parts(item)
+    calculation_type, confidence, unsupported_reason = _classify_accessorial_calculation_type(parts)
+    canonical_component = _classify_accessorial_canonical_component(parts)
+    component_group = _infer_accessorial_component_group(parts)
+    modifier_type = _infer_accessorial_modifier_type(calculation_type)
+    derived = {
+        "calculation_type": calculation_type,
+        "canonical_component": canonical_component,
+        "classification_confidence": confidence,
+        "component_group": component_group,
+        "modifier_type": modifier_type,
+        "related_to": None,
+    }
+    if unsupported_reason:
+        derived["unsupported_reason"] = unsupported_reason
+
+    has_unmapped_basis = str(parts.get("calculation_basis") or "").strip().lower() == UNMAPPED_CALCULATION_BASIS_LABEL
+    has_explicit_base_id = bool(item.get("_has_explicit_calculation_base_id")) and _optional_normalized_str(
+        item.get("calculation_base_id")
+    ) is not None
+    try:
+        calculation_bases = get_cleide_audit_config().calculation_bases
+        configured_base = (
+            get_active_calculation_base_by_id(item.get("calculation_base_id"), calculation_bases)
+            if has_explicit_base_id
+            else None
+        )
+        configured_base_result = (
+            {"status": "matched", "base": configured_base}
+            if configured_base is not None
+            else (
+                {"status": "unmapped", "base": None}
+                if has_unmapped_basis
+                else (
+                {"status": "invalid_id", "base": None}
+                if has_explicit_base_id
+                else resolve_calculation_base_status(
+                    parts.get("calculation_basis"),
+                    _accessorial_unit_for_configured_base(parts),
+                    calculation_bases,
+                )
+                )
+            )
+        )
+    except Exception:
+        logger.exception("Falha ao resolver base de cálculo configurada da Cleide Auditoria.")
+        configured_base_result = {"status": "not_found", "base": None}
+
+    configured_base = configured_base_result.get("base")
+    if configured_base_result.get("status") == "matched" and isinstance(configured_base, dict):
+        configured_calculation_type = str(configured_base.get("calculation_type") or calculation_type).strip()
+        should_override_type = calculation_type not in {
+            "minimum_amount",
+            "maximum_amount",
+            "conditional",
+        }
+        if should_override_type:
+            calculation_type = configured_calculation_type
+        source = (
+            "manual_configured_calculation_base"
+            if item.get("classification_source") == "manual_configured_calculation_base"
+            else "configured_calculation_base"
+        )
+        derived.update(_configured_base_fields_from_base(configured_base, source=source))
+        derived["calculation_type"] = calculation_type
+        derived["modifier_type"] = _infer_accessorial_modifier_type(calculation_type)
+        derived["classification_confidence"] = "high" if should_override_type else confidence
+        if should_override_type:
+            confidence = "high"
+    elif has_explicit_base_id or has_unmapped_basis:
+        derived.update(
+            _unmapped_calculation_base_fields(
+                warning="invalid_calculation_base_id" if has_explicit_base_id else None
+            )
+        )
+        calculation_type = "unknown"
+        confidence = "low"
+        unsupported_reason = None
+    else:
+        derived["calculation_base_id"] = None
+        derived["classification_source"] = "legacy_classifier"
+        if configured_base_result.get("status") == "ambiguous":
+            derived["classification_warning"] = "ambiguous_calculation_base"
+
+    if calculation_type == "conditional":
+        derived["status"] = "unsupported"
+        condition_text = _accessorial_joined_text(parts, ("notes", "scope", "original_text", "value"))
+        if condition_text:
+            derived["conditions"] = condition_text
+    elif calculation_type == "unknown":
+        derived["status"] = "unknown"
+    elif confidence == "high":
+        derived["status"] = "calculable"
+    else:
+        derived["status"] = "needs_review"
+
+    if unsupported_reason == "compound_accessorial_rule":
+        amount = _accessorial_first_money(parts)
+        normalized_text = _accessorial_normalized_text(parts)
+        if amount is not None and ("minimo" in normalized_text or "minima" in normalized_text):
+            derived["minimum_amount"] = _round_money(amount)
+        if amount is not None and ("teto" in normalized_text or "maximo" in normalized_text):
+            derived["maximum_amount"] = _round_money(amount)
+        condition_text = _accessorial_joined_text(parts, ("notes", "scope", "original_text", "value"))
+        if condition_text:
+            derived["conditions"] = condition_text
+
+    if calculation_type in {"invoice_percentage", "freight_percentage"}:
+        rate = _accessorial_first_rate(parts)
+        if rate is not None:
+            derived["rate"] = float(rate)
+        if unsupported_reason == "compound_accessorial_rule":
+            amount = _accessorial_first_money(parts)
+            if amount is not None and "minimo" in _accessorial_normalized_text(parts):
+                derived["minimum_amount"] = _round_money(amount)
+            condition_text = _accessorial_joined_text(parts, ("notes", "scope", "original_text", "value"))
+            if condition_text:
+                derived["conditions"] = condition_text
+    elif calculation_type == "fixed_amount":
+        amount = _accessorial_first_money(parts)
+        if amount is not None:
+            derived["amount"] = _round_money(amount)
+    elif calculation_type == "minimum_amount":
+        amount = _accessorial_first_money(parts)
+        if amount is not None:
+            derived["minimum_amount"] = _round_money(amount)
+    elif calculation_type == "maximum_amount":
+        amount = _accessorial_first_money(parts)
+        if amount is not None:
+            derived["maximum_amount"] = _round_money(amount)
+
+    return derived
+
+
+def _accessorial_confidence_rank(value) -> int:
+    return {"low": 1, "medium": 2, "high": 3}.get(str(value or "").lower(), 0)
+
+
+ACCESSORIAL_FEE_DERIVED_FIELDS = (
+    "calculation_type",
+    "calculation_base_id",
+    "calculation_base_label",
+    "audit_variable",
+    "operation",
+    "operation_parameters",
+    "classification_source",
+    "classification_warning",
+    "canonical_component",
+    "classification_confidence",
+    "status",
+    "rate",
+    "amount",
+    "minimum_amount",
+    "maximum_amount",
+    "conditions",
+    "unsupported_reason",
+    "component_group",
+    "modifier_type",
+    "related_to",
+)
+
+
+def _apply_accessorial_fee_classification(item: dict) -> dict:
+    classified = dict(item)
+    derived = _derive_accessorial_fee_fields(classified)
+
+    for field in ACCESSORIAL_FEE_DERIVED_FIELDS:
+        classified.pop(field, None)
+    for field in ACCESSORIAL_FEE_DERIVED_FIELDS:
+        if field in derived:
+            classified[field] = derived[field]
+    if "calculation_basis" in derived:
+        classified["calculation_basis"] = derived["calculation_basis"]
+    classified.pop("_has_explicit_calculation_base_id", None)
+    classified.setdefault("source_block", "accessorial_fees")
+    return classified
+
+
+def _normalize_accessorial_choice(value, allowed: set[str], default: str) -> str | None:
+    candidate = _optional_normalized_str(value)
+    if candidate is None:
+        return default
+    normalized = candidate.lower()
+    return normalized if normalized in allowed else default
+
+
+def _normalize_accessorial_extra_value(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _sanitize_cell_string(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, list):
+        cleaned = [_normalize_accessorial_extra_value(item) for item in value]
+        return [item for item in cleaned if item is not None]
+    if isinstance(value, dict):
+        cleaned: dict[str, object] = {}
+        for key, item in value.items():
+            safe_key = _sanitize_cell_string(key)
+            if not safe_key:
+                continue
+            safe_value = _normalize_accessorial_extra_value(item)
+            if safe_value is not None:
+                cleaned[safe_key] = safe_value
+        return cleaned
+    return _sanitize_cell_string(value)
+
+
+def _normalize_accessorial_modifier_type(value) -> str | None:
+    candidate = _optional_normalized_str(value)
+    if candidate is None:
+        return None
+    normalized = candidate.lower()
+    return normalized if normalized in ACCESSORIAL_FEE_MODIFIER_TYPES else None
+
+
+def _normalize_accessorial_component_ref(value) -> str | None:
+    candidate = _optional_normalized_str(value)
+    if candidate is None:
+        return None
+    normalized = _normalize_coverage_header(candidate).replace(" ", "_")
+    return normalized or None
+
+
 def _normalize_accessorial_fee_item(item) -> dict | None:
     if isinstance(item, str):
         text = _optional_normalized_str(item)
@@ -3140,7 +4668,7 @@ def _normalize_accessorial_fee_item(item) -> dict | None:
         }
     if not isinstance(item, dict):
         return None
-    return {
+    normalized = {
         "name": _optional_normalized_str(item.get("name")),
         "value": _optional_normalized_str(item.get("value")),
         "unit": _optional_normalized_str(item.get("unit")),
@@ -3148,6 +4676,68 @@ def _normalize_accessorial_fee_item(item) -> dict | None:
         "notes": _optional_normalized_str(item.get("notes")) or "",
         "scope": _optional_normalized_str(item.get("scope")),
     }
+    if "raw_calculation_basis" in item:
+        normalized["raw_calculation_basis"] = _optional_normalized_str(item.get("raw_calculation_basis"))
+    if "calculation_type" in item:
+        normalized["calculation_type"] = _normalize_accessorial_choice(
+            item.get("calculation_type"),
+            ACCESSORIAL_FEE_CALCULATION_TYPES,
+            "unknown",
+        )
+    if "canonical_component" in item:
+        normalized["canonical_component"] = _normalize_accessorial_choice(
+            item.get("canonical_component"),
+            ACCESSORIAL_FEE_CANONICAL_COMPONENTS,
+            "generic_accessorial",
+        )
+    if "classification_confidence" in item:
+        normalized["classification_confidence"] = _normalize_accessorial_choice(
+            item.get("classification_confidence"),
+            ACCESSORIAL_FEE_CLASSIFICATION_CONFIDENCES,
+            "low",
+        )
+    if "status" in item:
+        normalized["status"] = _normalize_accessorial_choice(
+            item.get("status"),
+            ACCESSORIAL_FEE_STATUSES,
+            "unknown",
+        )
+    if "component_group" in item:
+        normalized["component_group"] = _normalize_accessorial_component_ref(item.get("component_group"))
+    if "modifier_type" in item:
+        normalized["modifier_type"] = _normalize_accessorial_modifier_type(item.get("modifier_type"))
+    if "related_to" in item:
+        normalized["related_to"] = _normalize_accessorial_component_ref(item.get("related_to"))
+    for field in ACCESSORIAL_FEE_OPTIONAL_FIELDS:
+        if field not in item:
+            continue
+        value = _normalize_accessorial_extra_value(item.get(field))
+        if value is not None:
+            normalized[field] = value
+    if "calculation_base_id" in item:
+        normalized["_has_explicit_calculation_base_id"] = True
+    return _apply_accessorial_fee_classification(normalized)
+
+
+def _link_accessorial_fee_modifiers(fees: list[dict]) -> list[dict]:
+    base_groups = {
+        fee.get("component_group")
+        for fee in fees
+        if fee.get("component_group") and fee.get("modifier_type") == "base_fee"
+    }
+    linked: list[dict] = []
+    for fee in fees:
+        item = dict(fee)
+        group = item.get("component_group")
+        modifier_type = item.get("modifier_type")
+        if modifier_type == "base_fee":
+            item["related_to"] = None
+        elif modifier_type in {"minimum_amount", "maximum_amount"}:
+            item["related_to"] = group if group in base_groups else None
+            if group and item["related_to"] is None and item.get("status") == "calculable":
+                item["status"] = "needs_review"
+        linked.append(item)
+    return linked
 
 
 def _normalize_accessorial_fees(raw_fees) -> list[dict]:
@@ -3158,7 +4748,7 @@ def _normalize_accessorial_fees(raw_fees) -> list[dict]:
         fee = _normalize_accessorial_fee_item(item)
         if fee is not None:
             normalized.append(fee)
-    return normalized
+    return _link_accessorial_fee_modifiers(normalized)
 
 
 def _validate_accessorial_fees_for_save(raw_fees) -> list[dict]:
@@ -3177,17 +4767,205 @@ def _validate_accessorial_fees_for_save(raw_fees) -> list[dict]:
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "accessorial_fees inválido.",
         )
-    return [
-        {
-            "name": _sanitize_cell_string(item.get("name")),
-            "value": _sanitize_cell_string(item.get("value")),
-            "unit": _sanitize_cell_string(item.get("unit")),
-            "calculation_basis": _sanitize_cell_string(item.get("calculation_basis")),
-            "notes": _sanitize_cell_string(item.get("notes")) or "",
-            "scope": _sanitize_cell_string(item.get("scope")),
+    sanitized: list[dict] = []
+    for item in normalized:
+        fee = {
+            field: _sanitize_cell_string(item.get(field))
+            for field in ACCESSORIAL_FEE_LEGACY_FIELDS
         }
-        for item in normalized
-    ]
+        fee["notes"] = fee.get("notes") or ""
+        for field, default, allowed in (
+            ("calculation_type", "unknown", ACCESSORIAL_FEE_CALCULATION_TYPES),
+            ("canonical_component", "generic_accessorial", ACCESSORIAL_FEE_CANONICAL_COMPONENTS),
+            ("classification_confidence", "low", ACCESSORIAL_FEE_CLASSIFICATION_CONFIDENCES),
+            ("status", "unknown", ACCESSORIAL_FEE_STATUSES),
+        ):
+            if field in item:
+                fee[field] = _normalize_accessorial_choice(item.get(field), allowed, default)
+        for field in ACCESSORIAL_FEE_OPTIONAL_FIELDS:
+            if field not in item:
+                continue
+            value = _normalize_accessorial_extra_value(item.get(field))
+            if value is None and field in ACCESSORIAL_FEE_NULLABLE_OPTIONAL_FIELDS:
+                fee[field] = None
+                continue
+            if value is not None:
+                fee[field] = value
+        for field in ("component_group", "related_to"):
+            if field in item:
+                fee[field] = _normalize_accessorial_component_ref(item.get(field))
+        if "modifier_type" in item:
+            fee["modifier_type"] = _normalize_accessorial_modifier_type(item.get("modifier_type"))
+        sanitized.append(fee)
+    return sanitized
+
+
+def _is_general_accessorial_fee_for_base_validation(fee: dict) -> bool:
+    name = _normalize_coverage_header(fee.get("name"))
+    if not name:
+        return True
+    return not (
+        name.startswith("frete valor")
+        or name.startswith("frete peso")
+        or name.startswith("taxa embarque")
+        or name.startswith("taxa de embarque")
+    )
+
+
+_SUPPORTED_ACCESSORIAL_ADVANCE_OPERATIONS = frozenset(
+    {
+        "fixed_amount",
+        "percentage_of_variable",
+        "multiply_by_variable",
+        "ceil_fraction",
+    }
+)
+
+
+def _accessorial_fee_has_required_value_for_operation(fee: dict) -> bool:
+    operation = str(fee.get("operation") or "").strip()
+    if operation == "percentage_of_variable":
+        return _accessorial_runtime_rate(fee) is not None
+    if operation in {"fixed_amount", "ceil_fraction", "multiply_by_variable"}:
+        return _accessorial_runtime_amount(fee) is not None
+    return False
+
+
+def _accessorial_fee_unit_matches_base(fee: dict, active_bases_by_id: dict[str, dict]) -> bool:
+    base_id = str(fee.get("calculation_base_id") or "").strip()
+    base = active_bases_by_id.get(base_id)
+    if not base:
+        return False
+    expected = normalize_calculation_base_unit(base.get("unit"))
+    if not expected:
+        return True
+    return normalize_calculation_base_unit(fee.get("unit")) == expected
+
+
+def _accessorial_fee_uses_new_base_contract(fee: dict) -> bool:
+    base_id = str(fee.get("calculation_base_id") or "").strip()
+    basis = str(fee.get("calculation_basis") or "").strip().lower()
+    source = str(fee.get("classification_source") or "").strip()
+    return bool(base_id) or basis == UNMAPPED_CALCULATION_BASIS_LABEL.lower() or source.startswith("manual_")
+
+
+def _accessorial_fee_missing_calculation_base(
+    fee: dict,
+    active_bases_by_id: dict[str, dict],
+) -> bool:
+    base_id = str(fee.get("calculation_base_id") or "").strip()
+    if not base_id or base_id not in active_bases_by_id:
+        return True
+    basis = str(fee.get("calculation_basis") or "").strip().lower()
+    return basis == UNMAPPED_CALCULATION_BASIS_LABEL.lower()
+
+
+def _accessorial_fee_operation_is_complete(fee: dict) -> bool:
+    operation = str(fee.get("operation") or "").strip()
+    if operation not in _SUPPORTED_ACCESSORIAL_ADVANCE_OPERATIONS:
+        return False
+    if operation in {"percentage_of_variable", "multiply_by_variable", "ceil_fraction"}:
+        if not str(fee.get("audit_variable") or "").strip():
+            return False
+    if operation != "ceil_fraction":
+        return True
+    params = fee.get("operation_parameters")
+    if not isinstance(params, dict):
+        return False
+    fraction_size = params.get("fraction_size")
+    if fraction_size in (None, ""):
+        return False
+    try:
+        size = Decimal(str(fraction_size).replace(",", "."))
+    except Exception:
+        return False
+    return size > 0
+
+
+def _accessorial_advance_validation_error(
+    *,
+    index: int,
+    fee: dict,
+    field: str,
+    reason_code: str,
+    message: str,
+) -> dict:
+    return {
+        "section": "accessorial_fees",
+        "index": index,
+        "name": _sanitize_cell_string(fee.get("name")) or f"Item {index + 1}",
+        "field": field,
+        "reason_code": reason_code,
+        "message": message,
+    }
+
+
+def _validate_accessorial_fee_for_advance(
+    fee: dict,
+    index: int,
+    active_bases_by_id: dict[str, dict],
+) -> dict | None:
+    if _accessorial_fee_missing_calculation_base(fee, active_bases_by_id):
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field="calculation_base_id",
+            reason_code="missing_calculation_base",
+            message=ERROR_ACCESSORIAL_CALCULATION_BASE_MESSAGE,
+        )
+    if not _accessorial_fee_operation_is_complete(fee):
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field="calculation_base_id",
+            reason_code="unsupported_or_incomplete_operation",
+            message=ERROR_ACCESSORIAL_OPERATION_MESSAGE,
+        )
+    if not _accessorial_fee_has_required_value_for_operation(fee):
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field="value",
+            reason_code="invalid_accessorial_value",
+            message=ERROR_ACCESSORIAL_VALUE_MESSAGE,
+        )
+    if not _accessorial_fee_unit_matches_base(fee, active_bases_by_id):
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field="unit",
+            reason_code="incompatible_accessorial_unit",
+            message=ERROR_ACCESSORIAL_UNIT_MESSAGE,
+        )
+    return None
+
+
+def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
+    if not isinstance(accessorial_fees, list):
+        return
+    active_bases = get_active_calculation_bases_for_runtime(
+        get_cleide_audit_config().calculation_bases
+    )
+    active_bases_by_id = {
+        str(base.get("id") or "").strip(): base
+        for base in active_bases
+        if str(base.get("id") or "").strip()
+    }
+    errors: list[dict] = []
+    for index, fee in enumerate(accessorial_fees):
+        if not isinstance(fee, dict) or not _is_general_accessorial_fee_for_base_validation(fee):
+            continue
+        if not _accessorial_fee_uses_new_base_contract(fee):
+            continue
+        error = _validate_accessorial_fee_for_advance(fee, index, active_bases_by_id)
+        if error is not None:
+            errors.append(error)
+    if errors:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES,
+            ERROR_ACCESSORIAL_ADVANCE_MESSAGE,
+            errors=errors,
+        )
 
 
 def _assert_temp_table_scope(record: dict, *, user_scope=None, franquia_scope=None) -> None:
@@ -3417,6 +5195,9 @@ def save_temp_table_edit(
         if "uploaded_at" not in coverage:
             coverage["uploaded_at"] = now
         updated["coverage_table"] = coverage
+
+    if validated["review_action"] == TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE:
+        _validate_accessorial_fees_ready_to_advance(updated.get("accessorial_fees"))
 
     updated["updated_at"] = now
     updated["expires_at"] = preserved_expires_at
@@ -4013,7 +5794,7 @@ def normalize_partial_first_extraction_to_temp_table(raw: dict) -> dict:
         "freight_routes": _normalize_freight_routes(_list_field_from_raw(raw, "freight_routes")),
         "weight_ranges": _list_field_from_raw(raw, "weight_ranges"),
         "freight_values": _list_field_from_raw(raw, "freight_values"),
-        "accessorial_fees": _list_field_from_raw(raw, "accessorial_fees"),
+        "accessorial_fees": _normalize_accessorial_fees(_list_field_from_raw(raw, "accessorial_fees")),
         "charge_type_detected": raw.get("charge_type_detected"),
         "extracted_items": _list_field_from_raw(raw, "extracted_items"),
         "uncertain_fields": _list_field_from_raw(raw, "uncertain_fields"),
@@ -4084,7 +5865,7 @@ def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
         "freight_routes": _normalize_freight_routes(_list_field_from_raw(normalized, "freight_routes")),
         "weight_ranges": _list_field_from_raw(normalized, "weight_ranges"),
         "freight_values": _list_field_from_raw(normalized, "freight_values"),
-        "accessorial_fees": _list_field_from_raw(normalized, "accessorial_fees"),
+        "accessorial_fees": _normalize_accessorial_fees(_list_field_from_raw(normalized, "accessorial_fees")),
         "charge_type_detected": normalized.get("charge_type_detected"),
         "extracted_items": _list_field_from_raw(normalized, "extracted_items"),
         "uncertain_fields": uncertain,
@@ -4220,6 +6001,9 @@ def build_document_status_metadata() -> dict:
         },
         "documents": get_active_documents_for_session(),
         "temp_table": temp_table,
+        "calculation_bases": get_active_calculation_bases_for_runtime(
+            get_cleide_audit_config().calculation_bases
+        ),
         "allowed_formats": get_allowed_document_formats(),
         "session": {
             "count": totals["active_count"],
