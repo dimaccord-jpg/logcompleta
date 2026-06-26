@@ -25,7 +25,10 @@ from app.cleide_audit_doc_service import (
     TEMP_TABLE_STATUS_FAILED,
     TEMP_TABLE_VERSION_MARKER,
 )
-from app.cleide_audit_prompt import build_cleide_audit_temp_table_technical_prompt
+from app.cleide_audit_prompt import (
+    build_cleide_audit_temp_table_fallback_prompt,
+    build_cleide_audit_temp_table_technical_prompt,
+)
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.cleide_audit_config_service import get_active_calculation_bases_for_runtime
 
@@ -122,15 +125,19 @@ def _build_extraction_contents(
     *,
     document_context_block: str | None,
     document_file_parts: list | None,
+    use_fallback_prompt: bool = False,
 ) -> str | list:
-    try:
-        calculation_bases = get_active_calculation_bases_for_runtime()
-    except Exception:
-        logger.exception("Cleide temp_table extraction: falha ao carregar bases de cálculo ativas.")
-        calculation_bases = []
-    system_prompt = build_cleide_audit_temp_table_technical_prompt(
-        calculation_bases=calculation_bases,
-    ).strip()
+    if use_fallback_prompt:
+        system_prompt = build_cleide_audit_temp_table_fallback_prompt().strip()
+    else:
+        try:
+            calculation_bases = get_active_calculation_bases_for_runtime()
+        except Exception:
+            logger.exception("Cleide temp_table extraction: falha ao carregar bases de cálculo ativas.")
+            calculation_bases = []
+        system_prompt = build_cleide_audit_temp_table_technical_prompt(
+            calculation_bases=calculation_bases,
+        ).strip()
     parts = [system_prompt, "\n\n---\n\n"]
     doc_block = (document_context_block or "").strip()
     if doc_block:
@@ -312,11 +319,6 @@ def run_cleide_audit_temp_table_extraction(
             source_doc_ids=normalized,
         )
 
-    contents = _build_extraction_contents(
-        document_context_block=doc_ctx.get("context_block") or None,
-        document_file_parts=doc_ctx.get("gemini_file_parts") or None,
-    )
-
     effective_timeout_ms = get_extraction_timeout_ms()
     logger.info(
         "Cleide temp_table extraction: timeout efetivo=%sms (nao herda GEMINI_HTTP_TIMEOUT_MS)",
@@ -339,7 +341,12 @@ def run_cleide_audit_temp_table_extraction(
     last_error: Exception | None = None
     last_timeout = False
     timeout_models_attempted: list[str] = []
-    for model in model_candidates:
+    for model_index, model in enumerate(model_candidates):
+        contents = _build_extraction_contents(
+            document_context_block=doc_ctx.get("context_block") or None,
+            document_file_parts=doc_ctx.get("gemini_file_parts") or None,
+            use_fallback_prompt=model_index > 0,
+        )
         try:
             response = cleiton_governed_generate_content(
                 client,

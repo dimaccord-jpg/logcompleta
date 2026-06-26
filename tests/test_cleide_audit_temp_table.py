@@ -45,7 +45,10 @@ from app.cleide_audit_doc_service import (
     _parse_coverage_tabular_rows,
     _resolve_coverage_field,
 )
-from app.cleide_audit_prompt import build_cleide_audit_temp_table_technical_prompt
+from app.cleide_audit_prompt import (
+    build_cleide_audit_temp_table_fallback_prompt,
+    build_cleide_audit_temp_table_technical_prompt,
+)
 from app.services.cleide_audit_config_service import CleideAuditConfig, DEFAULT_FALLBACK_MESSAGE
 from tests.cleiton_doc_fixtures import (
     make_audit_xlsx,
@@ -1263,8 +1266,7 @@ def test_temp_table_prompt_includes_freight_routes_contract():
     prompt = build_cleide_audit_temp_table_technical_prompt()
     assert "freight_tables" in prompt
     assert "freight_routes" in prompt
-    assert "tabelas tarifarias" in prompt.lower()
-    assert "nao force colunas fixas de alfa" in prompt.lower()
+    assert "rotas/tabelas de frete" in prompt.lower()
     assert "nao reconstrua freight_tables a partir de freight_routes" in prompt.lower()
     assert (
         "generalidades em freight_routes" in prompt.lower()
@@ -1296,7 +1298,165 @@ def test_temp_table_prompt_includes_active_calculation_bases_contract():
     assert "calculation_base_id" in prompt
     assert "calculation_base_label" in prompt
     assert "raw_calculation_basis" in prompt
-    assert "não mapeado / revisar" in prompt
+    assert "calculation_base_id null" in prompt.lower()
+
+
+def test_temp_table_prompt_is_light_partial_first():
+    prompt = build_cleide_audit_temp_table_technical_prompt()
+    lowered = prompt.lower()
+    assert "nao calcula frete esperado" in lowered
+    assert "nao monta auditoria final" in lowered
+    assert "normalizacao do vinculo sera feita pelo backend" in lowered
+    assert "sao opcionais" in lowered
+    assert "memoria de calculo" in lowered
+    assert "nao calcula frete esperado, divergencia" in lowered
+
+
+def test_temp_table_prompt_requests_minimum_as_simple_extraction():
+    prompt = build_cleide_audit_temp_table_technical_prompt()
+    lowered = prompt.lower()
+    assert "taxa minima" in lowered
+    assert "extraia o item minimo separadamente" in lowered
+    assert "nao calcule nem aplique o minimo" in lowered
+    assert "modifier_type \"minimum_amount\"" not in prompt
+    assert "compartilhe component_group" not in lowered
+
+
+def test_temp_table_fallback_prompt_is_shorter_and_focused():
+    main_prompt = build_cleide_audit_temp_table_technical_prompt()
+    fallback_prompt = build_cleide_audit_temp_table_fallback_prompt()
+    assert len(fallback_prompt) < len(main_prompt) * 0.5
+    lowered = fallback_prompt.lower()
+    assert "freight_routes" in fallback_prompt
+    assert "weight_ranges" in fallback_prompt
+    assert "accessorial_fees" in fallback_prompt
+    assert "nao calcule frete" in lowered
+    assert "calculation_bases" not in lowered
+
+
+def test_extraction_fallback_uses_lite_prompt_after_primary_timeout(web_client, monkeypatch):
+    calls: list[dict] = []
+
+    def _generate(_client, *, model, contents, **_kwargs):
+        prompt_text = contents[-1] if isinstance(contents, list) else contents
+        calls.append({"model": model, "prompt": prompt_text})
+        if model == "gemini-2.5-flash":
+            raise Exception("504 DEADLINE_EXCEEDED")
+        return SimpleNamespace(text=json.dumps(_alfa_like_partial_extraction_payload()))
+
+    monkeypatch.setattr(audit_temp_table, "cleiton_governed_generate_content", _generate)
+    monkeypatch.setattr(audit_temp_table, "_get_client", lambda: object())
+    monkeypatch.setattr(
+        audit_temp_table,
+        "_get_model_candidates",
+        lambda: ["gemini-2.5-flash", "gemini-2.5-flash-lite"],
+    )
+    _upload(
+        web_client,
+        "Tabela Alfa teste.xlsx",
+        make_xlsx([["origem", "destino"], ["PR", "Capital"]]),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert len(calls) == 2
+    assert calls[0]["model"] == "gemini-2.5-flash"
+    assert calls[1]["model"] == "gemini-2.5-flash-lite"
+    assert len(calls[1]["prompt"]) < len(calls[0]["prompt"])
+    assert "calculation_bases" not in calls[1]["prompt"].lower()
+    temp_table = web_client.get("/api/cleide-auditoria/documents/status").get_json()["temp_table"]
+    assert temp_table["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(temp_table["freight_routes"]) == 1
+
+
+def _alfa_like_partial_extraction_payload(**overrides) -> dict:
+    payload = {
+        "status": "needs_review",
+        "freight_routes": [
+            {
+                "origin": "PR",
+                "destination": "PR - Capital",
+                "weight_30": "41,03",
+                "weight_50": "45,46",
+                "weight_70": "54,33",
+                "weight_100": "57,66",
+                "freight_weight_kg": "0,45",
+            }
+        ],
+        "weight_ranges": [
+            {"label": "ate 30 Kg", "min_weight": None, "max_weight": 30, "unit": "kg", "notes": ""},
+        ],
+        "accessorial_fees": [
+            {
+                "name": "GRIS",
+                "value": "0,15%",
+                "unit": "%",
+                "calculation_basis": "sobre NF",
+                "raw_calculation_basis": "sobre o valor da Nota Fiscal",
+                "notes": "",
+            },
+            {
+                "name": "GRIS minimo",
+                "value": "R$ 4,99",
+                "unit": "R$",
+                "raw_calculation_basis": "minimo por CTe",
+                "notes": "",
+            },
+        ],
+        "freight_tables": [],
+        "freight_values": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_alfa_like_xlsx_partial_extraction_becomes_needs_review(web_client, monkeypatch):
+    _fake_extraction_generate(monkeypatch, text=json.dumps(_alfa_like_partial_extraction_payload()))
+    _upload(
+        web_client,
+        "Tabela Alfa teste.xlsx",
+        make_xlsx([["origem", "destino"], ["PR", "Capital"]]),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    temp_table = web_client.get("/api/cleide-auditoria/documents/status").get_json()["temp_table"]
+    assert temp_table["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    assert len(temp_table["freight_routes"]) == 1
+    assert len(temp_table["weight_ranges"]) == 1
+    assert len(temp_table["accessorial_fees"]) == 2
+
+
+def test_partial_extraction_without_technical_fields_becomes_needs_review(web_client, monkeypatch):
+    payload = _alfa_like_partial_extraction_payload()
+    _fake_extraction_generate(monkeypatch, text=json.dumps(payload))
+    _upload(web_client, "t.csv", make_csv([["a"], ["1"]]), "text/csv")
+    temp_table = web_client.get("/api/cleide-auditoria/documents/status").get_json()["temp_table"]
+    assert temp_table["status"] == TEMP_TABLE_STATUS_NEEDS_REVIEW
+    gris = next(item for item in temp_table["accessorial_fees"] if item["name"] == "GRIS")
+    assert gris.get("modifier_type") in (None, "base_fee")
+    minimum = next(item for item in temp_table["accessorial_fees"] if "minimo" in item["name"].lower())
+    assert minimum.get("minimum_amount") in (None, 4.99)
+
+
+def test_double_model_timeout_without_response_stays_failed(web_client, monkeypatch):
+    call_count = {"n": 0}
+
+    def _fail(*_args, **_kwargs):
+        call_count["n"] += 1
+        raise Exception("504 DEADLINE_EXCEEDED")
+
+    monkeypatch.setattr(audit_temp_table, "cleiton_governed_generate_content", _fail)
+    monkeypatch.setattr(audit_temp_table, "_get_client", lambda: object())
+    monkeypatch.setattr(
+        audit_temp_table,
+        "_get_model_candidates",
+        lambda: ["gemini-2.5-flash", "gemini-2.5-flash-lite"],
+    )
+    _upload(web_client, "t.csv", make_csv([["a"], ["1"]]), "text/csv")
+    assert call_count["n"] == 2
+    temp_table = web_client.get("/api/cleide-auditoria/documents/status").get_json()["temp_table"]
+    assert temp_table["status"] == TEMP_TABLE_STATUS_FAILED
+    assert audit_temp_table.READING_ALERT_PROVIDER_TIMEOUT in temp_table["reading_alerts"]
+    assert temp_table["freight_routes"] == []
 
 
 def _sample_hengst_freight_tables_payload(**overrides) -> dict:
@@ -1914,6 +2074,466 @@ def test_validate_accessorial_fee_for_advance_returns_structured_errors():
     assert incomplete_operation["field"] == "calculation_base_id"
 
 
+def _linked_gris_and_minimum_accessorial_fees() -> list[dict]:
+    return [
+        {
+            "name": "GRIS",
+            "value": "0,15%",
+            "unit": "%",
+            "calculation_basis": "% por nota fiscal",
+            "calculation_base_id": "pct_nota_fiscal",
+            "classification_source": "manual_configured_calculation_base",
+            "operation": "percentage_of_variable",
+            "audit_variable": "valor_nf",
+            "modifier_type": "base_fee",
+            "component_group": "gris",
+            "related_to": None,
+        },
+        {
+            "name": "GRIS mínimo",
+            "value": "R$ 4,99",
+            "unit": "R$",
+            "calculation_basis": "não mapeado / revisar",
+            "modifier_type": "minimum_amount",
+            "calculation_type": "minimum_amount",
+            "minimum_amount": 4.99,
+            "component_group": "gris",
+            "related_to": "gris",
+            "canonical_component": "risk_management",
+        },
+    ]
+
+
+def _configured_base_with_linked_minimum_fees(
+    *,
+    base_name: str,
+    minimum_name: str,
+    group: str,
+    rate_value: str,
+    minimum_amount: float,
+) -> list[dict]:
+    return [
+        {
+            "name": base_name,
+            "value": rate_value,
+            "unit": "%",
+            "calculation_base_id": "pct_nota_fiscal",
+            "classification_source": "configured_calculation_base",
+            "operation": "percentage_of_variable",
+            "audit_variable": "valor_nf",
+            "modifier_type": "base_fee",
+            "component_group": group,
+            "canonical_component": group,
+            "calculation_type": "invoice_percentage",
+            "status": "calculable",
+            "classification_confidence": "high",
+        },
+        {
+            "name": minimum_name,
+            "value": f"R$ {minimum_amount:.2f}".replace(".", ","),
+            "unit": "R$",
+            "modifier_type": "minimum_amount",
+            "calculation_type": "minimum_amount",
+            "minimum_amount": minimum_amount,
+            "component_group": group,
+            "related_to": group,
+            "canonical_component": group,
+            "status": "calculable",
+            "classification_confidence": "high",
+        },
+    ]
+
+
+def test_build_configured_accessorial_applies_linked_minimum_when_calculated_is_lower(web_client):
+    from decimal import Decimal
+
+    saved = _apply_payload(
+        web_client,
+        {
+            "status": "needs_review",
+            "freight_tables": [],
+            "freight_routes": [],
+            "freight_values": [],
+            "accessorial_fees": _configured_base_with_linked_minimum_fees(
+                base_name="GRIS",
+                minimum_name="GRIS mínimo",
+                group="risk_management",
+                rate_value="0.15",
+                minimum_amount=4.99,
+            ),
+            "weight_ranges": [],
+            "reading_alerts": [],
+            "evidence_refs": [],
+        },
+    )
+    calculated, ignored, total = audit_doc_service._build_accessorial_percent_fee_components(
+        saved["accessorial_fees"],
+        invoice_value=Decimal("3016.55"),
+        audit_variables={"valor_nf": Decimal("3016.55")},
+        has_tariff_freight_value=False,
+    )
+    assert len(calculated) == 1
+    component = calculated[0]
+    assert component["label"] == "GRIS"
+    assert component["calculation_base_id"] == "pct_nota_fiscal"
+    assert component["operation"] == "percentage_of_variable"
+    assert component["calculated_amount"] == 4.52
+    assert component["minimum_amount"] == 4.99
+    assert component["minimum_applied"] is True
+    assert component["amount"] == 4.99
+    assert "mínimo aplicado" in component["details"]
+    assert total == Decimal("4.99")
+    assert ignored == []
+
+
+def test_build_configured_accessorial_keeps_calculated_when_above_linked_minimum(web_client):
+    from decimal import Decimal
+
+    saved = _apply_payload(
+        web_client,
+        {
+            "status": "needs_review",
+            "freight_tables": [],
+            "freight_routes": [],
+            "freight_values": [],
+            "accessorial_fees": _configured_base_with_linked_minimum_fees(
+                base_name="GRIS",
+                minimum_name="GRIS mínimo",
+                group="risk_management",
+                rate_value="0.15",
+                minimum_amount=4.99,
+            ),
+            "weight_ranges": [],
+            "reading_alerts": [],
+            "evidence_refs": [],
+        },
+    )
+    calculated, ignored, total = audit_doc_service._build_accessorial_percent_fee_components(
+        saved["accessorial_fees"],
+        invoice_value=Decimal("10000"),
+        audit_variables={"valor_nf": Decimal("10000")},
+        has_tariff_freight_value=False,
+    )
+    assert len(calculated) == 1
+    component = calculated[0]
+    assert component["amount"] == 15.00
+    assert component["minimum_applied"] is False
+    assert component["minimum_amount"] == 4.99
+    assert "mínimo não aplicado" in component["details"]
+    assert total == Decimal("15")
+    assert ignored == []
+
+
+def test_build_configured_accessorial_orphan_minimum_stays_ignored(web_client):
+    from decimal import Decimal
+
+    saved = _apply_payload(
+        web_client,
+        {
+            "status": "needs_review",
+            "freight_tables": [],
+            "freight_routes": [],
+            "freight_values": [],
+            "accessorial_fees": [
+                {
+                    "name": "GRIS mínimo",
+                    "value": "R$ 4,99",
+                    "unit": "R$",
+                    "modifier_type": "minimum_amount",
+                    "calculation_type": "minimum_amount",
+                    "minimum_amount": 4.99,
+                    "component_group": "risk_management",
+                    "related_to": "risk_management",
+                    "canonical_component": "risk_management",
+                    "status": "calculable",
+                    "classification_confidence": "high",
+                }
+            ],
+            "weight_ranges": [],
+            "reading_alerts": [],
+            "evidence_refs": [],
+        },
+    )
+    calculated, ignored, total = audit_doc_service._build_accessorial_percent_fee_components(
+        saved["accessorial_fees"],
+        invoice_value=Decimal("3016.55"),
+        audit_variables={"valor_nf": Decimal("3016.55")},
+        has_tariff_freight_value=False,
+    )
+    assert calculated == []
+    assert total == Decimal("0")
+    assert len(ignored) == 1
+    assert ignored[0]["label"] == "GRIS mínimo"
+    assert ignored[0]["reason_code"] == "accessorial_minimum_without_base_ignored"
+
+
+def test_build_configured_accessorial_applies_linked_minimum_for_non_gris_component(web_client):
+    from decimal import Decimal
+
+    saved = _apply_payload(
+        web_client,
+        {
+            "status": "needs_review",
+            "freight_tables": [],
+            "freight_routes": [],
+            "freight_values": [],
+            "accessorial_fees": _configured_base_with_linked_minimum_fees(
+                base_name="Ad Valorem",
+                minimum_name="Ad Valorem mínimo",
+                group="ad_valorem",
+                rate_value="0,10",
+                minimum_amount=5.00,
+            ),
+            "weight_ranges": [],
+            "reading_alerts": [],
+            "evidence_refs": [],
+        },
+    )
+    calculated, ignored, total = audit_doc_service._build_accessorial_percent_fee_components(
+        saved["accessorial_fees"],
+        invoice_value=Decimal("1000"),
+        audit_variables={"valor_nf": Decimal("1000")},
+        has_tariff_freight_value=False,
+    )
+    assert len(calculated) == 1
+    component = calculated[0]
+    assert component["label"] == "Ad Valorem"
+    assert component["component_group"] == "ad_valorem"
+    assert component["calculated_amount"] == 1.00
+    assert component["minimum_applied"] is True
+    assert component["amount"] == 5.00
+    assert total == Decimal("5")
+    assert ignored == []
+
+
+def test_validate_linked_minimum_amount_allows_advance_without_calculation_base():
+    fees = _linked_gris_and_minimum_accessorial_fees()
+    assert (
+        audit_doc_service._validate_linked_minimum_amount_for_advance(fees[1], 1, fees)
+        is None
+    )
+
+
+def test_normalize_minimum_modifier_reconciles_conditional_gemini_payload():
+    fees = audit_doc_service._normalize_accessorial_fees(
+        [
+            {
+                "name": "GRIS",
+                "value": "0.15",
+                "unit": "%",
+                "calculation_basis": "NF",
+                "calculation_base_id": "pct_nota_fiscal",
+                "modifier_type": "base_fee",
+                "component_group": "risk_management",
+                "canonical_component": "risk_management",
+            },
+            {
+                "name": "GRIS mínimo",
+                "value": "4.99",
+                "unit": "R$",
+                "calculation_basis": "não mapeado / revisar",
+                "raw_calculation_basis": "GRIS-PERCENTUAL-NF-MINIMO",
+                "modifier_type": "minimum_amount",
+                "component_group": "risk_management",
+                "related_to": "risk_management",
+                "canonical_component": "risk_management",
+            },
+        ]
+    )
+    minimum = _fee_by_name(fees, "GRIS mínimo")
+    assert minimum["calculation_type"] == "minimum_amount"
+    assert minimum["modifier_type"] == "minimum_amount"
+    assert minimum["minimum_amount"] == 4.99
+    assert minimum["related_to"] == "risk_management"
+    assert minimum["status"] == "calculable"
+    assert "unsupported_reason" not in minimum
+    assert not minimum.get("calculation_basis")
+
+
+def test_normalize_minimum_with_value_only_populates_minimum_amount():
+    fees = audit_doc_service._normalize_accessorial_fees(
+        [
+            {
+                "name": "GRIS",
+                "value": "0,15%",
+                "unit": "%",
+                "calculation_basis": "sobre NF",
+                "calculation_base_id": "pct_nota_fiscal",
+            },
+            {
+                "name": "GRIS mínimo",
+                "value": "4.99",
+                "unit": "R$",
+                "modifier_type": "minimum_amount",
+                "related_to": "risk_management",
+                "component_group": "risk_management",
+                "canonical_component": "risk_management",
+            },
+        ]
+    )
+    minimum = _fee_by_name(fees, "GRIS mínimo")
+    assert minimum["minimum_amount"] == 4.99
+
+
+def test_validate_linked_minimum_with_value_only_passes_advance():
+    fees = audit_doc_service._normalize_accessorial_fees(
+        [
+            {
+                "name": "GRIS",
+                "value": "0.15",
+                "unit": "%",
+                "calculation_basis": "NF",
+                "calculation_base_id": "pct_nota_fiscal",
+                "modifier_type": "base_fee",
+                "component_group": "risk_management",
+                "canonical_component": "risk_management",
+            },
+            {
+                "name": "GRIS mínimo",
+                "value": "4.99",
+                "unit": "R$",
+                "modifier_type": "minimum_amount",
+                "component_group": "risk_management",
+                "related_to": "risk_management",
+                "canonical_component": "risk_management",
+            },
+        ]
+    )
+    assert audit_doc_service._validate_linked_minimum_amount_for_advance(fees[1], 1, fees) is None
+
+
+def test_validate_orphan_minimum_amount_blocks_advance_missing_link():
+    error = audit_doc_service._validate_linked_minimum_amount_for_advance(
+        {
+            "name": "Taxa mínima",
+            "value": "R$ 4,99",
+            "unit": "R$",
+            "calculation_basis": "não mapeado / revisar",
+            "modifier_type": "minimum_amount",
+            "calculation_type": "minimum_amount",
+            "minimum_amount": 4.99,
+        },
+        0,
+        [],
+    )
+    assert error is not None
+    assert error["reason_code"] == "missing_minimum_base_link"
+    assert error["field"] == "related_to"
+
+
+def test_validate_minimum_with_invalid_base_link_blocks_advance():
+    fees = _linked_gris_and_minimum_accessorial_fees()
+    fees[1]["related_to"] = "inexistente"
+    error = audit_doc_service._validate_linked_minimum_amount_for_advance(fees[1], 1, fees)
+    assert error is not None
+    assert error["reason_code"] == "invalid_minimum_base_link"
+    assert error["field"] == "related_to"
+
+
+def test_validate_minimum_with_invalid_value_blocks_advance():
+    fees = _linked_gris_and_minimum_accessorial_fees()
+    fees[1]["minimum_amount"] = None
+    fees[1]["value"] = ""
+    error = audit_doc_service._validate_linked_minimum_amount_for_advance(fees[1], 1, fees)
+    assert error is not None
+    assert error["reason_code"] == "invalid_accessorial_value"
+    assert error["field"] == "value"
+
+
+def test_validate_common_fee_without_base_still_blocks_advance():
+    error = audit_doc_service._validate_accessorial_fee_for_advance(
+        {
+            "name": "Taxa XPTO",
+            "value": "0,20",
+            "unit": "%",
+            "calculation_basis": "não mapeado / revisar",
+        },
+        0,
+        {"por_cte": {"id": "por_cte", "unit": "R$", "operation": "fixed_amount"}},
+    )
+    assert error is not None
+    assert error["reason_code"] == "missing_calculation_base"
+    assert error["field"] == "calculation_base_id"
+
+
+def test_temp_table_save_and_advance_accepts_linked_minimum_without_calculation_base(web_client):
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(
+            accessorial_fees=[
+                {
+                    "name": "GRIS",
+                    "value": "0.15",
+                    "unit": "%",
+                    "calculation_basis": "NF",
+                    "calculation_base_id": "pct_nota_fiscal",
+                    "modifier_type": "base_fee",
+                    "component_group": "risk_management",
+                    "canonical_component": "risk_management",
+                },
+                {
+                    "name": "GRIS mínimo",
+                    "value": "4.99",
+                    "unit": "R$",
+                    "calculation_basis": "não mapeado / revisar",
+                    "raw_calculation_basis": "GRIS-PERCENTUAL-NF-MINIMO",
+                    "modifier_type": "minimum_amount",
+                    "component_group": "risk_management",
+                    "related_to": "risk_management",
+                    "canonical_component": "risk_management",
+                },
+            ]
+        ),
+    )
+    minimum = _fee_by_name(saved["accessorial_fees"], "GRIS mínimo")
+    assert minimum["minimum_amount"] == 4.99
+    assert minimum["calculation_type"] == "minimum_amount"
+    assert minimum["status"] == "calculable"
+
+    edited = _save_payload_for_record(saved)
+    edited["edit_target"]["accessorial_fees"][0].update(
+        {
+            "classification_source": "manual_configured_calculation_base",
+            "operation": "percentage_of_variable",
+            "audit_variable": "valor_nf",
+        }
+    )
+    minimum = edited["edit_target"]["accessorial_fees"][1]
+    assert minimum["modifier_type"] == "minimum_amount"
+    assert minimum["related_to"] == "risk_management"
+    assert not minimum.get("calculation_base_id")
+    resp = _post_temp_table_save(web_client, edited)
+    assert resp.status_code == 200
+    saved_minimum = resp.get_json()["temp_table"]["accessorial_fees"][1]
+    assert saved_minimum["modifier_type"] == "minimum_amount"
+    assert saved_minimum["related_to"] == "risk_management"
+    assert saved_minimum["minimum_amount"] == 4.99
+    assert saved_minimum.get("calculation_base_id") is None
+
+
+def test_temp_table_save_and_advance_blocks_orphan_minimum_without_base_link(web_client):
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(
+            accessorial_fees=[
+                {
+                    "name": "Taxa mínima",
+                    "value": "R$ 4,99",
+                    "unit": "R$",
+                    "calculation_basis": "não mapeado / revisar",
+                    "notes": "",
+                }
+            ]
+        ),
+    )
+    resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    _assert_accessorial_advance_error(
+        resp,
+        reason_code="missing_minimum_base_link",
+        field="related_to",
+    )
+
+
 def test_temp_table_save_preserves_expires_at(web_client):
     saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
     original_expires = saved["expires_at"]
@@ -2243,6 +2863,147 @@ def test_accessorial_minimum_without_matching_base_fee_stays_unlinked(web_client
     assert fee["component_group"] == "gris"
     assert fee["related_to"] is None
     assert fee["status"] == "needs_review"
+
+
+def test_accessorial_gris_percentual_nf_links_hyphenated_minimum(web_client):
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(
+            accessorial_fees=[
+                {
+                    "name": "GRIS-PERCENTUAL-NF",
+                    "value": "0,15",
+                    "unit": "%",
+                    "calculation_basis": "% por nota fiscal",
+                    "calculation_base_id": "pct_nota_fiscal",
+                    "notes": "",
+                },
+                {
+                    "name": "GRIS-PERCENTUAL-NF-MINIMO",
+                    "value": "4,99",
+                    "unit": "R$",
+                    "calculation_basis": "não mapeado / revisar",
+                    "notes": "",
+                },
+            ]
+        ),
+    )
+    base = _fee_by_name(saved["accessorial_fees"], "GRIS-PERCENTUAL-NF")
+    minimum = _fee_by_name(saved["accessorial_fees"], "GRIS-PERCENTUAL-NF-MINIMO")
+
+    assert base["calculation_type"] == "invoice_percentage"
+    assert base["modifier_type"] == "base_fee"
+    assert base["status"] == "calculable"
+    assert base["component_group"] == "gris"
+    assert base["related_to"] is None
+
+    assert minimum["calculation_type"] == "minimum_amount"
+    assert minimum["modifier_type"] == "minimum_amount"
+    assert minimum["minimum_amount"] == 4.99
+    assert minimum["component_group"] == "gris"
+    assert minimum["related_to"] == "gris"
+    assert minimum["status"] == "calculable"
+    assert not minimum.get("calculation_basis")
+
+
+def test_accessorial_ad_valorem_percent_links_minimum(web_client):
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(
+            accessorial_fees=[
+                {
+                    "name": "Ad Valorem",
+                    "value": "0,10%",
+                    "unit": "%",
+                    "calculation_basis": "sobre NF",
+                    "notes": "",
+                },
+                {
+                    "name": "Ad Valorem mínimo",
+                    "value": "R$ 5,00",
+                    "unit": "R$",
+                    "calculation_basis": "não mapeado / revisar",
+                    "notes": "",
+                },
+            ]
+        ),
+    )
+    base = _fee_by_name(saved["accessorial_fees"], "Ad Valorem")
+    minimum = _fee_by_name(saved["accessorial_fees"], "Ad Valorem mínimo")
+
+    assert base["calculation_type"] == "invoice_percentage"
+    assert base["modifier_type"] == "base_fee"
+    assert base["canonical_component"] == "ad_valorem"
+    assert base["component_group"] == "ad_valorem"
+    assert base["related_to"] is None
+
+    assert minimum["calculation_type"] == "minimum_amount"
+    assert minimum["modifier_type"] == "minimum_amount"
+    assert minimum["minimum_amount"] == 5.00
+    assert minimum["component_group"] == "ad_valorem"
+    assert minimum["related_to"] == "ad_valorem"
+    assert minimum["status"] == "calculable"
+
+
+def test_accessorial_orphan_minimum_with_unmapped_basis_stays_unlinked(web_client):
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(
+            accessorial_fees=[
+                {
+                    "name": "Taxa mínima",
+                    "value": "R$ 4,99",
+                    "unit": "R$",
+                    "calculation_basis": "não mapeado / revisar",
+                    "notes": "",
+                }
+            ]
+        ),
+    )
+    fee = saved["accessorial_fees"][0]
+    assert fee["calculation_type"] == "minimum_amount"
+    assert fee["modifier_type"] == "minimum_amount"
+    assert fee["minimum_amount"] == 4.99
+    assert fee["related_to"] is None
+    assert fee["status"] == "needs_review"
+    assert not fee.get("calculation_basis")
+
+
+def test_audit_run_applies_gris_hyphenated_minimum_via_linked_modifier(web_client):
+    result = _run_single_audit(
+        web_client,
+        _freight_value_pricing_payload(
+            header="Frete Valor",
+            freight_value="0,54",
+            weight_value="100,00",
+            accessorial_fees=[
+                {
+                    "name": "GRIS-PERCENTUAL-NF",
+                    "value": "0,30%",
+                    "unit": "%",
+                    "calculation_basis": "sobre NF",
+                    "notes": "",
+                },
+                {
+                    "name": "GRIS-PERCENTUAL-NF-MINIMO",
+                    "value": "R$ 50,00",
+                    "unit": "R$",
+                    "calculation_basis": "não mapeado / revisar",
+                    "notes": "",
+                },
+            ],
+        ),
+        audit_row=_sample_audit_row(valor_frete="150,00", peso="48", valor_nf="1000"),
+    )
+    assert result["status"] == "ok"
+    assert result["accessorial_fees_amount"] == 50.00
+    component = result["calculation_components"]["accessorial_fees"][0]
+    assert component["label"] == "GRIS-PERCENTUAL-NF"
+    assert component["calculated_amount"] == 3.00
+    assert component["minimum_amount"] == 50.00
+    assert component["minimum_applied"] is True
+    assert component["amount"] == 50.00
+    assert result["calculation_components"]["ignored_accessorial_fees"] == []
 
 
 def test_accessorial_maximum_modifier_is_structured(web_client):
@@ -2914,7 +3675,7 @@ def test_accessorial_fees_classifies_taxa_minima_with_or_without_amount(web_clie
     )
     with_amount, without_amount = saved["accessorial_fees"]
     assert with_amount["calculation_type"] == "minimum_amount"
-    assert with_amount["status"] == "calculable"
+    assert with_amount["status"] == "needs_review"
     assert with_amount["minimum_amount"] == 25.00
     assert without_amount["calculation_type"] == "minimum_amount"
     assert without_amount["status"] == "needs_review"
@@ -4184,6 +4945,46 @@ def test_build_freight_pricing_index_builds_city_destination_keys():
     assert index["TO|PALMAS"]["region"] == "Palmas"
 
 
+def _multi_uf_region_pricing_payload(*, region_label: str, rows: list[dict]) -> dict:
+    return {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "Tabela multi-UF",
+                "table_type": "weight_range_table",
+                "columns": ["UF", "Região de frete", "Até 30 kg"],
+                "rows": rows,
+            }
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+
+
+def _mono_uf_region_pricing_payload(*, region_label: str, value: str = "50,00") -> dict:
+    return {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "Tabela mono-UF",
+                "table_type": "weight_range_table",
+                "columns": ["Região de frete", "Até 30 kg"],
+                "rows": [{"Região de frete": region_label, "Até 30 kg": value}],
+            }
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+
+
 def test_find_pricing_rule_falls_back_from_coverage_region_to_city():
     pricing_index = audit_doc_service.build_freight_pricing_index(_sample_city_pricing_payload())
     rule = audit_doc_service._find_pricing_rule(
@@ -4193,6 +4994,400 @@ def test_find_pricing_rule_falls_back_from_coverage_region_to_city():
         "Palmas",
     )
     assert rule is pricing_index["TO|PALMAS"]
+
+
+def test_find_pricing_rule_uses_uf_region_when_generic_capital_is_unsupported():
+    payload = _multi_uf_region_pricing_payload(
+        region_label="Capital",
+        rows=[
+            {"UF": "PR", "Região de frete": "Capital", "Até 30 kg": "50,00"},
+            {"UF": "RS", "Região de frete": "Capital", "Até 30 kg": "60,00"},
+        ],
+    )
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert pricing_index["Capital"]["pricing_type"] == "unsupported_pricing_model"
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "Capital", "PR", "Curitiba")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key == "PR|CAPITAL"
+    assert rule["pricing_type"] == "fixed_range"
+    assert rule["brackets"][0]["value"] == 50.0
+    assert lookup_kind == "freight_region"
+
+
+def test_find_pricing_rule_uses_uf_region_when_generic_interior_is_unsupported():
+    payload = _multi_uf_region_pricing_payload(
+        region_label="Interior",
+        rows=[
+            {"UF": "ES", "Região de frete": "Interior", "Até 30 kg": "70,00"},
+            {"UF": "RS", "Região de frete": "Interior", "Até 30 kg": "80,00"},
+        ],
+    )
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert pricing_index["Interior"]["pricing_type"] == "unsupported_pricing_model"
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "Interior", "ES", "Castelo")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key == "ES|INTERIOR"
+    assert rule["pricing_type"] == "fixed_range"
+    assert rule["brackets"][0]["value"] == 70.0
+    assert lookup_kind == "freight_region"
+
+
+def test_find_pricing_rule_keeps_explicit_region_without_uf_composition():
+    pricing_index = audit_doc_service.build_freight_pricing_index(_sample_pricing_payload())
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "SP-Interior 1", "SP", "Campinas")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key == "SP-Interior 1"
+    assert rule["pricing_type"] == "range_plus_excess_per_kg"
+    assert lookup_kind == "freight_region"
+
+
+def test_find_pricing_rule_mono_uf_region_still_works():
+    payload = _mono_uf_region_pricing_payload(region_label="Capital", value="55,00")
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert pricing_index["Capital"]["pricing_type"] == "fixed_range"
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "Capital", "PR", "Curitiba")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key == "Capital"
+    assert rule["brackets"][0]["value"] == 55.0
+    assert lookup_kind == "freight_region"
+
+
+def test_find_pricing_rule_returns_none_when_no_rule_exists():
+    pricing_index = audit_doc_service.build_freight_pricing_index(_sample_pricing_payload())
+    assert audit_doc_service._find_pricing_rule_match(pricing_index, "SP-Interior 9", "SP", "Campinas") is None
+
+
+def test_find_pricing_rule_returns_unsupported_when_only_unsupported_exists():
+    pricing_index = {
+        "Capital": audit_doc_service._make_unsupported_rule("Capital", "Tabela", "Colisão"),
+    }
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "Capital", "PR", "Curitiba")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key == "Capital"
+    assert rule["pricing_type"] == "unsupported_pricing_model"
+    assert lookup_kind == "freight_region"
+
+
+def _freight_route_region_pricing_payload(
+    *,
+    destination: str,
+    weight_30: str = "50,00",
+    extra_routes: list[dict] | None = None,
+) -> dict:
+    routes = [
+        {
+            "origin": "SP",
+            "destination": destination,
+            "weight_30": weight_30,
+        }
+    ]
+    if extra_routes:
+        routes.extend(extra_routes)
+    return {
+        "status": "needs_review",
+        "freight_tables": [],
+        "freight_routes": routes,
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+
+
+def test_freight_route_capital_pr_registers_contextual_key_and_matches():
+    payload = _freight_route_region_pricing_payload(destination="Capital - PR", weight_30="50,00")
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert "Capital - PR" in pricing_index
+    assert "PR|CAPITAL" in pricing_index
+    assert pricing_index["PR|CAPITAL"]["region"] == "Capital - PR"
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "Capital", "PR", "Curitiba")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key == "PR|CAPITAL"
+    assert rule["pricing_type"] == "fixed_range"
+    assert rule["brackets"][0]["value"] == 50.0
+    assert lookup_kind == "freight_region"
+
+
+def test_freight_route_interior_es_registers_contextual_key_and_matches():
+    payload = _freight_route_region_pricing_payload(destination="Interior - ES", weight_30="70,00")
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert "Interior - ES" in pricing_index
+    assert "ES|INTERIOR" in pricing_index
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "Interior", "ES", "Castelo")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key == "ES|INTERIOR"
+    assert rule["pricing_type"] == "fixed_range"
+    assert rule["brackets"][0]["value"] == 70.0
+    assert lookup_kind == "freight_region"
+
+
+def test_freight_route_explicit_region_not_split_into_contextual_key():
+    payload = _freight_route_region_pricing_payload(destination="AM-Interior 1", weight_30="80,00")
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert "AM-Interior 1" in pricing_index
+    assert "AM|INTERIOR 1" not in pricing_index
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "AM-Interior 1", "AM", "Manaus")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key == "AM-Interior 1"
+    assert rule["pricing_type"] == "fixed_range"
+    assert lookup_kind == "freight_region"
+
+
+def _pr_capital_freight_route_payload(*, include_excess: bool = True) -> dict:
+    route = {
+        "origin": "PR",
+        "destination": "PR - Capital",
+        "weight_30": "41,03",
+        "weight_50": "45,46",
+        "weight_70": "54,33",
+        "weight_100": "57,66",
+    }
+    if include_excess:
+        route["freight_weight_kg"] = "0,45"
+    return {
+        "status": "needs_review",
+        "freight_tables": [],
+        "freight_routes": [route],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+
+
+def _pr_capital_freight_route_rule(*, include_excess: bool = True) -> dict:
+    payload = _pr_capital_freight_route_payload(include_excess=include_excess)
+    return audit_doc_service.build_freight_pricing_index(payload)["PR - Capital"]
+
+
+def test_freight_route_range_plus_excess_within_bracket():
+    rule = _pr_capital_freight_route_rule()
+    assert rule["pricing_type"] == "range_plus_excess_per_kg"
+    assert rule["excess"]["rate_per_kg"] == 0.45
+    calculated = audit_doc_service.calculate_weight_freight(68.64, rule)
+    assert calculated["expected_freight"] == 54.33
+    assert calculated["calculation_basis"] == "range_plus_excess_per_kg"
+    wrong = audit_doc_service.calculate_weight_freight(
+        68.64,
+        {"pricing_type": "direct_weight_rate", "unit": "kg", "value_per_kg": 0.45},
+    )
+    assert wrong["expected_freight"] == 30.89
+
+
+def test_freight_route_range_plus_excess_above_last_bracket():
+    rule = _pr_capital_freight_route_rule()
+    calculated = audit_doc_service.calculate_weight_freight(506.88, rule)
+    assert calculated["expected_freight"] == 240.76
+    assert calculated["calculation_basis"] == "range_plus_excess_per_kg"
+    wrong = audit_doc_service.calculate_weight_freight(
+        506.88,
+        {"pricing_type": "direct_weight_rate", "unit": "kg", "value_per_kg": 0.45},
+    )
+    assert wrong["expected_freight"] == 228.10
+
+
+def test_freight_route_fixed_range_without_excess():
+    rule = _pr_capital_freight_route_rule(include_excess=False)
+    assert rule["pricing_type"] == "fixed_range"
+    assert rule.get("excess") is None
+    calculated = audit_doc_service.calculate_weight_freight(68.64, rule)
+    assert calculated["expected_freight"] == 54.33
+    assert calculated["calculation_basis"] == "fixed_range"
+
+
+def test_freight_route_direct_weight_rate_without_brackets():
+    payload = {
+        "status": "needs_review",
+        "freight_tables": [],
+        "freight_routes": [
+            {
+                "origin": "SP",
+                "destination": "SP - Interior",
+                "freight_weight_kg": "2,50",
+            }
+        ],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    rule = audit_doc_service.build_freight_pricing_index(payload)["SP - Interior"]
+    assert rule["pricing_type"] == "direct_weight_rate"
+    assert rule["value_per_kg"] == 2.5
+    calculated = audit_doc_service.calculate_weight_freight(10, rule)
+    assert calculated["expected_freight"] == 25.00
+    assert calculated["calculation_basis"] == "direct_weight_rate"
+
+
+def test_audit_run_freight_route_capital_pr_resolves_coverage_region(web_client):
+    _apply_payload(web_client, _freight_route_region_pricing_payload(destination="Capital - PR", weight_30="50,00"))
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["PR", "Curitiba", "Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(uf_destino="PR", cidade_destino="Curitiba", peso="20", valor_frete="50,00")
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "ok"
+    assert result["freight_region"] == "Capital"
+    assert result["expected_freight"] == 50.0
+
+
+def test_audit_run_freight_route_interior_es_resolves_coverage_region(web_client):
+    _apply_payload(web_client, _freight_route_region_pricing_payload(destination="Interior - ES", weight_30="70,00"))
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["ES", "Castelo", "Interior"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(uf_destino="ES", cidade_destino="Castelo", peso="20", valor_frete="70,00")
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "ok"
+    assert result["freight_region"] == "Interior"
+    assert result["expected_freight"] == 70.0
+
+
+def test_audit_run_multi_uf_capital_uses_uf_region_rule(web_client):
+    payload = _multi_uf_region_pricing_payload(
+        region_label="Capital",
+        rows=[
+            {"UF": "PR", "Região de frete": "Capital", "Até 30 kg": "50,00"},
+            {"UF": "RS", "Região de frete": "Capital", "Até 30 kg": "60,00"},
+        ],
+    )
+    _apply_payload(web_client, payload)
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["PR", "Curitiba", "Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(uf_destino="PR", cidade_destino="Curitiba", peso="20", valor_frete="50,00")
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "ok"
+    assert result["freight_region"] == "Capital"
+    assert result["expected_freight"] == 50.0
+
+
+def test_audit_run_multi_uf_interior_uses_uf_region_rule(web_client):
+    payload = _multi_uf_region_pricing_payload(
+        region_label="Interior",
+        rows=[
+            {"UF": "ES", "Região de frete": "Interior", "Até 30 kg": "70,00"},
+            {"UF": "RS", "Região de frete": "Interior", "Até 30 kg": "80,00"},
+        ],
+    )
+    _apply_payload(web_client, payload)
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["ES", "Castelo", "Interior"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(uf_destino="ES", cidade_destino="Castelo", peso="20", valor_frete="70,00")
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "ok"
+    assert result["freight_region"] == "Interior"
+    assert result["expected_freight"] == 70.0
+
+
+def test_audit_run_mono_uf_capital_still_works(web_client):
+    _apply_payload(web_client, _mono_uf_region_pricing_payload(region_label="Capital", value="55,00"))
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["PR", "Curitiba", "Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(uf_destino="PR", cidade_destino="Curitiba", peso="20", valor_frete="55,00")
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "ok"
+    assert result["freight_region"] == "Capital"
+    assert result["expected_freight"] == 55.0
+
+
+def test_audit_run_unsupported_pricing_when_no_contextual_fallback(web_client):
+    duplicate_capital_table = {
+        "table_title": "Tabela Capital duplicada",
+        "table_type": "weight_range_table",
+        "columns": ["Região de frete", "Até 30 kg"],
+        "rows": [{"Região de frete": "Capital", "Até 30 kg": "60,00"}],
+    }
+    payload = {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "Tabela Capital 1",
+                "table_type": "weight_range_table",
+                "columns": ["Região de frete", "Até 30 kg"],
+                "rows": [{"Região de frete": "Capital", "Até 30 kg": "50,00"}],
+            },
+            duplicate_capital_table,
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    _apply_payload(web_client, payload)
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert pricing_index["Capital"]["pricing_type"] == "unsupported_pricing_model"
+    assert "PR|CAPITAL" not in pricing_index
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["PR", "Curitiba", "Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(uf_destino="PR", cidade_destino="Curitiba", peso="20", valor_frete="50,00")
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "unsupported_pricing_model"
+    assert result["freight_region"] == "Capital"
 
 
 def test_calculate_weight_freight_fixed_range():
@@ -4301,6 +5496,10 @@ def test_audit_run_records_results_summary_and_preserves_tables(web_client):
     assert temp_table["freight_tables"] == saved["freight_tables"]
     assert temp_table["accessorial_fees"] == saved["accessorial_fees"]
     assert temp_table["coverage_table"]["rows"][0]["freight_region"] == "SP-Interior 1"
+    ok_result = batch["results"][0]
+    assert ok_result["expected_freight"] == 100.50
+    assert isinstance(ok_result.get("calculation_components"), dict)
+    assert ok_result["calculation_components"]["weight_freight"]["amount"] == 100.50
 
 
 def test_audit_run_adds_simple_freight_value_to_weight_freight(web_client):
@@ -4602,6 +5801,36 @@ def test_audit_run_does_not_calculate_new_accessorial_types(web_client):
     assert ignored[0]["source_value"] == "999,00"
 
 
+def test_audit_run_applies_configured_linked_minimum_modifier(web_client):
+    result = _run_single_audit(
+        web_client,
+        _freight_value_pricing_payload(
+            header="Frete Valor",
+            freight_value="0,3",
+            weight_value="100,00",
+            accessorial_fees=_configured_base_with_linked_minimum_fees(
+                base_name="GRIS",
+                minimum_name="GRIS mínimo",
+                group="risk_management",
+                rate_value="0.15",
+                minimum_amount=4.99,
+            ),
+        ),
+        audit_row=_sample_audit_row(valor_frete="104,99", peso="48", valor_nf="3016,55"),
+    )
+    assert result["status"] == "ok"
+    assert result["accessorial_fees_amount"] == 4.99
+    component = result["calculation_components"]["accessorial_fees"][0]
+    assert component["label"] == "GRIS"
+    assert component["calculation_base_id"] == "pct_nota_fiscal"
+    assert component["operation"] == "percentage_of_variable"
+    assert component["calculated_amount"] == 4.52
+    assert component["minimum_amount"] == 4.99
+    assert component["minimum_applied"] is True
+    assert component["amount"] == 4.99
+    assert result["calculation_components"]["ignored_accessorial_fees"] == []
+
+
 def test_audit_run_applies_linked_accessorial_minimum_modifier(web_client):
     result = _run_single_audit(
         web_client,
@@ -4627,20 +5856,22 @@ def test_audit_run_applies_linked_accessorial_minimum_modifier(web_client):
                 },
             ],
         ),
-        audit_row=_sample_audit_row(valor_frete="103,00", peso="48", valor_nf="1000"),
+        audit_row=_sample_audit_row(valor_frete="150,00", peso="48", valor_nf="1000"),
     )
     assert result["status"] == "ok"
-    assert result["expected_freight"] == 103.00
-    assert result["accessorial_fees_amount"] == 3.00
-    assert result["accessorial_percent_fees_amount"] == 3.00
+    assert result["expected_freight"] == 150.00
+    assert result["accessorial_fees_amount"] == 50.00
+    assert result["accessorial_percent_fees_amount"] == 50.00
     component = result["calculation_components"]["accessorial_fees"][0]
     assert component["label"] == "GRIS"
     assert component["calculation_base_id"] == "pct_nota_fiscal"
     assert component["operation"] == "percentage_of_variable"
-    assert component["amount"] == 3.00
-    assert component["component_group"] == "gris"
+    assert component["calculated_amount"] == 3.00
+    assert component["minimum_amount"] == 50.00
+    assert component["minimum_applied"] is True
+    assert component["amount"] == 50.00
     ignored = result["calculation_components"]["ignored_accessorial_fees"]
-    assert {item["label"] for item in ignored} == {"GRIS Mínimo R$ por Cte", "TRT limite máximo"}
+    assert {item["label"] for item in ignored} == {"TRT limite máximo"}
 
 
 def test_audit_run_keeps_accessorial_percent_when_minimum_not_applied(web_client):
@@ -4950,16 +6181,20 @@ def test_audit_run_applies_accessorial_minimum_after_base(web_client):
                 },
             ],
         },
-        audit_row=_sample_audit_row(valor_frete="102,50", peso="48", valor_nf="1000"),
+        audit_row=_sample_audit_row(valor_frete="107,34", peso="48", valor_nf="1000"),
     )
     assert result["status"] == "ok"
     assert result["weight_freight"] == 100.50
-    assert result["expected_freight"] == 102.50
-    assert result["accessorial_fees_amount"] == 2.00
+    assert result["expected_freight"] == 107.34
+    assert result["accessorial_fees_amount"] == 6.84
     component = result["calculation_components"]["accessorial_fees"][0]
     assert component["calculation_base_id"] == "pct_nota_fiscal"
     assert component["operation"] == "percentage_of_variable"
-    assert component["amount"] == 2.00
+    assert component["calculated_amount"] == 2.00
+    assert component["minimum_amount"] == 6.84
+    assert component["minimum_applied"] is True
+    assert component["amount"] == 6.84
+    assert result["calculation_components"]["ignored_accessorial_fees"] == []
 
 
 def test_audit_run_missing_coverage_mapping(web_client):

@@ -580,6 +580,17 @@
     if (editBtn) editBtn.focus();
   }
 
+  function populateTempTableSaveEditTarget(editTarget, tempTable) {
+    if (!editTarget || !tempTable) return;
+    if (canEditFreightTables(tempTable)) {
+      editTarget.freight_tables = deepCloneTempTable(tempTable.freight_tables) || [];
+    } else if (canEditFreightRoutes(tempTable)) {
+      editTarget.freight_routes = deepCloneTempTable(tempTable.freight_routes) || [];
+    }
+    editTarget.accessorial_fees = deepCloneTempTable(tempTable.accessorial_fees) || [];
+    syncAccessorialMinimumAmountFields(editTarget.accessorial_fees);
+  }
+
   function collectTempTableSavePayload() {
     if (!currentTempTable || !currentTempTable.temp_table_id) return null;
     var payload = {
@@ -591,14 +602,7 @@
       },
       review_action: 'save_and_advance'
     };
-    if (tempTableEditMode) {
-      if (canEditFreightTables(currentTempTable)) {
-        payload.edit_target.freight_tables = deepCloneTempTable(currentTempTable.freight_tables) || [];
-      } else if (canEditFreightRoutes(currentTempTable)) {
-        payload.edit_target.freight_routes = deepCloneTempTable(currentTempTable.freight_routes) || [];
-      }
-      payload.edit_target.accessorial_fees = deepCloneTempTable(currentTempTable.accessorial_fees) || [];
-    }
+    populateTempTableSaveEditTarget(payload.edit_target, currentTempTable);
     return payload;
   }
 
@@ -643,11 +647,138 @@
     return normalizeCalculationUnit(fee && fee.unit) === normalizeCalculationUnit(base.unit);
   }
 
+  function accessorialStringHasDigit(text) {
+    var source = String(text || '');
+    for (var i = 0; i < source.length; i += 1) {
+      var ch = source.charAt(i);
+      if (ch >= '0' && ch <= '9') return true;
+    }
+    return false;
+  }
+
+  function accessorialParsePositiveDecimal(value) {
+    var text = String(value || '').trim();
+    if (!text || !accessorialStringHasDigit(text)) return null;
+    var normalized = '';
+    var i;
+    for (i = 0; i < text.length; i += 1) {
+      var ch = text.charAt(i);
+      if ((ch >= '0' && ch <= '9') || ch === '.' || ch === ',') normalized += ch;
+    }
+    if (!normalized) return null;
+    var commaIndex = normalized.indexOf(',');
+    var dotIndex = normalized.indexOf('.');
+    if (commaIndex !== -1) {
+      normalized = normalized.slice(0, commaIndex).split('.').join('') + '.' + normalized.slice(commaIndex + 1).split('.').join('');
+    } else if (dotIndex !== -1) {
+      var afterDot = normalized.slice(dotIndex + 1);
+      var hasSecondDot = normalized.indexOf('.', dotIndex + 1) !== -1;
+      if (!hasSecondDot && afterDot.length > 0 && afterDot.length <= 4) {
+        normalized = normalized.slice(0, dotIndex).split('.').join('') + '.' + afterDot.split('.').join('');
+      } else {
+        normalized = normalized.split('.').join('');
+      }
+    }
+    var parsed = parseFloat(normalized);
+    return isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function syncAccessorialMinimumAmountFields(fees) {
+    if (!Array.isArray(fees)) return;
+    fees.forEach(function (fee) {
+      if (!fee || typeof fee !== 'object' || !accessorialFeeIsMinimumAmount(fee)) return;
+      var parsed = accessorialParsePositiveDecimal(fee.minimum_amount);
+      if (parsed === null) parsed = accessorialParsePositiveDecimal(fee.value);
+      if (parsed !== null) fee.minimum_amount = parsed;
+    });
+  }
+
+  function accessorialFeeIsMinimumAmount(fee) {
+    var modifier = String((fee && fee.modifier_type) || '').trim();
+    var calcType = String((fee && fee.calculation_type) || '').trim();
+    return modifier === 'minimum_amount' || calcType === 'minimum_amount';
+  }
+
+  function accessorialFeeLinkRefs(fee) {
+    var refs = [];
+    ['component_group', 'canonical_component', 'related_to'].forEach(function (field) {
+      var value = String((fee && fee[field]) || '').trim();
+      if (!value || value === 'generic_accessorial') return;
+      if (refs.indexOf(value) === -1) refs.push(value);
+    });
+    return refs;
+  }
+
+  function accessorialFeeIsBaseForMinimumLink(fee) {
+    if (!fee || typeof fee !== 'object') return false;
+    var modifier = String(fee.modifier_type || '').trim();
+    var calcType = String(fee.calculation_type || '').trim();
+    if (modifier === 'minimum_amount' || calcType === 'minimum_amount') return false;
+    if (modifier === 'maximum_amount' || calcType === 'maximum_amount') return false;
+    return true;
+  }
+
+  function accessorialFeesShareLinkRef(feeA, feeB) {
+    var refsA = accessorialFeeLinkRefs(feeA);
+    var refsB = accessorialFeeLinkRefs(feeB);
+    return refsA.some(function (ref) { return refsB.indexOf(ref) !== -1; });
+  }
+
+  function findLinkedAccessorialBaseFee(minimumFee, fees, minimumIndex) {
+    var relatedTo = String((minimumFee && minimumFee.related_to) || '').trim();
+    if (!relatedTo) return null;
+    var matches = [];
+    fees.forEach(function (fee, idx) {
+      if (idx === minimumIndex || !fee || typeof fee !== 'object') return;
+      if (!accessorialFeeIsBaseForMinimumLink(fee)) return;
+      if (!accessorialFeesShareLinkRef(minimumFee, fee)) return;
+      if (accessorialFeeLinkRefs(fee).indexOf(relatedTo) === -1) return;
+      matches.push(fee);
+    });
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function accessorialFeeHasValidMinimumAmount(fee) {
+    var parsedAmount = accessorialParsePositiveDecimal(fee && fee.minimum_amount);
+    if (parsedAmount !== null) return true;
+    return accessorialParsePositiveDecimal(fee && fee.value) !== null;
+  }
+
+  function accessorialMinimumLinkErrorMessage() {
+    return 'Vincule este mínimo à taxa principal correspondente ou exclua a linha.';
+  }
+
   function accessorialFeeMissingCalculationBase(fee) {
+    if (accessorialFeeIsMinimumAmount(fee)) return false;
     var baseId = String((fee && fee.calculation_base_id) || '').trim();
     var base = getCalculationBaseById(baseId);
     var basis = normalizeTextKey(fee && fee.calculation_basis);
     return !baseId || !base || basis === normalizeTextKey('não mapeado / revisar');
+  }
+
+  function validateLinkedMinimumAccessorialFee(fee, fees, feeIndex) {
+    if (!accessorialFeeHasValidMinimumAmount(fee)) {
+      return {
+        section: 'accessorial_fees',
+        index: feeIndex,
+        name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+        field: 'value',
+        reason_code: 'invalid_accessorial_value',
+        message: accessorialValueErrorMessage()
+      };
+    }
+    var relatedTo = String((fee && fee.related_to) || '').trim();
+    if (!relatedTo || !findLinkedAccessorialBaseFee(fee, fees, feeIndex)) {
+      return {
+        section: 'accessorial_fees',
+        index: feeIndex,
+        name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+        field: 'related_to',
+        reason_code: relatedTo ? 'invalid_minimum_base_link' : 'missing_minimum_base_link',
+        message: accessorialMinimumLinkErrorMessage()
+      };
+    }
+    return null;
   }
 
   function accessorialCalculationBaseErrorMessage() {
@@ -671,6 +802,12 @@
     if (error.reason_code === 'incompatible_accessorial_unit') {
       return 'Ajuste a unidade para a base selecionada.';
     }
+    if (
+      error.reason_code === 'missing_minimum_base_link'
+      || error.reason_code === 'invalid_minimum_base_link'
+    ) {
+      return accessorialMinimumLinkErrorMessage();
+    }
     return error.message || '';
   }
 
@@ -685,11 +822,14 @@
     var fees = currentTempTable && Array.isArray(currentTempTable.accessorial_fees)
       ? currentTempTable.accessorial_fees
       : [];
+    syncAccessorialMinimumAmountFields(fees);
     var errors = [];
     fees.forEach(function (fee, feeIndex) {
       if (!fee || typeof fee !== 'object' || isPrimaryFreightAccessorialFee(fee)) return;
       var error = null;
-      if (accessorialFeeMissingCalculationBase(fee)) {
+      if (accessorialFeeIsMinimumAmount(fee)) {
+        error = validateLinkedMinimumAccessorialFee(fee, fees, feeIndex);
+      } else if (accessorialFeeMissingCalculationBase(fee)) {
         error = {
           section: 'accessorial_fees',
           index: feeIndex,
@@ -2927,6 +3067,349 @@ function renderDocumentItem(doc) {
     return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
+  function formatAuditMoneyWithCurrency(value) {
+    var formatted = formatAuditMoney(value);
+    if (formatted === '—') return formatted;
+    return 'R$ ' + formatted;
+  }
+
+  function auditMemoryDisplayText(value) {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'object') return '';
+    var text = String(value).trim();
+    if (!text || text === 'undefined' || text === 'null' || text === '[object Object]') return '';
+    return text;
+  }
+
+  function auditRowBasisText(row) {
+    var parts = [];
+    var basis = auditMemoryDisplayText(row && row.calculation_basis);
+    var details = auditMemoryDisplayText(row && row.calculation_details);
+    if (basis) parts.push(basis);
+    if (details && details !== basis) parts.push(details);
+    return parts.join(' — ');
+  }
+
+  function auditComponentBasisText(component, row) {
+    if (!component || typeof component !== 'object') return auditRowBasisText(row);
+    var details = auditMemoryDisplayText(component.details);
+    if (details) return details;
+    var basis = auditMemoryDisplayText(component.basis);
+    if (basis) return basis;
+    var calcBasis = auditMemoryDisplayText(component.calculation_basis);
+    if (calcBasis) return calcBasis;
+    return auditRowBasisText(row);
+  }
+
+  function auditIgnoredReasonText(item) {
+    if (!item || typeof item !== 'object') return '';
+    var details = auditMemoryDisplayText(item.details);
+    if (details) return 'Ignorado — ' + details;
+    var reasonCode = auditMemoryDisplayText(item.reason_code);
+    if (!reasonCode) return '';
+    return 'Ignorado — ' + reasonCode.replace(/_/g, ' ');
+  }
+
+  function hasAuditCalculationMemoryDetail(row) {
+    if (!row || typeof row !== 'object') return false;
+    if (auditRowBasisText(row)) return true;
+    var components = row.calculation_components;
+    if (!components || typeof components !== 'object') return false;
+    if (components.weight_freight && typeof components.weight_freight === 'object') return true;
+    if (components.freight_value && typeof components.freight_value === 'object') return true;
+    if (components.tariff_freight_value && typeof components.tariff_freight_value === 'object') return true;
+    if (Array.isArray(components.accessorial_fees) && components.accessorial_fees.length) return true;
+    if (Array.isArray(components.ignored_accessorial_fees) && components.ignored_accessorial_fees.length) {
+      return components.ignored_accessorial_fees.some(function (item) {
+        return !!auditIgnoredReasonText(item);
+      });
+    }
+    return false;
+  }
+
+  function buildAuditCalculationMemoryRows(row) {
+    var memoryRows = [];
+    if (!row || typeof row !== 'object') return memoryRows;
+    var components = row.calculation_components;
+    var hasComponents = components && typeof components === 'object';
+
+    if (hasComponents && components.weight_freight && typeof components.weight_freight === 'object') {
+      memoryRows.push({
+        component: 'Frete base/peso',
+        basis: auditComponentBasisText(components.weight_freight, row),
+        amount: components.weight_freight.amount,
+        ignored: false
+      });
+    } else if (hasFieldValue(row.weight_freight)) {
+      memoryRows.push({
+        component: 'Frete base/peso',
+        basis: auditRowBasisText(row),
+        amount: row.weight_freight,
+        ignored: false
+      });
+    }
+
+    var addedFreightValue = false;
+
+    if (hasComponents) {
+      var freightValue = components.freight_value || components.tariff_freight_value;
+      if (freightValue && typeof freightValue === 'object' && hasFieldValue(freightValue.amount)) {
+        var freightLabel = auditMemoryDisplayText(freightValue.source_column) || 'Frete valor/ad valorem';
+        memoryRows.push({
+          component: freightLabel,
+          basis: auditComponentBasisText(freightValue, row),
+          amount: freightValue.amount,
+          ignored: false
+        });
+        addedFreightValue = true;
+      }
+    }
+    if (!addedFreightValue && hasFieldValue(row.freight_value_amount)) {
+      memoryRows.push({
+        component: 'Frete valor/ad valorem',
+        basis: '',
+        amount: row.freight_value_amount,
+        ignored: false
+      });
+    }
+
+    if (hasComponents && Array.isArray(components.accessorial_fees)) {
+      components.accessorial_fees.forEach(function (item) {
+        if (!item || typeof item !== 'object') return;
+        var amount = hasFieldValue(item.amount) ? item.amount : item.calculated_amount;
+        var label = auditMemoryDisplayText(item.label) || 'Generalidade';
+        if (!hasFieldValue(amount) && !auditMemoryDisplayText(item.label)) return;
+        memoryRows.push({
+          component: label,
+          basis: auditComponentBasisText(item, row),
+          amount: amount,
+          ignored: false
+        });
+      });
+    }
+
+    if (hasComponents && Array.isArray(components.ignored_accessorial_fees)) {
+      components.ignored_accessorial_fees.forEach(function (item) {
+        var reason = auditIgnoredReasonText(item);
+        if (!reason) return;
+        memoryRows.push({
+          component: auditMemoryDisplayText(item && item.label) || 'Generalidade',
+          basis: reason,
+          amount: null,
+          ignored: true
+        });
+      });
+    }
+
+    return memoryRows;
+  }
+
+  var auditCalculationMemoryModalEl = null;
+  var auditCalculationMemoryEscapeHandler = null;
+
+  function ensureAuditCalculationMemoryModal() {
+    if (auditCalculationMemoryModalEl) return auditCalculationMemoryModalEl;
+
+    var modal = document.createElement('div');
+    modal.className = 'cleide-audit-temp-table-modal cleide-audit-calculation-memory-modal';
+    modal.id = 'cleideAuditCalculationMemoryModal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'cleideAuditCalculationMemoryModalTitle');
+    modal.hidden = true;
+
+    var backdrop = document.createElement('div');
+    backdrop.className = 'cleide-audit-temp-table-modal-backdrop';
+    backdrop.id = 'cleideAuditCalculationMemoryModalBackdrop';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'cleide-audit-temp-table-modal-dialog';
+
+    var header = document.createElement('div');
+    header.className = 'cleide-audit-temp-table-modal-header';
+
+    var headerMain = document.createElement('div');
+    headerMain.className = 'cleide-audit-temp-table-modal-header-main';
+
+    var title = document.createElement('h2');
+    title.className = 'cleide-audit-temp-table-modal-title';
+    title.id = 'cleideAuditCalculationMemoryModalTitle';
+    title.textContent = 'Memória de cálculo';
+
+    var subtitle = document.createElement('p');
+    subtitle.className = 'cleide-audit-temp-table-modal-subtitle';
+    subtitle.id = 'cleideAuditCalculationMemoryModalSubtitle';
+    subtitle.textContent = 'Detalhamento do frete esperado da linha selecionada.';
+
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'cleide-audit-temp-table-modal-close-btn';
+    closeBtn.id = 'cleideAuditCalculationMemoryModalClose';
+    closeBtn.setAttribute('aria-label', 'Fechar memória de cálculo');
+    closeBtn.innerHTML = '<span aria-hidden="true">&times;</span>';
+
+    headerMain.appendChild(title);
+    headerMain.appendChild(subtitle);
+    header.appendChild(headerMain);
+    header.appendChild(closeBtn);
+
+    var body = document.createElement('div');
+    body.className = 'cleide-audit-temp-table-modal-body';
+    body.id = 'cleideAuditCalculationMemoryModalBody';
+
+    dialog.appendChild(header);
+    dialog.appendChild(body);
+    modal.appendChild(backdrop);
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+
+    closeBtn.addEventListener('click', closeAuditCalculationMemory);
+    backdrop.addEventListener('click', closeAuditCalculationMemory);
+
+    auditCalculationMemoryModalEl = modal;
+    return modal;
+  }
+
+  function isAuditCalculationMemoryModalOpen() {
+    return !!(auditCalculationMemoryModalEl && !auditCalculationMemoryModalEl.hidden);
+  }
+
+  function closeAuditCalculationMemory() {
+    if (!auditCalculationMemoryModalEl || auditCalculationMemoryModalEl.hidden) return;
+    auditCalculationMemoryModalEl.hidden = true;
+    var body = byId('cleideAuditCalculationMemoryModalBody');
+    if (body) body.textContent = '';
+    if (auditCalculationMemoryEscapeHandler) {
+      document.removeEventListener('keydown', auditCalculationMemoryEscapeHandler, true);
+      auditCalculationMemoryEscapeHandler = null;
+    }
+  }
+
+  function renderAuditCalculationMemoryContent(row) {
+    var body = byId('cleideAuditCalculationMemoryModalBody');
+    if (!body) return;
+
+    var summary = document.createElement('div');
+    summary.className = 'cleide-audit-calculation-memory-summary';
+    appendDetailRow(summary, 'Documento', auditMemoryDisplayText(row.numero_documento) || '—');
+    var locationParts = [
+      auditMemoryDisplayText(row.destination_uf),
+      auditMemoryDisplayText(row.destination_city),
+      auditMemoryDisplayText(row.freight_region)
+    ].filter(function (part) { return !!part; });
+    appendDetailRow(summary, 'Destino', locationParts.length ? locationParts.join(' / ') : '—');
+    appendDetailRow(summary, 'Peso', hasFieldValue(row.audited_weight) ? String(row.audited_weight) : '—');
+    appendDetailRow(summary, 'Cobrado', formatAuditMoneyWithCurrency(row.charged_freight));
+    appendDetailRow(summary, 'Esperado', formatAuditMoneyWithCurrency(row.expected_freight));
+    appendDetailRow(summary, 'Diferença', formatAuditMoneyWithCurrency(row.divergence_value));
+    appendDetailRow(summary, 'Status', auditStatusLabel(row.status));
+    body.appendChild(summary);
+
+    var basisText = auditRowBasisText(row);
+    if (basisText) {
+      appendDetailRow(body, 'Regra/base', basisText);
+    }
+
+    var memoryRows = buildAuditCalculationMemoryRows(row);
+    if (memoryRows.length) {
+      var sectionTitle = document.createElement('h3');
+      sectionTitle.className = 'cleide-audit-temp-table-modal-section-title';
+      sectionTitle.textContent = 'Componentes';
+      body.appendChild(sectionTitle);
+
+      var scrollWrap = document.createElement('div');
+      scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll cleide-audit-calculation-memory-table-scroll';
+      var table = document.createElement('table');
+      table.className = 'cleide-audit-temp-table-modal-freight-table cleide-audit-calculation-memory-table';
+      var thead = document.createElement('thead');
+      var headerRow = document.createElement('tr');
+      ['Componente', 'Cálculo/Base', 'Valor'].forEach(function (label) {
+        appendTableCell(headerRow, label, true, false);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+
+      var tbody = document.createElement('tbody');
+      memoryRows.forEach(function (memoryRow) {
+        var tr = document.createElement('tr');
+        appendTableCell(tr, memoryRow.component, false, true);
+        appendTableCell(tr, memoryRow.basis || (memoryRow.ignored ? 'Não aplicado' : ''), false, true);
+        var valueText = memoryRow.ignored
+          ? 'Ignorado'
+          : formatAuditMoneyWithCurrency(memoryRow.amount);
+        appendTableCell(tr, valueText, false, true);
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      scrollWrap.appendChild(table);
+      body.appendChild(scrollWrap);
+    } else if (!hasAuditCalculationMemoryDetail(row)) {
+      var empty = document.createElement('p');
+      empty.className = 'cleide-audit-temp-table-modal-empty';
+      empty.textContent = 'Memória de cálculo detalhada não disponível para esta linha.';
+      body.appendChild(empty);
+    }
+
+    var totalRow = document.createElement('div');
+    totalRow.className = 'cleide-audit-calculation-memory-total';
+    var totalLabel = document.createElement('span');
+    totalLabel.className = 'cleide-audit-calculation-memory-total-label';
+    totalLabel.textContent = 'Total esperado:';
+    var totalValue = document.createElement('strong');
+    totalValue.className = 'cleide-audit-calculation-memory-total-value';
+    totalValue.textContent = formatAuditMoneyWithCurrency(row.expected_freight);
+    totalRow.appendChild(totalLabel);
+    totalRow.appendChild(totalValue);
+    body.appendChild(totalRow);
+  }
+
+  function openAuditCalculationMemory(row) {
+    if (!row || !hasFieldValue(row.expected_freight)) return;
+    var modal = ensureAuditCalculationMemoryModal();
+    var subtitle = byId('cleideAuditCalculationMemoryModalSubtitle');
+    if (subtitle) {
+      var doc = auditMemoryDisplayText(row.numero_documento);
+      subtitle.textContent = doc
+        ? 'Linha ' + String(row.row_index == null ? '—' : row.row_index) + ' — documento ' + doc
+        : 'Detalhamento do frete esperado da linha selecionada.';
+    }
+    renderAuditCalculationMemoryContent(row);
+    modal.hidden = false;
+    var closeBtn = byId('cleideAuditCalculationMemoryModalClose');
+    if (closeBtn && typeof closeBtn.focus === 'function') closeBtn.focus();
+
+    if (!auditCalculationMemoryEscapeHandler) {
+      auditCalculationMemoryEscapeHandler = function (e) {
+        if (e.key === 'Escape' && isAuditCalculationMemoryModalOpen()) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeAuditCalculationMemory();
+        }
+      };
+      document.addEventListener('keydown', auditCalculationMemoryEscapeHandler, true);
+    }
+  }
+
+  function appendExpectedFreightCell(tr, row) {
+    var td = document.createElement('td');
+    if (hasFieldValue(row.expected_freight)) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cleide-audit-run-expected-link';
+      btn.textContent = formatAuditMoney(row.expected_freight);
+      btn.setAttribute('aria-label', 'Ver memória de cálculo do frete esperado');
+      btn.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openAuditCalculationMemory(row);
+      });
+      td.appendChild(btn);
+    } else {
+      td.textContent = '—';
+    }
+    tr.appendChild(td);
+  }
+
   function auditStatusLabel(status) {
     var key = String(status || '');
     var labels = {
@@ -3006,7 +3489,7 @@ function renderDocumentItem(doc) {
       appendTableCell(tr, row.freight_region, false, true);
       appendTableCell(tr, row.audited_weight, false, true);
       appendTableCell(tr, formatAuditMoney(row.charged_freight), false, true);
-      appendTableCell(tr, formatAuditMoney(row.expected_freight), false, true);
+      appendExpectedFreightCell(tr, row);
       appendTableCell(tr, formatAuditMoney(row.divergence_value), false, true);
       appendTableCell(tr, auditStatusLabel(row.status), false, false);
       tbody.appendChild(tr);
@@ -3319,6 +3802,7 @@ function renderDocumentItem(doc) {
   function closeTempTableModal() {
     var modal = byId('cleideAuditTempTableModal');
     if (!modal || modal.hidden) return;
+    closeAuditCalculationMemory();
     modal.hidden = true;
     document.body.classList.remove('cleide-audit-temp-table-modal-open');
     resetFreightTableOpenState();

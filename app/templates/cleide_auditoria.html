@@ -1740,6 +1740,61 @@
     min-width: 980px;
   }
 
+  .cleide-audit-run-expected-link {
+    border: none;
+    background: transparent;
+    color: var(--af-accent, #00BFFF);
+    font: inherit;
+    font-size: inherit;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
+  .cleide-audit-run-expected-link:hover {
+    color: #66d9ff;
+  }
+
+  .cleide-audit-run-expected-link:focus-visible {
+    outline: 2px solid rgba(0, 191, 255, 0.45);
+    outline-offset: 2px;
+  }
+
+  .cleide-audit-calculation-memory-modal {
+    z-index: 2200;
+  }
+
+  .cleide-audit-calculation-memory-modal .cleide-audit-temp-table-modal-dialog {
+    width: min(760px, 100%);
+  }
+
+  .cleide-audit-calculation-memory-summary {
+    margin-bottom: 0.75rem;
+  }
+
+  .cleide-audit-calculation-memory-table-scroll {
+    margin-top: 0.35rem;
+  }
+
+  .cleide-audit-calculation-memory-total {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 0.85rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.82rem;
+  }
+
+  .cleide-audit-calculation-memory-total-label {
+    color: var(--af-text-secondary, #C8CCE5);
+  }
+
+  .cleide-audit-calculation-memory-total-value {
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
   .cleide-audit-temp-table-modal-edit-btn {
     border: 1px solid rgba(111, 66, 193, 0.45) !important;
     background: rgba(111, 66, 193, 0.14) !important;
