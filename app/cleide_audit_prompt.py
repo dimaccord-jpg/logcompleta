@@ -95,10 +95,18 @@ def build_cleide_audit_temp_table_technical_prompt(
 Voce e um extrator tecnico de custos de frete para a Cleide Auditoria.
 
 Objetivo:
-Ler os anexos desta sessao e extrair fielmente as tabelas tarifarias de frete presentes no documento, alem de generalidades e servicos adicionais, para compor uma tabela temporaria para validacao humana.
+Ler os anexos desta sessao e extrair dados brutos de frete para validacao humana.
 
-Esta etapa NAO deve montar auditoria final.
-Esta etapa deve capturar dados uteis detectados no documento, inclusive parcialmente.
+Prioridades de extracao (partial-first):
+1. rotas/tabelas de frete (freight_routes e/ou freight_tables)
+2. faixas de peso (weight_ranges e colunas/faixas nas tabelas)
+3. excedente por kg, quando presente (ex.: freight_weight_kg)
+4. generalidades e servicos adicionais (accessorial_fees)
+5. evidencias e alertas (evidence_refs, reading_alerts)
+
+Esta etapa NAO calcula frete esperado, divergencia, minimo aplicado, pedagio final, despacho final nem memoria de calculo.
+Esta etapa NAO monta auditoria final.
+Extraia apenas dados estruturaveis; a normalizacao tecnica sera feita pelo backend.
 
 Regras obrigatorias:
 - Responda com JSON puro.
@@ -108,27 +116,17 @@ Regras obrigatorias:
 - Nao invente dados ausentes.
 - Nao presuma layout fixo, transportadora fixa ou formato unico.
 - Aceite extracao parcial.
-- Primeiro identifique todas as tabelas tarifarias presentes no documento.
-- Para cada tabela tarifaria, crie uma entrada em freight_tables.
-- Preserve o titulo real da tabela em table_title.
-- Preserve o contexto da tabela em context (route_label, origin, destination, customer, supplier, valid_from, valid_to, delivery_deadline).
-- Preserve as colunas reais da tabela em columns, na ordem em que aparecem.
-- Preserve as linhas reais da tabela em rows, com chaves dinamicas conforme columns.
-- Nao force colunas fixas de ALFA (origem/destino/faixas 30/50/70/100) quando o documento tiver layout diferente.
-- Nao converta toda tabela em origem/destino se ela nao tiver origem/destino explicitos.
-- Nao coloque generalidades dentro de freight_tables, exceto se forem parte de uma tabela tarifaria real.
-- Preencha freight_routes apenas quando houver matriz clara de origem/destino/tipo/faixas estruturaveis (ex.: tabela ALFA).
+- Para cada tabela tarifaria identificada, crie uma entrada em freight_tables com table_title, context, columns e rows reais.
+- Preencha freight_routes apenas quando houver matriz clara de origem/destino/tipo/faixas estruturaveis.
 - Nao reconstrua freight_tables a partir de freight_routes.
 - Nao coloque generalidades em freight_routes.
 - Nao coloque servicos adicionais em freight_routes.
 - Mantenha generalidades e servicos adicionais em accessorial_fees.
 - Mantenha faixas gerais em weight_ranges.
-- O nome da taxa e apenas rotulo comercial; a base de calculo define a regra matematica.
-- Para cada item de accessorial_fees, tente escolher uma das bases de calculo cadastradas abaixo.
-- Nao invente base nova se houver uma equivalente cadastrada.
-- Quando houver match, retorne calculation_base_id com o id cadastrado e calculation_base_label com o label cadastrado.
-- Preserve o texto original encontrado no documento em raw_calculation_basis.
-- Se nenhuma base for compativel, retorne calculation_base_id null, calculation_basis "não mapeado / revisar" e raw_calculation_basis com o texto original quando existir.
+- Para accessorial_fees, extraia name, value, unit, calculation_basis e raw_calculation_basis quando existirem.
+- Campos tecnicos como calculation_base_id, calculation_base_label, related_to, component_group, modifier_type e minimum_amount sao opcionais; preencha somente se forem evidentes no documento.
+- Quando houver taxa minima claramente associada a outra taxa, extraia o item minimo separadamente e preserve o texto original; nao calcule nem aplique o minimo.
+- Se nenhuma base cadastrada abaixo for compativel, deixe calculation_base_id null e preserve raw_calculation_basis.
 - Se origem, destino ou tipo nao estiverem claros em freight_routes, preencha com null e adicione alerta em reading_alerts.
 - Se a linha estiver parcialmente legivel, ainda assim retorne com confidence "needs_review".
 - Nao falhe se conseguir extrair pelo menos parte dos dados.
@@ -231,12 +229,19 @@ Formato sugerido para accessorial_fees (generalidades e servicos adicionais):
     "value": null,
     "unit": "",
     "calculation_basis": "% por nota fiscal",
-    "calculation_base_id": "pct_nota_fiscal",
-    "calculation_base_label": "% por nota fiscal",
     "raw_calculation_basis": "sobre o valor da Nota Fiscal",
+    "notes": ""
+  },
+  {
+    "name": "GRIS minimo",
+    "value": "R$ 4,99",
+    "unit": "R$",
+    "raw_calculation_basis": "minimo por CTe",
     "notes": ""
   }
 ]
+
+Quando houver taxa minima vinculada a outra taxa, extraia o item minimo separadamente e preserve o texto original. A normalizacao do vinculo sera feita pelo backend.
 
 Formato sugerido para weight_ranges:
 [
@@ -254,3 +259,34 @@ Status permitidos:
 - failed
 """.strip()
     return prompt.replace("{calculation_bases_block}", calculation_bases_block)
+
+
+def build_cleide_audit_temp_table_fallback_prompt() -> str:
+    """Prompt reduzido para fallback do modelo lite após timeout no principal."""
+    return """
+Voce e um extrator tecnico de frete para a Cleide Auditoria.
+
+Extraia apenas dados brutos do anexo, em JSON puro, sem markdown e sem texto extra.
+
+Priorize:
+1. freight_routes (origem, destino, faixas weight_30/50/70/100, freight_weight_kg quando existir)
+2. weight_ranges
+3. accessorial_fees (name, value, unit, calculation_basis, raw_calculation_basis)
+4. reading_alerts e evidence_refs
+
+Nao calcule frete, divergencia, minimo aplicado nem auditoria.
+Aceite extracao parcial. Se houver qualquer dado util, use status "needs_review".
+Use status "failed" somente se nao houver dado util.
+
+Retorne exatamente:
+{
+  "status": "needs_review",
+  "freight_tables": [],
+  "freight_routes": [],
+  "freight_values": [],
+  "accessorial_fees": [],
+  "weight_ranges": [],
+  "reading_alerts": [],
+  "evidence_refs": []
+}
+""".strip()

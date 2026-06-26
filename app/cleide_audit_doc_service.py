@@ -126,6 +126,9 @@ ERROR_ACCESSORIAL_CALCULATION_BASE_MESSAGE = "Selecione uma base de cálculo ou 
 ERROR_ACCESSORIAL_VALUE_MESSAGE = "Preencha um valor válido para esta taxa ou exclua a linha."
 ERROR_ACCESSORIAL_UNIT_MESSAGE = "A unidade não é compatível com a base selecionada."
 ERROR_ACCESSORIAL_OPERATION_MESSAGE = "Revise a operação da base de cálculo selecionada."
+ERROR_ACCESSORIAL_MINIMUM_LINK_MESSAGE = (
+    "Vincule este mínimo à taxa principal correspondente ou exclua a linha."
+)
 ERROR_ACCESSORIAL_ADVANCE_MESSAGE = "Revise as generalidades antes de avançar."
 
 ERROR_TEMP_TABLE_NOT_FOUND = "cleide_audit_temp_table_not_found"
@@ -2610,6 +2613,34 @@ def _accessorial_find_linked_minimum(fee: dict, minimum_fees: list[dict]) -> Dec
     return matches[0]
 
 
+def _accessorial_resolve_linked_minimum(
+    fee: dict,
+    calculated_amount: Decimal,
+    minimum_fees: list[dict],
+    consumed_minimum_ids: set[int],
+) -> tuple[Decimal, Decimal | None, bool]:
+    minimum_amount = _accessorial_find_linked_minimum(fee, minimum_fees)
+    minimum_applied = minimum_amount is not None and minimum_amount > calculated_amount
+    final_amount = minimum_amount if minimum_applied else calculated_amount
+    if minimum_amount is not None:
+        for minimum_fee in minimum_fees:
+            if _accessorial_runtime_minimum_amount(minimum_fee) == minimum_amount and (
+                _accessorial_fee_component_ref(fee) & _accessorial_fee_component_ref(minimum_fee)
+            ):
+                consumed_minimum_ids.add(id(minimum_fee))
+                break
+    return final_amount, minimum_amount, minimum_applied
+
+
+def _accessorial_append_minimum_details(
+    details: str,
+    minimum_amount: Decimal,
+    minimum_applied: bool,
+) -> str:
+    suffix = "mínimo aplicado" if minimum_applied else "mínimo não aplicado"
+    return f"{details}; {suffix} = {_format_brazilian_decimal(minimum_amount)}"
+
+
 def _accessorial_component_details(
     fee: dict,
     *,
@@ -2672,8 +2703,27 @@ def _build_accessorial_percent_fee_components(
                 audit_variables,
             )
             if component is not None:
+                calculated_amount = amount
+                final_amount, minimum_amount, minimum_applied = _accessorial_resolve_linked_minimum(
+                    fee,
+                    calculated_amount,
+                    minimum_fees,
+                    consumed_minimum_ids,
+                )
+                component["calculated_amount"] = _round_money(calculated_amount)
+                component["minimum_amount"] = (
+                    _round_money(minimum_amount) if minimum_amount is not None else None
+                )
+                component["minimum_applied"] = minimum_applied
+                component["amount"] = _round_money(final_amount)
+                if minimum_amount is not None and component.get("details"):
+                    component["details"] = _accessorial_append_minimum_details(
+                        component["details"],
+                        minimum_amount,
+                        minimum_applied,
+                    )
                 calculated.append(component)
-                total += amount
+                total += final_amount
             elif ignored_component is not None:
                 ignored.append(ignored_component)
             continue
@@ -2710,17 +2760,13 @@ def _build_accessorial_percent_fee_components(
             continue
 
         calculated_amount = invoice_value * rate
-        minimum_amount = _accessorial_find_linked_minimum(fee, minimum_fees)
-        minimum_applied = minimum_amount is not None and minimum_amount > calculated_amount
-        amount = minimum_amount if minimum_applied else calculated_amount
-        total += amount
-        if minimum_amount is not None:
-            for minimum_fee in minimum_fees:
-                if _accessorial_runtime_minimum_amount(minimum_fee) == minimum_amount and (
-                    _accessorial_fee_component_ref(fee) & _accessorial_fee_component_ref(minimum_fee)
-                ):
-                    consumed_minimum_ids.add(id(minimum_fee))
-                    break
+        final_amount, minimum_amount, minimum_applied = _accessorial_resolve_linked_minimum(
+            fee,
+            calculated_amount,
+            minimum_fees,
+            consumed_minimum_ids,
+        )
+        total += final_amount
         calculated.append(
             {
                 "label": _sanitize_cell_string(fee.get("name")),
@@ -2731,7 +2777,7 @@ def _build_accessorial_percent_fee_components(
                 "calculated_amount": _round_money(calculated_amount),
                 "minimum_amount": _round_money(minimum_amount) if minimum_amount is not None else None,
                 "minimum_applied": minimum_applied,
-                "amount": _round_money(amount),
+                "amount": _round_money(final_amount),
                 "rate": float(rate),
                 "source_value": _sanitize_cell_string(fee.get("value")),
                 "invoice_value": _round_money(invoice_value),
@@ -2741,7 +2787,7 @@ def _build_accessorial_percent_fee_components(
                     rate=rate,
                     calculated_amount=calculated_amount,
                     minimum_amount=minimum_amount,
-                    amount=amount,
+                    amount=final_amount,
                     minimum_applied=minimum_applied,
                 ),
                 "source_block": "accessorial_fees",
@@ -2832,6 +2878,35 @@ def _pricing_rule_keys_for_row(
     uf = _normalize_destination_uf(destination_uf)
     if uf and normalized_region:
         keys.append(f"{uf}|{normalized_region}")
+    return list(dict.fromkeys(keys))
+
+
+def _region_uf_from_composite_route_destination(destination: str) -> tuple[str, str] | None:
+    cleaned = _sanitize_cell_string(destination)
+    if not cleaned:
+        return None
+    for separator in (" - ", " – ", " — "):
+        parts = [part.strip() for part in cleaned.split(separator) if part.strip()]
+        if len(parts) != 2:
+            continue
+        left, right = parts
+        left_uf = _normalize_destination_uf(left)
+        right_uf = _normalize_destination_uf(right)
+        if left_uf and left_uf in _BR_UFS and not right_uf:
+            return right, left_uf
+        if right_uf and right_uf in _BR_UFS and not left_uf:
+            return left, right_uf
+    return None
+
+
+def _pricing_rule_keys_for_freight_route(destination: str) -> list[str]:
+    keys = [destination]
+    parsed = _region_uf_from_composite_route_destination(destination)
+    if parsed:
+        region_label, uf = parsed
+        normalized_region = _normalize_audit_lookup_text(region_label)
+        if uf and normalized_region:
+            keys.append(f"{uf}|{normalized_region}")
     return list(dict.fromkeys(keys))
 
 
@@ -3021,21 +3096,6 @@ def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
     )
     if not region:
         return None
-    direct_kg = _parse_brazilian_money(route.get("freight_weight_kg") or route.get("frete_peso_kg"))
-    if direct_kg is not None:
-        return (
-            region,
-            {
-                "pricing_type": "direct_weight_rate",
-                "region": region,
-                "source_table_title": "freight_routes",
-                "brackets": [],
-                "excess": None,
-                "unit": "kg",
-                "value_per_kg": direct_kg,
-                "normalization_notes": [],
-            },
-        )
     brackets = []
     for limit in (10, 20, 30, 50, 70, 100):
         value = _parse_brazilian_money(
@@ -3051,20 +3111,35 @@ def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
                 }
             )
     brackets = _normalize_brackets(brackets)
-    if not brackets:
-        return (region, _make_unsupported_rule(region, "freight_routes", "Rota sem faixa de peso calculável."))
-    return (
-        region,
-        {
-            "pricing_type": "fixed_range",
-            "region": region,
-            "source_table_title": "freight_routes",
-            "brackets": brackets,
-            "excess": None,
-            "unit": "kg",
-            "normalization_notes": [],
-        },
-    )
+    excess_rate = _parse_brazilian_money(route.get("freight_weight_kg") or route.get("frete_peso_kg"))
+    if brackets:
+        return (
+            region,
+            {
+                "pricing_type": "range_plus_excess_per_kg" if excess_rate is not None else "fixed_range",
+                "region": region,
+                "source_table_title": "freight_routes",
+                "brackets": brackets,
+                "excess": {"rate_per_kg": excess_rate} if excess_rate is not None else None,
+                "unit": "kg",
+                "normalization_notes": [],
+            },
+        )
+    if excess_rate is not None:
+        return (
+            region,
+            {
+                "pricing_type": "direct_weight_rate",
+                "region": region,
+                "source_table_title": "freight_routes",
+                "brackets": [],
+                "excess": None,
+                "unit": "kg",
+                "value_per_kg": excess_rate,
+                "normalization_notes": [],
+            },
+        )
+    return (region, _make_unsupported_rule(region, "freight_routes", "Rota sem faixa de peso calculável."))
 
 
 def build_freight_pricing_index(temp_table) -> dict:
@@ -3098,7 +3173,8 @@ def build_freight_pricing_index(temp_table) -> dict:
         route_rule = _build_rule_from_freight_route(route)
         if route_rule is not None:
             region, rule = route_rule
-            _register_pricing_rule(index, region, rule)
+            for key in _pricing_rule_keys_for_freight_route(region):
+                _register_pricing_rule(index, key, rule)
 
     return index
 
@@ -3290,6 +3366,24 @@ def _apply_freight_value_component(
     return result
 
 
+def _resolve_pricing_index_entry(
+    pricing_index: dict,
+    lookup_key: str,
+) -> tuple[dict, str] | None:
+    if lookup_key in pricing_index:
+        return pricing_index[lookup_key], lookup_key
+    wanted = _normalize_audit_lookup_text(lookup_key)
+    matches = [
+        (region, rule)
+        for region, rule in pricing_index.items()
+        if _normalize_audit_lookup_text(region) == wanted
+    ]
+    if len(matches) == 1:
+        matched_key, matched_rule = matches[0]
+        return matched_rule, matched_key
+    return None
+
+
 def _find_pricing_rule_match(
     pricing_index: dict,
     freight_region: str | None,
@@ -3299,6 +3393,11 @@ def _find_pricing_rule_match(
     candidates: list[tuple[str, str]] = []
     if freight_region:
         candidates.append(("freight_region", freight_region))
+        uf = _normalize_destination_uf(destination_uf)
+        if uf:
+            composed_key = f"{uf}|{_normalize_audit_lookup_text(freight_region)}"
+            if composed_key:
+                candidates.append(("freight_region", composed_key))
     uf_city_key = _coverage_lookup_key(destination_uf, destination_city)
     if uf_city_key:
         candidates.append(("destination_uf_city", uf_city_key))
@@ -3307,21 +3406,22 @@ def _find_pricing_rule_match(
         candidates.append(("destination_city", city_key))
 
     seen: set[str] = set()
+    fallback_unsupported: tuple[dict, str, str] | None = None
     for lookup_kind, lookup_key in candidates:
         if not lookup_key or lookup_key in seen:
             continue
         seen.add(lookup_key)
-        if lookup_key in pricing_index:
-            return pricing_index[lookup_key], lookup_kind, lookup_key
-        wanted = _normalize_audit_lookup_text(lookup_key)
-        matches = [
-            (region, rule)
-            for region, rule in pricing_index.items()
-            if _normalize_audit_lookup_text(region) == wanted
-        ]
-        if len(matches) == 1:
-            matched_key, matched_rule = matches[0]
-            return matched_rule, lookup_kind, matched_key
+        resolved = _resolve_pricing_index_entry(pricing_index, lookup_key)
+        if resolved is None:
+            continue
+        rule, matched_key = resolved
+        if rule.get("pricing_type") == AUDIT_STATUS_UNSUPPORTED_PRICING:
+            if fallback_unsupported is None:
+                fallback_unsupported = (rule, lookup_kind, matched_key)
+            continue
+        return rule, lookup_kind, matched_key
+    if fallback_unsupported is not None:
+        return fallback_unsupported
     return None
 
 
@@ -4131,16 +4231,25 @@ def _accessorial_token_set(text: str) -> set[str]:
     return {token for token in text.split() if token}
 
 
+def _accessorial_name_fragments(text: str) -> set[str]:
+    fragments = set(_accessorial_token_set(text))
+    for chunk in text.replace("_", "-").split("-"):
+        chunk = chunk.strip()
+        if chunk:
+            fragments.add(chunk)
+    return fragments
+
+
 def _infer_accessorial_component_group(parts: dict[str, str]) -> str | None:
     text = _accessorial_normalized_text(parts, ("name", "notes", "original_text"))
-    tokens = _accessorial_token_set(text)
-    if "gris" in tokens:
+    fragments = _accessorial_name_fragments(text)
+    if "gris" in fragments:
         return "gris"
-    if "trt" in tokens:
+    if "trt" in fragments:
         return "trt"
-    if "tde" in tokens:
+    if "tde" in fragments:
         return "tde"
-    if {"agendamento", "agendada", "agendado"} & tokens:
+    if {"agendamento", "agendada", "agendado"} & fragments:
         return "agendamento"
     return None
 
@@ -4335,6 +4444,17 @@ def _classify_accessorial_calculation_type(parts: dict[str, str]) -> tuple[str, 
         return "conditional", "medium", "textual_condition"
     if _accessorial_has_non_priced_day_condition(parts) and not money_signal:
         return "conditional", "medium", "missing_monetary_amount"
+    value_only_parts = {
+        **parts,
+        "name": "",
+        "notes": "",
+        "original_text": "",
+        "calculation_basis": "",
+        "raw_calculation_basis": "",
+    }
+    if minimum_signal and money_signal and not _accessorial_has_percent_signal(value_only_parts):
+        confidence = "high" if _accessorial_first_money(parts) is not None else "medium"
+        return "minimum_amount", confidence, None
     if compound_signal:
         if percent_signal and _accessorial_has_invoice_percent_basis(basis_text):
             return "invoice_percentage", "medium", "compound_accessorial_rule"
@@ -4425,19 +4545,79 @@ def _unmapped_calculation_base_fields(*, warning: str | None = None) -> dict:
     return fields
 
 
+def _accessorial_modifier_link_refs(fee: dict) -> set[str]:
+    refs: set[str] = set()
+    for field in ("component_group", "canonical_component", "related_to"):
+        value = fee.get(field)
+        if value and value != "generic_accessorial":
+            refs.add(str(value))
+    return refs
+
+
+def _accessorial_base_link_ref(fee: dict) -> str | None:
+    group = fee.get("component_group")
+    if group:
+        return str(group)
+    canonical = fee.get("canonical_component")
+    if canonical and canonical != "generic_accessorial":
+        return str(canonical)
+    return None
+
+
+def _finalize_accessorial_minimum_modifier(item: dict, parts: dict[str, str], derived: dict) -> None:
+    modifier_type = derived.get("modifier_type")
+    if modifier_type != "minimum_amount":
+        return
+
+    explicit_modifier = _normalize_accessorial_modifier_type(item.get("modifier_type"))
+    derived["calculation_type"] = "minimum_amount"
+    derived["modifier_type"] = "minimum_amount"
+    for field in ("unsupported_reason", "conditions", "rate", "amount", "classification_warning"):
+        derived.pop(field, None)
+
+    amount = _decimal_money(item.get("minimum_amount"))
+    if amount is None:
+        amount = _accessorial_first_money(parts)
+    if amount is not None:
+        derived["minimum_amount"] = _round_money(amount)
+
+    basis = str(parts.get("calculation_basis") or "").strip().lower()
+    if basis == UNMAPPED_CALCULATION_BASIS_LABEL.lower():
+        derived["calculation_basis"] = ""
+
+    related_to = derived.get("related_to") or _normalize_accessorial_component_ref(item.get("related_to"))
+    if related_to:
+        derived["related_to"] = related_to
+
+    if explicit_modifier != "minimum_amount":
+        return
+
+    if derived.get("minimum_amount") is not None:
+        derived["classification_confidence"] = "high"
+        derived["status"] = "calculable" if related_to else "needs_review"
+    else:
+        derived["status"] = "needs_review"
+
+
 def _derive_accessorial_fee_fields(item: dict) -> dict:
     parts = _accessorial_text_parts(item)
     calculation_type, confidence, unsupported_reason = _classify_accessorial_calculation_type(parts)
     canonical_component = _classify_accessorial_canonical_component(parts)
-    component_group = _infer_accessorial_component_group(parts)
-    modifier_type = _infer_accessorial_modifier_type(calculation_type)
+    explicit_group = _normalize_accessorial_component_ref(item.get("component_group"))
+    component_group = explicit_group or _infer_accessorial_component_group(parts)
+    if component_group is None and canonical_component not in {None, "", "generic_accessorial"}:
+        component_group = canonical_component
+    modifier_type = _normalize_accessorial_modifier_type(item.get("modifier_type"))
+    if modifier_type is None:
+        modifier_type = _infer_accessorial_modifier_type(calculation_type)
+    explicit_related = _normalize_accessorial_component_ref(item.get("related_to"))
     derived = {
         "calculation_type": calculation_type,
         "canonical_component": canonical_component,
         "classification_confidence": confidence,
         "component_group": component_group,
         "modifier_type": modifier_type,
-        "related_to": None,
+        "related_to": explicit_related,
     }
     if unsupported_reason:
         derived["unsupported_reason"] = unsupported_reason
@@ -4496,14 +4676,22 @@ def _derive_accessorial_fee_fields(item: dict) -> dict:
         if should_override_type:
             confidence = "high"
     elif has_explicit_base_id or has_unmapped_basis:
-        derived.update(
-            _unmapped_calculation_base_fields(
-                warning="invalid_calculation_base_id" if has_explicit_base_id else None
+        if calculation_type in {"minimum_amount", "maximum_amount"}:
+            derived.setdefault("classification_source", "legacy_classifier")
+            if has_unmapped_basis:
+                derived["calculation_basis"] = ""
+            if has_explicit_base_id and configured_base_result.get("status") != "matched":
+                derived["classification_warning"] = "invalid_calculation_base_id"
+                derived["status"] = "needs_review"
+        else:
+            derived.update(
+                _unmapped_calculation_base_fields(
+                    warning="invalid_calculation_base_id" if has_explicit_base_id else None
+                )
             )
-        )
-        calculation_type = "unknown"
-        confidence = "low"
-        unsupported_reason = None
+            calculation_type = "unknown"
+            confidence = "low"
+            unsupported_reason = None
     else:
         derived["calculation_base_id"] = None
         derived["classification_source"] = "legacy_classifier"
@@ -4557,6 +4745,7 @@ def _derive_accessorial_fee_fields(item: dict) -> dict:
         if amount is not None:
             derived["maximum_amount"] = _round_money(amount)
 
+    _finalize_accessorial_minimum_modifier(item, parts, derived)
     return derived
 
 
@@ -4720,21 +4909,56 @@ def _normalize_accessorial_fee_item(item) -> dict | None:
 
 
 def _link_accessorial_fee_modifiers(fees: list[dict]) -> list[dict]:
-    base_groups = {
-        fee.get("component_group")
-        for fee in fees
-        if fee.get("component_group") and fee.get("modifier_type") == "base_fee"
-    }
+    base_fees = [fee for fee in fees if fee.get("modifier_type") == "base_fee"]
+    base_ref_sets = [_accessorial_modifier_link_refs(fee) for fee in base_fees]
+    all_base_refs: set[str] = set()
+    for refs in base_ref_sets:
+        all_base_refs.update(refs)
+
     linked: list[dict] = []
     for fee in fees:
         item = dict(fee)
-        group = item.get("component_group")
         modifier_type = item.get("modifier_type")
         if modifier_type == "base_fee":
             item["related_to"] = None
-        elif modifier_type in {"minimum_amount", "maximum_amount"}:
-            item["related_to"] = group if group in base_groups else None
-            if group and item["related_to"] is None and item.get("status") == "calculable":
+            linked.append(item)
+            continue
+        if modifier_type not in {"minimum_amount", "maximum_amount"}:
+            linked.append(item)
+            continue
+
+        explicit_related = item.get("related_to")
+        item_refs = _accessorial_modifier_link_refs(item)
+        compatible_indices = [
+            idx for idx, base_refs in enumerate(base_ref_sets) if item_refs & base_refs
+        ]
+
+        if len(compatible_indices) == 1:
+            base_fee = base_fees[compatible_indices[0]]
+            shared_refs = item_refs & base_ref_sets[compatible_indices[0]]
+            preferred = _accessorial_base_link_ref(base_fee)
+            if preferred and preferred in shared_refs:
+                item["related_to"] = preferred
+            elif shared_refs:
+                item["related_to"] = sorted(shared_refs)[0]
+            elif preferred:
+                item["related_to"] = preferred
+            else:
+                item["related_to"] = None
+            if not item.get("component_group"):
+                item["component_group"] = base_fee.get("component_group") or base_fee.get("canonical_component")
+        elif explicit_related and explicit_related in all_base_refs:
+            item["related_to"] = explicit_related
+            if not item.get("component_group"):
+                for idx, base_refs in enumerate(base_ref_sets):
+                    if explicit_related in base_refs:
+                        item["component_group"] = (
+                            base_fees[idx].get("component_group") or explicit_related
+                        )
+                        break
+        else:
+            item["related_to"] = None
+            if item.get("status") == "calculable":
                 item["status"] = "needs_review"
         linked.append(item)
     return linked
@@ -4849,6 +5073,54 @@ def _accessorial_fee_uses_new_base_contract(fee: dict) -> bool:
     return bool(base_id) or basis == UNMAPPED_CALCULATION_BASIS_LABEL.lower() or source.startswith("manual_")
 
 
+def _accessorial_fee_is_minimum_modifier(fee: dict) -> bool:
+    modifier = str(fee.get("modifier_type") or "").strip()
+    calculation_type = str(fee.get("calculation_type") or "").strip()
+    return modifier == "minimum_amount" or calculation_type == "minimum_amount"
+
+
+def _accessorial_fee_is_base_fee_for_minimum_link(fee: dict) -> bool:
+    modifier = str(fee.get("modifier_type") or "").strip()
+    calculation_type = str(fee.get("calculation_type") or "").strip()
+    if modifier in {"minimum_amount", "maximum_amount"}:
+        return False
+    if calculation_type in {"minimum_amount", "maximum_amount"}:
+        return False
+    return True
+
+
+def _find_accessorial_minimum_base_fee(
+    minimum_fee: dict,
+    accessorial_fees: list[dict],
+    *,
+    exclude_index: int | None = None,
+) -> dict | None:
+    related_to = str(minimum_fee.get("related_to") or "").strip()
+    if not related_to:
+        return None
+    minimum_refs = _accessorial_modifier_link_refs(minimum_fee)
+    minimum_refs.add(related_to)
+    matches: list[dict] = []
+    for idx, fee in enumerate(accessorial_fees):
+        if exclude_index is not None and idx == exclude_index:
+            continue
+        if not isinstance(fee, dict) or not _accessorial_fee_is_base_fee_for_minimum_link(fee):
+            continue
+        base_refs = _accessorial_modifier_link_refs(fee)
+        if not minimum_refs & base_refs or related_to not in base_refs:
+            continue
+        matches.append(fee)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _accessorial_fee_has_valid_minimum_amount(fee: dict) -> bool:
+    if _accessorial_runtime_minimum_amount(fee) is not None:
+        return True
+    return _accessorial_first_money(_accessorial_text_parts(fee)) is not None
+
+
 def _accessorial_fee_missing_calculation_base(
     fee: dict,
     active_bases_by_id: dict[str, dict],
@@ -4898,6 +5170,39 @@ def _accessorial_advance_validation_error(
         "reason_code": reason_code,
         "message": message,
     }
+
+
+def _validate_linked_minimum_amount_for_advance(
+    fee: dict,
+    index: int,
+    accessorial_fees: list[dict],
+) -> dict | None:
+    if not _accessorial_fee_has_valid_minimum_amount(fee):
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field="value",
+            reason_code="invalid_accessorial_value",
+            message=ERROR_ACCESSORIAL_VALUE_MESSAGE,
+        )
+    related_to = str(fee.get("related_to") or "").strip()
+    if not related_to:
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field="related_to",
+            reason_code="missing_minimum_base_link",
+            message=ERROR_ACCESSORIAL_MINIMUM_LINK_MESSAGE,
+        )
+    if _find_accessorial_minimum_base_fee(fee, accessorial_fees, exclude_index=index) is None:
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field="related_to",
+            reason_code="invalid_minimum_base_link",
+            message=ERROR_ACCESSORIAL_MINIMUM_LINK_MESSAGE,
+        )
+    return None
 
 
 def _validate_accessorial_fee_for_advance(
@@ -4954,6 +5259,11 @@ def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
     errors: list[dict] = []
     for index, fee in enumerate(accessorial_fees):
         if not isinstance(fee, dict) or not _is_general_accessorial_fee_for_base_validation(fee):
+            continue
+        if _accessorial_fee_is_minimum_modifier(fee):
+            error = _validate_linked_minimum_amount_for_advance(fee, index, accessorial_fees)
+            if error is not None:
+                errors.append(error)
             continue
         if not _accessorial_fee_uses_new_base_contract(fee):
             continue

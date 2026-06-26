@@ -444,8 +444,22 @@ def test_cleide_auditoria_js_temp_table_modal_somente_leitura():
     assert "contentEditable" not in js
     assert "collectTempTableSavePayload" in js
     assert "accessorial_fees" in js
-    payload_block = js[js.index("function collectTempTableSavePayload"): js.index("function collectTempTableSavePayload") + 900]
+    payload_block = js[js.index("function collectTempTableSavePayload"): js.index("function accessorialFeeHasRequiredValue")]
     assert "accessorial_fees" in payload_block
+    assert "populateTempTableSaveEditTarget" in payload_block
+
+
+def test_cleide_auditoria_js_direct_save_preserves_temp_table_sections_in_payload():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    populate_block = js[
+        js.index("function populateTempTableSaveEditTarget"): js.index("function collectTempTableSavePayload")
+    ]
+    payload_block = js[js.index("function collectTempTableSavePayload"): js.index("function accessorialFeeHasRequiredValue")]
+    assert "deepCloneTempTable(tempTable.accessorial_fees)" in populate_block
+    assert "deepCloneTempTable(tempTable.freight_tables)" in populate_block
+    assert "deepCloneTempTable(tempTable.freight_routes)" in populate_block
+    assert "populateTempTableSaveEditTarget(payload.edit_target, currentTempTable)" in payload_block
+    assert "if (tempTableEditMode)" not in payload_block
 
 
 def test_cleide_auditoria_js_temp_table_edit_features():
@@ -491,6 +505,13 @@ def test_cleide_auditoria_js_bloqueia_avanco_com_base_nao_mapeada():
     assert "accessorialFeeHasRequiredValue" in js
     assert "accessorialFeeUnitMatchesBase" in js
     assert "accessorialFeeOperationIsComplete" in js
+    assert "accessorialFeeIsMinimumAmount" in js
+    assert "validateLinkedMinimumAccessorialFee" in js
+    assert "syncAccessorialMinimumAmountFields" in js
+    assert "afterDot.length <= 4" in js
+    assert "missing_minimum_base_link" in js
+    assert "invalid_minimum_base_link" in js
+    assert "Vincule este mínimo à taxa principal correspondente ou exclua a linha." in js
     assert "multiply_by_variable" in js
 
 
@@ -644,6 +665,21 @@ def test_cleide_auditoria_js_audit_run_summary_and_results():
     assert "cleide-audit-run-results-table" in results_block
     assert "Esperado" in results_block
     assert "Diferença" in results_block
+    assert "appendExpectedFreightCell" in results_block
+
+
+def test_cleide_auditoria_js_audit_calculation_memory():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    memory_block = js[js.index("function buildAuditCalculationMemoryRows"): js.index("function auditStatusLabel")]
+    assert "openAuditCalculationMemory" in js
+    assert "buildAuditCalculationMemoryRows" in js
+    assert "renderAuditCalculationMemoryContent" in js
+    assert "calculation_components" in memory_block
+    assert "Memória de cálculo detalhada não disponível para esta linha." in memory_block
+    assert "fetch(" not in memory_block
+    assert "cleide-audit-calculation-memory-modal" in source
+    assert "cleide-audit-run-expected-link" in source
 
 
 def test_cleide_auditoria_html_audit_file_styles():
