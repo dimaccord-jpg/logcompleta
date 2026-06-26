@@ -2899,14 +2899,100 @@ def _region_uf_from_composite_route_destination(destination: str) -> tuple[str, 
     return None
 
 
-def _pricing_rule_keys_for_freight_route(destination: str) -> list[str]:
-    keys = [destination]
-    parsed = _region_uf_from_composite_route_destination(destination)
+_FREIGHT_ROUTE_REGION_NOTE_HEADERS = frozenset(
+    {
+        "regiao",
+        "regiao de frete",
+        "praca",
+        "rota",
+        "itinerario",
+        "zona",
+        "area",
+    }
+)
+
+
+def _freight_route_has_weight_brackets(route: dict) -> bool:
+    for limit in (10, 20, 30, 50, 70, 100):
+        if _parse_brazilian_money(route.get(f"weight_{limit}") or route.get(f"weight_{limit}kg")) is not None:
+            return True
+    return False
+
+
+def _region_label_from_freight_route_notes(notes) -> str | None:
+    cleaned = _sanitize_cell_string(notes)
+    if not cleaned:
+        return None
+    for separator in (":", " - ", " – ", " — "):
+        if separator not in cleaned:
+            continue
+        parts = [part.strip() for part in cleaned.split(separator) if part.strip()]
+        if len(parts) < 2:
+            continue
+        header = _normalize_coverage_header(parts[0])
+        if header not in _FREIGHT_ROUTE_REGION_NOTE_HEADERS and not header.startswith("regiao"):
+            continue
+        label = parts[1] if len(parts) == 2 else " ".join(parts[1:])
+        candidate = _sanitize_cell_string(label)
+        if candidate:
+            return candidate
+    return None
+
+
+def _resolve_freight_route_region_uf_table(route: dict) -> tuple[str, str] | None:
+    if not isinstance(route, dict):
+        return None
+    origin = _sanitize_cell_string(route.get("origin"))
+    destination = _sanitize_cell_string(route.get("destination"))
+    if not origin or not destination:
+        return None
+    if _region_uf_from_composite_route_destination(destination):
+        return None
+    destination_uf = _normalize_destination_uf(destination)
+    if not destination_uf or destination_uf not in _BR_UFS:
+        return None
+    origin_uf = _normalize_destination_uf(origin)
+    if origin_uf and origin_uf in _BR_UFS:
+        return None
+    if not _freight_route_has_weight_brackets(route):
+        return None
+    notes_region = _region_label_from_freight_route_notes(route.get("notes"))
+    region_label = notes_region or origin
+    if not region_label:
+        return None
+    if notes_region and origin:
+        if _normalize_audit_lookup_text(origin) != _normalize_audit_lookup_text(notes_region):
+            return None
+    return region_label, destination_uf
+
+
+def _freight_route_region_label(route: dict) -> str | None:
+    region_uf = _resolve_freight_route_region_uf_table(route)
+    if region_uf:
+        return region_uf[0]
+    return (
+        _sanitize_cell_string(
+            route.get("destination")
+            or route.get("freight_region")
+            or route.get("region")
+            or route.get("route")
+        )
+        or None
+    )
+
+
+def _pricing_rule_keys_for_freight_route(route: dict, region: str) -> list[str]:
+    keys = [region]
+    parsed = _region_uf_from_composite_route_destination(region)
     if parsed:
         region_label, uf = parsed
         normalized_region = _normalize_audit_lookup_text(region_label)
         if uf and normalized_region:
             keys.append(f"{uf}|{normalized_region}")
+    region_uf = _resolve_freight_route_region_uf_table(route)
+    if region_uf:
+        region_label, uf = region_uf
+        keys.extend(_pricing_rule_keys_for_row(region_label, uf))
     return list(dict.fromkeys(keys))
 
 
@@ -3088,12 +3174,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
 
 
 def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
-    region = _sanitize_cell_string(
-        route.get("destination")
-        or route.get("freight_region")
-        or route.get("region")
-        or route.get("route")
-    )
+    region = _freight_route_region_label(route)
     if not region:
         return None
     brackets = []
@@ -3173,7 +3254,7 @@ def build_freight_pricing_index(temp_table) -> dict:
         route_rule = _build_rule_from_freight_route(route)
         if route_rule is not None:
             region, rule = route_rule
-            for key in _pricing_rule_keys_for_freight_route(region):
+            for key in _pricing_rule_keys_for_freight_route(route, region):
                 _register_pricing_rule(index, key, rule)
 
     return index
