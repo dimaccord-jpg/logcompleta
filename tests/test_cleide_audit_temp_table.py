@@ -5131,7 +5131,7 @@ def test_freight_route_interior_es_registers_contextual_key_and_matches():
 
 def _homolog_freight_route_payload(
     *,
-    origin: str,
+    origin: str | None,
     destination: str,
     notes: str = "",
     weight_30: str = "50,00",
@@ -5193,6 +5193,178 @@ def test_freight_route_homolog_capital_pr_registers_contextual_key_and_matches()
     assert lookup_kind == "freight_region"
     calculated = audit_doc_service.calculate_weight_freight(20, rule)
     assert calculated["expected_freight"] == 41.03
+
+
+def _homolog_real_capital_pr_freight_route_payload(**overrides) -> dict:
+    route_overrides = {
+        "weight_30": "41.03",
+        "weight_50": "45.46",
+        "weight_70": "54.33",
+        "weight_100": "57.66",
+        "freight_weight_kg": "0.45",
+        **overrides,
+    }
+    return _homolog_freight_route_payload(
+        origin=None,
+        destination="PR",
+        notes="Rota classificada como 'Capital'.",
+        **route_overrides,
+    )
+
+
+def test_freight_route_homolog_real_payload_null_origin_pr_notes_capital():
+    payload = _homolog_real_capital_pr_freight_route_payload()
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert "Capital" in pricing_index
+    assert "PR|CAPITAL" in pricing_index
+    assert pricing_index["PR|CAPITAL"]["region"] == "Capital"
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "Capital", "PR", "Curitiba")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key in {"Capital", "PR|CAPITAL"}
+    assert rule["pricing_type"] == "range_plus_excess_per_kg"
+    assert rule["brackets"][0]["value"] == 41.03
+    assert rule["excess"]["rate_per_kg"] == 0.45
+    assert lookup_kind == "freight_region"
+    calculated = audit_doc_service.calculate_weight_freight(20, rule)
+    assert calculated["expected_freight"] == 41.03
+
+
+def test_freight_route_homolog_null_origin_es_interior_via_notes():
+    payload = _homolog_freight_route_payload(
+        origin=None,
+        destination="ES",
+        notes="Rota classificada como 'Interior'.",
+        weight_30="70,00",
+    )
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert "Interior" in pricing_index
+    assert "ES|INTERIOR" in pricing_index
+    match = audit_doc_service._find_pricing_rule_match(pricing_index, "Interior", "ES", "Castelo")
+    assert match is not None
+    rule, lookup_kind, lookup_key = match
+    assert lookup_key in {"Interior", "ES|INTERIOR"}
+    assert rule["pricing_type"] == "fixed_range"
+    assert rule["brackets"][0]["value"] == 70.0
+    assert lookup_kind == "freight_region"
+
+
+def test_freight_route_homolog_null_origin_without_notes_does_not_invent_region():
+    payload = _homolog_freight_route_payload(
+        origin=None,
+        destination="PR",
+        notes="",
+        weight_30="41,03",
+        weight_50="45,46",
+        weight_70="54,33",
+        weight_100="57,66",
+        freight_weight_kg="0,45",
+    )
+    pricing_index = audit_doc_service.build_freight_pricing_index(payload)
+    assert "PR|CAPITAL" not in pricing_index
+    assert audit_doc_service._find_pricing_rule_match(pricing_index, "Capital", "PR", "Curitiba") is None
+
+
+def test_freight_route_homolog_null_origin_notes_without_quotes_preserves_current_long_text_behavior():
+    notes = "Rota classificada como Capital atendimento especial"
+    assert audit_doc_service._region_label_from_freight_route_notes(notes) == "Capital atendimento especial"
+
+
+def test_audit_run_freight_route_homolog_real_null_origin_pr_resolves_coverage_region(web_client):
+    _apply_payload(web_client, _homolog_real_capital_pr_freight_route_payload())
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["PR", "Curitiba", "Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(
+            numero_documento="7414646",
+            uf_destino="PR",
+            cidade_destino="Curitiba",
+            peso="20",
+            valor_frete="41,03",
+        )
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "ok"
+    assert result["reason_code"] != "missing_freight_rule"
+    assert result["freight_region"] == "Capital"
+    assert result["expected_freight"] == 41.03
+    assert result["calculation_components"]["weight_freight"]["amount"] == 41.03
+
+
+def test_audit_run_freight_route_homolog_real_doc_7414646_uses_70kg_bracket(web_client):
+    _apply_payload(web_client, _homolog_real_capital_pr_freight_route_payload())
+    coverage = make_csv([["UF destino", "Cidade destino", "Regi?o de frete"], ["PR", "Curitiba", "Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(
+            numero_documento="7414646",
+            uf_destino="PR",
+            cidade_destino="Curitiba",
+            peso="68,64",
+            valor_frete="54,33",
+            valor_nf="1000,00",
+        )
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] not in {"missing_freight_rule", "unsupported_pricing_model"}
+    assert result["reason_code"] != "missing_freight_rule"
+    assert result["expected_freight"] is not None
+    assert result["freight_region"] == "Capital"
+    assert result["weight_freight"] == pytest.approx(54.33, abs=0.01)
+    assert result["expected_freight"] == pytest.approx(54.33, abs=0.01)
+    assert result["calculation_basis"] == "range_plus_excess_per_kg"
+    assert result["calculation_components"]["weight_freight"]["basis"] == "range_plus_excess_per_kg"
+    assert "direct_weight_rate" not in str(result["calculation_details"])
+    assert "direct_weight_rate" not in json.dumps(result["calculation_components"], ensure_ascii=False)
+    assert result["weight_freight"] != pytest.approx(68.64 * 0.45, abs=0.01)
+
+
+def test_audit_run_freight_route_homolog_real_null_origin_pr_above_100kg_uses_excess(web_client):
+    _apply_payload(web_client, _homolog_real_capital_pr_freight_route_payload())
+    coverage = make_csv([["UF destino", "Cidade destino", "Regi?o de frete"], ["PR", "Curitiba", "Capital"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    audit_file = _sample_audit_xlsx(
+        _sample_audit_row(
+            uf_destino="PR",
+            cidade_destino="Curitiba",
+            peso="506,88",
+            valor_frete="240,76",
+            valor_nf="1000,00",
+        )
+    )
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        audit_file,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] != "missing_freight_rule"
+    assert result["reason_code"] != "missing_freight_rule"
+    assert result["expected_freight"] is not None
+    assert result["freight_region"] == "Capital"
+    assert result["weight_freight"] == pytest.approx(240.76, abs=0.01)
+    assert result["expected_freight"] == pytest.approx(240.76, abs=0.01)
+    assert result["calculation_basis"] == "range_plus_excess_per_kg"
+    assert result["calculation_components"]["weight_freight"]["basis"] == "range_plus_excess_per_kg"
+    assert "direct_weight_rate" not in str(result["calculation_details"])
+    assert "direct_weight_rate" not in json.dumps(result["calculation_components"], ensure_ascii=False)
+    assert result["weight_freight"] != pytest.approx(506.88 * 0.45, abs=0.01)
 
 
 def test_freight_route_homolog_interior_es_registers_contextual_key_and_matches():
