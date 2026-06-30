@@ -2919,6 +2919,22 @@ def _freight_route_has_weight_brackets(route: dict) -> bool:
     return False
 
 
+def _region_label_from_freight_route_classification_notes(tail: str) -> str | None:
+    text = _sanitize_cell_string(tail)
+    if not text:
+        return None
+    for quote in ("'", '"', "\u2018", "\u2019", "\u201c", "\u201d"):
+        if not text.startswith(quote):
+            continue
+        end = text.find(quote, 1)
+        if end > 1:
+            candidate = _sanitize_cell_string(text[1:end])
+            if candidate:
+                return candidate
+    stripped = text.rstrip(".,; ")
+    return _sanitize_cell_string(stripped) if stripped else None
+
+
 def _region_label_from_freight_route_notes(notes) -> str | None:
     cleaned = _sanitize_cell_string(notes)
     if not cleaned:
@@ -2936,6 +2952,14 @@ def _region_label_from_freight_route_notes(notes) -> str | None:
         candidate = _sanitize_cell_string(label)
         if candidate:
             return candidate
+    lowered = cleaned.lower()
+    for marker in ("classificada como", "classificado como"):
+        if marker not in lowered:
+            continue
+        idx = lowered.index(marker)
+        candidate = _region_label_from_freight_route_classification_notes(cleaned[idx + len(marker) :])
+        if candidate:
+            return candidate
     return None
 
 
@@ -2944,19 +2968,23 @@ def _resolve_freight_route_region_uf_table(route: dict) -> tuple[str, str] | Non
         return None
     origin = _sanitize_cell_string(route.get("origin"))
     destination = _sanitize_cell_string(route.get("destination"))
-    if not origin or not destination:
+    if not destination:
         return None
     if _region_uf_from_composite_route_destination(destination):
         return None
     destination_uf = _normalize_destination_uf(destination)
     if not destination_uf or destination_uf not in _BR_UFS:
         return None
-    origin_uf = _normalize_destination_uf(origin)
-    if origin_uf and origin_uf in _BR_UFS:
-        return None
     if not _freight_route_has_weight_brackets(route):
         return None
     notes_region = _region_label_from_freight_route_notes(route.get("notes"))
+    if not origin:
+        if not notes_region:
+            return None
+        return notes_region, destination_uf
+    origin_uf = _normalize_destination_uf(origin)
+    if origin_uf and origin_uf in _BR_UFS:
+        return None
     region_label = notes_region or origin
     if not region_label:
         return None
