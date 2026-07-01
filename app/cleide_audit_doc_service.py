@@ -183,6 +183,61 @@ AUDIT_STATUS_INVALID_WEIGHT = "invalid_weight"
 AUDIT_STATUS_INVALID_CHARGED_FREIGHT = "invalid_charged_freight"
 AUDIT_STATUS_INVALID_INVOICE_VALUE = "invalid_invoice_value"
 AUDIT_STATUS_UNSUPPORTED_PRICING = "unsupported_pricing_model"
+
+AUDIT_BI_DATASET_VERSION = "cleide_audit_bi_v1"
+AUDIT_BI_SOURCE = "audit_batch"
+AUDIT_BI_FILTER_MODE = "frontend_row_level"
+AUDIT_BI_CHARTS_SUPPORTED = (
+    "transportadora",
+    "uf_destino",
+    "temporal",
+    "uf_origem",
+    "volume_transportadora",
+    "pareto_uf",
+    "pareto_transportadora",
+)
+AUDIT_BI_PUBLIC_ROW_FIELDS = (
+    "row_index",
+    "carrier",
+    "origin_uf",
+    "destination_uf",
+    "issue_date",
+    "audited_weight",
+    "charged_freight",
+    "expected_freight",
+    "divergence_value",
+    "status",
+)
+AUDIT_BI_FIELD_PRESENCE_FIELDS = (
+    "carrier",
+    "origin_uf",
+    "destination_uf",
+    "issue_date",
+    "audited_weight",
+    "charged_freight",
+    "expected_freight",
+    "divergence_value",
+    "status",
+)
+AUDIT_BI_FORBIDDEN_PUBLIC_FIELDS = frozenset(
+    {
+        "document_number",
+        "invoice_value",
+        "origin_city",
+        "destination_city",
+        "source_file_name",
+        "calculation_details",
+        "calculation_basis",
+        "calculation_components",
+        "numero_documento",
+        "freight_region",
+    }
+)
+AUDIT_BI_NOT_READY_MESSAGE = (
+    "Ainda não há dados auditados disponíveis para gráficos. "
+    "Envie o arquivo auditado para habilitar esta área."
+)
+
 AUDIT_REASON_ACCESSORIAL_PERCENTAGE_CALCULATED = "accessorial_percentage_calculated"
 AUDIT_REASON_DUPLICATE_INVOICE_PERCENTAGE_FEE_IGNORED = "duplicate_invoice_percentage_fee_ignored"
 AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE = "ambiguous_accessorial_percentage"
@@ -3958,6 +4013,115 @@ def upload_audit_batch_from_file(
     return public
 
 
+def _audit_bi_field_has_value(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _audit_bi_results_by_row_index(results) -> dict[int, dict]:
+    indexed: dict[int, dict] = {}
+    if not isinstance(results, list):
+        return indexed
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        row_index = result.get("row_index")
+        if isinstance(row_index, bool) or row_index is None:
+            continue
+        try:
+            indexed[int(row_index)] = result
+        except (TypeError, ValueError):
+            continue
+    return indexed
+
+
+def _audit_bi_public_row(normalized_row: dict, result: dict | None = None) -> dict:
+    public_row = {
+        "row_index": normalized_row.get("row_index"),
+        "carrier": normalized_row.get("carrier"),
+        "origin_uf": normalized_row.get("origin_uf"),
+        "destination_uf": normalized_row.get("destination_uf"),
+        "issue_date": normalized_row.get("issue_date"),
+        "audited_weight": normalized_row.get("audited_weight"),
+        "charged_freight": normalized_row.get("charged_freight"),
+        "expected_freight": None,
+        "divergence_value": None,
+        "status": None,
+    }
+    if isinstance(result, dict):
+        if result.get("expected_freight") is not None:
+            public_row["expected_freight"] = result.get("expected_freight")
+        if result.get("divergence_value") is not None:
+            public_row["divergence_value"] = result.get("divergence_value")
+        if result.get("status") is not None:
+            public_row["status"] = result.get("status")
+    return public_row
+
+
+def _audit_bi_compute_field_presence(rows: list[dict]) -> dict[str, bool]:
+    presence = {field: False for field in AUDIT_BI_FIELD_PRESENCE_FIELDS}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for field in AUDIT_BI_FIELD_PRESENCE_FIELDS:
+            if _audit_bi_field_has_value(row.get(field)):
+                presence[field] = True
+    return presence
+
+
+def _public_audit_bi(audit_batch) -> dict:
+    base = {
+        "dataset_version": AUDIT_BI_DATASET_VERSION,
+        "source": AUDIT_BI_SOURCE,
+        "filter_mode": AUDIT_BI_FILTER_MODE,
+        "charts_supported": list(AUDIT_BI_CHARTS_SUPPORTED),
+    }
+    normalized_rows = None
+    results = None
+    if isinstance(audit_batch, dict):
+        raw_rows = audit_batch.get("normalized_rows")
+        if isinstance(raw_rows, list):
+            normalized_rows = raw_rows
+        raw_results = audit_batch.get("results")
+        if isinstance(raw_results, list):
+            results = raw_results
+
+    if not normalized_rows:
+        return {
+            **base,
+            "ready": False,
+            "row_count": 0,
+            "rows": [],
+            "field_presence": {field: False for field in AUDIT_BI_FIELD_PRESENCE_FIELDS},
+            "message": AUDIT_BI_NOT_READY_MESSAGE,
+        }
+
+    results_by_index = _audit_bi_results_by_row_index(results)
+    public_rows: list[dict] = []
+    for normalized_row in normalized_rows:
+        if not isinstance(normalized_row, dict):
+            continue
+        row_index = normalized_row.get("row_index")
+        result = None
+        if row_index is not None and not isinstance(row_index, bool):
+            try:
+                result = results_by_index.get(int(row_index))
+            except (TypeError, ValueError):
+                result = None
+        public_rows.append(_audit_bi_public_row(normalized_row, result))
+
+    return {
+        **base,
+        "ready": True,
+        "row_count": len(public_rows),
+        "rows": public_rows,
+        "field_presence": _audit_bi_compute_field_presence(public_rows),
+    }
+
+
 def _public_temp_table(record: dict | None) -> dict | None:
     if not record:
         return None
@@ -4003,6 +4167,7 @@ def _public_temp_table(record: dict | None) -> dict | None:
     audit_batch = _public_audit_batch(record.get("audit_batch"))
     if audit_batch is not None:
         public["audit_batch"] = audit_batch
+    public["audit_bi"] = _public_audit_bi(record.get("audit_batch"))
     return public
 
 

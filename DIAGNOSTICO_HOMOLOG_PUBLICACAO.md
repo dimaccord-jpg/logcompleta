@@ -1,4 +1,4 @@
-# Diagnostico de Homologacao e Publicacao
+﻿# Diagnostico de Homologacao e Publicacao
 
 Este documento complementa o `README.md` principal com foco exclusivo em go/no-go de homologacao.
 Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
@@ -6,9 +6,9 @@ Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 ## Estado Atual Confirmado
 
 - pacote funcional da fase atual integrado localmente
-- homolog validada no commit `17675d0`
-- producao atualizada e aprovada apos merge `bad8990`
-- apos o push, `origin/producao` ficou no commit `bad8990`
+- homolog validada no commit `28904e4`
+- producao atualizada e aprovada no commit `0afe528`
+- apos o push, `origin/producao` ficou no commit `0afe528`
 - o ambiente local retornou para `homolog`, limpo e sincronizado
 - estabilizacao da auditoria documental da Cleide promovida sem nova migration
 - tabela temporaria da auditoria Cleide estabilizada como artefato tecnico temporario, descartavel e sujeito a validacao humana
@@ -64,6 +64,13 @@ Somente quando todos forem verdadeiros:
 - a configuracao versionada em `render.yaml` ainda aponta o servico de producao para `branch: main`
 - o fluxo operacional aprovado desta entrega usa `producao` como branch de producao
 - manter esse item documentado como divergencia a validar no painel do Render antes de nova publicacao, sem forcar alteracao de codigo nesta tarefa
+
+## Historico operacional recente
+
+- `homolog` recebeu os commits finais `faae3b0`, `7cc884e` e `28904e4`
+- `main` nao foi usada como base de promocao porque nao refletia a base estrutural atual da Cleide
+- a promocao segura foi feita em `producao` via cherry-pick dos equivalentes `5db6f98`, `2581baa` e `0afe528`
+- o painel do Render ficou com deploy manual de producao em `0afe528`
 
 ## Referencia Principal
 

@@ -1,9 +1,9 @@
-# Arquitetura Oficial
+﻿# Arquitetura Oficial
 
-Data de consolidacao: `2026-06-19`
-Commit de referencia: `bad8990`
+Data de consolidacao: `2026-06-30`
+Commit de referencia: `homolog@28904e4` e `producao@0afe528`
 
-Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos a estabilizacao da auditoria documental da Cleide.
+Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos os ajustes finais da auditoria de frete da Cleide.
 
 ## Principios
 
@@ -102,6 +102,10 @@ Tabela canonica:
 - `DELETE /api/cleide-auditoria/documents/<doc_id>`
 - `POST /api/cleide-auditoria/documents/clear`
 - `POST /api/cleide-auditoria/temp-table/save`
+- `POST /api/cleide-auditoria/coverage/upload`
+- `GET /api/cleide-auditoria/audit-template`
+- `POST /api/cleide-auditoria/audit/upload`
+- `POST /api/cleide-auditoria/audit/run`
 - `POST /api/cleide-auditoria/chat`
 
 ## Arquitetura documental da Cleide Auditoria
@@ -117,6 +121,7 @@ Contratos reais:
 - a resposta esperada do modelo e JSON tecnico, sem auditoria final
 - o endpoint de status devolve `temp_table` quando houver artefato ativo
 - o endpoint `POST /api/cleide-auditoria/temp-table/save` registra revisao humana governada da tabela temporaria quando o artefato esta ativo
+- coverage complementar e lote auditado operam no mesmo trilho autenticado da auditoria
 - a UI exibe um card clicavel de tabela temporaria e abre modal somente leitura
 - a priorizacao visual e operacional recai sobre blocos operacionais, rotas/tabelas de frete e informacoes adicionais
 
@@ -131,7 +136,7 @@ Garantias:
 - invalidacoes ocorrem quando os documentos fonte mudam ou sao removidos
 - nao ha migration nova, nova tabela de banco, novo campo ou alteracao manual de schema para esse fluxo
 - nao ha conexao nova com APIs da Julia ou do BI nessa superficie documental
-- a promocao aprovada desta entrega foi `17675d0 -> bad8990`, sem alteracao estrutural de banco
+- a promocao segura mais recente ocorreu via `producao`, a partir dos equivalentes `5db6f98`, `2581baa` e `0afe528`, sem alteracao estrutural de banco
 
 ## Arquitetura documental da Julia
 

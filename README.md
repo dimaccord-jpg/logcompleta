@@ -1,20 +1,22 @@
-# Agentefrete / Log Completa
+﻿# Agentefrete / Log Completa
 
-Data de consolidacao: `2026-06-19`
-Estado de referencia: `producao` / merge `bad8990`
+Data de consolidacao: `2026-06-30`
+Estado de referencia: `homolog@28904e4` e `producao@0afe528`
 
-Este `README.md` resume o estado real homologado e promovido apos a estabilizacao da auditoria documental da Cleide:
+Este `README.md` resume o estado real homologado e promovido apos os ajustes finais da auditoria de frete da Cleide:
 
-- `17675d0 feat: estabiliza auditoria documental da Cleide`
-- `bad8990 merge: promove auditoria documental da Cleide para producao`
+- `faae3b0 fix: estabiliza auditoria de frete da Cleide`
+- `7cc884e fix: ajusta regra contextual de frete da Cleide`
+- `28904e4 fix: refina resolucao contextual de rotas da Cleide`
 
 Confirmacoes operacionais:
 
-- `homolog` contem `17675d0`
-- `producao` contem merge `bad8990`
+- `homolog` contem `28904e4`
+- `origin/homolog` esta sincronizada com `homolog`
+- `producao` contem `0afe528`
 - homolog foi validada antes da promocao
 - producao foi validada e aprovada apos deploy
-- apos o push, `origin/producao` ficou no commit `bad8990`
+- apos o push, `origin/producao` ficou no commit `0afe528`
 - o ambiente local retornou para `homolog`, limpo e sincronizado
 - nao houve migration nova, nova tabela, novo campo ou alteracao manual de schema
 
@@ -61,6 +63,10 @@ Contratos oficiais do fluxo:
 - remocao: `DELETE /api/cleide-auditoria/documents/<doc_id>`
 - limpeza: `POST /api/cleide-auditoria/documents/clear`
 - revisao humana governada da tabela temporaria ativa: `POST /api/cleide-auditoria/temp-table/save`
+- upload complementar de coverage: `POST /api/cleide-auditoria/coverage/upload`
+- download do template de auditoria: `GET /api/cleide-auditoria/audit-template`
+- upload do lote auditado: `POST /api/cleide-auditoria/audit/upload`
+- processamento do lote auditado: `POST /api/cleide-auditoria/audit/run`
 - chat: `POST /api/cleide-auditoria/chat`
 
 Tabela temporaria extraida:
@@ -91,6 +97,20 @@ Extracao tecnica:
 - prompt tecnico: `build_cleide_audit_temp_table_technical_prompt()` em `app/cleide_audit_prompt.py`
 - usa Gemini governado pelo Cleiton, com timeout proprio e fallback de modelo
 - responde JSON tecnico para estruturacao de tabela temporaria, sem montar auditoria final
+
+Arquivos principais da auditoria refletidos no codigo atual:
+
+- `app/cleide_audit_doc_service.py`: sessao documental da Cleide Auditoria, ciclo de vida da `temp_table`, revisao humana, coverage table e lote auditado
+- `app/cleide_audit_prompt.py`: prompt conversacional da auditoria e prompt tecnico da extracao pos-upload
+- `app/run_cleide_audit_temp_table.py`: pipeline tecnico separado do chat, com parsing seguro de JSON, timeout dedicado e fallback de modelo
+- `app/static/js/cleide_auditoria.js`: UI da experiencia `/auditoria-frete`, polling da `temp_table`, upload documental, coverage, lote auditado e chat
+- `app/templates/cleide_auditoria.html`: shell visual da auditoria com anexos, card/modal readonly e fluxo guiado
+- `app/cleide_audit_routes.py`: endpoints documentais, coverage, template, lote auditado e chat autenticado com autorizacao por franquia
+- `tests/test_cleide_audit_temp_table.py`: cobertura do pipeline pos-upload, ciclo de vida da `temp_table`, coverage e regras de revisao humana
+- `tests/test_cleide_auditoria_page.py`: contrato da pagina `/auditoria-frete`, template e JS acoplado
+- `tests/test_cleide_admin_routes.py`: admin da Cleide, incluindo bloco da auditoria e bases de calculo
+- `tests/test_cleide_audit_config_service.py`: persistencia e validacao das configuracoes da auditoria em `ConfigRegras`
+- `tests/test_cleide_audit_doc_routes.py`: contratos HTTP dos endpoints documentais da auditoria
 
 ## Copilot da Home
 
@@ -231,18 +251,33 @@ Cobertura diretamente relacionada:
 
 Validacoes registradas antes da promocao:
 
-- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py`
-- resultado validado: `341 passed, 2 warnings`
-- warnings conhecidos de dependencia em `flask_session` e `google.genai`, sem bloqueio da promocao
+- `pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_routes.py`
+- resultado validado antes do deploy: `572 passed, 2 warnings` em aproximadamente `220.39s`
+- warnings conhecidos: `DeprecationWarning` de `flask_session` filesystem e `DeprecationWarning` de `google genai` / `_UnionGenericAlias` em Python 3.14
+- esses warnings nao foram tratados como falha de implantacao
 
 ## Deploy e branches
 
-- o fluxo aprovado e `homolog -> producao`
+- `homolog` e a branch oficial de homologacao
+- `producao` e a branch funcional de producao usada pelo Render
+- `main` nao deve ser usada como destino operacional automatico de producao neste momento
 - validar `git status --short` limpo antes de promover
 - rodar primeiro os testes especificos da Cleide Auditoria e, quando possivel, a suite completa
 - confirmar que residuos como `.tmp_*`, `*_tmp`, uploads locais e JSONs ficticios nao entraram no versionamento
 - validar Render e `/health` apos o push controlado
-- ponto de atencao: o `render.yaml` do repositorio ainda referencia `branch: main` no servico `logcompleta-web-prod`, enquanto a documentacao operacional desta entrega usa `producao`; tratar isso como divergencia a confirmar no Render antes de qualquer nova promocao
+- Render homolog: servico `logcompleta-web-homolog`, branch `homolog`, `autoDeploy: true`, health `/health`
+- Render producao: servico `logcompleta-web-prod`, branch real configurada no painel `producao`, `autoDeploy: false`, deploy manual no painel, health `/health`
+- ponto de atencao: o `render.yaml` do repositorio ainda referencia `branch: main` no servico `logcompleta-web-prod`; reconciliar isso com cuidado e somente apos confirmar o painel real do Render
+
+## Historico operacional recente
+
+- `homolog` recebeu os commits finais `faae3b0`, `7cc884e` e `28904e4`
+- como `main` nao tinha a base estrutural da Cleide, a promocao direta para `main` foi descartada
+- a promocao segura ocorreu em `producao` via cherry-pick:
+  `5db6f98` equivalente a `faae3b0`
+  `2581baa` equivalente a `7cc884e`
+  `0afe528` equivalente a `28904e4`
+- o deploy de producao foi manual no Render e ficou live em `0afe528`
 
 ## Documentos oficiais de apoio
 
@@ -268,3 +303,5 @@ Nao documentar nem prometer:
 - automacao operacional inexistente
 - leitura documental fingida quando o conteudo nao foi extraido
 - tabela temporaria da Cleide como auditoria final
+- checklist rigido no chat da Cleide para validar a tabela temporaria
+- regex como solucao principal de interpretacao de frete

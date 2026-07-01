@@ -9,7 +9,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.cleide_audit_doc_service import CLEIDE_AUDIT_DOC_IDS_SESSION_KEY
+from app.cleide_audit_doc_service import (
+    AUDIT_BI_DATASET_VERSION,
+    CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+    _public_audit_bi,
+)
 from app.cleiton_doc_contracts import (
     ERROR_INVALID_EXTENSION,
     FIELD_PREPARED_CONTEXT,
@@ -603,3 +607,74 @@ def test_cleide_bi_template_route_unchanged(app, ctx, monkeypatch, tmp_path):
     resp = client.get("/api/cleide/template")
     assert resp.status_code == 200
     assert resp.data.startswith(b"PK")
+
+
+def test_public_audit_bi_not_ready_without_normalized_rows():
+    payload = _public_audit_bi(None)
+    assert payload["dataset_version"] == AUDIT_BI_DATASET_VERSION
+    assert payload["ready"] is False
+    assert payload["row_count"] == 0
+    assert payload["rows"] == []
+    assert payload["message"]
+
+
+def test_public_audit_bi_ready_with_normalized_rows_without_results():
+    audit_batch = {
+        "normalized_rows": [
+            {
+                "row_index": 1,
+                "carrier": "Transportadora X",
+                "origin_uf": "SP",
+                "destination_uf": "PR",
+                "issue_date": "2024-01-01",
+                "audited_weight": 48.0,
+                "charged_freight": 100.5,
+                "document_number": "123",
+            }
+        ]
+    }
+    payload = _public_audit_bi(audit_batch)
+    assert payload["ready"] is True
+    assert payload["row_count"] == 1
+    row = payload["rows"][0]
+    assert row["carrier"] == "Transportadora X"
+    assert row["expected_freight"] is None
+    assert row["divergence_value"] is None
+    assert row["status"] is None
+    assert "document_number" not in row
+
+
+def test_public_audit_bi_ready_with_sanitized_rows():
+    audit_batch = {
+        "normalized_rows": [
+            {
+                "row_index": 1,
+                "carrier": "Transportadora X",
+                "origin_uf": "SP",
+                "destination_uf": "PR",
+                "destination_city": "Curitiba",
+                "issue_date": "2024-01-01",
+                "audited_weight": 48.0,
+                "charged_freight": 100.5,
+                "document_number": "123",
+            }
+        ],
+        "results": [
+            {
+                "row_index": 1,
+                "expected_freight": 100.5,
+                "divergence_value": 0.0,
+                "status": "ok",
+                "calculation_details": "secret",
+            }
+        ],
+    }
+    payload = _public_audit_bi(audit_batch)
+    assert payload["ready"] is True
+    assert payload["row_count"] == 1
+    row = payload["rows"][0]
+    assert row["expected_freight"] == 100.5
+    assert row["status"] == "ok"
+    assert "destination_city" not in row
+    assert "document_number" not in row
+    assert "calculation_details" not in payload

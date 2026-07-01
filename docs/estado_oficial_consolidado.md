@@ -1,7 +1,7 @@
-# Estado Oficial Consolidado
+﻿# Estado Oficial Consolidado
 
-Data de consolidacao: `2026-06-19`
-Commit de referencia: `bad8990`
+Data de consolidacao: `2026-06-30`
+Commit de referencia: `homolog@28904e4` e `producao@0afe528`
 
 ## Escopo promovido
 
@@ -16,10 +16,11 @@ Estado confirmado no codigo e na promocao:
 
 ## Estado oficial de ambiente
 
-- `homolog` contem `17675d0`
-- `producao` contem merge `bad8990`
+- `homolog` contem `28904e4`
+- `origin/homolog` esta sincronizada com `homolog`
+- `producao` contem `0afe528`
 - producao foi validada e aprovada apos deploy
-- apos o push, `origin/producao` ficou em `bad8990`
+- apos o push, `origin/producao` ficou em `0afe528`
 - o ambiente local voltou para `homolog`, limpo e sincronizado
 - nao houve migration nova
 - nao houve schema novo
@@ -99,6 +100,10 @@ Estado promovido:
 - retorno de `temp_table` no upload quando disponivel
 - retorno de `temp_table` no status documental
 - revisao humana da `temp_table` disponivel em `POST /api/cleide-auditoria/temp-table/save`
+- coverage complementar em `POST /api/cleide-auditoria/coverage/upload`
+- template do lote auditado em `GET /api/cleide-auditoria/audit-template`
+- upload do lote auditado em `POST /api/cleide-auditoria/audit/upload`
+- processamento do lote auditado em `POST /api/cleide-auditoria/audit/run`
 - o chat consulta o contexto, mas nao deve recriar, alterar ou sobrescrever a tabela temporaria
 - a interface exibe card clicavel da tabela temporaria no painel de anexos/documentos
 - o modal da tabela temporaria e somente leitura
@@ -143,12 +148,15 @@ Esta entrega:
 
 Validacoes registradas para a promocao:
 
-- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py`
-- resultado: `341 passed, 2 warnings`
-- warnings conhecidos de `flask_session` e `google.genai`, sem falha funcional e sem bloqueio da promocao
+- `pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_routes.py`
+- resultado: `572 passed, 2 warnings` em aproximadamente `220.39s`
+- warnings conhecidos: `DeprecationWarning` de `flask_session` filesystem e `DeprecationWarning` de `google genai` / `_UnionGenericAlias` em Python 3.14
+- esses warnings nao foram tratados como falha funcional nem bloqueio da promocao
 
 ## Ponto de atencao operacional
 
-- o fluxo aprovado do projeto usa `homolog` e `producao`
+- `homolog` e a branch oficial de homologacao
+- `producao` e a branch funcional de producao usada no painel do Render
+- `main` nao deve ser usada como destino operacional automatico de producao neste momento
 - o `render.yaml` do repositorio ainda referencia `branch: main` no servico de producao
 - manter a confirmacao do painel Render como etapa obrigatoria antes de novas promocoes

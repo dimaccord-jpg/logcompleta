@@ -1,7 +1,7 @@
-# Onboarding Tecnico
+﻿# Onboarding Tecnico
 
-Data de consolidacao: `2026-06-19`
-Commit de referencia: `17675d0`
+Data de consolidacao: `2026-06-30`
+Commit de referencia: `28904e4`
 
 ## Objetivo
 
@@ -25,7 +25,7 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - `app/static/js/chat_behavior.js`: shell visual do Copilot e da Julia
 - `app/julia_documents_routes.py`: API documental da Julia
 - `app/julia_doc_context.py`: montagem do contexto documental para o chat
-- `app/cleide_audit_routes.py`: upload, status e chat da Cleide Auditoria
+- `app/cleide_audit_routes.py`: upload, status, remocao, coverage, template, lote auditado e chat da Cleide Auditoria
 - `app/cleide_routes.py`: superficies visuais da Cleide, incluindo `/auditoria-frete`
 - `app/cleide_audit_doc_service.py`: sessao documental e ciclo de vida da tabela temporaria
 - `app/run_cleide_audit_temp_table.py`: extracao tecnica pos-upload da tabela temporaria
@@ -35,6 +35,7 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - `app/cleiton_doc_store.py`: store temporario local
 - `app/services/cleiton_doc_config_service.py`: configuracao documental em `ConfigRegras`
 - `app/painel_admin/admin_routes.py`: admin com bloco documental do Cleiton
+- `app/painel_admin/template_admin/agentes_cleide.html`: admin da Cleide com blocos independentes de BI e Auditoria
 
 ## Premissas de arquitetura
 
@@ -61,6 +62,9 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - nao documentar tabela ou migration inexistente
 - nao documentar a tabela temporaria da Cleide como auditoria final
 - nao atribuir ownership da tabela temporaria a Cleide
+- nao misturar o chat da Cleide com o fluxo de validacao da tabela temporaria
+- nao transformar a auditoria em checklist rigido dentro do chat
+- nao usar regex como solucao principal de interpretacao de frete
 
 ## Validacao minima de entrada
 
@@ -72,5 +76,6 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - validar que a tabela temporaria aparece como artefato temporario sujeito a revisao humana
 - validar o modal da tabela temporaria em modo somente leitura
 - validar a revisao humana da tabela temporaria via endpoint dedicado quando aplicavel
+- validar coverage complementar e lote auditado quando o fluxo exigir
 - validar admin do Cleiton
 - validar Roberto e Cleide

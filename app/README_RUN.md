@@ -1,7 +1,7 @@
-# Execucao Local
+﻿# Execucao Local
 
-Data de consolidacao: `2026-06-19`
-Commit de referencia: `17675d0`
+Data de consolidacao: `2026-06-30`
+Commit de referencia: `28904e4`
 
 ## Objetivo
 
@@ -41,6 +41,7 @@ Executar o projeto localmente e validar o estado atual de Home, onboarding, Juli
 - a Cleide Auditoria tenta extrair tabela temporaria apos upload e exige validacao humana
 - a validacao da tabela temporaria e humana e governada; nao e uma nova conversa de IA
 - o chat da Cleide consulta contexto, mas nao e owner da tabela temporaria
+- o fluxo complementar pode incluir coverage table e lote auditado, mas continua separado do chat
 - `app/cleiton_doc_tmp/` e temporario, local e ignorado no Git
 - o `.gitignore` protege `app/cleiton_doc_tmp/`
 - `tt_*.json`, `.cleanup_meta.json` e outros `.json` dessa pasta nao devem entrar em commit

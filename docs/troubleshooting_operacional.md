@@ -1,7 +1,7 @@
-# Troubleshooting Operacional
+﻿# Troubleshooting Operacional
 
 Data de consolidacao: `2026-06-19`
-Commit de referencia: `bad8990`
+Commit de referencia: `0afe528`
 
 ## 1. Home publica sem responder
 
