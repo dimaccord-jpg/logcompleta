@@ -529,7 +529,7 @@ def test_cleide_auditoria_js_destaca_base_calculo_invalida():
     assert "field: 'unit'" in js
     assert "accessorial-field-error" in js
     assert "accessorial-field-error-icon" in js
-    assert "⚠" in js
+    assert "âš " in js
     assert ".accessorial-row--invalid" in source
     assert ".cleide-audit-temp-table-modal-cell-input.field-invalid" in source
     assert ".accessorial-field-error" in source
@@ -633,6 +633,16 @@ def test_cleide_auditoria_js_audit_upload_status():
     assert "'error'" in upload_block
     assert "resultado" not in upload_block.lower()
     assert "diverg" not in upload_block.lower()
+
+
+def test_cleide_auditoria_js_audit_upload_refreshes_documents_for_bi_button():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    upload_block = js[js.index("function uploadAuditFile"): js.index("function ensureCoverageTableShell")]
+    assert "return fetchDocuments().then(function (statusData) {" in upload_block
+    assert "if (statusData) return statusData;" in upload_block
+    assert "if (res.data.temp_table) {" in upload_block
+    assert "currentTempTable = res.data.temp_table;" in upload_block
+    assert "setAuditUploadStatus('Arquivo recebido para auditoria.', 'success');" in upload_block
 
 
 def test_cleide_auditoria_js_audit_run_step():
@@ -1058,3 +1068,102 @@ def test_cleide_auditoria_html_coverage_upload_card_styles():
     assert "cleide-audit-coverage-upload-status.is-success" in html
     assert "cleide-audit-coverage-upload-status.is-error" in html
     assert "cleide-audit-coverage-upload-file-name" in html
+
+
+def test_cleide_auditoria_template_bi_section_below_documents():
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    docs_pos = source.index('id="cleideAuditDocumentsPanel"')
+    bi_pos = source.index('id="cleideAuditBiSection"')
+    modal_pos = source.index('id="cleideAuditTempTableModal"')
+    assert docs_pos < bi_pos < modal_pos
+    assert 'id="cleideAuditBiDashboard"' in source
+    assert 'id="cleideAuditBiChartsGrid"' in source
+    assert "BI da Auditoria de Frete" in source
+    assert "Top Transportadoras" in source
+    assert "Custo por UF Destino" in source
+    assert "Evolução Diária" in source
+    assert "Custo por UF Origem" in source
+    assert "Volume por Transportadora" in source
+    assert "Ocorrências por UF Destino" in source
+    assert "Ocorrências por Transportadora" in source
+    assert 'data-audit-bi-chart-card="transportadora"' in source
+    assert 'data-audit-bi-chart-card="pareto_transportadora"' in source
+    assert "chart.js@4.4.1" in source
+
+
+def test_cleide_auditoria_js_bi_generate_button_and_section():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "Gerar Gráficos" in js
+    assert "showAuditBiSection" in js
+    assert "initAuditBiDashboard" in js
+    assert "auditBiRenderDashboard" in js
+    assert "cleide-audit-bi-generate-btn" in js
+    assert "auditBi.ready === true" in js
+    assert "auditBi.ready === false" in js
+    assert "audit_bi" in js
+    assert "auditBiFilteredRows" in js
+    assert "auditBiClearFilters" in js
+    assert "auditBiHideChart" in js
+    assert "auditBiShowChart" in js
+    assert "auditBiShowAllCharts" in js
+    assert "Campo indisponível no lote auditado atual." in js
+
+
+def test_cleide_auditoria_js_bi_seven_chart_cards_and_cross_filter():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    for chart_key in (
+        "transportadora",
+        "uf_destino",
+        "temporal",
+        "uf_origem",
+        "volume_transportadora",
+        "pareto_uf",
+        "pareto_transportadora",
+    ):
+        assert chart_key in js
+    assert "Top Transportadoras" in js
+    assert "auditBiHandleChartClick" in js
+    assert "auditBiApplyFilterToggle" in js
+    assert "auditBiBuildParetoRows" in js
+    assert "auditBiFilteredRows" in js
+    assert "applyBackendFilters" not in js
+
+
+def test_cleide_auditoria_js_bi_does_not_alter_chat_upload_modal():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "openTempTableModal" in js
+    assert "/api/cleide-auditoria/chat" in js
+    assert "/api/cleide-auditoria/documents/upload" in js
+    assert "renderTempTableModalContent" in js
+    bi_block = js[js.index("var AUDIT_BI_CHART_LABELS"): js.index("function renderTempTableItem")]
+    assert "openTempTableModal" not in bi_block
+    assert "renderTempTableModalContent" not in bi_block
+    assert "auditBiFilteredRows" in bi_block
+    assert "/api/cleide-auditoria/chat" not in bi_block
+
+
+def test_cleide_auditoria_js_bi_old_bi_not_touched():
+    old_js = pathlib.Path("app/static/js/cleide_auditoria_frete.js").read_text(encoding="utf-8")
+    assert "applyBackendFilters" in old_js
+    assert "initAuditBiDashboard" not in old_js
+
+
+def test_cleide_auditoria_template_bi_grid_has_hidden_layout_rule():
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    assert "cleide-audit-bi-charts-grid--has-hidden" in source
+    assert ".cleide-audit-bi-charts-grid--has-hidden .cleide-audit-bi-chart-card--wide" in source
+    assert "grid-column: auto" in source
+    assert 'id="cleideAuditBiChartsGrid"' in source
+
+
+def test_cleide_auditoria_js_bi_grid_hidden_state_toggle():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    hidden_block = js[js.index("function auditBiRenderHiddenChartsUi"): js.index("function auditBiHideChart")]
+    assert "cleideAuditBiChartsGrid" in hidden_block
+    assert "cleide-audit-bi-charts-grid--has-hidden" in hidden_block
+    assert "hiddenKeys.length > 0" in hidden_block
+    assert "auditBiShowAllCharts" in js
+    assert "auditBiResizeVisibleCharts" in js
+    assert "Gerar Gráficos" in js
+    assert "auditBiClearFilters" in js
+    assert "openTempTableModal" in js

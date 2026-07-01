@@ -1,4 +1,4 @@
-# Render + Cron em Homolog
+﻿# Render + Cron em Homolog
 
 Documento complementar ao `README.md` principal, focado apenas em cron/Render.
 
@@ -14,7 +14,7 @@ Consulte este arquivo somente para detalhes especificos de execucao automatica e
 - `APP_BASE_URL` configurado no Cron Job
 - persistencia valida
 - migrations existentes ja tratadas no ambiente alvo
-- estado homologado de referencia: `17675d0`
+- estado homologado de referencia: `28904e4`
 
 ## Comandos Render
 
@@ -55,6 +55,7 @@ curl -fsS -X POST "$APP_BASE_URL/cron/billing-snapshot" -H "X-Cron-Secret: $CRON
 
 - a operacao aprovada desta entrega considera `homolog` para validacao e `producao` para publicacao
 - o `render.yaml` versionado ainda mostra `branch: main` no servico de producao
+- o painel real do Render usa `producao` na producao com deploy manual e `autoDeploy: false`
 - confirmar no painel do Render qual branch esta efetivamente conectada antes de promover
 
 ## Referencia Principal

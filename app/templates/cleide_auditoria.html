@@ -238,6 +238,210 @@
 
       </div>
 
+      <section class="cleide-audit-bi-section"
+
+               id="cleideAuditBiSection"
+
+               aria-labelledby="cleideAuditBiTitle"
+
+               hidden>
+
+        <div class="cleide-audit-bi-header">
+
+          <h2 class="cleide-audit-bi-title" id="cleideAuditBiTitle">BI da Auditoria de Frete</h2>
+
+          <p class="cleide-audit-bi-subtitle small mb-0">
+
+            Gráficos operacionais da auditoria, com filtros cruzados sobre o lote auditado.
+
+          </p>
+
+        </div>
+
+        <div class="cleide-audit-bi-unavailable small" id="cleideAuditBiUnavailable" hidden></div>
+
+        <div class="cleide-audit-bi-dashboard" id="cleideAuditBiDashboard" hidden>
+
+          <div class="cleide-audit-bi-toolbar">
+
+            <div class="cleide-audit-bi-filter-status small" id="cleideAuditBiFilterStatus" aria-live="polite">
+
+              Filtros inativos. Exibindo visão geral do lote auditado.
+
+            </div>
+
+            <div class="cleide-audit-bi-filter-chips-wrap">
+
+              <span class="cleide-audit-bi-filter-label">Filtros ativos</span>
+
+              <div class="cleide-audit-bi-filter-chips" id="cleideAuditBiFilterChips"></div>
+
+              <button type="button" class="btn btn-sm cleide-audit-bi-clear-filters-btn" id="cleideAuditBiClearFiltersBtn">
+
+                Limpar filtros
+
+              </button>
+
+            </div>
+
+            <div class="cleide-audit-bi-hidden-charts-wrap" id="cleideAuditBiHiddenChartsWrap">
+
+              <span class="cleide-audit-bi-filter-label">Gráficos ocultos</span>
+
+              <div class="cleide-audit-bi-hidden-charts-list" id="cleideAuditBiHiddenChartsList"></div>
+
+              <button type="button" class="btn btn-sm cleide-audit-bi-show-all-btn" id="cleideAuditBiShowAllChartsBtn" disabled>
+
+                Reexibir todos
+
+              </button>
+
+            </div>
+
+          </div>
+
+          <p class="cleide-audit-bi-all-hidden-message small" id="cleideAuditBiAllHiddenMessage" hidden>
+
+            Todos os gráficos estão ocultos. Use os controles acima para restaurá-los.
+
+          </p>
+
+          <div class="cleide-audit-bi-charts-grid" id="cleideAuditBiChartsGrid">
+
+            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="transportadora">
+
+              <div class="cleide-audit-bi-chart-card-header">
+
+                <h3 class="cleide-audit-bi-chart-title">Top Transportadoras</h3>
+
+                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="transportadora">Ocultar</button>
+
+              </div>
+
+              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="transportadora"></div>
+
+              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="transportadora" hidden></div>
+
+              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="transportadora"></canvas></div>
+
+            </article>
+
+            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="uf_destino">
+
+              <div class="cleide-audit-bi-chart-card-header">
+
+                <h3 class="cleide-audit-bi-chart-title">Custo por UF Destino</h3>
+
+                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="uf_destino">Ocultar</button>
+
+              </div>
+
+              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="uf_destino"></div>
+
+              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="uf_destino" hidden></div>
+
+              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="uf_destino"></canvas></div>
+
+            </article>
+
+            <article class="cleide-audit-bi-chart-card cleide-audit-bi-chart-card--wide" data-audit-bi-chart-card="temporal">
+
+              <div class="cleide-audit-bi-chart-card-header">
+
+                <h3 class="cleide-audit-bi-chart-title">Evolução Diária</h3>
+
+                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="temporal">Ocultar</button>
+
+              </div>
+
+              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="temporal"></div>
+
+              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="temporal" hidden></div>
+
+              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="temporal"></canvas></div>
+
+            </article>
+
+            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="uf_origem">
+
+              <div class="cleide-audit-bi-chart-card-header">
+
+                <h3 class="cleide-audit-bi-chart-title">Custo por UF Origem</h3>
+
+                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="uf_origem">Ocultar</button>
+
+              </div>
+
+              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="uf_origem"></div>
+
+              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="uf_origem" hidden></div>
+
+              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="uf_origem"></canvas></div>
+
+            </article>
+
+            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="volume_transportadora">
+
+              <div class="cleide-audit-bi-chart-card-header">
+
+                <h3 class="cleide-audit-bi-chart-title">Volume por Transportadora</h3>
+
+                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="volume_transportadora">Ocultar</button>
+
+              </div>
+
+              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="volume_transportadora"></div>
+
+              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="volume_transportadora" hidden></div>
+
+              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="volume_transportadora"></canvas></div>
+
+            </article>
+
+            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="pareto_uf">
+
+              <div class="cleide-audit-bi-chart-card-header">
+
+                <h3 class="cleide-audit-bi-chart-title">Ocorrências por UF Destino</h3>
+
+                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="pareto_uf">Ocultar</button>
+
+              </div>
+
+              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="pareto_uf"></div>
+
+              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="pareto_uf" hidden></div>
+
+              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="pareto_uf"></canvas></div>
+
+            </article>
+
+            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="pareto_transportadora">
+
+              <div class="cleide-audit-bi-chart-card-header">
+
+                <h3 class="cleide-audit-bi-chart-title">Ocorrências por Transportadora</h3>
+
+                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="pareto_transportadora">Ocultar</button>
+
+              </div>
+
+              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="pareto_transportadora"></div>
+
+              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="pareto_transportadora" hidden></div>
+
+              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="pareto_transportadora"></canvas></div>
+
+            </article>
+
+          </div>
+
+        </div>
+
+        <div class="cleide-audit-bi-content" id="cleideAuditBiContent" aria-live="polite" hidden></div>
+
+      </section>
+
     </div>
 
   </div>
@@ -2143,7 +2347,232 @@
 
   }
 
+  .cleide-audit-bi-section {
+    margin-top: 1rem;
+    padding: 0.85rem 0.95rem;
+    border-radius: 0.65rem;
+    border: 1px solid rgba(0, 191, 255, 0.18);
+    background: rgba(0, 0, 0, 0.14);
+  }
+
+  .cleide-audit-bi-title {
+    font-size: 0.95rem;
+    margin: 0 0 0.25rem;
+    color: var(--af-cyan, #00BFFF);
+  }
+
+  .cleide-audit-bi-subtitle {
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .cleide-audit-bi-content {
+    margin-top: 0.75rem;
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.82rem;
+  }
+
+  .cleide-audit-bi-prep-lead {
+    margin-bottom: 0.65rem;
+  }
+
+  .cleide-audit-bi-block-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--af-cyan, #00BFFF);
+    margin: 0.65rem 0 0.35rem;
+  }
+
+  .cleide-audit-bi-field-list,
+  .cleide-audit-bi-chart-list {
+    margin: 0;
+    padding-left: 1.1rem;
+  }
+
+  .cleide-audit-bi-field-list li,
+  .cleide-audit-bi-chart-list li {
+    margin-bottom: 0.2rem;
+  }
+
+  .cleide-audit-temp-table-item-actions {
+    padding: 0.35rem 0.75rem 0.55rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+  }
+
+  .cleide-audit-bi-generate-btn {
+    border-color: rgba(0, 191, 255, 0.35);
+    color: var(--af-cyan, #00BFFF);
+    background: rgba(0, 191, 255, 0.08);
+  }
+
+  .cleide-audit-bi-generate-btn:hover {
+    background: rgba(0, 191, 255, 0.16);
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-bi-unavailable {
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .cleide-audit-bi-dashboard {
+    margin-top: 0.75rem;
+  }
+
+  .cleide-audit-bi-toolbar {
+    display: grid;
+    gap: 0.65rem;
+    margin-bottom: 0.85rem;
+  }
+
+  .cleide-audit-bi-filter-status {
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .cleide-audit-bi-filter-chips-wrap,
+  .cleide-audit-bi-hidden-charts-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+  }
+
+  .cleide-audit-bi-filter-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--af-cyan, #00BFFF);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .cleide-audit-bi-filter-chips,
+  .cleide-audit-bi-hidden-charts-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+  }
+
+  .cleide-audit-bi-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.18rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 191, 255, 0.28);
+    background: rgba(0, 191, 255, 0.08);
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.72rem;
+  }
+
+  .cleide-audit-bi-filter-chip button {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .cleide-audit-bi-clear-filters-btn,
+  .cleide-audit-bi-show-all-btn,
+  .cleide-audit-bi-hidden-chart-chip {
+    border-color: rgba(0, 191, 255, 0.28);
+    color: var(--af-cyan, #00BFFF);
+    background: rgba(0, 191, 255, 0.06);
+    font-size: 0.72rem;
+  }
+
+  .cleide-audit-bi-all-hidden-message {
+    color: var(--af-text-secondary, #A0A0B8);
+    margin-bottom: 0.65rem;
+  }
+
+  .cleide-audit-bi-charts-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .cleide-audit-bi-chart-card {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.55rem;
+    background: rgba(0, 0, 0, 0.18);
+    padding: 0.65rem 0.7rem 0.75rem;
+  }
+
+  .cleide-audit-bi-chart-card.is-hidden {
+    display: none;
+  }
+
+  .cleide-audit-bi-chart-card--wide {
+    grid-column: 1 / -1;
+  }
+
+  .cleide-audit-bi-charts-grid--has-hidden .cleide-audit-bi-chart-card--wide {
+    grid-column: auto;
+  }
+
+  .cleide-audit-bi-chart-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .cleide-audit-bi-chart-title {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-bi-hide-chart-btn {
+    border-color: rgba(255, 255, 255, 0.14);
+    color: var(--af-text-secondary, #A0A0B8);
+    background: transparent;
+    font-size: 0.68rem;
+  }
+
+  .cleide-audit-bi-chart-note {
+    font-size: 0.72rem;
+    color: var(--af-text-secondary, #A0A0B8);
+    margin-bottom: 0.35rem;
+  }
+
+  .cleide-audit-bi-chart-empty {
+    font-size: 0.74rem;
+    color: var(--af-text-secondary, #A0A0B8);
+    border: 1px dashed rgba(255, 255, 255, 0.12);
+    border-radius: 0.45rem;
+    padding: 0.65rem 0.75rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .cleide-audit-bi-chart-wrap {
+    position: relative;
+    height: 220px;
+  }
+
+  .cleide-audit-bi-chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  @media (max-width: 992px) {
+    .cleide-audit-bi-charts-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .cleide-audit-bi-chart-card--wide {
+      grid-column: auto;
+    }
+  }
+
 </style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
 <script src="{{ url_for('static', filename='js/cleide_auditoria.js') }}"></script>
 

@@ -1221,6 +1221,711 @@
     return 'Tabela temporária extraída para revisão.';
   }
 
+  var AUDIT_BI_CHART_LABELS = {
+    transportadora: 'Top Transportadoras',
+    uf_destino: 'Custo por UF Destino',
+    temporal: 'Evolução Diária',
+    uf_origem: 'Custo por UF Origem',
+    volume_transportadora: 'Volume por Transportadora',
+    pareto_uf: 'Ocorrências por UF Destino',
+    pareto_transportadora: 'Ocorrências por Transportadora'
+  };
+
+  var AUDIT_BI_CHART_KEYS = [
+    'transportadora',
+    'uf_destino',
+    'temporal',
+    'uf_origem',
+    'volume_transportadora',
+    'pareto_uf',
+    'pareto_transportadora'
+  ];
+
+  var AUDIT_BI_FIELD_REQUIREMENTS = {
+    transportadora: ['carrier'],
+    uf_destino: ['destination_uf'],
+    temporal: ['issue_date'],
+    uf_origem: ['origin_uf'],
+    volume_transportadora: ['carrier', 'audited_weight'],
+    pareto_uf: ['destination_uf'],
+    pareto_transportadora: ['carrier']
+  };
+
+  var AUDIT_BI_FIELD_UNAVAILABLE_MESSAGE = 'Campo indisponível no lote auditado atual.';
+  var AUDIT_BI_TOP_N = 10;
+
+  var auditBiDashboardState = {
+    initialized: false,
+    sourceRows: [],
+    fieldPresence: {},
+    rowCount: 0,
+    activeFilters: {
+      carrier: null,
+      origin_uf: null,
+      destination_uf: null,
+      issue_date: null
+    },
+    hiddenCharts: {},
+    chartInstances: {}
+  };
+
+  function auditBiSafeText(value) {
+    return String(value == null ? '' : value).trim();
+  }
+
+  function auditBiGetNumeric(value) {
+    var num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+  }
+
+  function auditBiNormalizeDate(value) {
+    var text = auditBiSafeText(value);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    var parsed = new Date(text);
+    if (isNaN(parsed.getTime())) return '';
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  function auditBiFormatNumber(value, fractionDigits) {
+    var digits = typeof fractionDigits === 'number' ? fractionDigits : 2;
+    return auditBiGetNumeric(value).toLocaleString('pt-BR', {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits
+    });
+  }
+
+  function auditBiFormatCurrency(value) {
+    return 'R$ ' + auditBiFormatNumber(value, 2);
+  }
+
+  function auditBiFormatPercent(value) {
+    return auditBiFormatNumber(value, 2) + '%';
+  }
+
+  function auditBiChartRequirementsMet(chartKey) {
+    var required = AUDIT_BI_FIELD_REQUIREMENTS[chartKey] || [];
+    return required.every(function (fieldKey) {
+      return auditBiDashboardState.fieldPresence[fieldKey] === true;
+    });
+  }
+
+  function auditBiFilteredRows() {
+    var rows = Array.isArray(auditBiDashboardState.sourceRows) ? auditBiDashboardState.sourceRows : [];
+    var filters = auditBiDashboardState.activeFilters;
+    return rows.filter(function (row) {
+      if (!row || typeof row !== 'object') return false;
+      if (filters.carrier && auditBiSafeText(row.carrier) !== filters.carrier) return false;
+      if (filters.origin_uf && auditBiSafeText(row.origin_uf) !== filters.origin_uf) return false;
+      if (filters.destination_uf && auditBiSafeText(row.destination_uf) !== filters.destination_uf) return false;
+      if (filters.issue_date && auditBiNormalizeDate(row.issue_date) !== filters.issue_date) return false;
+      return true;
+    });
+  }
+
+  function auditBiAggregateByField(rows, fieldName) {
+    var grouped = {};
+    rows.forEach(function (row) {
+      var key = auditBiSafeText(row[fieldName]);
+      if (!key) return;
+      if (!grouped[key]) {
+        grouped[key] = { chave: key, quantidade: 0, valor_total: 0, peso_total: 0 };
+      }
+      grouped[key].quantidade += 1;
+      grouped[key].valor_total += auditBiGetNumeric(row.charged_freight);
+      grouped[key].peso_total += auditBiGetNumeric(row.audited_weight);
+    });
+    return Object.keys(grouped).map(function (key) { return grouped[key]; });
+  }
+
+  function auditBiAggregateByDate(rows) {
+    var grouped = {};
+    rows.forEach(function (row) {
+      var key = auditBiNormalizeDate(row.issue_date);
+      if (!key) return;
+      if (!grouped[key]) {
+        grouped[key] = { data: key, quantidade: 0, valor_total: 0, peso_total: 0 };
+      }
+      grouped[key].quantidade += 1;
+      grouped[key].valor_total += auditBiGetNumeric(row.charged_freight);
+      grouped[key].peso_total += auditBiGetNumeric(row.audited_weight);
+    });
+    return Object.keys(grouped).sort().map(function (key) { return grouped[key]; });
+  }
+
+  function auditBiIsOccurrenceRow(row) {
+    var status = auditBiSafeText(row.status);
+    if (status && status !== 'ok') return true;
+    return auditBiGetNumeric(row.charged_freight) === 0;
+  }
+
+  function auditBiBuildParetoRows(rows, fieldName) {
+    var occurrenceRows = rows.filter(auditBiIsOccurrenceRow);
+    var grouped = auditBiAggregateByField(occurrenceRows, fieldName);
+    grouped.sort(function (a, b) { return b.quantidade - a.quantidade; });
+    var total = grouped.reduce(function (sum, row) { return sum + row.quantidade; }, 0);
+    var accumulated = 0;
+    return grouped.slice(0, AUDIT_BI_TOP_N).map(function (row) {
+      var percentual = total > 0 ? (row.quantidade / total) * 100 : 0;
+      accumulated += percentual;
+      return {
+        chave: row.chave,
+        quantidade: row.quantidade,
+        percentual: percentual,
+        percentual_acumulado: accumulated
+      };
+    });
+  }
+
+  function auditBiSortRows(rows, sortKey, order) {
+    var direction = order === 'asc' ? 1 : -1;
+    return rows.slice().sort(function (a, b) {
+      var av = a[sortKey];
+      var bv = b[sortKey];
+      if (sortKey === 'chave' || sortKey === 'data') {
+        var at = auditBiSafeText(av).toUpperCase();
+        var bt = auditBiSafeText(bv).toUpperCase();
+        if (at < bt) return -1 * direction;
+        if (at > bt) return 1 * direction;
+        return 0;
+      }
+      var an = auditBiGetNumeric(av);
+      var bn = auditBiGetNumeric(bv);
+      if (an === bn) return 0;
+      return (an - bn) * direction;
+    });
+  }
+
+  function auditBiTopRows(rows, sortKey, valueKey) {
+    return auditBiSortRows(rows, sortKey, 'desc').slice(0, AUDIT_BI_TOP_N).map(function (row) {
+      return {
+        label: auditBiSafeText(row.chave || row.data) || '-',
+        value: auditBiGetNumeric(row[valueKey])
+      };
+    });
+  }
+
+  function auditBiDestroyChart(chartKey) {
+    var instance = auditBiDashboardState.chartInstances[chartKey];
+    if (instance && typeof instance.destroy === 'function') {
+      instance.destroy();
+    }
+    delete auditBiDashboardState.chartInstances[chartKey];
+  }
+
+  function auditBiDestroyAllCharts() {
+    AUDIT_BI_CHART_KEYS.forEach(auditBiDestroyChart);
+  }
+
+  function auditBiEnsureChartJs() {
+    return typeof window.Chart === 'function';
+  }
+
+  function auditBiGetCanvas(chartKey) {
+    var section = byId('cleideAuditBiSection');
+    if (!section) return null;
+    return section.querySelector('[data-audit-bi-chart-canvas="' + chartKey + '"]');
+  }
+
+  function auditBiSetCardEmpty(chartKey, message, showCanvas) {
+    var section = byId('cleideAuditBiSection');
+    if (!section) return;
+    var emptyEl = section.querySelector('[data-audit-bi-chart-empty="' + chartKey + '"]');
+    var noteEl = section.querySelector('[data-audit-bi-chart-note="' + chartKey + '"]');
+    var wrapEl = emptyEl ? emptyEl.parentElement.querySelector('.cleide-audit-bi-chart-wrap') : null;
+    if (emptyEl) {
+      emptyEl.textContent = message || '';
+      emptyEl.hidden = !message;
+    }
+    if (noteEl) noteEl.textContent = '';
+    if (wrapEl) wrapEl.style.display = showCanvas ? '' : 'none';
+    if (!showCanvas) auditBiDestroyChart(chartKey);
+  }
+
+  function auditBiApplyFilterToggle(filterKey, value) {
+    if (!value) return;
+    auditBiDashboardState.activeFilters[filterKey] =
+      auditBiDashboardState.activeFilters[filterKey] === value ? null : value;
+    auditBiRenderDashboard();
+  }
+
+  function auditBiHandleChartClick(chartKey, label) {
+    var selected = auditBiSafeText(label);
+    if (!selected || selected === '-') return;
+    if (chartKey === 'transportadora' || chartKey === 'volume_transportadora' || chartKey === 'pareto_transportadora') {
+      auditBiApplyFilterToggle('carrier', selected);
+      return;
+    }
+    if (chartKey === 'uf_origem') {
+      auditBiApplyFilterToggle('origin_uf', selected);
+      return;
+    }
+    if (chartKey === 'uf_destino' || chartKey === 'pareto_uf') {
+      auditBiApplyFilterToggle('destination_uf', selected);
+      return;
+    }
+    if (chartKey === 'temporal') {
+      var day = auditBiNormalizeDate(selected);
+      if (!day) return;
+      auditBiApplyFilterToggle('issue_date', day);
+    }
+  }
+
+  function auditBiRenderSimpleChart(chartKey, labels, values, options) {
+    if (!auditBiEnsureChartJs()) {
+      auditBiSetCardEmpty(chartKey, 'Chart.js indisponível nesta página.', false);
+      return false;
+    }
+    var canvas = auditBiGetCanvas(chartKey);
+    if (!canvas) return false;
+    auditBiDestroyChart(chartKey);
+    var type = options.type || 'bar';
+    var indexAxis = options.indexAxis || 'x';
+    var datasetLabel = options.datasetLabel || 'Valor';
+    var valueFormatter = options.valueFormatter || auditBiFormatNumber;
+    var chartColor = options.chartColor || '#25b0ff';
+    var areaColor = options.areaColor || 'rgba(37, 176, 255, 0.20)';
+    var isHorizontal = indexAxis === 'y';
+    var instance = new window.Chart(canvas, {
+      type: type,
+      data: {
+        labels: labels,
+        datasets: [{
+          label: datasetLabel,
+          data: values,
+          borderColor: chartColor,
+          backgroundColor: areaColor,
+          fill: type === 'line',
+          borderWidth: 2,
+          tension: type === 'line' ? 0.24 : 0,
+          pointRadius: type === 'line' ? 2 : 0,
+          maxBarThickness: 28
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        indexAxis: indexAxis,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                var parsed = ctx.parsed || {};
+                var raw = isHorizontal ? parsed.x : parsed.y;
+                return datasetLabel + ': ' + valueFormatter(raw);
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(124, 148, 189, 0.14)' },
+            ticks: { color: '#c6d7f2' }
+          },
+          y: {
+            grid: { color: 'rgba(124, 148, 189, 0.14)' },
+            ticks: { color: '#c6d7f2' }
+          }
+        },
+        onClick: function (_event, elements) {
+          if (!elements || !elements.length) return;
+          auditBiHandleChartClick(chartKey, labels[elements[0].index]);
+        }
+      }
+    });
+    auditBiDashboardState.chartInstances[chartKey] = instance;
+    return true;
+  }
+
+  function auditBiRenderParetoChart(chartKey, rows) {
+    if (!auditBiEnsureChartJs()) {
+      auditBiSetCardEmpty(chartKey, 'Chart.js indisponível nesta página.', false);
+      return false;
+    }
+    var canvas = auditBiGetCanvas(chartKey);
+    if (!canvas) return false;
+    auditBiDestroyChart(chartKey);
+    var labels = rows.map(function (row) { return auditBiSafeText(row.chave) || '-'; });
+    var quantidade = rows.map(function (row) { return auditBiGetNumeric(row.quantidade); });
+    var acumulado = rows.map(function (row) { return auditBiGetNumeric(row.percentual_acumulado); });
+    var percentual = rows.map(function (row) { return auditBiGetNumeric(row.percentual); });
+    var instance = new window.Chart(canvas, {
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: 'bar',
+            label: 'Ocorrências',
+            data: quantidade,
+            yAxisID: 'y',
+            backgroundColor: 'rgba(37, 176, 255, 0.45)',
+            borderColor: '#25b0ff',
+            borderWidth: 1,
+            maxBarThickness: 28
+          },
+          {
+            type: 'line',
+            label: 'Pareto acumulado',
+            data: acumulado,
+            yAxisID: 'y1',
+            borderColor: '#f4b400',
+            backgroundColor: 'rgba(244, 180, 0, 0.2)',
+            fill: false,
+            borderWidth: 2,
+            tension: 0.24,
+            pointRadius: 2
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: { display: true, labels: { color: '#c6d7f2' } },
+          tooltip: {
+            callbacks: {
+              afterBody: function (items) {
+                var idx = items[0] ? items[0].dataIndex : 0;
+                return [
+                  'Percentual: ' + auditBiFormatPercent(percentual[idx] || 0),
+                  'Acumulado: ' + auditBiFormatPercent(acumulado[idx] || 0)
+                ];
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { color: 'rgba(124, 148, 189, 0.14)' }, ticks: { color: '#c6d7f2' } },
+          y: {
+            beginAtZero: true,
+            position: 'left',
+            grid: { color: 'rgba(124, 148, 189, 0.14)' },
+            ticks: { color: '#c6d7f2' }
+          },
+          y1: {
+            beginAtZero: true,
+            position: 'right',
+            min: 0,
+            max: 100,
+            grid: { drawOnChartArea: false },
+            ticks: { color: '#f4d27a', callback: function (v) { return auditBiFormatNumber(v, 0) + '%'; } }
+          }
+        },
+        onClick: function (_event, elements) {
+          if (!elements || !elements.length) return;
+          auditBiHandleChartClick(chartKey, labels[elements[0].index]);
+        }
+      }
+    });
+    auditBiDashboardState.chartInstances[chartKey] = instance;
+    return true;
+  }
+
+  function auditBiRenderFilterUi() {
+    var filters = auditBiDashboardState.activeFilters;
+    var activeEntries = [];
+    if (filters.carrier) activeEntries.push({ key: 'carrier', label: 'Transportadora', value: filters.carrier });
+    if (filters.origin_uf) activeEntries.push({ key: 'origin_uf', label: 'UF origem', value: filters.origin_uf });
+    if (filters.destination_uf) activeEntries.push({ key: 'destination_uf', label: 'UF destino', value: filters.destination_uf });
+    if (filters.issue_date) activeEntries.push({ key: 'issue_date', label: 'Data', value: filters.issue_date });
+
+    var statusEl = byId('cleideAuditBiFilterStatus');
+    if (statusEl) {
+      statusEl.textContent = activeEntries.length
+        ? 'Filtros ativos: ' + activeEntries.map(function (entry) { return entry.label + '=' + entry.value; }).join(' | ')
+        : 'Filtros inativos. Exibindo visão geral do lote auditado.';
+    }
+
+    var chipsEl = byId('cleideAuditBiFilterChips');
+    if (chipsEl) {
+      chipsEl.innerHTML = '';
+      if (!activeEntries.length) {
+        chipsEl.innerHTML = '<span class="small">nenhum</span>';
+      } else {
+        activeEntries.forEach(function (entry) {
+          var chip = document.createElement('span');
+          chip.className = 'cleide-audit-bi-filter-chip';
+          chip.innerHTML = entry.label + ': ' + entry.value +
+            ' <button type="button" data-audit-bi-remove-filter="' + entry.key + '" aria-label="Remover filtro ' + entry.label + '">×</button>';
+          chipsEl.appendChild(chip);
+        });
+      }
+    }
+
+    var clearBtn = byId('cleideAuditBiClearFiltersBtn');
+    if (clearBtn) clearBtn.disabled = activeEntries.length === 0;
+  }
+
+  function auditBiResizeVisibleCharts() {
+    window.requestAnimationFrame(function () {
+      AUDIT_BI_CHART_KEYS.forEach(function (chartKey) {
+        if (auditBiDashboardState.hiddenCharts[chartKey]) return;
+        var instance = auditBiDashboardState.chartInstances[chartKey];
+        if (instance && typeof instance.resize === 'function') {
+          instance.resize();
+        }
+      });
+    });
+  }
+
+  function auditBiRenderHiddenChartsUi() {
+    var hiddenKeys = AUDIT_BI_CHART_KEYS.filter(function (chartKey) {
+      return auditBiDashboardState.hiddenCharts[chartKey] === true;
+    });
+    var listEl = byId('cleideAuditBiHiddenChartsList');
+    var showAllBtn = byId('cleideAuditBiShowAllChartsBtn');
+    var allHiddenMessage = byId('cleideAuditBiAllHiddenMessage');
+    var gridEl = byId('cleideAuditBiChartsGrid');
+    if (gridEl) {
+      gridEl.classList.toggle('cleide-audit-bi-charts-grid--has-hidden', hiddenKeys.length > 0);
+    }
+    if (listEl) {
+      listEl.innerHTML = '';
+      if (!hiddenKeys.length) {
+        listEl.innerHTML = '<span class="small">Nenhum gráfico oculto</span>';
+      } else {
+        hiddenKeys.forEach(function (chartKey) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-sm cleide-audit-bi-hidden-chart-chip';
+          btn.setAttribute('data-audit-bi-show-chart', chartKey);
+          btn.textContent = 'Mostrar ' + (AUDIT_BI_CHART_LABELS[chartKey] || chartKey);
+          listEl.appendChild(btn);
+        });
+      }
+    }
+    if (showAllBtn) showAllBtn.disabled = hiddenKeys.length === 0;
+    if (allHiddenMessage) allHiddenMessage.hidden = hiddenKeys.length !== AUDIT_BI_CHART_KEYS.length;
+    AUDIT_BI_CHART_KEYS.forEach(function (chartKey) {
+      var card = document.querySelector('[data-audit-bi-chart-card="' + chartKey + '"]');
+      if (card) card.classList.toggle('is-hidden', auditBiDashboardState.hiddenCharts[chartKey] === true);
+    });
+    auditBiResizeVisibleCharts();
+  }
+
+  function auditBiHideChart(chartKey) {
+    if (AUDIT_BI_CHART_KEYS.indexOf(chartKey) === -1) return;
+    auditBiDashboardState.hiddenCharts[chartKey] = true;
+    auditBiRenderHiddenChartsUi();
+  }
+
+  function auditBiShowChart(chartKey) {
+    if (AUDIT_BI_CHART_KEYS.indexOf(chartKey) === -1) return;
+    delete auditBiDashboardState.hiddenCharts[chartKey];
+    auditBiRenderHiddenChartsUi();
+    auditBiRenderChartCard(chartKey, auditBiFilteredRows());
+  }
+
+  function auditBiShowAllCharts() {
+    auditBiDashboardState.hiddenCharts = {};
+    auditBiRenderHiddenChartsUi();
+    auditBiRenderDashboard();
+  }
+
+  function auditBiClearFilters() {
+    auditBiDashboardState.activeFilters = {
+      carrier: null,
+      origin_uf: null,
+      destination_uf: null,
+      issue_date: null
+    };
+    auditBiRenderDashboard();
+  }
+
+  function auditBiRenderChartCard(chartKey, filteredRows) {
+    if (auditBiDashboardState.hiddenCharts[chartKey]) return;
+    if (!auditBiChartRequirementsMet(chartKey)) {
+      auditBiSetCardEmpty(chartKey, AUDIT_BI_FIELD_UNAVAILABLE_MESSAGE, false);
+      return;
+    }
+    var noteEl = document.querySelector('[data-audit-bi-chart-note="' + chartKey + '"]');
+    var wrapEl = document.querySelector('[data-audit-bi-chart-card="' + chartKey + '"] .cleide-audit-bi-chart-wrap');
+    if (wrapEl) wrapEl.style.display = '';
+    var emptyMessage = filteredRows.length ? 'Sem dados para os filtros atuais.' : 'Sem dados no lote auditado atual.';
+    if (chartKey === 'transportadora') {
+      var carrierRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'carrier'), 'valor_total', 'valor_total');
+      if (!carrierRows.length) {
+        auditBiSetCardEmpty(chartKey, emptyMessage, false);
+        return;
+      }
+      auditBiSetCardEmpty(chartKey, '', true);
+      if (noteEl) noteEl.textContent = 'Top ' + carrierRows.length + ' transportadoras por frete cobrado.';
+      auditBiRenderSimpleChart(chartKey, carrierRows.map(function (row) { return row.label; }), carrierRows.map(function (row) { return row.value; }), {
+        type: 'bar',
+        indexAxis: 'y',
+        datasetLabel: 'Frete cobrado',
+        valueFormatter: auditBiFormatCurrency
+      });
+      return;
+    }
+    if (chartKey === 'uf_destino') {
+      var ufDestRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'destination_uf'), 'valor_total', 'valor_total');
+      if (!ufDestRows.length) {
+        auditBiSetCardEmpty(chartKey, emptyMessage, false);
+        return;
+      }
+      auditBiSetCardEmpty(chartKey, '', true);
+      if (noteEl) noteEl.textContent = 'Custo agregado por UF destino.';
+      auditBiRenderSimpleChart(chartKey, ufDestRows.map(function (row) { return row.label; }), ufDestRows.map(function (row) { return row.value; }), {
+        datasetLabel: 'Frete cobrado',
+        valueFormatter: auditBiFormatCurrency
+      });
+      return;
+    }
+    if (chartKey === 'temporal') {
+      var temporalRows = auditBiTopRows(auditBiAggregateByDate(filteredRows), 'valor_total', 'valor_total');
+      if (!temporalRows.length) {
+        auditBiSetCardEmpty(chartKey, emptyMessage, false);
+        return;
+      }
+      auditBiSetCardEmpty(chartKey, '', true);
+      if (noteEl) noteEl.textContent = 'Evolução diária do frete cobrado.';
+      auditBiRenderSimpleChart(chartKey, temporalRows.map(function (row) { return row.label; }), temporalRows.map(function (row) { return row.value; }), {
+        type: 'line',
+        datasetLabel: 'Frete cobrado',
+        valueFormatter: auditBiFormatCurrency,
+        chartColor: '#7cc4ff',
+        areaColor: 'rgba(124, 196, 255, 0.18)'
+      });
+      return;
+    }
+    if (chartKey === 'uf_origem') {
+      var ufOrigRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'origin_uf'), 'valor_total', 'valor_total');
+      if (!ufOrigRows.length) {
+        auditBiSetCardEmpty(chartKey, emptyMessage, false);
+        return;
+      }
+      auditBiSetCardEmpty(chartKey, '', true);
+      if (noteEl) noteEl.textContent = 'Custo agregado por UF origem.';
+      auditBiRenderSimpleChart(chartKey, ufOrigRows.map(function (row) { return row.label; }), ufOrigRows.map(function (row) { return row.value; }), {
+        type: 'bar',
+        indexAxis: 'y',
+        datasetLabel: 'Frete cobrado',
+        valueFormatter: auditBiFormatCurrency
+      });
+      return;
+    }
+    if (chartKey === 'volume_transportadora') {
+      var volumeRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'carrier'), 'peso_total', 'peso_total');
+      if (!volumeRows.length) {
+        auditBiSetCardEmpty(chartKey, emptyMessage, false);
+        return;
+      }
+      auditBiSetCardEmpty(chartKey, '', true);
+      if (noteEl) noteEl.textContent = 'Volume auditado por transportadora.';
+      auditBiRenderSimpleChart(chartKey, volumeRows.map(function (row) { return row.label; }), volumeRows.map(function (row) { return row.value; }), {
+        type: 'bar',
+        indexAxis: 'y',
+        datasetLabel: 'Peso auditado',
+        valueFormatter: function (value) { return auditBiFormatNumber(value, 2) + ' kg'; },
+        chartColor: '#6fd3a4',
+        areaColor: 'rgba(111, 211, 164, 0.22)'
+      });
+      return;
+    }
+    if (chartKey === 'pareto_uf') {
+      var paretoUfRows = auditBiBuildParetoRows(filteredRows, 'destination_uf');
+      if (!paretoUfRows.length) {
+        auditBiSetCardEmpty(chartKey, 'Sem ocorrências auditáveis para UF destino.', false);
+        return;
+      }
+      auditBiSetCardEmpty(chartKey, '', true);
+      if (noteEl) noteEl.textContent = 'Ocorrências auditáveis por UF destino.';
+      auditBiRenderParetoChart(chartKey, paretoUfRows);
+      return;
+    }
+    if (chartKey === 'pareto_transportadora') {
+      var paretoCarrierRows = auditBiBuildParetoRows(filteredRows, 'carrier');
+      if (!paretoCarrierRows.length) {
+        auditBiSetCardEmpty(chartKey, 'Sem ocorrências auditáveis por transportadora.', false);
+        return;
+      }
+      auditBiSetCardEmpty(chartKey, '', true);
+      if (noteEl) noteEl.textContent = 'Ocorrências auditáveis por transportadora.';
+      auditBiRenderParetoChart(chartKey, paretoCarrierRows);
+    }
+  }
+
+  function auditBiRenderDashboard() {
+    var filteredRows = auditBiFilteredRows();
+    auditBiRenderFilterUi();
+    auditBiRenderHiddenChartsUi();
+    AUDIT_BI_CHART_KEYS.forEach(function (chartKey) {
+      auditBiRenderChartCard(chartKey, filteredRows);
+    });
+  }
+
+  function auditBiBindDashboardEvents() {
+    if (auditBiDashboardState.initialized) return;
+    var section = byId('cleideAuditBiSection');
+    if (!section) return;
+    section.addEventListener('click', function (event) {
+      var target = event.target;
+      if (!target || !target.closest) return;
+      var hideBtn = target.closest('[data-audit-bi-hide-chart]');
+      if (hideBtn) {
+        auditBiHideChart(hideBtn.getAttribute('data-audit-bi-hide-chart'));
+        return;
+      }
+      var showBtn = target.closest('[data-audit-bi-show-chart]');
+      if (showBtn) {
+        auditBiShowChart(showBtn.getAttribute('data-audit-bi-show-chart'));
+        return;
+      }
+      var removeFilterBtn = target.closest('[data-audit-bi-remove-filter]');
+      if (removeFilterBtn) {
+        var filterKey = removeFilterBtn.getAttribute('data-audit-bi-remove-filter');
+        if (filterKey && Object.prototype.hasOwnProperty.call(auditBiDashboardState.activeFilters, filterKey)) {
+          auditBiDashboardState.activeFilters[filterKey] = null;
+          auditBiRenderDashboard();
+        }
+        return;
+      }
+      if (target.id === 'cleideAuditBiClearFiltersBtn' || target.closest('#cleideAuditBiClearFiltersBtn')) {
+        auditBiClearFilters();
+        return;
+      }
+      if (target.id === 'cleideAuditBiShowAllChartsBtn' || target.closest('#cleideAuditBiShowAllChartsBtn')) {
+        auditBiShowAllCharts();
+      }
+    });
+    auditBiDashboardState.initialized = true;
+  }
+
+  function initAuditBiDashboard(auditBi) {
+    auditBiBindDashboardEvents();
+    var unavailableEl = byId('cleideAuditBiUnavailable');
+    var dashboardEl = byId('cleideAuditBiDashboard');
+    var legacyContentEl = byId('cleideAuditBiContent');
+    if (!auditBi || auditBi.ready !== true || !Array.isArray(auditBi.rows) || !auditBi.rows.length) {
+      auditBiDestroyAllCharts();
+      if (dashboardEl) dashboardEl.hidden = true;
+      if (legacyContentEl) legacyContentEl.hidden = true;
+      if (unavailableEl) {
+        unavailableEl.hidden = false;
+        unavailableEl.textContent = (auditBi && auditBi.message) || 'Gráficos indisponíveis até o envio do arquivo auditado.';
+      }
+      return;
+    }
+    if (unavailableEl) unavailableEl.hidden = true;
+    if (legacyContentEl) legacyContentEl.hidden = true;
+    if (dashboardEl) dashboardEl.hidden = false;
+    auditBiDashboardState.sourceRows = auditBi.rows.slice();
+    auditBiDashboardState.fieldPresence = auditBi.field_presence || {};
+    auditBiDashboardState.rowCount = Number(auditBi.row_count) || auditBi.rows.length;
+    auditBiRenderDashboard();
+  }
+
+  function showAuditBiSection(auditBi) {
+    var section = byId('cleideAuditBiSection');
+    if (!section) return;
+    initAuditBiDashboard(auditBi);
+    section.hidden = false;
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   function renderTempTableItem(tempTable) {
     var li = document.createElement('li');
     li.className = 'cleide-audit-doc-item cleide-audit-temp-table-item';
@@ -1259,6 +1964,32 @@
     openBtn.appendChild(meta);
     openBtn.appendChild(badge);
     li.appendChild(openBtn);
+
+    var auditBi = tempTable.audit_bi || null;
+    if (auditBi) {
+      var actions = document.createElement('div');
+      actions.className = 'cleide-audit-temp-table-item-actions';
+      if (auditBi.ready === true && Number(auditBi.row_count) > 0) {
+        var chartBtn = document.createElement('button');
+        chartBtn.type = 'button';
+        chartBtn.className = 'btn btn-sm cleide-audit-bi-generate-btn';
+        chartBtn.textContent = 'Gerar Gráficos';
+        chartBtn.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          showAuditBiSection(auditBi);
+        });
+        actions.appendChild(chartBtn);
+      } else if (auditBi.ready === false) {
+        var unavailable = document.createElement('span');
+        unavailable.className = 'cleide-audit-bi-unavailable small';
+        unavailable.textContent = auditBi.message || 'Gráficos indisponíveis até o envio do arquivo auditado.';
+        actions.appendChild(unavailable);
+      }
+      if (actions.childNodes.length > 0) {
+        li.appendChild(actions);
+      }
+    }
     return li;
   }
 
@@ -2565,7 +3296,7 @@ function renderDocumentItem(doc) {
       var icon = document.createElement('span');
       icon.className = 'accessorial-field-error-icon';
       icon.setAttribute('aria-hidden', 'true');
-      icon.textContent = '⚠';
+      icon.textContent = 'âš ';
       td.appendChild(icon);
       var hint = document.createElement('div');
       hint.className = 'accessorial-field-error';
@@ -2660,7 +3391,7 @@ function renderDocumentItem(doc) {
       var icon = document.createElement('span');
       icon.className = 'accessorial-field-error-icon';
       icon.setAttribute('aria-hidden', 'true');
-      icon.textContent = '⚠';
+      icon.textContent = 'âš ';
       td.appendChild(icon);
       var hint = document.createElement('div');
       hint.className = 'accessorial-field-error';
@@ -3024,18 +3755,23 @@ function renderDocumentItem(doc) {
           );
           return;
         }
-        if (res.data.temp_table) {
-          currentTempTable = res.data.temp_table;
-        }
-        if (hasAuditBatch(currentTempTable)) {
-          auditFileStepActive = true;
-          tempTableModalActiveTab = 'audit';
-          setAuditUploadStatus('Arquivo recebido para auditoria.', 'success');
-          renderTempTableModalContent(currentTempTable);
-          updateTempTableModalFooter();
-        } else {
-          setAuditUploadStatus('Não foi possível registrar o arquivo auditado.', 'error');
-        }
+        return fetchDocuments().then(function (statusData) {
+          if (statusData) return statusData;
+          if (res.data.temp_table) {
+            currentTempTable = res.data.temp_table;
+          }
+          return res.data;
+        }).then(function () {
+          if (hasAuditBatch(currentTempTable)) {
+            auditFileStepActive = true;
+            tempTableModalActiveTab = 'audit';
+            setAuditUploadStatus('Arquivo recebido para auditoria.', 'success');
+            renderTempTableModalContent(currentTempTable);
+            updateTempTableModalFooter();
+          } else {
+            setAuditUploadStatus('Não foi possível registrar o arquivo auditado.', 'error');
+          }
+        });
       })
       .catch(function () {
         setAuditUploadStatus('Não foi possível enviar o arquivo. Verifique sua conexão e tente novamente.', 'error');

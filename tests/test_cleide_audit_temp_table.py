@@ -7044,3 +7044,151 @@ def test_clear_documents_removes_audit_batch(web_client):
     assert clear_resp.status_code == 200
     status_after = web_client.get("/api/cleide-auditoria/documents/status").get_json()
     assert status_after.get("temp_table") is None
+
+
+AUDIT_BI_ALLOWED_ROW_FIELDS = frozenset(audit_doc_service.AUDIT_BI_PUBLIC_ROW_FIELDS)
+
+
+def _collect_object_keys(value) -> set[str]:
+    keys: set[str] = set()
+    if isinstance(value, dict):
+        keys.update(value.keys())
+        for nested in value.values():
+            keys.update(_collect_object_keys(nested))
+    elif isinstance(value, list):
+        for item in value:
+            keys.update(_collect_object_keys(item))
+    return keys
+
+
+def test_temp_table_status_exposes_audit_bi_not_ready_without_audit_batch(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    audit_bi = audit_doc_service._public_temp_table(saved)["audit_bi"]
+    assert audit_bi["dataset_version"] == audit_doc_service.AUDIT_BI_DATASET_VERSION
+    assert audit_bi["source"] == "audit_batch"
+    assert audit_bi["ready"] is False
+    assert audit_bi["row_count"] == 0
+    assert audit_bi["rows"] == []
+    assert audit_bi["message"]
+    assert audit_bi["field_presence"]["carrier"] is False
+
+
+def test_status_keeps_audit_bi_ready_after_audit_upload_without_results(web_client, monkeypatch):
+    payload = _sample_hengst_freight_tables_payload()
+    _fake_extraction_generate(monkeypatch, text=json.dumps(payload))
+    upload_doc = _upload(
+        web_client,
+        "tabela.csv",
+        make_csv([["origem", "destino", "valor"], ["SP", "RJ", "120.00"]]),
+        "text/csv",
+    )
+    assert upload_doc.status_code == 200
+
+    upload_resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert upload_resp.status_code == 200
+
+    status = web_client.get("/api/cleide-auditoria/documents/status").get_json()
+    temp_table = status["temp_table"]
+    audit_bi = temp_table["audit_bi"]
+    audit_batch = temp_table["audit_batch"]
+
+    assert audit_bi["ready"] is True
+    assert audit_bi["row_count"] == 1
+    assert len(audit_bi["rows"]) == 1
+    assert audit_bi.get("message") is None
+    assert audit_batch["row_count"] == 1
+    assert audit_batch["results"] == []
+
+def test_audit_bi_ready_true_after_audit_upload(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert resp.status_code == 200
+    audit_bi = resp.get_json()["temp_table"]["audit_bi"]
+    assert audit_bi["ready"] is True
+    assert audit_bi["row_count"] == 1
+    assert len(audit_bi["rows"]) == 1
+    assert audit_bi["rows"][0]["carrier"] == "Transportadora X"
+    assert audit_bi["rows"][0]["destination_uf"] == "SP"
+    assert audit_bi["rows"][0]["audited_weight"] == 48.0
+    assert audit_bi["rows"][0]["charged_freight"] == 100.5
+
+
+def test_audit_bi_rows_contain_only_sanitized_fields(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    audit_bi = resp.get_json()["temp_table"]["audit_bi"]
+    for row in audit_bi["rows"]:
+        assert set(row.keys()) <= AUDIT_BI_ALLOWED_ROW_FIELDS
+
+
+def test_audit_bi_forbidden_fields_not_exposed(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    upload_resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    assert upload_resp.status_code == 200
+    run_resp = _post_audit_run(web_client)
+    assert run_resp.status_code == 200
+    exposed_keys = _collect_object_keys(run_resp.get_json()["temp_table"]["audit_bi"])
+    forbidden = audit_doc_service.AUDIT_BI_FORBIDDEN_PUBLIC_FIELDS
+    assert not (exposed_keys & forbidden)
+
+
+def test_audit_bi_field_presence_reflects_available_data(web_client):
+    _apply_payload(web_client, _sample_hengst_freight_tables_payload())
+    resp = _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    presence = resp.get_json()["temp_table"]["audit_bi"]["field_presence"]
+    assert presence["carrier"] is True
+    assert presence["destination_uf"] is True
+    assert presence["audited_weight"] is True
+    assert presence["charged_freight"] is True
+    assert presence["expected_freight"] is False
+    assert presence["status"] is False
+
+
+def test_audit_bi_enriched_from_results_after_audit_run(web_client):
+    saved = _apply_payload(web_client, _sample_pricing_payload())
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Campinas", "SP-Interior 1"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(_sample_audit_row(valor_frete="100.50", peso="48")),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    assert resp.status_code == 200
+    audit_bi = resp.get_json()["temp_table"]["audit_bi"]
+    row = audit_bi["rows"][0]
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["status"] == "ok"
+    assert row["expected_freight"] == result["expected_freight"]
+    assert row["divergence_value"] == result["divergence_value"]
+    assert row["status"] == result["status"]
+    assert audit_bi["field_presence"]["expected_freight"] is True
+    assert audit_bi["field_presence"]["divergence_value"] is True
+    assert audit_bi["field_presence"]["status"] is True
+    assert saved["temp_table_id"] == resp.get_json()["temp_table"]["temp_table_id"]

@@ -1,11 +1,11 @@
-# Runtime IA e Observabilidade
+﻿# Runtime IA e Observabilidade
 
-Data de consolidacao: `2026-06-19`
-Commit de referencia: `bad8990`
+Data de consolidacao: `2026-06-30`
+Commit de referencia: `homolog@28904e4` e `producao@0afe528`
 
 ## Objetivo
 
-Consolidar o runtime oficial de IA, consumo tecnico e governanca documental no estado homologado em `17675d0` e promovido em producao por `bad8990`.
+Consolidar o runtime oficial de IA, consumo tecnico e governanca documental no estado homologado em `28904e4` e promovido em producao por `0afe528`.
 
 ## Eventos oficiais
 
@@ -79,6 +79,7 @@ Pontos observaveis:
 - upload/status documental podem expor `temp_table` quando houver artefato ativo
 - a extracao da tabela temporaria ocorre no fluxo pos-upload/status
 - a revisao humana governada pode salvar alteracoes da `temp_table` via endpoint dedicado
+- o runtime tambem observa coverage complementar e lote auditado no mesmo trilho autenticado
 - o chat da Cleide consome contexto, mas nao deve alterar o ciclo de vida da `temp_table`
 - a tabela temporaria continua descartavel, sujeita a TTL e a validacao humana
 - a visualizacao da `temp_table` na UI e readonly e nao representa persistencia de banco
@@ -111,4 +112,4 @@ Campos principais:
 - `prompt_max_files_considered`
 - limites por tipo para `pdf`, `excel`, `docx`, `txt`, `xml`, `csv`
 
-Nao houve migration nova, tabela nova, campo novo, alteracao manual de schema ou `.db` versionado para essa configuracao ou para a estabilizacao da auditoria Cleide.
+Nao houve migration nova, tabela nova, campo novo, alteracao manual de schema ou `.db` versionado para essa configuracao ou para os ajustes finais da auditoria de frete da Cleide.

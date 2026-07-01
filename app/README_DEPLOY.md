@@ -1,7 +1,7 @@
-# Deploy e Promocao
+﻿# Deploy e Promocao
 
-Data de consolidacao: `2026-06-19`
-Commit de referencia em producao: `bad8990`
+Data de consolidacao: `2026-06-30`
+Commit de referencia em producao: `0afe528`
 
 ## Ambientes
 
@@ -21,16 +21,17 @@ Variaveis contratuais:
 
 Entrega validada e promovida:
 
-- `17675d0 feat: estabiliza auditoria documental da Cleide`
-- `bad8990 merge: promove auditoria documental da Cleide para producao`
+- `faae3b0 fix: estabiliza auditoria de frete da Cleide`
+- `7cc884e fix: ajusta regra contextual de frete da Cleide`
+- `28904e4 fix: refina resolucao contextual de rotas da Cleide`
 
 Confirmacoes operacionais:
 
-- `homolog -> 17675d0`
-- `producao -> bad8990`
+- `homolog -> 28904e4`
+- `producao -> 0afe528`
 - homologacao validada antes da promocao
 - producao aprovada apos o deploy
-- apos o push, `origin/producao` ficou em `bad8990`
+- apos o push, `origin/producao` ficou em `0afe528`
 - o ambiente local retornou para `homolog`, limpo e sincronizado
 - working tree limpo antes e depois dos pushes
 
@@ -79,8 +80,8 @@ Nao promover homolog -> producao sem:
 - validacao da revisao humana da tabela temporaria quando aplicavel
 - confirmacao de que a tabela temporaria continua separada do chat
 - execucao dos testes especificos:
-  `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py`
-- confirmacao do resultado aprovado: `341 passed, 2 warnings`
+  `pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_routes.py`
+- confirmacao do resultado aprovado: `572 passed, 2 warnings` em aproximadamente `220.39s`
 - validacao da observabilidade
 - validacao de Roberto e Cleide
 - confirmacao de que nenhum temporario foi versionado
@@ -90,6 +91,7 @@ Nao promover homolog -> producao sem:
 
 - a documentacao operacional desta entrega usa `producao` como branch oficial de publicacao
 - o `render.yaml` versionado ainda referencia `branch: main` no servico `logcompleta-web-prod`
+- o painel real do Render usa `producao` como branch ativa de producao, com deploy manual e `autoDeploy: false`
 - nao forcar alteracao de codigo so para alinhar esse ponto; confirmar a configuracao real do painel Render antes de uma nova promocao
 
 Temporarios que nao podem entrar em commit:

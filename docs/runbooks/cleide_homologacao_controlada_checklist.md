@@ -1,4 +1,4 @@
-# Cleide - Homologacao Operacional Controlada
+﻿# Cleide - Homologacao Operacional Controlada
 
 Este documento e um runbook historico/de validacao controlada da entrega aprovada. Nao deve ser interpretado como descricao de um fluxo de produto paralelo nem como fonte primaria da arquitetura ativa.
 
@@ -6,9 +6,9 @@ Objetivo: validar comportamento real ponta-a-ponta antes da promocao definitiva,
 
 Estado desta entrega:
 
-- homolog aprovada no commit `17675d0`
-- producao aprovada apos merge `bad8990`
-- apos o push, `origin/producao` ficou em `bad8990`
+- homolog aprovada no commit `28904e4`
+- producao aprovada no commit `0afe528`
+- apos o push, `origin/producao` ficou em `0afe528`
 - o ambiente local voltou para `homolog`, limpo e sincronizado
 - sem migration nova
 - sem nova tabela de banco
@@ -29,8 +29,8 @@ Estado desta entrega:
 
 Validacoes registradas antes da promocao:
 
-- `python -m pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py`
-- resultado: `341 passed, 2 warnings`
+- `pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_routes.py`
+- resultado: `572 passed, 2 warnings` em aproximadamente `220.39s`
 
 Cobertura automatizada ja existente no projeto:
 
