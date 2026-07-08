@@ -511,7 +511,13 @@ def test_cleide_auditoria_js_bloqueia_avanco_com_base_nao_mapeada():
     assert "afterDot.length <= 4" in js
     assert "missing_minimum_base_link" in js
     assert "invalid_minimum_base_link" in js
-    assert "Vincule este mínimo à taxa principal correspondente ou exclua a linha." in js
+    assert "Esta regra mínima não possui uma taxa principal válida vinculada. Corrija ou exclua a regra antes de continuar." in js
+    assert "function accessorialRateConflictError" in js
+    assert "reason_code: 'accessorial_rate_conflict'" in js
+    assert "Valor informado no campo:" in js
+    assert "Valor descrito na observação:" in js
+    assert "O sistema não pode decidir qual percentual utilizar." in js
+    assert "related_fields: ['value', 'notes']" in js
     assert "multiply_by_variable" in js
 
 
@@ -527,6 +533,8 @@ def test_cleide_auditoria_js_destaca_base_calculo_invalida():
     assert "data-field', 'calculation_base_id'" in js
     assert "field: 'value'" in js
     assert "field: 'unit'" in js
+    assert "field: 'notes'" in js
+    assert "error.related_fields.indexOf(field)" in js
     assert "accessorial-field-error" in js
     assert "accessorial-field-error-icon" in js
     assert "âš " in js
@@ -641,7 +649,7 @@ def test_cleide_auditoria_js_audit_upload_refreshes_documents_for_bi_button():
     assert "return fetchDocuments().then(function (statusData) {" in upload_block
     assert "if (statusData) return statusData;" in upload_block
     assert "if (res.data.temp_table) {" in upload_block
-    assert "currentTempTable = res.data.temp_table;" in upload_block
+    assert "setCurrentTempTable(res.data.temp_table)" in upload_block
     assert "setAuditUploadStatus('Arquivo recebido para auditoria.', 'success');" in upload_block
 
 
@@ -670,12 +678,86 @@ def test_cleide_auditoria_js_audit_run_summary_and_results():
     assert "Sem mapeamento" in summary_block
     assert "Sem regra" in summary_block
     assert "Inválidas" in summary_block
+    assert "function renderAuditDiagnostics" in summary_block
+    assert "Diagnóstico da auditoria" in summary_block
+    assert "Dimensão tarifária incompatível" in summary_block
+    assert "Nenhuma correção automática será aplicada nesta fase." in summary_block
+    assert "Corrigir tabela cadastrada" in summary_block
+    assert "openAuditCorrectionExplanation" in summary_block
+    assert "fetch(" not in summary_block
     results_block = js[js.index("function renderAuditRunResults"): js.index("function runAuditProcessing")]
     assert "Resultados por linha" in results_block
     assert "cleide-audit-run-results-table" in results_block
     assert "Esperado" in results_block
     assert "Diferença" in results_block
+    assert "Ações" in results_block
+    assert "appendAuditRowActionCell" in results_block
     assert "appendExpectedFreightCell" in results_block
+
+
+def test_cleide_auditoria_js_audit_diagnostics_actions_are_local():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    diagnostics_gate_block = js[js.index("function auditDiagnosticsHasErrors"): js.index("function auditCorrectionSuggestionForGroup")]
+    scroll_block = js[js.index("function scrollToAuditDiagnostics"): js.index("function renderAuditGlobalErrorButton")]
+    global_block = js[js.index("function renderAuditGlobalErrorButton"): js.index("function renderLegacyAuditDiagnosticsNotice")]
+    assert "diagnostics.has_errors === true" in diagnostics_gate_block
+    assert "Number(diagnostics.total_errors || 0) > 0" in diagnostics_gate_block
+    assert "Ver erros da auditoria" in global_block
+    assert "batch.audit_diagnostics" in js
+    assert "scrollToAuditDiagnostics" in global_block
+    assert "scrollIntoView" in scroll_block
+    assert "fetch(" not in global_block
+
+    action_block = js[js.index("function appendAuditRowActionCell"): js.index("function renderAuditRunResults")]
+    assert "auditRowHasFailure(row)" in action_block
+    assert "Ver erro" in action_block
+    assert "openLineErrorDetail(row, diagnostics)" in action_block
+    assert "fetch(" not in action_block
+
+
+def test_cleide_auditoria_js_audit_error_modal_and_choices_are_readonly():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    modal_block = js[js.index("var auditDiagnosticModalEl"): js.index("function renderAuditRunResults")]
+    assert "Documento" in modal_block
+    assert "UF destino" in modal_block
+    assert "Cidade destino" in modal_block
+    assert "Classificação de cobertura identificada" in modal_block
+    assert "Etapa da falha" in modal_block
+    assert "Critérios usados na busca" in modal_block
+    assert "Tentativas de correspondência" in modal_block
+    assert "Valores da dimensão tarifária atual" in modal_block
+    assert "Coluna candidata" in modal_block
+    assert "Valores da coluna candidata" in modal_block
+    assert "Causa relacionada" in modal_block
+    assert "diagnostic_group_code" in js
+    assert "Chave procurada" not in js
+    assert "Grupo global" not in js
+    assert "Sem grupo vinculado" not in js
+    assert "Nenhuma alteração foi aplicada." in modal_block
+    assert "Simular correção" in modal_block
+    assert "fetch(API_AUDIT_CORRECTION_PREVIEW" in js
+    assert "fetch(API_AUDIT_CORRECTION_APPLY" in js
+    assert "fetch(API_AUDIT_CORRECTION_UNDO" in js
+    assert "Aplicar correção" in js
+    assert "applyBtn.disabled = !preview.safe_to_apply" in js
+    assert "A correção será aplicada somente na tabela temporária e poderá ser desfeita." in js
+    assert "Desfazer correção" in js
+    assert "setCurrentTempTable(res.data.temp_table)" in js
+    assert "Prefiro corrigir os arquivos e refazer o upload" in modal_block
+    assert "Nenhum documento será removido e nenhum estado será alterado." in modal_block
+    assert "currentTempTable =" not in modal_block
+    assert "removeDocument" not in modal_block
+    assert "runAuditProcessing" not in modal_block
+
+
+def test_cleide_auditoria_js_audit_legacy_diagnostics_notice():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    legacy_block = js[js.index("function renderLegacyAuditDiagnosticsNotice"): js.index("function appendAuditSummaryItem")]
+    assert "Este lote foi processado antes da geração do diagnóstico detalhado." in legacy_block
+    assert "Atualizar diagnóstico" in legacy_block
+    assert "runAuditProcessing()" in legacy_block
+    assert "batch.audit_diagnostics" in legacy_block
+    assert "auditBatchHasFailureResults(batch)" in legacy_block
 
 
 def test_cleide_auditoria_js_audit_calculation_memory():
@@ -700,6 +782,15 @@ def test_cleide_auditoria_html_audit_file_styles():
     assert "cleide-audit-run-btn" in source
     assert "cleide-audit-run-status.is-loading" in source
     assert "cleide-audit-run-summary" in source
+    assert "cleide-audit-diagnostics" in source
+    assert "cleide-audit-diagnostic-card" in source
+    assert "cleide-audit-error-global-btn" in source
+    assert "cleide-audit-run-row-error-btn" in source
+    assert "cleide-audit-diagnostic-modal" in source
+    assert "cleide-audit-correction-primary-btn:disabled" in source
+    assert ".cleide-audit-run-results-table th:last-child" in source
+    assert ".cleide-audit-run-results-table td:last-child" in source
+    assert "scrollbar-gutter: stable" in source
     assert "cleide-audit-run-results-table" in source
 
 
@@ -1078,18 +1169,19 @@ def test_cleide_auditoria_template_bi_section_below_documents():
     assert docs_pos < bi_pos < modal_pos
     assert 'id="cleideAuditBiDashboard"' in source
     assert 'id="cleideAuditBiChartsGrid"' in source
-    assert "BI da Auditoria de Frete" in source
-    assert "Top Transportadoras" in source
-    assert "Custo por UF Destino" in source
-    assert "Evolução Diária" in source
-    assert "Custo por UF Origem" in source
-    assert "Volume por Transportadora" in source
-    assert "Ocorrências por UF Destino" in source
-    assert "Ocorrências por Transportadora" in source
+    assert "BI Executivo da Auditoria de Frete" in source
+    assert "Impacto Financeiro por Transportadora" in source
+    assert "Divergência Financeira por UF Destino" in source
+    assert "Evolução da Divergência no Período" in source
+    assert "Pareto do Valor Cobrado a Mais" in source
     assert 'data-audit-bi-chart-card="transportadora"' in source
+    assert 'data-audit-bi-chart-card="uf_destino"' in source
+    assert 'data-audit-bi-chart-card="temporal"' in source
     assert 'data-audit-bi-chart-card="pareto_transportadora"' in source
+    assert 'data-audit-bi-chart-card="uf_origem"' not in source
+    assert 'data-audit-bi-chart-card="volume_transportadora"' not in source
+    assert 'data-audit-bi-chart-card="pareto_uf"' not in source
     assert "chart.js@4.4.1" in source
-
 
 def test_cleide_auditoria_js_bi_generate_button_and_section():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
@@ -1107,26 +1199,106 @@ def test_cleide_auditoria_js_bi_generate_button_and_section():
     assert "auditBiShowChart" in js
     assert "auditBiShowAllCharts" in js
     assert "Campo indisponível no lote auditado atual." in js
+    assert "function setCurrentTempTable" in js
+    assert "function refreshAuditBiDashboardFromCurrentTempTable" in js
+    assert "initAuditBiDashboard((currentTempTable && currentTempTable.audit_bi) || auditBi)" in js
+    assert "auditBiDestroyAllCharts()" in js
+    assert "auditBiDashboardState.activeFilters = {" in js
 
 
-def test_cleide_auditoria_js_bi_seven_chart_cards_and_cross_filter():
+def test_cleide_auditoria_js_bi_four_executive_chart_cards_and_cross_filter():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    chart_contract = js[
+        js.index("var AUDIT_BI_CHART_LABELS"):
+        js.index("var AUDIT_BI_FIELD_REQUIREMENTS")
+    ]
     for chart_key in (
         "transportadora",
         "uf_destino",
         "temporal",
-        "uf_origem",
-        "volume_transportadora",
-        "pareto_uf",
         "pareto_transportadora",
     ):
-        assert chart_key in js
-    assert "Top Transportadoras" in js
+        assert chart_key in chart_contract
+    assert "uf_origem" not in chart_contract
+    assert "volume_transportadora" not in chart_contract
+    assert "pareto_uf" not in chart_contract
+    assert "Impacto Financeiro por Transportadora" in chart_contract
+    assert "Divergência Financeira por UF Destino" in chart_contract
+    assert "Evolução da Divergência no Período" in chart_contract
+    assert "Pareto do Valor Cobrado a Mais" in chart_contract
     assert "auditBiHandleChartClick" in js
     assert "auditBiApplyFilterToggle" in js
-    assert "auditBiBuildParetoRows" in js
+    assert "auditBiBuildOverchargeParetoRows" in js
     assert "auditBiFilteredRows" in js
     assert "applyBackendFilters" not in js
+
+def test_cleide_auditoria_js_bi_transportadora_agrega_impacto_financeiro():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    aggregate_block = js[
+        js.index("function auditBiAggregateCarrierDivergence"):
+        js.index("function auditBiAggregateByDate")
+    ]
+    assert "auditBiAggregateByField(rows, 'carrier')" in aggregate_block
+    assert "'impacto_total', 'desc'" in aggregate_block
+
+    generic_block = js[
+        js.index("function auditBiAggregateByField"):
+        js.index("function auditBiHasDivergenceValue")
+    ]
+    assert "valor_cobrado: 0" in generic_block
+    assert "valor_esperado: 0" in generic_block
+    assert "divergencia_liquida: 0" in generic_block
+    assert "cobrado_a_mais: 0" in generic_block
+    assert "cobrado_a_menor: 0" in generic_block
+    assert "impacto_total: 0" in generic_block
+    assert "grouped[key].valor_cobrado += auditBiGetNumeric(row.charged_freight)" in generic_block
+    assert "grouped[key].divergencia_liquida += divergence" in generic_block
+    assert "grouped[key].cobrado_a_mais += divergence" in generic_block
+    assert "grouped[key].cobrado_a_menor += Math.abs(divergence)" in generic_block
+
+def test_cleide_auditoria_js_bi_transportadora_usa_tres_datasets_executivos():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    render_block = js[
+        js.index("function auditBiRenderCarrierDivergenceChart"):
+        js.index("function auditBiRenderFilterUi")
+    ]
+    assert "type: 'bar'" in render_block
+    assert "indexAxis: 'y'" in render_block
+    assert "label: 'Cobrado a mais'" in render_block
+    assert "label: 'Cobrado a menor'" in render_block
+    assert "label: 'Divergência líquida'" in render_block
+    assert "auditBiFormatCurrency(parsed.x)" in render_block
+    assert "auditBiHandleChartClick(chartKey, labels[elements[0].index])" in render_block
+
+def test_cleide_auditoria_js_bi_transportadora_indisponivel_sem_base_financeira():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    render_start = js.index("function auditBiRenderChartCard")
+    chart_block = js[
+        js.index("if (chartKey === 'transportadora')", render_start):
+        js.index("if (chartKey === 'uf_destino')", render_start)
+    ]
+    assert "Divergência financeira indisponível no lote auditado atual." in js
+    assert "Transportadora indisponível no lote auditado atual." in js
+    assert "auditBiDashboardState.fieldPresence.carrier === false" in chart_block
+    assert "filteredRows.length > 0 && !auditBiHasCarrierValue(filteredRows)" in chart_block
+    assert "filteredRows.length > 0 && !auditBiHasDivergenceValue(filteredRows)" in chart_block
+    assert "auditBiComputeDivergence(row) !== null" in js
+    assert "auditBiHasNumericValue(row.divergence_value)" in js
+    assert chart_block.index("AUDIT_BI_CARRIER_UNAVAILABLE_MESSAGE") < chart_block.index("AUDIT_BI_DIVERGENCE_UNAVAILABLE_MESSAGE")
+    assert "auditBiRenderCarrierDivergenceChart(carrierRows)" in chart_block
+    assert "auditBiRenderSimpleChart" not in chart_block
+
+def test_cleide_auditoria_js_bi_transportadora_filtro_preservado():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    click_block = js[js.index("function auditBiHandleChartClick"): js.index("function auditBiRenderSimpleChart")]
+    assert "chartKey === 'transportadora'" in click_block
+    assert "auditBiApplyFilterToggle('carrier', selected)" in click_block
+    render_block = js[
+        js.index("function auditBiRenderCarrierDivergenceChart"):
+        js.index("function auditBiRenderFilterUi")
+    ]
+    assert "labels[elements[0].index]" in render_block
+    assert "datasetIndex" not in render_block
 
 
 def test_cleide_auditoria_js_bi_does_not_alter_chat_upload_modal():

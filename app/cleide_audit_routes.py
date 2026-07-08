@@ -12,6 +12,18 @@ from flask import Blueprint, jsonify, request, send_file, session
 from flask_login import current_user
 
 from app.cleide_audit_doc_context import build_cleide_audit_document_context_for_chat
+from app.cleide_audit_correction_service import (
+    CleideAuditCorrectionError,
+    ERROR_CORRECTION_CONSTRAINT_MISMATCH,
+    ERROR_CORRECTION_NO_TEMP_TABLE,
+    ERROR_CORRECTION_PREVIEW_EXPIRED,
+    ERROR_CORRECTION_PREVIEW_NOT_FOUND,
+    ERROR_CORRECTION_SUGGESTION_NOT_FOUND,
+    ERROR_CORRECTION_UNDO_NOT_FOUND,
+    apply_audit_correction_for_session,
+    preview_audit_correction_for_session,
+    undo_last_audit_correction_for_session,
+)
 from app.cleide_audit_doc_service import (
     CLEIDE_AUDIT_CHAT_FLOW_TYPE,
     CLEIDE_AUDIT_TEMPLATE_FILENAME,
@@ -204,6 +216,21 @@ def _http_status_for_audit_batch_error(error_code: str) -> int:
     if error_code == ERROR_AUDIT_BATCH_EMPTY:
         return 409
     return 400
+
+
+def _http_status_for_correction_error(error_code: str) -> int:
+    if error_code in {
+        ERROR_CORRECTION_NO_TEMP_TABLE,
+        ERROR_CORRECTION_SUGGESTION_NOT_FOUND,
+        ERROR_CORRECTION_PREVIEW_NOT_FOUND,
+        ERROR_CORRECTION_UNDO_NOT_FOUND,
+    }:
+        return 404
+    if error_code == ERROR_CORRECTION_PREVIEW_EXPIRED:
+        return 410
+    if error_code == ERROR_CORRECTION_CONSTRAINT_MISMATCH:
+        return 409
+    return _http_status_for_audit_batch_error(error_code)
 
 
 @cleide_audit_bp.route("/api/cleide-auditoria/documents/upload", methods=["POST"])
@@ -650,6 +677,161 @@ def cleide_audit_batch_run():
         )
 
     return jsonify({"ok": True, "temp_table": temp_table})
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/audit/correction/preview", methods=["POST"])
+def cleide_audit_correction_preview():
+    unauthorized = _authorize_cleide_audit_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    data = request.get_json(silent=True) or {}
+    suggestion_id = str(data.get("suggestion_id") or "").strip()
+    if not suggestion_id:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "cleide_audit_correction_invalid_payload",
+                    "message": "Informe suggestion_id para simular a correção.",
+                }
+            ),
+            400,
+        )
+
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        preview = preview_audit_correction_for_session(
+            suggestion_id,
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+        )
+    except CleideAuditCorrectionError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_correction_error(exc.error_code),
+        )
+    except Exception:
+        logger.exception("Falha inesperada no preview de correção da Cleide Auditoria.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "cleide_audit_correction_preview_failed",
+                    "message": "Não foi possível simular a correção neste momento.",
+                }
+            ),
+            500,
+        )
+
+    return jsonify({"ok": True, "preview": preview})
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/audit/correction/apply", methods=["POST"])
+def cleide_audit_correction_apply():
+    unauthorized = _authorize_cleide_audit_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    data = request.get_json(silent=True) or {}
+    preview_id = str(data.get("preview_id") or "").strip()
+    suggestion_id = str(data.get("suggestion_id") or "").strip()
+    if not preview_id or not suggestion_id:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "cleide_audit_correction_invalid_payload",
+                    "message": "Informe preview_id e suggestion_id para aplicar a correção.",
+                }
+            ),
+            400,
+        )
+
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        applied = apply_audit_correction_for_session(
+            preview_id=preview_id,
+            suggestion_id=suggestion_id,
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+        )
+    except CleideAuditCorrectionError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_correction_error(exc.error_code),
+        )
+    except Exception:
+        logger.exception("Falha inesperada ao aplicar correção da Cleide Auditoria.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "cleide_audit_correction_apply_failed",
+                    "message": "Não foi possível aplicar a correção neste momento.",
+                }
+            ),
+            500,
+        )
+
+    return jsonify({"ok": True, **applied})
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/audit/correction/undo", methods=["POST"])
+def cleide_audit_correction_undo():
+    unauthorized = _authorize_cleide_audit_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    data = request.get_json(silent=True) or {}
+    application_id = str(data.get("application_id") or "").strip() or None
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        undone = undo_last_audit_correction_for_session(
+            application_id=application_id,
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+        )
+    except CleideAuditCorrectionError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_correction_error(exc.error_code),
+        )
+    except Exception:
+        logger.exception("Falha inesperada ao desfazer correção da Cleide Auditoria.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "cleide_audit_correction_undo_failed",
+                    "message": "Não foi possível desfazer a correção neste momento.",
+                }
+            ),
+            500,
+        )
+
+    return jsonify({"ok": True, **undone})
 
 
 @cleide_audit_bp.route("/api/cleide-auditoria/chat", methods=["POST"])

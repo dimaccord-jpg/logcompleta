@@ -248,11 +248,11 @@
 
         <div class="cleide-audit-bi-header">
 
-          <h2 class="cleide-audit-bi-title" id="cleideAuditBiTitle">BI da Auditoria de Frete</h2>
+          <h2 class="cleide-audit-bi-title" id="cleideAuditBiTitle">BI Executivo da Auditoria de Frete</h2>
 
           <p class="cleide-audit-bi-subtitle small mb-0">
 
-            Gráficos operacionais da auditoria, com filtros cruzados sobre o lote auditado.
+            Visão financeira da auditoria, com confiança, impacto e concentração das divergências.
 
           </p>
 
@@ -306,13 +306,29 @@
 
           </p>
 
+          <div class="cleide-audit-bi-executive-summary" id="cleideAuditBiExecutiveSummary">
+
+            <article class="cleide-audit-bi-confidence-card" id="cleideAuditBiConfidenceCard">
+
+              <span class="cleide-audit-bi-kpi-label">Confiança da auditoria</span>
+
+              <strong class="cleide-audit-bi-confidence-value" id="cleideAuditBiConfidenceValue">-</strong>
+
+              <span class="cleide-audit-bi-confidence-detail" id="cleideAuditBiConfidenceDetail">Aguardando dados financeiros.</span>
+
+            </article>
+
+            <div class="cleide-audit-bi-kpi-grid" id="cleideAuditBiKpiGrid"></div>
+
+          </div>
+
           <div class="cleide-audit-bi-charts-grid" id="cleideAuditBiChartsGrid">
 
             <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="transportadora">
 
               <div class="cleide-audit-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Top Transportadoras</h3>
+                <h3 class="cleide-audit-bi-chart-title">Impacto Financeiro por Transportadora</h3>
 
                 <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="transportadora">Ocultar</button>
 
@@ -330,7 +346,7 @@
 
               <div class="cleide-audit-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Custo por UF Destino</h3>
+                <h3 class="cleide-audit-bi-chart-title">Divergência Financeira por UF Destino</h3>
 
                 <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="uf_destino">Ocultar</button>
 
@@ -348,7 +364,7 @@
 
               <div class="cleide-audit-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Evolução Diária</h3>
+                <h3 class="cleide-audit-bi-chart-title">Evolução da Divergência no Período</h3>
 
                 <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="temporal">Ocultar</button>
 
@@ -362,65 +378,11 @@
 
             </article>
 
-            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="uf_origem">
-
-              <div class="cleide-audit-bi-chart-card-header">
-
-                <h3 class="cleide-audit-bi-chart-title">Custo por UF Origem</h3>
-
-                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="uf_origem">Ocultar</button>
-
-              </div>
-
-              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="uf_origem"></div>
-
-              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="uf_origem" hidden></div>
-
-              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="uf_origem"></canvas></div>
-
-            </article>
-
-            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="volume_transportadora">
-
-              <div class="cleide-audit-bi-chart-card-header">
-
-                <h3 class="cleide-audit-bi-chart-title">Volume por Transportadora</h3>
-
-                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="volume_transportadora">Ocultar</button>
-
-              </div>
-
-              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="volume_transportadora"></div>
-
-              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="volume_transportadora" hidden></div>
-
-              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="volume_transportadora"></canvas></div>
-
-            </article>
-
-            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="pareto_uf">
-
-              <div class="cleide-audit-bi-chart-card-header">
-
-                <h3 class="cleide-audit-bi-chart-title">Ocorrências por UF Destino</h3>
-
-                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="pareto_uf">Ocultar</button>
-
-              </div>
-
-              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="pareto_uf"></div>
-
-              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="pareto_uf" hidden></div>
-
-              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="pareto_uf"></canvas></div>
-
-            </article>
-
             <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="pareto_transportadora">
 
               <div class="cleide-audit-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Ocorrências por Transportadora</h3>
+                <h3 class="cleide-audit-bi-chart-title">Pareto do Valor Cobrado a Mais</h3>
 
                 <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="pareto_transportadora">Ocultar</button>
 
@@ -1897,6 +1859,7 @@
   }
 
   .cleide-audit-run-summary,
+  .cleide-audit-diagnostics,
   .cleide-audit-run-results {
     margin-top: 0.45rem;
     padding-top: 0.55rem;
@@ -1904,6 +1867,7 @@
   }
 
   .cleide-audit-run-summary-title,
+  .cleide-audit-diagnostics-title,
   .cleide-audit-run-results-title {
     margin: 0 0 0.45rem;
     font-size: 0.82rem;
@@ -1940,8 +1904,240 @@
     font-size: 0.78rem;
   }
 
+  .cleide-audit-error-global-actions {
+    margin-top: 0.5rem;
+  }
+
+  .cleide-audit-error-global-btn,
+  .cleide-audit-run-row-error-btn,
+  .cleide-audit-diagnostic-fix-table-btn,
+  .cleide-audit-correction-primary-btn,
+  .cleide-audit-correction-secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .cleide-audit-error-global-btn,
+  .cleide-audit-run-row-error-btn,
+  .cleide-audit-diagnostic-fix-table-btn {
+    padding: 0.3rem 0.75rem;
+    border: 1px solid rgba(255, 193, 7, 0.42);
+    background: rgba(255, 193, 7, 0.1);
+    color: #ffd966;
+  }
+
+  .cleide-audit-error-global-btn:hover,
+  .cleide-audit-run-row-error-btn:hover,
+  .cleide-audit-diagnostic-fix-table-btn:hover {
+    background: rgba(255, 193, 7, 0.18);
+    border-color: rgba(255, 193, 7, 0.58);
+  }
+
+  .cleide-audit-run-row-error-btn {
+    min-width: 4.5rem;
+    padding: 0.18rem 0.55rem;
+    font-size: 0.68rem;
+    white-space: nowrap;
+  }
+
+  .cleide-audit-run-actions-cell {
+    min-width: 6rem;
+    width: 6rem;
+    padding-right: 1rem !important;
+    white-space: nowrap;
+  }
+
+  .cleide-audit-diagnostics-subtitle {
+    margin: -0.15rem 0 0.55rem;
+    font-size: 0.76rem;
+    line-height: 1.4;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-diagnostic-card {
+    padding: 0.65rem 0.75rem;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(255, 193, 7, 0.28);
+    background: rgba(255, 193, 7, 0.07);
+  }
+
+  .cleide-audit-diagnostics.is-highlighted {
+    animation: cleideAuditDiagnosticPulse 1.2s ease;
+  }
+
+  @keyframes cleideAuditDiagnosticPulse {
+    0% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.32); }
+    55% { box-shadow: 0 0 0 6px rgba(255, 193, 7, 0.08); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0); }
+  }
+
+  .cleide-audit-diagnostic-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.35rem;
+  }
+
+  .cleide-audit-diagnostic-card-title {
+    margin: 0;
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: #ffd966;
+  }
+
+  .cleide-audit-diagnostic-confidence {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 196, 140, 0.32);
+    background: rgba(0, 196, 140, 0.1);
+    color: #7ee7c4;
+    font-size: 0.68rem;
+    font-weight: 600;
+  }
+
+  .cleide-audit-diagnostic-message,
+  .cleide-audit-diagnostic-actionability {
+    margin: 0.25rem 0 0.45rem;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-diagnostic-actionability {
+    margin-bottom: 0;
+    color: var(--af-text-secondary, #C8CCE5);
+  }
+
+  .cleide-audit-diagnostic-actions {
+    margin-top: 0.55rem;
+  }
+
+  .cleide-audit-diagnostic-meta {
+    margin: 0.35rem 0 0.45rem;
+  }
+
+  .cleide-audit-diagnostic-list-wrap {
+    margin-top: 0.45rem;
+  }
+
+  .cleide-audit-diagnostic-list-label {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: var(--af-text-secondary, #8A8AA3);
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  .cleide-audit-diagnostic-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .cleide-audit-diagnostic-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.12rem 0.48rem;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 191, 255, 0.24);
+    background: rgba(0, 191, 255, 0.08);
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.7rem;
+    line-height: 1.3;
+  }
+
+  .cleide-audit-diagnostic-modal {
+    z-index: 2220;
+  }
+
+  .cleide-audit-line-error-summary,
+  .cleide-audit-correction-explanation,
+  .cleide-audit-correction-choice-panel {
+    padding: 0.1rem 0 0.25rem;
+  }
+
+  .cleide-audit-correction-warning {
+    margin: 0.65rem 0;
+    padding: 0.45rem 0.6rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(255, 193, 7, 0.34);
+    background: rgba(255, 193, 7, 0.09);
+    color: #ffd966;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+  .cleide-audit-correction-choices,
+  .cleide-audit-correction-choice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 0.65rem;
+  }
+
+  .cleide-audit-correction-primary-btn {
+    padding: 0.35rem 0.8rem;
+    border: 1px solid rgba(0, 196, 140, 0.36);
+    background: rgba(0, 196, 140, 0.12);
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-correction-primary-btn:disabled {
+    opacity: 0.48;
+    cursor: not-allowed;
+  }
+
+  .cleide-audit-correction-secondary-btn {
+    padding: 0.35rem 0.8rem;
+    border: 1px solid rgba(0, 191, 255, 0.32);
+    background: rgba(0, 191, 255, 0.09);
+    color: var(--af-cyan, #00BFFF);
+  }
+
+  .cleide-audit-correction-secondary-btn:hover {
+    background: rgba(0, 191, 255, 0.16);
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-correction-help,
+  .cleide-audit-correction-choice-text {
+    margin: 0;
+    font-size: 0.76rem;
+    line-height: 1.4;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .cleide-audit-correction-choice-title {
+    margin: 0 0 0.35rem;
+    font-size: 0.86rem;
+    font-weight: 700;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
   .cleide-audit-run-results-table {
-    min-width: 980px;
+    min-width: 1060px;
+  }
+
+  .cleide-audit-run-results-scroll {
+    scrollbar-gutter: stable;
+  }
+
+  .cleide-audit-run-results-table th:last-child,
+  .cleide-audit-run-results-table td:last-child {
+    min-width: 6rem;
+    width: 6rem;
+    padding-right: 1rem;
+    white-space: nowrap;
   }
 
   .cleide-audit-run-expected-link {
@@ -2028,6 +2224,40 @@
     color: var(--af-text-primary, #F0F0F5);
     font-size: 0.74rem;
     padding: 0.2rem 0.35rem;
+  }
+
+  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input {
+    color-scheme: dark;
+    background-color: rgba(8, 15, 28, 0.94);
+    color: var(--af-text-primary, #F0F0F5);
+    border-color: rgba(0, 191, 255, 0.34);
+  }
+
+  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input:hover {
+    border-color: rgba(0, 212, 255, 0.62);
+    background-color: rgba(10, 19, 36, 0.98);
+  }
+
+  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input:focus-visible {
+    outline: none;
+    border-color: var(--af-accent, #00BFFF);
+    box-shadow: 0 0 0 2px rgba(0, 191, 255, 0.22);
+  }
+
+  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input option {
+    background-color: #0b1424;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input option:hover,
+  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input option:focus {
+    background-color: rgba(0, 191, 255, 0.24);
+    color: #ffffff;
+  }
+
+  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input option:checked {
+    background-color: #006da3;
+    color: #ffffff;
   }
 
   .cleide-audit-temp-table-modal-cell-input.field-invalid {
@@ -2489,6 +2719,104 @@
     margin-bottom: 0.65rem;
   }
 
+  .cleide-audit-bi-executive-summary {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.9fr) minmax(0, 2.1fr);
+    gap: 0.75rem;
+    margin-bottom: 0.85rem;
+  }
+
+  .cleide-audit-bi-confidence-card,
+  .cleide-audit-bi-kpi-card {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.55rem;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0.7rem 0.75rem;
+  }
+
+  .cleide-audit-bi-confidence-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    border-color: rgba(0, 191, 255, 0.22);
+  }
+
+  .cleide-audit-bi-confidence-card.is-high {
+    border-color: rgba(0, 196, 140, 0.38);
+    background: rgba(0, 196, 140, 0.08);
+  }
+
+  .cleide-audit-bi-confidence-card.is-medium {
+    border-color: rgba(244, 180, 0, 0.4);
+    background: rgba(244, 180, 0, 0.08);
+  }
+
+  .cleide-audit-bi-confidence-card.is-low,
+  .cleide-audit-bi-confidence-card.is-unavailable {
+    border-color: rgba(255, 77, 106, 0.36);
+    background: rgba(255, 77, 106, 0.07);
+  }
+
+  .cleide-audit-bi-confidence-value {
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 1.15rem;
+    line-height: 1.2;
+  }
+
+  .cleide-audit-bi-confidence-detail {
+    color: var(--af-text-secondary, #A0A0B8);
+    font-size: 0.74rem;
+    line-height: 1.35;
+  }
+
+  .cleide-audit-bi-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .cleide-audit-bi-kpi-card {
+    min-width: 0;
+  }
+
+  .cleide-audit-bi-kpi-label {
+    display: block;
+    color: var(--af-text-secondary, #A0A0B8);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .cleide-audit-bi-kpi-value {
+    display: block;
+    margin-top: 0.25rem;
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .cleide-audit-bi-kpi-hint {
+    display: block;
+    margin-top: 0.22rem;
+    color: var(--af-text-muted, #8A8AA3);
+    font-size: 0.68rem;
+    line-height: 1.25;
+  }
+
+  .cleide-audit-bi-kpi-card.is-negative .cleide-audit-bi-kpi-value {
+    color: #ff8a9a;
+  }
+
+  .cleide-audit-bi-kpi-card.is-positive .cleide-audit-bi-kpi-value {
+    color: #7ee7c4;
+  }
+
+  .cleide-audit-bi-kpi-card.is-warning .cleide-audit-bi-kpi-value {
+    color: #ffd966;
+  }
+
   .cleide-audit-bi-charts-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2561,12 +2889,26 @@
   }
 
   @media (max-width: 992px) {
+    .cleide-audit-bi-executive-summary {
+      grid-template-columns: 1fr;
+    }
+
+    .cleide-audit-bi-kpi-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .cleide-audit-bi-charts-grid {
       grid-template-columns: 1fr;
     }
 
     .cleide-audit-bi-chart-card--wide {
       grid-column: auto;
+    }
+  }
+
+  @media (max-width: 576px) {
+    .cleide-audit-bi-kpi-grid {
+      grid-template-columns: 1fr;
     }
   }
 

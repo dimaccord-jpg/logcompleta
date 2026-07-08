@@ -53,6 +53,7 @@ def _audit_cfg(**overrides):
         "no_documents_behavior": "allow_guided",
         "show_documents_used": True,
         "no_hallucination_instruction_enabled": True,
+        "audited_file_max_bytes": None,
         "audited_file_max_rows": 2000,
         "calculation_bases": cleide_audit_config_service.DEFAULT_CALCULATION_BASES,
     }
@@ -226,6 +227,7 @@ def test_admin_agentes_cleide_get_campos_audit_no_form_correto(monkeypatch):
         "document_context_max_chars",
         "max_documents_considered",
         "question_max_chars",
+        "audited_file_max_bytes",
         "audited_file_max_rows",
         "no_documents_behavior",
         "show_documents_used",
@@ -235,6 +237,8 @@ def test_admin_agentes_cleide_get_campos_audit_no_form_correto(monkeypatch):
     for field in audit_fields:
         assert f'name="{field}"' in html
     assert "Máximo de linhas por lote auditado" in html
+    assert "Limite específico do arquivo auditado" in html
+    assert "cleide_audit_cfg_audited_file_max_bytes" in html
     assert "cleide_audit_cfg_audited_file_max_rows" in html
     assert "pdf_max_pages" not in html
     assert "upload_ttl_hours" not in html
@@ -310,6 +314,7 @@ def test_admin_agentes_cleide_post_audit_salva(monkeypatch):
         calls["saved"] = True
         assert payload["chat_max_history"] == "8"
         assert payload["question_max_chars"] == "3500"
+        assert payload["audited_file_max_bytes"] == "1048576"
         assert payload["audited_file_max_rows"] == "10"
         assert payload["no_documents_behavior"] == "require_documents"
         assert payload["fallback_message"] == "Falha temporária da Cleide Auditoria."
@@ -337,6 +342,7 @@ def test_admin_agentes_cleide_post_audit_salva(monkeypatch):
             "document_context_max_chars": "18000",
             "max_documents_considered": "2",
             "question_max_chars": "3500",
+            "audited_file_max_bytes": "1048576",
             "audited_file_max_rows": "10",
             "no_documents_behavior": "require_documents",
             "show_documents_used": "on",
@@ -373,6 +379,7 @@ def test_admin_agentes_cleide_post_audit_persiste_audited_file_max_rows(app, ctx
             "document_context_max_chars": "18000",
             "max_documents_considered": "2",
             "question_max_chars": "3500",
+            "audited_file_max_bytes": "1048576",
             "audited_file_max_rows": "10",
             "no_documents_behavior": "allow_guided",
             "show_documents_used": "on",
@@ -382,10 +389,126 @@ def test_admin_agentes_cleide_post_audit_persiste_audited_file_max_rows(app, ctx
     ):
         admin_routes.agentes_cleide.__wrapped__()
 
-    row = ConfigRegras.query.filter_by(chave="cleide_audit_cfg_audited_file_max_rows").first()
-    assert row is not None
-    assert row.valor_inteiro == 10
-    assert cleide_audit_config_service.get_cleide_audit_config().audited_file_max_rows == 10
+    row_bytes = ConfigRegras.query.filter_by(
+        chave="cleide_audit_cfg_audited_file_max_bytes"
+    ).first()
+    row_rows = ConfigRegras.query.filter_by(chave="cleide_audit_cfg_audited_file_max_rows").first()
+    assert row_bytes is not None
+    assert row_bytes.valor_inteiro == 1048576
+    assert row_rows is not None
+    assert row_rows.valor_inteiro == 10
+    loaded = cleide_audit_config_service.get_cleide_audit_config()
+    assert loaded.audited_file_max_bytes == 1048576
+    assert loaded.audited_file_max_rows == 10
+
+
+def test_admin_agentes_cleide_post_audit_limite_bytes_acima_global_flash_warning(
+    app,
+    ctx,
+    monkeypatch,
+):
+    from app.painel_admin import admin_routes
+    from app.services.cleiton_doc_config_service import salvar_cleiton_doc_config
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+    salvar_cleiton_doc_config({"excel_max_bytes": "1048576"})
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data={
+            "form_name": "cleide_audit",
+            "chat_enabled": "on",
+            "upload_enabled": "on",
+            "chat_max_history": "8",
+            "document_context_max_chars": "18000",
+            "max_documents_considered": "2",
+            "question_max_chars": "3500",
+            "audited_file_max_bytes": "2097152",
+            "audited_file_max_rows": "10",
+            "no_documents_behavior": "allow_guided",
+            "show_documents_used": "on",
+            "no_hallucination_instruction_enabled": "on",
+            "fallback_message": "Falha temporária da Cleide Auditoria.",
+        },
+    ):
+        resp = admin_routes.agentes_cleide.__wrapped__()
+        from flask import get_flashed_messages
+
+        msgs = get_flashed_messages(with_categories=True)
+
+    assert resp.status_code == 302
+    assert any(
+        category == "warning"
+        and "não pode ultrapassar o limite global de Excel definido em Cleiton" in msg
+        for category, msg in msgs
+    )
+    assert (
+        ConfigRegras.query.filter_by(chave="cleide_audit_cfg_audited_file_max_bytes").first()
+        is None
+    )
+
+
+def test_admin_agentes_cleide_post_audit_excecao_inesperada_rollback_e_log(
+    app,
+    ctx,
+    monkeypatch,
+    caplog,
+):
+    from app.painel_admin import admin_routes
+
+    app.config["SECRET_KEY"] = "test-secret"
+    _register_admin_blueprint(app)
+    monkeypatch.setattr(admin_routes, "current_user", _admin_user())
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+
+    def _raise_after_pending_write(_payload):
+        db.session.add(ConfigRegras(chave="cleide_audit_cfg_partial_unexpected", valor_inteiro=1))
+        raise RuntimeError("boom interno")
+
+    monkeypatch.setattr(
+        "app.services.cleide_audit_config_service.salvar_cleide_audit_config",
+        _raise_after_pending_write,
+    )
+
+    with app.test_request_context(
+        "/admin/agentes/cleide",
+        method="POST",
+        data={
+            "form_name": "cleide_audit",
+            "chat_enabled": "on",
+            "chat_max_history": "8",
+            "document_context_max_chars": "18000",
+            "max_documents_considered": "2",
+            "question_max_chars": "3500",
+            "audited_file_max_bytes": "",
+            "audited_file_max_rows": "10",
+            "no_documents_behavior": "allow_guided",
+            "fallback_message": "Falha temporária da Cleide Auditoria.",
+        },
+    ):
+        with caplog.at_level("ERROR", logger="app.painel_admin.admin_routes"):
+            resp = admin_routes.agentes_cleide.__wrapped__()
+        from flask import get_flashed_messages
+
+        msgs = get_flashed_messages(with_categories=True)
+
+    assert resp.status_code == 302
+    assert any(
+        category == "danger"
+        and "Não foi possível salvar os parâmetros da Cleide Auditoria documental." in msg
+        for category, msg in msgs
+    )
+    assert (
+        ConfigRegras.query.filter_by(chave="cleide_audit_cfg_partial_unexpected").first()
+        is None
+    )
+    assert "form_name=cleide_audit" in caplog.text
+    assert "audited_file_max_bytes" in caplog.text
+    assert "Falha temporária da Cleide Auditoria" not in caplog.text
 
 
 def test_admin_agentes_cleide_post_calculation_bases_tabular_salva_duas_bases(
