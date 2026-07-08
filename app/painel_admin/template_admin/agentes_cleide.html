@@ -160,6 +160,13 @@
                         <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_question_max_chars</code></div>
                     </div>
                     <div class="col-md-4">
+                        <label class="form-label" for="cleideAuditAuditedFileMaxBytes">Limite específico do arquivo auditado (bytes)</label>
+                        <input type="number" min="1" max="209715200" step="1" name="audited_file_max_bytes" id="cleideAuditAuditedFileMaxBytes" class="form-control"
+                               value="{{ audit_cfg.audited_file_max_bytes or '' }}">
+                        <small class="text-muted">Opcional. Em branco, herda <code>cleiton_doc_excel_max_bytes</code>; preenchido, vale o menor entre Cleiton e Cleide.</small>
+                        <div class="small mt-1 text-muted">Chave: <code>cleide_audit_cfg_audited_file_max_bytes</code></div>
+                    </div>
+                    <div class="col-md-4">
                         <label class="form-label" for="cleideAuditAuditedFileMaxRows">Máximo de linhas por lote auditado</label>
                         <input type="number" min="1" max="50000" step="1" name="audited_file_max_rows" id="cleideAuditAuditedFileMaxRows" class="form-control"
                                value="{{ audit_cfg.audited_file_max_rows }}">

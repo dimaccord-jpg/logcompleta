@@ -175,9 +175,27 @@ DEFAULTS: dict[str, Any] = {
     "no_documents_behavior": "allow_guided",
     "show_documents_used": 1,
     "no_hallucination_instruction_enabled": 1,
+    "audited_file_max_bytes": None,
     "audited_file_max_rows": DEFAULT_AUDITED_FILE_MAX_ROWS,
     "calculation_bases": DEFAULT_CALCULATION_BASES,
 }
+
+GENERAL_FORM_CONFIG_FIELDS: tuple[str, ...] = (
+    "chat_enabled",
+    "upload_enabled",
+    "chat_max_history",
+    "document_context_max_chars",
+    "max_documents_considered",
+    "question_max_chars",
+    "audited_file_max_bytes",
+    "audited_file_max_rows",
+    "no_documents_behavior",
+    "show_documents_used",
+    "no_hallucination_instruction_enabled",
+    "fallback_message",
+)
+
+CALCULATION_BASES_FORM_CONFIG_FIELDS: tuple[str, ...] = ("calculation_bases",)
 
 DESCRICOES: dict[str, str] = {
     "chat_enabled": "Habilita o chat IA da Cleide Auditoria em /auditoria-frete.",
@@ -191,6 +209,9 @@ DESCRICOES: dict[str, str] = {
     "show_documents_used": "Exibe metadados dos documentos usados na resposta ao usuário.",
     "no_hallucination_instruction_enabled": (
         "Reforça instrução anti-alucinação no prompt da Cleide Auditoria."
+    ),
+    "audited_file_max_bytes": (
+        "Limite específico opcional de bytes para o arquivo auditado da Cleide Auditoria."
     ),
     "audited_file_max_rows": (
         "Define o limite de linhas aceitas no arquivo enviado para auditoria de frete."
@@ -213,6 +234,7 @@ class CleideAuditConfig:
     no_documents_behavior: str
     show_documents_used: bool
     no_hallucination_instruction_enabled: bool
+    audited_file_max_bytes: int | None
     audited_file_max_rows: int
     calculation_bases: list[dict[str, Any]] = field(
         default_factory=lambda: json.loads(
@@ -662,6 +684,8 @@ def _bounded(nome: str, valor: int) -> int:
         return min(max(1, valor), 10)
     if nome == "question_max_chars":
         return min(max(500, valor), 12000)
+    if nome == "audited_file_max_bytes":
+        return min(max(1, valor), 200 * 1024 * 1024)
     if nome == "audited_file_max_rows":
         return min(max(1, valor), 50000)
     return valor
@@ -689,6 +713,22 @@ def _parse_int(cfg_map: dict[str, ConfigRegras], nome: str) -> int:
         return _bounded(nome, default)
     raw = row.valor_inteiro if row.valor_inteiro is not None else row.valor_texto
     return _bounded(nome, _coerce_positive_int(raw, default))
+
+
+def _parse_optional_int(cfg_map: dict[str, ConfigRegras], nome: str) -> int | None:
+    row = cfg_map.get(_cfg_key(nome))
+    if row is None:
+        return None
+    raw = row.valor_inteiro if row.valor_inteiro is not None else row.valor_texto
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        parsed = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return _bounded(nome, parsed)
 
 
 def _parse_str(cfg_map: dict[str, ConfigRegras], nome: str) -> str:
@@ -745,6 +785,34 @@ def _apply_global_doc_limits(cfg: CleideAuditConfig) -> CleideAuditConfig:
     return cfg
 
 
+def resolve_audited_file_limits(
+    cfg: CleideAuditConfig | None = None,
+    global_cfg: Any | None = None,
+) -> dict[str, int | None | str]:
+    audit_cfg = cfg or get_cleide_audit_config()
+    cleiton_cfg = global_cfg or get_cleiton_doc_config()
+
+    global_max_bytes = max(0, int(cleiton_cfg.excel_max_bytes))
+    global_max_rows = max(0, int(cleiton_cfg.excel_max_rows))
+    specific_max_bytes = audit_cfg.audited_file_max_bytes
+    specific_max_rows = max(0, int(audit_cfg.audited_file_max_rows))
+
+    if specific_max_bytes is None:
+        effective_max_bytes = global_max_bytes
+        source = "global"
+    else:
+        effective_max_bytes = min(global_max_bytes, max(0, int(specific_max_bytes)))
+        source = "specific_capped_by_global"
+
+    return {
+        "global_max_bytes": global_max_bytes,
+        "specific_max_bytes": specific_max_bytes,
+        "effective_max_bytes": effective_max_bytes,
+        "effective_max_rows": min(global_max_rows, specific_max_rows),
+        "source": source,
+    }
+
+
 def get_cleide_audit_config() -> CleideAuditConfig:
     if has_request_context():
         cached = getattr(g, "_cleide_audit_cfg", None)
@@ -765,6 +833,7 @@ def get_cleide_audit_config() -> CleideAuditConfig:
         no_hallucination_instruction_enabled=_parse_bool(
             cfg_map, "no_hallucination_instruction_enabled"
         ),
+        audited_file_max_bytes=_parse_optional_int(cfg_map, "audited_file_max_bytes"),
         audited_file_max_rows=_parse_int(cfg_map, "audited_file_max_rows"),
         calculation_bases=_parse_calculation_bases(cfg_map),
     )
@@ -799,6 +868,25 @@ def _parse_bounded_positive_int_strict(value: Any, field_name: str) -> int:
     return bounded
 
 
+def _parse_optional_bounded_positive_int_strict(value: Any, field_name: str) -> int | None:
+    raw = "" if value is None else str(value).strip()
+    if not raw:
+        return None
+    return _parse_bounded_positive_int_strict(raw, field_name)
+
+
+def _validate_audited_file_max_bytes_against_global(value: int | None) -> None:
+    if value is None:
+        return
+    global_cfg = get_cleiton_doc_config()
+    global_max_bytes = max(0, int(global_cfg.excel_max_bytes))
+    if value > global_max_bytes:
+        raise ValueError(
+            "O limite específico do arquivo auditado não pode ultrapassar o limite global "
+            "de Excel definido em Cleiton."
+        )
+
+
 def parsear_cleide_audit_config(raw_values: dict[str, Any]) -> CleideAuditConfig:
     if not isinstance(raw_values, dict):
         raise ValueError("Campos de configuração da Cleide Auditoria inválidos.")
@@ -814,6 +902,12 @@ def parsear_cleide_audit_config(raw_values: dict[str, Any]) -> CleideAuditConfig
     fallback = str(fallback_raw or DEFAULT_FALLBACK_MESSAGE).strip() or DEFAULT_FALLBACK_MESSAGE
     if len(fallback) > 500:
         raise ValueError("fallback_message excede o limite de 500 caracteres.")
+
+    audited_file_max_bytes = _parse_optional_bounded_positive_int_strict(
+        _raw("audited_file_max_bytes"),
+        "audited_file_max_bytes",
+    )
+    _validate_audited_file_max_bytes_against_global(audited_file_max_bytes)
 
     parsed = CleideAuditConfig(
         chat_enabled=_parse_bool_field("chat_enabled", raw_values, cfg_atual),
@@ -842,6 +936,7 @@ def parsear_cleide_audit_config(raw_values: dict[str, Any]) -> CleideAuditConfig
             raw_values,
             cfg_atual,
         ),
+        audited_file_max_bytes=audited_file_max_bytes,
         audited_file_max_rows=_parse_bounded_positive_int_strict(
             _raw("audited_file_max_rows"),
             "audited_file_max_rows",
@@ -851,12 +946,23 @@ def parsear_cleide_audit_config(raw_values: dict[str, Any]) -> CleideAuditConfig
     return _apply_global_doc_limits(parsed)
 
 
-def persistir_cleide_audit_config(parsed: CleideAuditConfig, *, commit: bool = True) -> None:
-    for nome in DEFAULTS.keys():
+def _persistir_cleide_audit_config_fields(
+    parsed: CleideAuditConfig,
+    field_names: tuple[str, ...],
+    *,
+    commit: bool,
+) -> None:
+    for nome in field_names:
+        if nome not in DEFAULTS:
+            raise ValueError(f"Campo de configuração da Cleide Auditoria inválido: {nome}.")
         row = ConfigRegras.query.filter_by(chave=_cfg_key(nome)).first()
+        valor = getattr(parsed, nome)
+        if valor is None:
+            if row is not None:
+                db.session.delete(row)
+            continue
         if row is None:
             row = ConfigRegras(chave=_cfg_key(nome), descricao=DESCRICOES.get(nome))
-        valor = getattr(parsed, nome)
         if isinstance(valor, bool):
             row.valor_inteiro = 1 if valor else 0
             row.valor_texto = None
@@ -875,6 +981,14 @@ def persistir_cleide_audit_config(parsed: CleideAuditConfig, *, commit: bool = T
         db.session.commit()
 
 
+def persistir_cleide_audit_config(parsed: CleideAuditConfig, *, commit: bool = True) -> None:
+    _persistir_cleide_audit_config_fields(
+        parsed,
+        GENERAL_FORM_CONFIG_FIELDS,
+        commit=commit,
+    )
+
+
 def salvar_cleide_audit_config(raw_values: dict[str, Any]) -> CleideAuditConfig:
     parsed = parsear_cleide_audit_config(raw_values)
     persistir_cleide_audit_config(parsed, commit=True)
@@ -891,7 +1005,11 @@ def salvar_cleide_audit_calculation_bases(raw_bases: Any) -> list[dict[str, Any]
     bases = validar_calculation_bases(raw_bases)
     cfg_atual = get_cleide_audit_config()
     parsed = replace(cfg_atual, calculation_bases=bases)
-    persistir_cleide_audit_config(parsed, commit=True)
+    _persistir_cleide_audit_config_fields(
+        parsed,
+        CALCULATION_BASES_FORM_CONFIG_FIELDS,
+        commit=True,
+    )
     if has_request_context():
         g._cleide_audit_cfg = parsed
     return bases

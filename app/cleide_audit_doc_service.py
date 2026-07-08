@@ -87,8 +87,10 @@ from app.services.cleide_audit_config_service import (
     get_active_calculation_bases_for_runtime,
     get_cleide_audit_config,
     normalize_calculation_base_unit,
+    resolve_audited_file_limits,
     resolve_calculation_base_status,
 )
+from app.cleide_audit_correction_service import build_audit_correction_suggestions
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +121,7 @@ TEMP_TABLE_JSON_END = "---END_CLEIDE_TEMP_TABLE---"
 
 TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES = 512 * 1024
 TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE = "save_and_advance"
+TEMP_TABLE_REVIEW_ACTION_SAVE_DRAFT = "save_draft"
 HUMAN_REVIEW_STATUS_REVIEWED = "reviewed"
 HUMAN_REVIEW_STATUS_EDITED = "edited"
 UNMAPPED_CALCULATION_BASIS_LABEL = "não mapeado / revisar"
@@ -127,9 +130,13 @@ ERROR_ACCESSORIAL_VALUE_MESSAGE = "Preencha um valor válido para esta taxa ou e
 ERROR_ACCESSORIAL_UNIT_MESSAGE = "A unidade não é compatível com a base selecionada."
 ERROR_ACCESSORIAL_OPERATION_MESSAGE = "Revise a operação da base de cálculo selecionada."
 ERROR_ACCESSORIAL_MINIMUM_LINK_MESSAGE = (
-    "Vincule este mínimo à taxa principal correspondente ou exclua a linha."
+    "Esta regra mínima não possui uma taxa principal válida vinculada. Corrija ou exclua a regra antes de continuar."
 )
 ERROR_ACCESSORIAL_ADVANCE_MESSAGE = "Revise as generalidades antes de avançar."
+ERROR_ACCESSORIAL_RATE_CONFLICT_MESSAGE_TEMPLATE = (
+    "Há informações contraditórias na regra {name}. O valor informado é {structured_percent}%, "
+    "mas a observação indica {described_percent}%. Corrija uma das informações ou exclua a regra antes de continuar."
+)
 
 ERROR_TEMP_TABLE_NOT_FOUND = "cleide_audit_temp_table_not_found"
 ERROR_TEMP_TABLE_ID_MISMATCH = "cleide_audit_temp_table_id_mismatch"
@@ -157,7 +164,6 @@ AUDIT_BATCH_SHEET_NAME = "Modelo Cleide"
 AUDIT_INPUT_SCHEMA_VERSION = "cleide_audit_input_v1"
 AUDIT_BATCH_STATUS_UPLOADED = "uploaded"
 AUDIT_BATCH_STATUS_PROCESSED = "processed"
-AUDIT_UPLOAD_MAX_BYTES = 2 * 1024 * 1024
 CLEIDE_AUDIT_TEMPLATE_FILENAME = "template_cleide_auditoria_frete.xlsx"
 
 ERROR_AUDIT_NO_TEMP_TABLE = "cleide_audit_audit_no_temp_table"
@@ -183,6 +189,8 @@ AUDIT_STATUS_INVALID_WEIGHT = "invalid_weight"
 AUDIT_STATUS_INVALID_CHARGED_FREIGHT = "invalid_charged_freight"
 AUDIT_STATUS_INVALID_INVOICE_VALUE = "invalid_invoice_value"
 AUDIT_STATUS_UNSUPPORTED_PRICING = "unsupported_pricing_model"
+AUDIT_DIAGNOSTIC_PRICING_DIMENSION_MISMATCH = "pricing_dimension_mismatch"
+AUDIT_TRANSFORMATION_SELECT_PRICING_DIMENSION = "select_pricing_dimension"
 
 AUDIT_BI_DATASET_VERSION = "cleide_audit_bi_v1"
 AUDIT_BI_SOURCE = "audit_batch"
@@ -191,9 +199,6 @@ AUDIT_BI_CHARTS_SUPPORTED = (
     "transportadora",
     "uf_destino",
     "temporal",
-    "uf_origem",
-    "volume_transportadora",
-    "pareto_uf",
     "pareto_transportadora",
 )
 AUDIT_BI_PUBLIC_ROW_FIELDS = (
@@ -1890,6 +1895,7 @@ def _parse_audit_xlsx_bytes(
     file_bytes: bytes,
     *,
     source_file_name: str,
+    max_bytes: int,
     max_rows: int,
 ) -> tuple[list[dict], dict[str, str], str]:
     if not file_bytes:
@@ -1897,7 +1903,7 @@ def _parse_audit_xlsx_bytes(
             ERROR_AUDIT_EMPTY_FILE,
             "O arquivo auditado está vazio.",
         )
-    if len(file_bytes) > AUDIT_UPLOAD_MAX_BYTES:
+    if len(file_bytes) > int(max_bytes):
         raise CleideAuditBatchError(
             ERROR_AUDIT_PAYLOAD_TOO_LARGE,
             "O arquivo auditado excede o limite de tamanho permitido.",
@@ -1962,6 +1968,7 @@ def _empty_audit_batch_shell(*, uploaded_at: str | None = None) -> dict:
         "normalized_rows": [],
         "results": [],
         "summary": None,
+        "audit_diagnostics": None,
     }
 
 
@@ -2198,6 +2205,19 @@ def _is_freight_value_percent_column(column_name) -> bool:
         return False
 
     has_percent_marker = "%" in raw or "pct" in normalized or "percentual" in normalized or "perc" in normalized
+    if normalized in {
+        "adv",
+        "adv %",
+        "adv percent",
+        "adv percentual",
+        "ad val",
+        "ad valorem",
+        "frete valor",
+        "frete valor %",
+        "frete valor percent",
+        "frete valor percentual",
+    }:
+        return True
     if normalized in {
         "sobre nf",
         "sob nf",
@@ -2461,7 +2481,10 @@ _CONFIGURED_ACCESSORIAL_OPERATIONS = {
 
 def _accessorial_is_configured_calculation_base(fee: dict) -> bool:
     return (
-        fee.get("classification_source") == "configured_calculation_base"
+        fee.get("classification_source") in {
+            "configured_calculation_base",
+            "manual_configured_calculation_base",
+        }
         and bool(fee.get("calculation_base_id"))
     )
 
@@ -3138,7 +3161,10 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
     if not rows or not columns:
         return []
 
-    region_col = next((col for col in columns if _is_region_column(col)), None)
+    selected_dimension_col = _sanitize_cell_string(table.get("_selected_pricing_dimension_column"))
+    region_col = selected_dimension_col if selected_dimension_col in columns else None
+    if region_col is None:
+        region_col = next((col for col in columns if _is_region_column(col)), None)
     uf_col = next((col for col in columns if _is_destination_uf_column(col)), None)
     range_cols = [(col, _parse_range_from_label(col)) for col in columns]
     range_cols = [(col, parsed) for col, parsed in range_cols if parsed is not None]
@@ -3548,12 +3574,11 @@ def _resolve_pricing_index_entry(
     return None
 
 
-def _find_pricing_rule_match(
-    pricing_index: dict,
+def _pricing_rule_lookup_candidates(
     freight_region: str | None,
     destination_uf: str | None = None,
     destination_city: str | None = None,
-) -> tuple[dict, str, str] | None:
+) -> list[tuple[str, str]]:
     candidates: list[tuple[str, str]] = []
     if freight_region:
         candidates.append(("freight_region", freight_region))
@@ -3569,12 +3594,28 @@ def _find_pricing_rule_match(
     if city_key:
         candidates.append(("destination_city", city_key))
 
+    ordered: list[tuple[str, str]] = []
     seen: set[str] = set()
-    fallback_unsupported: tuple[dict, str, str] | None = None
     for lookup_kind, lookup_key in candidates:
         if not lookup_key or lookup_key in seen:
             continue
         seen.add(lookup_key)
+        ordered.append((lookup_kind, lookup_key))
+    return ordered
+
+
+def _find_pricing_rule_match(
+    pricing_index: dict,
+    freight_region: str | None,
+    destination_uf: str | None = None,
+    destination_city: str | None = None,
+) -> tuple[dict, str, str] | None:
+    fallback_unsupported: tuple[dict, str, str] | None = None
+    for lookup_kind, lookup_key in _pricing_rule_lookup_candidates(
+        freight_region,
+        destination_uf,
+        destination_city,
+    ):
         resolved = _resolve_pricing_index_entry(pricing_index, lookup_key)
         if resolved is None:
             continue
@@ -3642,11 +3683,68 @@ def _base_audit_result(row: dict) -> dict:
     }
 
 
-def _status_result(row: dict, status: str, *, freight_region: str | None = None) -> dict:
+def _limit_diagnostic_text(value, max_chars: int = 500) -> str | None:
+    cleaned = _sanitize_cell_string(value)
+    if not cleaned:
+        return None
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return f"{cleaned[: max_chars - 1].rstrip()}…"
+
+
+def _audit_search_context(row: dict, freight_region: str | None = None) -> dict:
+    return {
+        "destination_uf": _sanitize_cell_string(row.get("destination_uf")),
+        "destination_city": _sanitize_cell_string(row.get("destination_city")),
+        "coverage_classification": _sanitize_cell_string(freight_region),
+    }
+
+
+def _sanitize_attempted_keys(keys) -> list[str]:
+    sanitized: list[str] = []
+    seen: set[str] = set()
+    for key in keys or []:
+        cleaned = _sanitize_cell_string(key)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        sanitized.append(cleaned)
+        if len(sanitized) >= 8:
+            break
+    return sanitized
+
+
+def _audit_failure_diagnostic(
+    row: dict,
+    *,
+    failure_stage: str,
+    freight_region: str | None = None,
+    attempted_keys=None,
+    message: str | None = None,
+    diagnostic_group_code: str | None = None,
+) -> dict:
+    return {
+        "failure_stage": _limit_diagnostic_text(failure_stage, 80),
+        "diagnostic_group_code": _limit_diagnostic_text(diagnostic_group_code, 120),
+        "search_context": _audit_search_context(row, freight_region),
+        "attempted_keys": _sanitize_attempted_keys(attempted_keys),
+        "message": _limit_diagnostic_text(message or "A linha não pôde ser calculada com os dados registrados."),
+    }
+
+
+def _status_result(
+    row: dict,
+    status: str,
+    *,
+    freight_region: str | None = None,
+    diagnostic: dict | None = None,
+) -> dict:
     result = _base_audit_result(row)
     result["freight_region"] = freight_region
     result["status"] = status
     result["reason_code"] = status
+    if isinstance(diagnostic, dict):
+        result["diagnostic"] = diagnostic
     return result
 
 
@@ -3660,26 +3758,76 @@ def _audit_single_row(
 ) -> dict:
     weight = _parse_weight_number(row.get("audited_weight"))
     if weight is None:
-        return _status_result(row, AUDIT_STATUS_INVALID_WEIGHT)
+        return _status_result(
+            row,
+            AUDIT_STATUS_INVALID_WEIGHT,
+            diagnostic=_audit_failure_diagnostic(
+                row,
+                failure_stage="input_validation",
+                message="Peso inválido ou ausente no arquivo auditado.",
+            ),
+        )
     charged = _parse_brazilian_money(row.get("charged_freight"))
     if charged is None:
-        return _status_result(row, AUDIT_STATUS_INVALID_CHARGED_FREIGHT)
+        return _status_result(
+            row,
+            AUDIT_STATUS_INVALID_CHARGED_FREIGHT,
+            diagnostic=_audit_failure_diagnostic(
+                row,
+                failure_stage="input_validation",
+                message="Frete cobrado inválido ou ausente no arquivo auditado.",
+            ),
+        )
 
     freight_region = None
     if has_coverage:
         key = _coverage_lookup_key(row.get("destination_uf"), row.get("destination_city"))
         match = coverage_index.get(key) if key else None
         if isinstance(match, dict):
-            return _status_result(row, AUDIT_STATUS_AMBIGUOUS_COVERAGE)
+            return _status_result(
+                row,
+                AUDIT_STATUS_AMBIGUOUS_COVERAGE,
+                diagnostic=_audit_failure_diagnostic(
+                    row,
+                    failure_stage="coverage_mapping",
+                    message="Mais de uma classificação de cobertura foi encontrada para este destino.",
+                ),
+            )
         if isinstance(match, str) and match.strip():
             freight_region = match
         else:
-            return _status_result(row, AUDIT_STATUS_MISSING_COVERAGE)
+            return _status_result(
+                row,
+                AUDIT_STATUS_MISSING_COVERAGE,
+                diagnostic=_audit_failure_diagnostic(
+                    row,
+                    failure_stage="coverage_mapping",
+                    message="Nenhuma classificação de cobertura foi encontrada para este destino.",
+                ),
+            )
     else:
         freight_region, reason = _resolve_region_without_coverage(row, pricing_index)
         if reason:
-            return _status_result(row, reason)
+            return _status_result(
+                row,
+                reason,
+                freight_region=freight_region,
+                diagnostic=_audit_failure_diagnostic(
+                    row,
+                    failure_stage="coverage_mapping",
+                    freight_region=freight_region,
+                    message="Nenhuma classificação de cobertura foi encontrada para este destino.",
+                ),
+            )
 
+    attempted_pricing_keys = [
+        lookup_key
+        for _lookup_kind, lookup_key in _pricing_rule_lookup_candidates(
+            freight_region,
+            row.get("destination_uf"),
+            row.get("destination_city"),
+        )
+    ]
     rule_match = _find_pricing_rule_match(
         pricing_index,
         freight_region,
@@ -3687,17 +3835,68 @@ def _audit_single_row(
         row.get("destination_city"),
     )
     if rule_match is None:
-        return _status_result(row, AUDIT_STATUS_MISSING_FREIGHT_RULE, freight_region=freight_region)
+        uf = _normalize_destination_uf(row.get("destination_uf"))
+        coverage = _sanitize_cell_string(freight_region)
+        message = (
+            f"Nenhuma regra compatível foi encontrada para {uf} / {coverage}."
+            if uf and coverage
+            else "Nenhuma regra compatível foi encontrada para a classificação de cobertura da linha."
+        )
+        return _status_result(
+            row,
+            AUDIT_STATUS_MISSING_FREIGHT_RULE,
+            freight_region=freight_region,
+            diagnostic=_audit_failure_diagnostic(
+                row,
+                failure_stage="pricing_rule_match",
+                freight_region=freight_region,
+                attempted_keys=attempted_pricing_keys,
+                message=message,
+            ),
+        )
     rule, lookup_kind, lookup_key = rule_match
     if rule.get("pricing_type") == AUDIT_STATUS_UNSUPPORTED_PRICING:
-        return _status_result(row, AUDIT_STATUS_UNSUPPORTED_PRICING, freight_region=freight_region)
+        return _status_result(
+            row,
+            AUDIT_STATUS_UNSUPPORTED_PRICING,
+            freight_region=freight_region,
+            diagnostic=_audit_failure_diagnostic(
+                row,
+                failure_stage="pricing_rule_match",
+                freight_region=freight_region,
+                attempted_keys=attempted_pricing_keys,
+                message="A regra localizada usa um modelo de tarifa ainda não suportado pela auditoria.",
+            ),
+        )
 
     calculated = calculate_weight_freight(weight, rule)
     if calculated is None:
-        return _status_result(row, AUDIT_STATUS_UNSUPPORTED_PRICING, freight_region=freight_region)
+        return _status_result(
+            row,
+            AUDIT_STATUS_UNSUPPORTED_PRICING,
+            freight_region=freight_region,
+            diagnostic=_audit_failure_diagnostic(
+                row,
+                failure_stage="pricing_calculation",
+                freight_region=freight_region,
+                attempted_keys=attempted_pricing_keys,
+                message="A regra localizada não possui dados suficientes para calcular o frete esperado.",
+            ),
+        )
     calculated = _apply_freight_value_component(calculated, row, rule, accessorial_fees=accessorial_fees)
     if calculated is None:
-        return _status_result(row, AUDIT_STATUS_INVALID_INVOICE_VALUE, freight_region=freight_region)
+        return _status_result(
+            row,
+            AUDIT_STATUS_INVALID_INVOICE_VALUE,
+            freight_region=freight_region,
+            diagnostic=_audit_failure_diagnostic(
+                row,
+                failure_stage="pricing_calculation",
+                freight_region=freight_region,
+                attempted_keys=attempted_pricing_keys,
+                message="Valor de nota fiscal inválido ou ausente para uma regra que depende desse campo.",
+            ),
+        )
 
     comparison = compare_charged_vs_expected(charged, calculated["expected_freight"])
     result = _base_audit_result(row)
@@ -3756,6 +3955,263 @@ def _build_audit_summary(results: list[dict], total_rows: int) -> dict:
     return summary
 
 
+def _ordered_non_empty_strings(values) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        cleaned = _sanitize_cell_string(value)
+        normalized = _normalize_audit_lookup_text(cleaned)
+        if not cleaned or not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(cleaned)
+    return ordered
+
+
+def _pricing_index_available_values(pricing_index: dict) -> list[str]:
+    if not isinstance(pricing_index, dict):
+        return []
+    # Composite keys are lookup helpers, not the tariff dimension shown to the user.
+    return _ordered_non_empty_strings(key for key in pricing_index if "|" not in str(key))
+
+
+def _candidate_column_for_requested_values(temp_table: dict, requested_values: list[str]) -> dict | None:
+    requested_norm = {_normalize_audit_lookup_text(value) for value in requested_values}
+    requested_norm.discard("")
+    if not requested_norm or not isinstance(temp_table, dict):
+        return None
+
+    matches: list[dict] = []
+    for table_index, table in enumerate(temp_table.get("freight_tables") or []):
+        if not isinstance(table, dict):
+            continue
+        columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+        rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+        if not columns or not rows:
+            continue
+        current_column = next((col for col in columns if _is_region_column(col)), None)
+        for column in columns:
+            if _is_region_column(column) or _is_destination_uf_column(column):
+                continue
+            candidate_values = _ordered_non_empty_strings(
+                row.get(column) for row in rows if isinstance(row, dict)
+            )
+            candidate_norm = {_normalize_audit_lookup_text(value) for value in candidate_values}
+            candidate_norm.discard("")
+            if candidate_norm == requested_norm:
+                matches.append(
+                    {
+                        "candidate_column": _sanitize_cell_string(column),
+                        "candidate_values": candidate_values,
+                        "current_column": _sanitize_cell_string(current_column),
+                        "table_refs": [f"freight_tables[{table_index}]"],
+                        "exact_candidate_match": True,
+                    }
+                )
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _build_audit_diagnostics(
+    temp_table: dict,
+    *,
+    results: list[dict],
+    pricing_index: dict,
+    generated_at: str,
+) -> dict:
+    error_statuses = {
+        AUDIT_STATUS_MISSING_COVERAGE,
+        AUDIT_STATUS_AMBIGUOUS_COVERAGE,
+        AUDIT_STATUS_MISSING_FREIGHT_RULE,
+        AUDIT_STATUS_INVALID_WEIGHT,
+        AUDIT_STATUS_INVALID_CHARGED_FREIGHT,
+        AUDIT_STATUS_INVALID_INVOICE_VALUE,
+        AUDIT_STATUS_UNSUPPORTED_PRICING,
+    }
+    error_results = [
+        result
+        for result in results
+        if isinstance(result, dict) and result.get("status") in error_statuses
+    ]
+    missing_rule_results = [
+        result
+        for result in error_results
+        if result.get("status") == AUDIT_STATUS_MISSING_FREIGHT_RULE
+        and _sanitize_cell_string(result.get("freight_region"))
+    ]
+
+    groups: list[dict] = []
+    requested_values = _ordered_non_empty_strings(
+        result.get("freight_region") for result in missing_rule_results
+    )
+    available_values = _pricing_index_available_values(pricing_index)
+    requested_norm = {_normalize_audit_lookup_text(value) for value in requested_values}
+    available_norm = {_normalize_audit_lookup_text(value) for value in available_values}
+    requested_norm.discard("")
+    available_norm.discard("")
+    candidate = _candidate_column_for_requested_values(temp_table, requested_values)
+
+    if (
+        missing_rule_results
+        and requested_norm
+        and available_norm
+        and requested_norm.isdisjoint(available_norm)
+        and candidate is not None
+    ):
+        groups.append(
+            {
+                "code": AUDIT_DIAGNOSTIC_PRICING_DIMENSION_MISMATCH,
+                "title": "Dimensão tarifária incompatível",
+                "failure_stage": "pricing_rule_match",
+                "affected_rows": len(missing_rule_results),
+                "sample_row_indexes": [
+                    result.get("row_index")
+                    for result in missing_rule_results[:5]
+                    if result.get("row_index") is not None
+                ],
+                "requested_values": requested_values,
+                "available_values": available_values,
+                "table_refs": list(candidate.get("table_refs") or []),
+                "current_column": candidate.get("current_column"),
+                "candidate_column": candidate["candidate_column"],
+                "candidate_values": candidate["candidate_values"],
+                "confidence": "high",
+                "exact_candidate_match": bool(candidate.get("exact_candidate_match")),
+                "ambiguous": False,
+                "message": (
+                    "As regiões utilizadas na cobertura não coincidem com a dimensão usada nas tarifas."
+                ),
+                "evidence": [],
+                "actionability": {
+                    "can_review_registered_table": True,
+                    "can_apply_automatically": False,
+                    "can_fix_source_files": True,
+                },
+            }
+        )
+
+    diagnostics = {
+        "has_errors": bool(error_results),
+        "total_errors": len(error_results),
+        "generated_at": generated_at,
+        "groups": groups,
+    }
+    diagnostics["suggestions"] = build_audit_correction_suggestions(temp_table, diagnostics)
+    return diagnostics
+
+
+def _format_human_list_pt(values) -> str:
+    items = _ordered_non_empty_strings(values)
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return f"{', '.join(items[:-1])} e {items[-1]}"
+
+
+def _pricing_dimension_mismatch_row_message(result: dict, group: dict) -> str:
+    diagnostic = result.get("diagnostic") if isinstance(result.get("diagnostic"), dict) else {}
+    context = diagnostic.get("search_context") if isinstance(diagnostic.get("search_context"), dict) else {}
+    city = _sanitize_cell_string(context.get("destination_city")) or "A cidade"
+    uf = _sanitize_cell_string(context.get("destination_uf"))
+    coverage = _sanitize_cell_string(context.get("coverage_classification"))
+    current_values = _format_human_list_pt(group.get("available_values"))
+    candidate_column = _sanitize_cell_string(group.get("candidate_column"))
+    candidate_values = _format_human_list_pt(group.get("candidate_values"))
+
+    parts = []
+    if city and coverage:
+        parts.append(f"A cidade {city} foi classificada como {coverage}.")
+    if uf and coverage:
+        parts.append(f"Nenhuma regra compatível foi encontrada para {uf} + {coverage}.")
+    if current_values:
+        parts.append(f"A tabela cadastrada está organizada atualmente pelos valores {current_values}.")
+    if candidate_column and candidate_values:
+        parts.append(
+            f"Foi encontrada a coluna {candidate_column} com os valores {candidate_values}."
+        )
+    return " ".join(parts) or (
+        "As regiões utilizadas na cobertura não coincidem com a dimensão usada nas tarifas."
+    )
+
+
+def _attach_audit_diagnostic_groups(results: list[dict], audit_diagnostics: dict) -> None:
+    groups = audit_diagnostics.get("groups") if isinstance(audit_diagnostics, dict) else []
+    if not isinstance(groups, list):
+        return
+
+    pricing_mismatch_group = next(
+        (
+            group
+            for group in groups
+            if isinstance(group, dict)
+            and group.get("code") == AUDIT_DIAGNOSTIC_PRICING_DIMENSION_MISMATCH
+            and group.get("failure_stage") == "pricing_rule_match"
+        ),
+        None,
+    )
+    if not pricing_mismatch_group:
+        return
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        diagnostic = result.get("diagnostic")
+        if not isinstance(diagnostic, dict):
+            continue
+        if (
+            result.get("status") != AUDIT_STATUS_MISSING_FREIGHT_RULE
+            or diagnostic.get("failure_stage") != "pricing_rule_match"
+        ):
+            continue
+        diagnostic["diagnostic_group_code"] = AUDIT_DIAGNOSTIC_PRICING_DIMENSION_MISMATCH
+        diagnostic["message"] = _limit_diagnostic_text(
+            _pricing_dimension_mismatch_row_message(result, pricing_mismatch_group)
+        )
+
+
+def compute_audit_outputs(record: dict, normalized_rows: list[dict]) -> dict:
+    coverage_table = record.get("coverage_table") if isinstance(record.get("coverage_table"), dict) else None
+    has_coverage = bool(coverage_table and isinstance(coverage_table.get("rows"), list) and coverage_table.get("rows"))
+    coverage_index = build_coverage_index(coverage_table or {"rows": []})
+    pricing_index = build_freight_pricing_index(record)
+    accessorial_fees = record.get("accessorial_fees") if isinstance(record.get("accessorial_fees"), list) else []
+    results = [
+        _audit_single_row(
+            row if isinstance(row, dict) else {},
+            coverage_index=coverage_index,
+            pricing_index=pricing_index,
+            has_coverage=has_coverage,
+            accessorial_fees=accessorial_fees,
+        )
+        for row in normalized_rows
+    ]
+    now = _utcnow().isoformat()
+    summary = _build_audit_summary(results, len(normalized_rows))
+    audit_diagnostics = _build_audit_diagnostics(
+        record,
+        results=results,
+        pricing_index=pricing_index,
+        generated_at=now,
+    )
+    _attach_audit_diagnostic_groups(results, audit_diagnostics)
+    audit_batch = {
+        "normalized_rows": normalized_rows,
+        "results": results,
+        "summary": summary,
+        "audit_diagnostics": audit_diagnostics,
+    }
+    return {
+        "results": results,
+        "summary": summary,
+        "audit_diagnostics": audit_diagnostics,
+        "audit_bi": _public_audit_bi(audit_batch),
+        "pricing_index": pricing_index,
+        "generated_at": now,
+    }
+
+
 def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict:
     _require_session()
     sync_temp_table_with_session_documents()
@@ -3801,29 +4257,17 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
             "O lote auditado não possui linhas normalizadas para processar.",
         )
 
-    coverage_table = record.get("coverage_table") if isinstance(record.get("coverage_table"), dict) else None
-    has_coverage = bool(coverage_table and isinstance(coverage_table.get("rows"), list) and coverage_table.get("rows"))
-    coverage_index = build_coverage_index(coverage_table or {"rows": []})
-    pricing_index = build_freight_pricing_index(record)
-    accessorial_fees = record.get("accessorial_fees") if isinstance(record.get("accessorial_fees"), list) else []
-    results = [
-        _audit_single_row(
-            row if isinstance(row, dict) else {},
-            coverage_index=coverage_index,
-            pricing_index=pricing_index,
-            has_coverage=has_coverage,
-            accessorial_fees=accessorial_fees,
-        )
-        for row in normalized_rows
-    ]
-    summary = _build_audit_summary(results, len(normalized_rows))
-
-    now = _utcnow().isoformat()
+    outputs = compute_audit_outputs(record, normalized_rows)
+    results = outputs["results"]
+    now = outputs["generated_at"]
+    summary = outputs["summary"]
+    audit_diagnostics = outputs["audit_diagnostics"]
     preserved_expires_at = record.get("expires_at")
     updated_batch = dict(audit_batch)
     updated_batch["status"] = AUDIT_BATCH_STATUS_PROCESSED
     updated_batch["results"] = results
     updated_batch["summary"] = summary
+    updated_batch["audit_diagnostics"] = audit_diagnostics
     updated_batch["updated_at"] = now
     updated_batch["processed_at"] = now
     updated_batch["expires_at"] = audit_batch.get("expires_at") or preserved_expires_at
@@ -3841,6 +4285,71 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
             "Não foi possível retornar a tabela temporária processada.",
         )
     return public
+
+
+def _public_audit_diagnostics(audit_diagnostics) -> dict | None:
+    if not isinstance(audit_diagnostics, dict):
+        return None
+
+    public_groups: list[dict] = []
+    groups = audit_diagnostics.get("groups")
+    if isinstance(groups, list):
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            actionability = group.get("actionability")
+            public_actionability = {
+                "can_review_registered_table": False,
+                "can_apply_automatically": False,
+                "can_fix_source_files": False,
+            }
+            if isinstance(actionability, dict):
+                public_actionability = {
+                    "can_review_registered_table": bool(
+                        actionability.get("can_review_registered_table")
+                    ),
+                    "can_apply_automatically": bool(actionability.get("can_apply_automatically")),
+                    "can_fix_source_files": bool(actionability.get("can_fix_source_files")),
+                }
+            raw_evidence = group.get("evidence") if isinstance(group.get("evidence"), list) else []
+            public_evidence = _ordered_non_empty_strings(raw_evidence)
+            public_group = {
+                "code": _sanitize_cell_string(group.get("code")),
+                "title": _sanitize_cell_string(group.get("title")),
+                "failure_stage": _sanitize_cell_string(group.get("failure_stage")),
+                "affected_rows": group.get("affected_rows"),
+                "sample_row_indexes": list(group.get("sample_row_indexes") or [])[:5],
+                "requested_values": _ordered_non_empty_strings(group.get("requested_values")),
+                "available_values": _ordered_non_empty_strings(group.get("available_values")),
+                "candidate_column": _sanitize_cell_string(group.get("candidate_column")),
+                "candidate_values": _ordered_non_empty_strings(group.get("candidate_values")),
+                "confidence": _sanitize_cell_string(group.get("confidence")),
+                "message": _sanitize_cell_string(group.get("message")),
+                "evidence": public_evidence,
+                "actionability": public_actionability,
+            }
+            public_table_refs = [
+                _sanitize_cell_string(ref)
+                for ref in list(group.get("table_refs") or [])[:10]
+                if _sanitize_cell_string(ref)
+            ]
+            if public_table_refs:
+                public_group["table_refs"] = public_table_refs
+            public_current_column = _sanitize_cell_string(group.get("current_column"))
+            if public_current_column:
+                public_group["current_column"] = public_current_column
+            public_groups.append(public_group)
+
+    public_diagnostics = {
+        "has_errors": bool(audit_diagnostics.get("has_errors")),
+        "total_errors": audit_diagnostics.get("total_errors") or 0,
+        "generated_at": _sanitize_cell_string(audit_diagnostics.get("generated_at")),
+        "groups": public_groups,
+    }
+    suggestions = list(audit_diagnostics.get("suggestions") or [])
+    if suggestions:
+        public_diagnostics["suggestions"] = suggestions
+    return public_diagnostics
 
 
 def _public_audit_batch(audit_batch) -> dict | None:
@@ -3866,6 +4375,7 @@ def _public_audit_batch(audit_batch) -> dict | None:
         "header_map": dict(audit_batch.get("header_map") or {}),
         "results": list(audit_batch.get("results") or []),
         "summary": audit_batch.get("summary"),
+        "audit_diagnostics": _public_audit_diagnostics(audit_batch.get("audit_diagnostics")),
         "processed_at": audit_batch.get("processed_at"),
     }
 
@@ -3903,7 +4413,11 @@ def upload_audit_batch_from_file(
             ERROR_AUDIT_EMPTY_FILE,
             "O arquivo auditado está vazio.",
         )
-    if len(file_bytes) > AUDIT_UPLOAD_MAX_BYTES:
+    cfg = get_cleiton_doc_config()
+    audit_cfg = get_cleide_audit_config()
+    audit_limits = resolve_audited_file_limits(audit_cfg, global_cfg=cfg)
+    max_bytes = int(audit_limits["effective_max_bytes"] or 0)
+    if len(file_bytes) > max_bytes:
         raise CleideAuditBatchError(
             ERROR_AUDIT_PAYLOAD_TOO_LARGE,
             "O arquivo auditado excede o limite de tamanho permitido.",
@@ -3931,7 +4445,6 @@ def upload_audit_batch_from_file(
             "Nenhuma tabela temporária ativa nesta sessão.",
         )
 
-    cfg = get_cleiton_doc_config()
     record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
     if record is None:
         clear_temp_table_session_refs(session)
@@ -3953,8 +4466,7 @@ def upload_audit_batch_from_file(
         )
     _assert_temp_table_scope(record, user_scope=user_scope, franquia_scope=franquia_scope)
 
-    audit_cfg = get_cleide_audit_config()
-    max_rows = int(audit_cfg.audited_file_max_rows)
+    max_rows = int(audit_limits["effective_max_rows"] or 0)
     safe_name = secure_filename(display_name or "auditado") or "auditado"
     if ext == ".csv":
         normalized_rows, header_map, sheet_name = _parse_audit_csv_bytes(
@@ -3966,6 +4478,7 @@ def upload_audit_batch_from_file(
         normalized_rows, header_map, sheet_name = _parse_audit_xlsx_bytes(
             file_bytes,
             source_file_name=safe_name,
+            max_bytes=max_bytes,
             max_rows=max_rows,
         )
 
@@ -3989,6 +4502,7 @@ def upload_audit_batch_from_file(
         "normalized_rows": normalized_rows,
         "results": [],
         "summary": None,
+        "audit_diagnostics": None,
     }
 
     updated = dict(record)
@@ -4126,6 +4640,8 @@ def _public_temp_table(record: dict | None) -> dict | None:
     if not record:
         return None
     ui = record.get("ui_visibility") if isinstance(record.get("ui_visibility"), dict) else {}
+    correction_history = record.get("correction_history") if isinstance(record.get("correction_history"), list) else []
+    last_correction = correction_history[-1] if correction_history and isinstance(correction_history[-1], dict) else {}
     public = {
         "temp_table_id": record.get("temp_table_id"),
         "status": record.get("status"),
@@ -4160,6 +4676,12 @@ def _public_temp_table(record: dict | None) -> dict | None:
         "human_edited_at": record.get("human_edited_at"),
         "human_edited_by_user_id": record.get("human_edited_by_user_id"),
         "edit_version": record.get("edit_version"),
+        "audit_correction": {
+            "can_undo": bool(correction_history),
+            "last_application_id": record.get("last_correction_application_id") or last_correction.get("application_id"),
+            "last_applied_at": record.get("last_correction_applied_at") or last_correction.get("applied_at"),
+            "last_suggestion_id": last_correction.get("suggestion_id"),
+        },
     }
     coverage = _public_coverage_table(record.get("coverage_table"))
     if coverage is not None:
@@ -4368,6 +4890,7 @@ ACCESSORIAL_FEE_OPTIONAL_FIELDS = (
     "operation_parameters",
     "classification_source",
     "classification_warning",
+    "note_classification",
     "raw_calculation_basis",
     "source_block",
     "original_text",
@@ -4667,12 +5190,55 @@ def _accessorial_percent_values(parts: dict[str, str]) -> list[str]:
     return list(dict.fromkeys(_normalize_coverage_header(match) for match in matches))
 
 
+def _accessorial_percent_decimals(parts: dict[str, str], fields: tuple[str, ...] | None = None) -> list[Decimal]:
+    values = _accessorial_explicit_percent_values(_accessorial_joined_text(parts, fields))
+    unique: list[Decimal] = []
+    for value in values:
+        if not any(value == existing for existing in unique):
+            unique.append(value)
+    return unique
+
+
+def _accessorial_has_multiple_material_percentages(parts: dict[str, str]) -> bool:
+    values = _accessorial_percent_decimals(parts, ("value", "notes", "original_text", "name"))
+    if len(values) <= 1:
+        return False
+    first = values[0].quantize(Decimal("0.000001"))
+    return any(value.quantize(Decimal("0.000001")) != first for value in values[1:])
+
+
 def _accessorial_has_uf_condition(parts: dict[str, str]) -> bool:
     text = _accessorial_joined_text(parts)
     if not text:
         return False
     uf_pattern = "|".join(_BRAZILIAN_UF_CODES)
     return bool(re.search(rf"\b(?:{uf_pattern})(?:\s*/\s*(?:{uf_pattern}))?\b", text.upper()))
+
+
+def _accessorial_has_operational_condition(parts: dict[str, str]) -> bool:
+    condition_text = _accessorial_normalized_text(parts, ("notes", "scope", "original_text"))
+    full_text = _accessorial_normalized_text(parts)
+    return bool(
+        _accessorial_contains_any(condition_text, _ACCESSORIAL_CONDITIONAL_MARKERS)
+        or _accessorial_has_uf_condition(parts)
+        or _accessorial_has_non_priced_day_condition(parts)
+        or _accessorial_has_multiple_material_percentages(parts)
+        or _accessorial_contains_any(
+            full_text,
+            {"mercadoria", "modalidade", "modal", "prazo", "origem especifica", "destino especifico"},
+        )
+    )
+
+
+def _accessorial_note_classification(parts: dict[str, str]) -> str | None:
+    if _accessorial_has_operational_condition(parts):
+        return "unsupported_operational_condition"
+    text = _accessorial_normalized_text(parts, ("notes", "original_text", "value", "name"))
+    if "minimo" in text or "minima" in text or "cobranca minima" in text:
+        return "structured_minimum_rule"
+    if _accessorial_joined_text(parts, ("notes", "original_text")).strip():
+        return "descriptive_notes"
+    return None
 
 
 def _accessorial_is_compound_rule(parts: dict[str, str]) -> bool:
@@ -4688,7 +5254,7 @@ def _accessorial_is_compound_rule(parts: dict[str, str]) -> bool:
     )
     return bool(
         (has_percent and has_minimum_or_maximum)
-        or len(percent_values) > 1
+        or _accessorial_has_multiple_material_percentages(parts)
         or (has_percent and _accessorial_has_uf_condition(parts))
     )
 
@@ -4876,6 +5442,7 @@ def _finalize_accessorial_minimum_modifier(item: dict, parts: dict[str, str], de
 def _derive_accessorial_fee_fields(item: dict) -> dict:
     parts = _accessorial_text_parts(item)
     calculation_type, confidence, unsupported_reason = _classify_accessorial_calculation_type(parts)
+    note_classification = _accessorial_note_classification(parts)
     canonical_component = _classify_accessorial_canonical_component(parts)
     explicit_group = _normalize_accessorial_component_ref(item.get("component_group"))
     component_group = explicit_group or _infer_accessorial_component_group(parts)
@@ -4895,6 +5462,8 @@ def _derive_accessorial_fee_fields(item: dict) -> dict:
     }
     if unsupported_reason:
         derived["unsupported_reason"] = unsupported_reason
+    if note_classification:
+        derived["note_classification"] = note_classification
 
     has_unmapped_basis = str(parts.get("calculation_basis") or "").strip().lower() == UNMAPPED_CALCULATION_BASIS_LABEL
     has_explicit_base_id = bool(item.get("_has_explicit_calculation_base_id")) and _optional_normalized_str(
@@ -4991,9 +5560,10 @@ def _derive_accessorial_fee_fields(item: dict) -> dict:
             derived["minimum_amount"] = _round_money(amount)
         if amount is not None and ("teto" in normalized_text or "maximo" in normalized_text):
             derived["maximum_amount"] = _round_money(amount)
-        condition_text = _accessorial_joined_text(parts, ("notes", "scope", "original_text", "value"))
-        if condition_text:
-            derived["conditions"] = condition_text
+        if note_classification == "unsupported_operational_condition":
+            condition_text = _accessorial_joined_text(parts, ("notes", "scope", "original_text", "value"))
+            if condition_text:
+                derived["conditions"] = condition_text
 
     if calculation_type in {"invoice_percentage", "freight_percentage"}:
         rate = _accessorial_first_rate(parts)
@@ -5003,9 +5573,24 @@ def _derive_accessorial_fee_fields(item: dict) -> dict:
             amount = _accessorial_first_money(parts)
             if amount is not None and "minimo" in _accessorial_normalized_text(parts):
                 derived["minimum_amount"] = _round_money(amount)
-            condition_text = _accessorial_joined_text(parts, ("notes", "scope", "original_text", "value"))
-            if condition_text:
-                derived["conditions"] = condition_text
+            if note_classification == "unsupported_operational_condition":
+                condition_text = _accessorial_joined_text(parts, ("notes", "scope", "original_text", "value"))
+                if condition_text:
+                    derived["conditions"] = condition_text
+        if (
+            configured_base_result.get("status") == "matched"
+            and note_classification != "unsupported_operational_condition"
+            and rate is not None
+            and str(derived.get("operation") or "").strip() in _SUPPORTED_ACCESSORIAL_ADVANCE_OPERATIONS
+            and (
+                str(derived.get("operation") or "").strip() != "percentage_of_variable"
+                or str(derived.get("audit_variable") or "").strip()
+            )
+        ):
+            derived.pop("unsupported_reason", None)
+            derived.pop("conditions", None)
+            derived["classification_confidence"] = "high"
+            derived["status"] = "calculable"
     elif calculation_type == "fixed_amount":
         amount = _accessorial_first_money(parts)
         if amount is not None:
@@ -5036,6 +5621,7 @@ ACCESSORIAL_FEE_DERIVED_FIELDS = (
     "operation_parameters",
     "classification_source",
     "classification_warning",
+    "note_classification",
     "canonical_component",
     "classification_confidence",
     "status",
@@ -5395,6 +5981,80 @@ def _accessorial_fee_has_valid_minimum_amount(fee: dict) -> bool:
     return _accessorial_first_money(_accessorial_text_parts(fee)) is not None
 
 
+def _accessorial_explicit_percent_values(text) -> list[Decimal]:
+    source = _sanitize_cell_string(text) or ""
+    values: list[Decimal] = []
+    index = 0
+    while index < len(source):
+        percent_index = source.find("%", index)
+        if percent_index < 0:
+            break
+        start = percent_index - 1
+        while start >= 0 and source[start].isspace():
+            start -= 1
+        end = start + 1
+        while start >= 0 and (
+            source[start].isdigit()
+            or source[start] in {".", ","}
+        ):
+            start -= 1
+        token = source[start + 1:end]
+        parsed = _parse_decimal_number(token)
+        if parsed is not None:
+            values.append(parsed)
+        index = percent_index + 1
+    unique: list[Decimal] = []
+    for value in values:
+        if not any(value == existing for existing in unique):
+            unique.append(value)
+    return unique
+
+
+def _format_accessorial_percent(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    return _format_brazilian_decimal(value)
+
+
+def _accessorial_percent_materially_differs(left: Decimal, right: Decimal) -> bool:
+    return left.quantize(Decimal("0.000001")) != right.quantize(Decimal("0.000001"))
+
+
+def _accessorial_rate_conflict_for_advance(fee: dict, index: int) -> dict | None:
+    unit = normalize_calculation_base_unit(fee.get("unit"))
+    if unit != "%":
+        return None
+    structured_rate = _accessorial_runtime_rate(fee)
+    if structured_rate is None:
+        return None
+    structured_percent = structured_rate * Decimal("100")
+    described_values = _accessorial_explicit_percent_values(fee.get("notes"))
+    if len(described_values) != 1:
+        return None
+    described_percent = described_values[0]
+    if not _accessorial_percent_materially_differs(structured_percent, described_percent):
+        return None
+    name = _sanitize_cell_string(fee.get("name")) or f"Item {index + 1}"
+    message = ERROR_ACCESSORIAL_RATE_CONFLICT_MESSAGE_TEMPLATE.format(
+        name=name,
+        structured_percent=_format_accessorial_percent(structured_percent),
+        described_percent=_format_accessorial_percent(described_percent),
+    )
+    error = _accessorial_advance_validation_error(
+        index=index,
+        fee=fee,
+        field="value",
+        reason_code="accessorial_rate_conflict",
+        message=message,
+    )
+    error["code"] = "accessorial_rate_conflict"
+    error["severity"] = "blocking"
+    error["structured_percent"] = float(structured_percent)
+    error["described_percent"] = float(described_percent)
+    error["related_fields"] = ["value", "notes"]
+    return error
+
+
 def _accessorial_fee_missing_calculation_base(
     fee: dict,
     active_bases_by_id: dict[str, dict],
@@ -5436,12 +6096,24 @@ def _accessorial_advance_validation_error(
     reason_code: str,
     message: str,
 ) -> dict:
+    code_by_reason = {
+        "missing_calculation_base": "unknown_calculation_basis",
+        "unsupported_or_incomplete_operation": "unsupported_compound_rule",
+        "invalid_accessorial_value": "invalid_accessorial_value",
+        "incompatible_accessorial_unit": "incompatible_accessorial_unit",
+        "missing_minimum_base_link": "minimum_without_base",
+        "invalid_minimum_base_link": "minimum_without_base",
+        "accessorial_rate_conflict": "accessorial_rate_conflict",
+        "percentage_without_audit_variable": "percentage_without_audit_variable",
+    }
     return {
+        "code": code_by_reason.get(reason_code, reason_code),
         "section": "accessorial_fees",
         "index": index,
         "name": _sanitize_cell_string(fee.get("name")) or f"Item {index + 1}",
         "field": field,
         "reason_code": reason_code,
+        "severity": "blocking",
         "message": message,
     }
 
@@ -5450,6 +6122,7 @@ def _validate_linked_minimum_amount_for_advance(
     fee: dict,
     index: int,
     accessorial_fees: list[dict],
+    active_bases_by_id: dict[str, dict],
 ) -> dict | None:
     if not _accessorial_fee_has_valid_minimum_amount(fee):
         return _accessorial_advance_validation_error(
@@ -5468,7 +6141,25 @@ def _validate_linked_minimum_amount_for_advance(
             reason_code="missing_minimum_base_link",
             message=ERROR_ACCESSORIAL_MINIMUM_LINK_MESSAGE,
         )
-    if _find_accessorial_minimum_base_fee(fee, accessorial_fees, exclude_index=index) is None:
+    base_fee = _find_accessorial_minimum_base_fee(fee, accessorial_fees, exclude_index=index)
+    base_is_valid = False
+    if base_fee is not None:
+        base_error = None
+        has_explicit_base_contract = bool(
+            str(base_fee.get("operation") or "").strip()
+            or str(base_fee.get("classification_source") or "").strip().startswith("manual_")
+            or str(base_fee.get("classification_source") or "").strip() == "configured_calculation_base"
+        )
+        if has_explicit_base_contract and _accessorial_fee_uses_new_base_contract(base_fee):
+            base_error = _validate_accessorial_fee_for_advance(
+                base_fee,
+                index,
+                active_bases_by_id,
+            )
+        else:
+            base_error = None if _accessorial_runtime_rate(base_fee) is not None else {}
+        base_is_valid = base_error is None and _accessorial_rate_conflict_for_advance(base_fee, index) is None
+    if not base_is_valid:
         return _accessorial_advance_validation_error(
             index=index,
             fee=fee,
@@ -5491,6 +6182,15 @@ def _validate_accessorial_fee_for_advance(
             field="calculation_base_id",
             reason_code="missing_calculation_base",
             message=ERROR_ACCESSORIAL_CALCULATION_BASE_MESSAGE,
+        )
+    operation = str(fee.get("operation") or "").strip()
+    if operation == "percentage_of_variable" and not str(fee.get("audit_variable") or "").strip():
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field="calculation_base_id",
+            reason_code="percentage_without_audit_variable",
+            message=ERROR_ACCESSORIAL_OPERATION_MESSAGE,
         )
     if not _accessorial_fee_operation_is_complete(fee):
         return _accessorial_advance_validation_error(
@@ -5516,6 +6216,9 @@ def _validate_accessorial_fee_for_advance(
             reason_code="incompatible_accessorial_unit",
             message=ERROR_ACCESSORIAL_UNIT_MESSAGE,
         )
+    conflict = _accessorial_rate_conflict_for_advance(fee, index)
+    if conflict is not None:
+        return conflict
     return None
 
 
@@ -5535,7 +6238,12 @@ def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
         if not isinstance(fee, dict) or not _is_general_accessorial_fee_for_base_validation(fee):
             continue
         if _accessorial_fee_is_minimum_modifier(fee):
-            error = _validate_linked_minimum_amount_for_advance(fee, index, accessorial_fees)
+            error = _validate_linked_minimum_amount_for_advance(
+                fee,
+                index,
+                accessorial_fees,
+                active_bases_by_id,
+            )
             if error is not None:
                 errors.append(error)
             continue
@@ -5607,7 +6315,10 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
             "edit_target é obrigatório.",
         )
     review_action = payload.get("review_action")
-    if review_action is not None and review_action != TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE:
+    if review_action is not None and review_action not in {
+        TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE,
+        TEMP_TABLE_REVIEW_ACTION_SAVE_DRAFT,
+    }:
         raise CleideAuditTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "review_action inválida.",

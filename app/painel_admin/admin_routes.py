@@ -552,7 +552,14 @@ def agentes_cleide():
             except ValueError as e:
                 flash(str(e), "warning")
             except Exception as e:
-                _log.exception("Erro ao salvar bases de cálculo da Cleide Auditoria: %s", e)
+                db.session.rollback()
+                _log.exception(
+                    "Erro ao salvar bases de cálculo da Cleide Auditoria "
+                    "(form_name=%s, keys=%s): %s",
+                    form_name,
+                    sorted(request.form.keys()),
+                    e,
+                )
                 flash(
                     "Não foi possível salvar as bases de cálculo da Cleide Auditoria.",
                     "danger",
@@ -569,6 +576,9 @@ def agentes_cleide():
                     request.form.get("max_documents_considered") or ""
                 ).strip(),
                 "question_max_chars": (request.form.get("question_max_chars") or "").strip(),
+                "audited_file_max_bytes": (
+                    request.form.get("audited_file_max_bytes") or ""
+                ).strip(),
                 "audited_file_max_rows": (
                     request.form.get("audited_file_max_rows") or ""
                 ).strip(),
@@ -590,7 +600,14 @@ def agentes_cleide():
             except ValueError as e:
                 flash(str(e), "warning")
             except Exception as e:
-                _log.exception("Erro ao salvar parâmetros da Cleide Auditoria: %s", e)
+                db.session.rollback()
+                _log.exception(
+                    "Erro ao salvar parâmetros da Cleide Auditoria "
+                    "(form_name=%s, keys=%s): %s",
+                    form_name,
+                    sorted(campos.keys()),
+                    e,
+                )
                 flash(
                     "Não foi possível salvar os parâmetros da Cleide Auditoria documental.",
                     "danger",

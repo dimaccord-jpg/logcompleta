@@ -12,6 +12,7 @@ import pytest
 from app.cleide_audit_doc_service import (
     AUDIT_BI_DATASET_VERSION,
     CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+    _public_audit_batch,
     _public_audit_bi,
 )
 from app.cleiton_doc_contracts import (
@@ -48,6 +49,7 @@ def _default_audit_cfg(**overrides):
         "no_documents_behavior": "allow_guided",
         "show_documents_used": True,
         "no_hallucination_instruction_enabled": True,
+        "audited_file_max_bytes": None,
         "audited_file_max_rows": 2000,
     }
     defaults.update(overrides)
@@ -151,6 +153,18 @@ def test_anonymous_receives_401_on_all_endpoints(app, ctx, monkeypatch, tmp_path
     ).status_code == 401
     assert _post_temp_table_save(client, {"temp_table_id": "x", "edit_target": {}}).status_code == 401
     assert client.post("/api/cleide-auditoria/audit/run", json={}).status_code == 401
+    assert client.post(
+        "/api/cleide-auditoria/audit/correction/preview",
+        json={"suggestion_id": "sug_1"},
+    ).status_code == 401
+    assert client.post(
+        "/api/cleide-auditoria/audit/correction/apply",
+        json={"preview_id": "prev_1", "suggestion_id": "sug_1"},
+    ).status_code == 401
+    assert client.post(
+        "/api/cleide-auditoria/audit/correction/undo",
+        json={"application_id": "corr_1"},
+    ).status_code == 401
 
     body = client.get("/api/cleide-auditoria/documents/status").get_json()
     assert body["error_code"] == "auth_required"
@@ -208,6 +222,92 @@ def test_status_returns_only_active_calculation_bases(web_client, monkeypatch):
     assert ids == ["pct_nota_fiscal"]
     assert body["calculation_bases"][0]["parameters"] == {}
     assert body["calculation_bases"][0]["audit_variable"] == "valor_nf"
+
+
+def test_correction_preview_route_accepts_only_suggestion_id(web_client, monkeypatch):
+    preview_payload = {
+        "preview_id": "prev_1",
+        "suggestion_id": "sug_1",
+        "generated_at": "2026-07-07T19:00:00+00:00",
+        "expires_at": "2026-07-07T19:10:00+00:00",
+        "before": {"summary": {}, "diagnostic_totals": {}},
+        "after": {"summary": {}, "diagnostic_totals": {}},
+        "delta": {
+            "resolved_errors": 1,
+            "remaining_errors": 0,
+            "new_errors": 0,
+            "changed_rows": 1,
+            "new_ok": 1,
+            "new_divergent": 0,
+        },
+        "regressions": [],
+        "sample_changes": [],
+        "remaining_errors": [],
+        "safe_to_apply": True,
+        "safety_reasons": [],
+    }
+    preview_mock = MagicMock(return_value=preview_payload)
+    monkeypatch.setattr("app.cleide_audit_routes.preview_audit_correction_for_session", preview_mock)
+
+    resp = web_client.post(
+        "/api/cleide-auditoria/audit/correction/preview",
+        json={
+            "suggestion_id": "sug_1",
+            "transformation": {"type": "select_pricing_dimension", "parameters": {"candidate_column": "ignored"}},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["preview"] == preview_payload
+    preview_mock.assert_called_once()
+    assert preview_mock.call_args.args == ("sug_1",)
+
+
+def test_correction_apply_route_accepts_only_preview_identifiers(web_client, monkeypatch):
+    applied_payload = {
+        "application_id": "corr_1",
+        "temp_table": {"temp_table_id": "tt-test", "audit_correction": {"can_undo": True}},
+    }
+    apply_mock = MagicMock(return_value=applied_payload)
+    monkeypatch.setattr("app.cleide_audit_routes.apply_audit_correction_for_session", apply_mock)
+
+    resp = web_client.post(
+        "/api/cleide-auditoria/audit/correction/apply",
+        json={
+            "preview_id": "prev_1",
+            "suggestion_id": "sug_1",
+            "transformation": {"parameters": {"candidate_column": "ignored"}},
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["application_id"] == "corr_1"
+    assert body["temp_table"]["audit_correction"]["can_undo"] is True
+    apply_mock.assert_called_once()
+    assert apply_mock.call_args.kwargs["preview_id"] == "prev_1"
+    assert apply_mock.call_args.kwargs["suggestion_id"] == "sug_1"
+
+
+def test_correction_undo_route_accepts_application_id(web_client, monkeypatch):
+    undo_payload = {
+        "undone_application_id": "corr_1",
+        "temp_table": {"temp_table_id": "tt-test", "audit_correction": {"can_undo": False}},
+    }
+    undo_mock = MagicMock(return_value=undo_payload)
+    monkeypatch.setattr("app.cleide_audit_routes.undo_last_audit_correction_for_session", undo_mock)
+
+    resp = web_client.post(
+        "/api/cleide-auditoria/audit/correction/undo",
+        json={"application_id": "corr_1"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["undone_application_id"] == "corr_1"
+    assert body["temp_table"]["audit_correction"]["can_undo"] is False
+    undo_mock.assert_called_once()
+    assert undo_mock.call_args.kwargs["application_id"] == "corr_1"
 
 
 def test_status_exposes_combined_upload_flags(web_client, monkeypatch):
@@ -607,6 +707,74 @@ def test_cleide_bi_template_route_unchanged(app, ctx, monkeypatch, tmp_path):
     resp = client.get("/api/cleide/template")
     assert resp.status_code == 200
     assert resp.data.startswith(b"PK")
+
+
+def test_public_audit_batch_exposes_sanitized_audit_diagnostics():
+    audit_batch = {
+        "status": "processed",
+        "row_count": 609,
+        "results": [],
+        "summary": {"total_rows": 609},
+        "audit_diagnostics": {
+            "has_errors": True,
+            "total_errors": 609,
+            "generated_at": "2026-07-07T19:30:00+00:00",
+            "groups": [
+                {
+                    "code": "pricing_dimension_mismatch",
+                    "title": "Dimensão tarifária incompatível",
+                    "failure_stage": "pricing_rule_match",
+                    "affected_rows": 609,
+                    "sample_row_indexes": [1, 2, 3, 4, 5, 6],
+                    "requested_values": ["CAPITAL", "INTERIOR 1", "", "CAPITAL"],
+                    "available_values": ["SUL", "SUDESTE"],
+                    "candidate_column": "RAIO",
+                    "candidate_values": ["CAPITAL", "INTERIOR 1"],
+                    "confidence": "high",
+                    "message": "As regiões utilizadas na cobertura não coincidem.",
+                    "evidence": [],
+                    "actionability": {
+                        "can_review_registered_table": True,
+                        "can_apply_automatically": False,
+                        "can_fix_source_files": True,
+                        "internal_note": "não expor",
+                    },
+                    "internal_debug": "não expor",
+                }
+            ],
+        },
+    }
+
+    payload = _public_audit_batch(audit_batch)
+
+    diagnostics = payload["audit_diagnostics"]
+    assert diagnostics == {
+        "has_errors": True,
+        "total_errors": 609,
+        "generated_at": "2026-07-07T19:30:00+00:00",
+        "groups": [
+            {
+                "code": "pricing_dimension_mismatch",
+                "title": "Dimensão tarifária incompatível",
+                "failure_stage": "pricing_rule_match",
+                "affected_rows": 609,
+                "sample_row_indexes": [1, 2, 3, 4, 5],
+                "requested_values": ["CAPITAL", "INTERIOR 1"],
+                "available_values": ["SUL", "SUDESTE"],
+                "candidate_column": "RAIO",
+                "candidate_values": ["CAPITAL", "INTERIOR 1"],
+                "confidence": "high",
+                "message": "As regiões utilizadas na cobertura não coincidem.",
+                "evidence": [],
+                "actionability": {
+                    "can_review_registered_table": True,
+                    "can_apply_automatically": False,
+                    "can_fix_source_files": True,
+                },
+            }
+        ],
+    }
+    assert "audit_diagnostics" in payload
 
 
 def test_public_audit_bi_not_ready_without_normalized_rows():

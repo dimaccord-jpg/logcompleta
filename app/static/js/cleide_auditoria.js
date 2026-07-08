@@ -10,6 +10,9 @@
   var API_AUDIT_TEMPLATE = '/api/cleide-auditoria/audit-template';
   var API_AUDIT_UPLOAD = '/api/cleide-auditoria/audit/upload';
   var API_AUDIT_RUN = '/api/cleide-auditoria/audit/run';
+  var API_AUDIT_CORRECTION_PREVIEW = '/api/cleide-auditoria/audit/correction/preview';
+  var API_AUDIT_CORRECTION_APPLY = '/api/cleide-auditoria/audit/correction/apply';
+  var API_AUDIT_CORRECTION_UNDO = '/api/cleide-auditoria/audit/correction/undo';
   var uploadInFlight = false;
   var chatInFlight = false;
   var chatHistory = [];
@@ -406,7 +409,7 @@
           return;
         }
         if (res.data.temp_table) {
-          currentTempTable = res.data.temp_table;
+          setCurrentTempTable(res.data.temp_table);
         }
         if (hasCoverageRows(currentTempTable)) {
           coverageStepActive = true;
@@ -483,7 +486,7 @@
           return;
         }
         if (res.data.temp_table) {
-          currentTempTable = res.data.temp_table;
+          setCurrentTempTable(res.data.temp_table);
         }
         tempTableEditMode = false;
         tempTableEditSnapshot = null;
@@ -568,7 +571,7 @@
   function cancelTempTableEdit() {
     if (!tempTableEditMode) return;
     if (tempTableEditSnapshot) {
-      currentTempTable = deepCloneTempTable(tempTableEditSnapshot);
+      setCurrentTempTable(deepCloneTempTable(tempTableEditSnapshot), { refreshAuditBi: false });
     }
     tempTableEditMode = false;
     tempTableEditSnapshot = null;
@@ -683,6 +686,57 @@
     return isFinite(parsed) && parsed > 0 ? parsed : null;
   }
 
+  function accessorialParseExplicitPercentValues(text) {
+    var source = String(text || '');
+    var values = [];
+    var index = 0;
+    while (index < source.length) {
+      var percentIndex = source.indexOf('%', index);
+      if (percentIndex < 0) break;
+      var end = percentIndex - 1;
+      while (end >= 0 && /\s/.test(source.charAt(end))) end -= 1;
+      var start = end;
+      while (start >= 0 && /[0-9.,]/.test(source.charAt(start))) start -= 1;
+      var token = source.slice(start + 1, end + 1);
+      var parsed = accessorialParsePositiveDecimal(token);
+      if (parsed !== null && values.indexOf(parsed) === -1) values.push(parsed);
+      index = percentIndex + 1;
+    }
+    return values;
+  }
+
+  function accessorialFormatPercent(value) {
+    var num = Number(value);
+    if (!isFinite(num)) return '';
+    return num.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 6 });
+  }
+
+  function accessorialRateConflictError(fee, feeIndex) {
+    if (normalizeCalculationUnit(fee && fee.unit) !== '%') return null;
+    var structured = accessorialParsePositiveDecimal(fee && fee.value);
+    if (structured === null) return null;
+    var described = accessorialParseExplicitPercentValues(fee && fee.notes);
+    if (described.length !== 1) return null;
+    if (Math.abs(structured - described[0]) < 0.000001) return null;
+    var name = hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1);
+    return {
+      code: 'accessorial_rate_conflict',
+      section: 'accessorial_fees',
+      index: feeIndex,
+      name: name,
+      field: 'value',
+      related_fields: ['value', 'notes'],
+      structured_percent: structured,
+      described_percent: described[0],
+      severity: 'blocking',
+      reason_code: 'accessorial_rate_conflict',
+      message: 'Há informações contraditórias na regra ' + name + '.\n\n'
+        + 'Valor informado no campo: ' + accessorialFormatPercent(structured) + '%\n'
+        + 'Valor descrito na observação: ' + accessorialFormatPercent(described[0]) + '%\n\n'
+        + 'O sistema não pode decidir qual percentual utilizar. Corrija o valor, ajuste a observação ou exclua esta regra antes de continuar.'
+    };
+  }
+
   function syncAccessorialMinimumAmountFields(fees) {
     if (!Array.isArray(fees)) return;
     fees.forEach(function (fee) {
@@ -745,7 +799,7 @@
   }
 
   function accessorialMinimumLinkErrorMessage() {
-    return 'Vincule este mínimo à taxa principal correspondente ou exclua a linha.';
+    return 'Esta regra mínima não possui uma taxa principal válida vinculada. Corrija ou exclua a regra antes de continuar.';
   }
 
   function accessorialFeeMissingCalculationBase(fee) {
@@ -799,6 +853,9 @@
 
   function accessorialFieldErrorMessage(error) {
     if (!error) return '';
+    if (error.code === 'accessorial_rate_conflict' || error.reason_code === 'accessorial_rate_conflict') {
+      return error.message || 'Há informações contraditórias nesta regra. Corrija o valor, a observação ou exclua a linha.';
+    }
     if (error.reason_code === 'incompatible_accessorial_unit') {
       return 'Ajuste a unidade para a base selecionada.';
     }
@@ -867,6 +924,8 @@
             reason_code: 'incompatible_accessorial_unit',
             message: accessorialUnitErrorMessage()
           };
+        } else {
+          error = accessorialRateConflictError(fee, feeIndex);
         }
       }
       if (error) errors.push(error);
@@ -881,7 +940,11 @@
         error
         && error.section === 'accessorial_fees'
         && Number(error.index) === feeIndex
-        && (!field || error.field === field)
+        && (
+          !field
+          || error.field === field
+          || (Array.isArray(error.related_fields) && error.related_fields.indexOf(field) !== -1)
+        )
       ) {
         return error;
       }
@@ -982,7 +1045,7 @@
           return;
         }
         if (res.data.temp_table) {
-          currentTempTable = res.data.temp_table;
+          setCurrentTempTable(res.data.temp_table);
         }
         clearTempTableValidationErrors();
         tempTableEditMode = false;
@@ -1071,9 +1134,9 @@
       resetAuditFileStepState();
     }
     if (tempTable && tempTable.temp_table_id) {
-      currentTempTable = tempTable;
+      setCurrentTempTable(tempTable);
     } else {
-      currentTempTable = null;
+      setCurrentTempTable(null);
     }
     renderDocuments(data.documents || [], tempTable);
     announceTempTableStatusIfNeeded(tempTable);
@@ -1222,36 +1285,30 @@
   }
 
   var AUDIT_BI_CHART_LABELS = {
-    transportadora: 'Top Transportadoras',
-    uf_destino: 'Custo por UF Destino',
-    temporal: 'Evolução Diária',
-    uf_origem: 'Custo por UF Origem',
-    volume_transportadora: 'Volume por Transportadora',
-    pareto_uf: 'Ocorrências por UF Destino',
-    pareto_transportadora: 'Ocorrências por Transportadora'
+    transportadora: 'Impacto Financeiro por Transportadora',
+    uf_destino: 'Divergência Financeira por UF Destino',
+    temporal: 'Evolução da Divergência no Período',
+    pareto_transportadora: 'Pareto do Valor Cobrado a Mais'
   };
 
   var AUDIT_BI_CHART_KEYS = [
     'transportadora',
     'uf_destino',
     'temporal',
-    'uf_origem',
-    'volume_transportadora',
-    'pareto_uf',
     'pareto_transportadora'
   ];
 
   var AUDIT_BI_FIELD_REQUIREMENTS = {
-    transportadora: ['carrier'],
-    uf_destino: ['destination_uf'],
-    temporal: ['issue_date'],
-    uf_origem: ['origin_uf'],
-    volume_transportadora: ['carrier', 'audited_weight'],
-    pareto_uf: ['destination_uf'],
-    pareto_transportadora: ['carrier']
+    transportadora: ['carrier', 'charged_freight', 'expected_freight'],
+    uf_destino: ['destination_uf', 'charged_freight', 'expected_freight'],
+    temporal: ['issue_date', 'charged_freight', 'expected_freight'],
+    pareto_transportadora: ['carrier', 'charged_freight', 'expected_freight']
   };
 
   var AUDIT_BI_FIELD_UNAVAILABLE_MESSAGE = 'Campo indisponível no lote auditado atual.';
+  var AUDIT_BI_DIVERGENCE_UNAVAILABLE_MESSAGE = 'Divergência financeira indisponível no lote auditado atual.';
+  var AUDIT_BI_CARRIER_UNAVAILABLE_MESSAGE = 'Transportadora indisponível no lote auditado atual.';
+  var AUDIT_BI_DESTINATION_UF_UNAVAILABLE_MESSAGE = 'UF destino indisponível no lote auditado atual.';
   var AUDIT_BI_TOP_N = 10;
 
   var auditBiDashboardState = {
@@ -1276,6 +1333,26 @@
   function auditBiGetNumeric(value) {
     var num = Number(value);
     return Number.isFinite(num) ? num : 0;
+  }
+
+  function auditBiHasNumericValue(value) {
+    if (value === null || value === undefined || value === '') return false;
+    return Number.isFinite(Number(value));
+  }
+
+  function auditBiComputeDivergence(row) {
+    if (!row || typeof row !== 'object') return null;
+    if (auditBiHasNumericValue(row.charged_freight) && auditBiHasNumericValue(row.expected_freight)) {
+      return auditBiGetNumeric(row.charged_freight) - auditBiGetNumeric(row.expected_freight);
+    }
+    if (auditBiHasNumericValue(row.divergence_value)) {
+      return auditBiGetNumeric(row.divergence_value);
+    }
+    return null;
+  }
+
+  function auditBiHasFinancialBase(row) {
+    return row && auditBiHasNumericValue(row.charged_freight) && auditBiHasNumericValue(row.expected_freight);
   }
 
   function auditBiNormalizeDate(value) {
@@ -1328,13 +1405,62 @@
       var key = auditBiSafeText(row[fieldName]);
       if (!key) return;
       if (!grouped[key]) {
-        grouped[key] = { chave: key, quantidade: 0, valor_total: 0, peso_total: 0 };
+        grouped[key] = {
+          chave: key,
+          quantidade: 0,
+          linhas_financeiras: 0,
+          linhas_divergentes: 0,
+          valor_cobrado: 0,
+          valor_esperado: 0,
+          divergencia_liquida: 0,
+          cobrado_a_mais: 0,
+          cobrado_a_menor: 0,
+          impacto_total: 0
+        };
       }
       grouped[key].quantidade += 1;
-      grouped[key].valor_total += auditBiGetNumeric(row.charged_freight);
-      grouped[key].peso_total += auditBiGetNumeric(row.audited_weight);
+      if (auditBiHasNumericValue(row.charged_freight)) {
+        grouped[key].valor_cobrado += auditBiGetNumeric(row.charged_freight);
+      }
+      if (auditBiHasNumericValue(row.expected_freight)) {
+        grouped[key].valor_esperado += auditBiGetNumeric(row.expected_freight);
+      }
+      var divergence = auditBiComputeDivergence(row);
+      if (divergence === null) return;
+      grouped[key].linhas_financeiras += 1;
+      grouped[key].divergencia_liquida += divergence;
+      if (Math.abs(divergence) > 0.004) grouped[key].linhas_divergentes += 1;
+      if (divergence > 0) {
+        grouped[key].cobrado_a_mais += divergence;
+        grouped[key].impacto_total += divergence;
+      } else if (divergence < 0) {
+        grouped[key].cobrado_a_menor += Math.abs(divergence);
+        grouped[key].impacto_total += Math.abs(divergence);
+      }
     });
     return Object.keys(grouped).map(function (key) { return grouped[key]; });
+  }
+
+  function auditBiHasDivergenceValue(rows) {
+    return rows.some(function (row) {
+      return auditBiComputeDivergence(row) !== null;
+    });
+  }
+
+  function auditBiHasCarrierValue(rows) {
+    return rows.some(function (row) {
+      return row && auditBiSafeText(row.carrier) !== '';
+    });
+  }
+
+  function auditBiHasDestinationUfValue(rows) {
+    return rows.some(function (row) {
+      return row && auditBiSafeText(row.destination_uf) !== '';
+    });
+  }
+
+  function auditBiAggregateCarrierDivergence(rows) {
+    return auditBiSortRows(auditBiAggregateByField(rows, 'carrier'), 'impacto_total', 'desc');
   }
 
   function auditBiAggregateByDate(rows) {
@@ -1343,33 +1469,48 @@
       var key = auditBiNormalizeDate(row.issue_date);
       if (!key) return;
       if (!grouped[key]) {
-        grouped[key] = { data: key, quantidade: 0, valor_total: 0, peso_total: 0 };
+        grouped[key] = {
+          data: key,
+          quantidade: 0,
+          linhas_financeiras: 0,
+          linhas_divergentes: 0,
+          divergencia_liquida: 0,
+          cobrado_a_mais: 0,
+          cobrado_a_menor: 0,
+          impacto_total: 0
+        };
       }
       grouped[key].quantidade += 1;
-      grouped[key].valor_total += auditBiGetNumeric(row.charged_freight);
-      grouped[key].peso_total += auditBiGetNumeric(row.audited_weight);
+      var divergence = auditBiComputeDivergence(row);
+      if (divergence === null) return;
+      grouped[key].linhas_financeiras += 1;
+      grouped[key].divergencia_liquida += divergence;
+      if (Math.abs(divergence) > 0.004) grouped[key].linhas_divergentes += 1;
+      if (divergence > 0) {
+        grouped[key].cobrado_a_mais += divergence;
+        grouped[key].impacto_total += divergence;
+      } else if (divergence < 0) {
+        grouped[key].cobrado_a_menor += Math.abs(divergence);
+        grouped[key].impacto_total += Math.abs(divergence);
+      }
     });
     return Object.keys(grouped).sort().map(function (key) { return grouped[key]; });
   }
 
-  function auditBiIsOccurrenceRow(row) {
-    var status = auditBiSafeText(row.status);
-    if (status && status !== 'ok') return true;
-    return auditBiGetNumeric(row.charged_freight) === 0;
-  }
-
-  function auditBiBuildParetoRows(rows, fieldName) {
-    var occurrenceRows = rows.filter(auditBiIsOccurrenceRow);
-    var grouped = auditBiAggregateByField(occurrenceRows, fieldName);
-    grouped.sort(function (a, b) { return b.quantidade - a.quantidade; });
-    var total = grouped.reduce(function (sum, row) { return sum + row.quantidade; }, 0);
+  function auditBiBuildOverchargeParetoRows(rows, fieldName) {
+    var grouped = auditBiAggregateByField(rows, fieldName).filter(function (row) {
+      return auditBiGetNumeric(row.cobrado_a_mais) > 0;
+    });
+    grouped.sort(function (a, b) { return b.cobrado_a_mais - a.cobrado_a_mais; });
+    var total = grouped.reduce(function (sum, row) { return sum + row.cobrado_a_mais; }, 0);
     var accumulated = 0;
     return grouped.slice(0, AUDIT_BI_TOP_N).map(function (row) {
-      var percentual = total > 0 ? (row.quantidade / total) * 100 : 0;
+      var value = auditBiGetNumeric(row.cobrado_a_mais);
+      var percentual = total > 0 ? (value / total) * 100 : 0;
       accumulated += percentual;
       return {
         chave: row.chave,
-        quantidade: row.quantidade,
+        valor: value,
         percentual: percentual,
         percentual_acumulado: accumulated
       };
@@ -1401,6 +1542,127 @@
         label: auditBiSafeText(row.chave || row.data) || '-',
         value: auditBiGetNumeric(row[valueKey])
       };
+    });
+  }
+
+  function auditBiBuildFinancialMetrics(rows) {
+    var totalRows = Array.isArray(rows) ? rows.length : 0;
+    var metrics = {
+      totalRows: totalRows,
+      financialRows: 0,
+      divergentRows: 0,
+      chargedTotal: 0,
+      expectedTotal: 0,
+      overcharged: 0,
+      undercharged: 0,
+      netDivergence: 0,
+      absoluteImpact: 0,
+      confidenceRatio: 0,
+      confidenceLabel: 'Indisponível',
+      confidenceClass: 'unavailable'
+    };
+    rows.forEach(function (row) {
+      if (auditBiHasNumericValue(row.charged_freight)) {
+        metrics.chargedTotal += auditBiGetNumeric(row.charged_freight);
+      }
+      if (auditBiHasNumericValue(row.expected_freight)) {
+        metrics.expectedTotal += auditBiGetNumeric(row.expected_freight);
+      }
+      var divergence = auditBiComputeDivergence(row);
+      if (divergence === null) return;
+      if (auditBiHasFinancialBase(row)) metrics.financialRows += 1;
+      if (Math.abs(divergence) > 0.004) metrics.divergentRows += 1;
+      metrics.netDivergence += divergence;
+      if (divergence > 0) {
+        metrics.overcharged += divergence;
+        metrics.absoluteImpact += divergence;
+      } else if (divergence < 0) {
+        metrics.undercharged += Math.abs(divergence);
+        metrics.absoluteImpact += Math.abs(divergence);
+      }
+    });
+    metrics.confidenceRatio = totalRows > 0 ? (metrics.financialRows / totalRows) * 100 : 0;
+    if (metrics.confidenceRatio >= 95) {
+      metrics.confidenceLabel = 'Alta';
+      metrics.confidenceClass = 'high';
+    } else if (metrics.confidenceRatio >= 75) {
+      metrics.confidenceLabel = 'Média';
+      metrics.confidenceClass = 'medium';
+    } else if (metrics.confidenceRatio > 0) {
+      metrics.confidenceLabel = 'Baixa';
+      metrics.confidenceClass = 'low';
+    }
+    return metrics;
+  }
+
+  function auditBiRenderExecutiveSummary(rows) {
+    var metrics = auditBiBuildFinancialMetrics(rows);
+    var confidenceCard = byId('cleideAuditBiConfidenceCard');
+    var confidenceValue = byId('cleideAuditBiConfidenceValue');
+    var confidenceDetail = byId('cleideAuditBiConfidenceDetail');
+    if (confidenceCard) {
+      confidenceCard.className = 'cleide-audit-bi-confidence-card is-' + metrics.confidenceClass;
+    }
+    if (confidenceValue) {
+      confidenceValue.textContent = metrics.confidenceLabel + ' (' + auditBiFormatPercent(metrics.confidenceRatio) + ')';
+    }
+    if (confidenceDetail) {
+      confidenceDetail.textContent = metrics.financialRows + ' de ' + metrics.totalRows +
+        ' linhas filtradas têm frete cobrado e esperado para cálculo financeiro.';
+    }
+
+    var kpiGrid = byId('cleideAuditBiKpiGrid');
+    if (!kpiGrid) return;
+    var kpis = [
+      {
+        label: 'Cobrado a mais',
+        value: auditBiFormatCurrency(metrics.overcharged),
+        hint: 'Soma das divergências positivas',
+        className: 'is-negative'
+      },
+      {
+        label: 'Cobrado a menor',
+        value: auditBiFormatCurrency(metrics.undercharged),
+        hint: 'Soma absoluta das divergências negativas',
+        className: 'is-warning'
+      },
+      {
+        label: 'Impacto total',
+        value: auditBiFormatCurrency(metrics.absoluteImpact),
+        hint: 'Cobrado a mais + cobrado a menor',
+        className: 'is-negative'
+      },
+      {
+        label: 'Divergência líquida',
+        value: auditBiFormatCurrency(metrics.netDivergence),
+        hint: 'Cobrado - esperado no filtro',
+        className: metrics.netDivergence >= 0 ? 'is-negative' : 'is-warning'
+      },
+      {
+        label: 'Linhas divergentes',
+        value: String(metrics.divergentRows),
+        hint: metrics.financialRows ? auditBiFormatPercent((metrics.divergentRows / metrics.financialRows) * 100) + ' das linhas calculáveis' : 'Sem linhas calculáveis',
+        className: ''
+      },
+      {
+        label: 'Linhas analisadas',
+        value: String(metrics.totalRows),
+        hint: 'Após filtros cruzados ativos',
+        className: 'is-positive'
+      }
+    ];
+    kpiGrid.innerHTML = '';
+    kpis.forEach(function (kpi) {
+      var card = document.createElement('article');
+      card.className = 'cleide-audit-bi-kpi-card ' + kpi.className;
+      card.innerHTML =
+        '<span class="cleide-audit-bi-kpi-label"></span>' +
+        '<strong class="cleide-audit-bi-kpi-value"></strong>' +
+        '<span class="cleide-audit-bi-kpi-hint"></span>';
+      card.querySelector('.cleide-audit-bi-kpi-label').textContent = kpi.label;
+      card.querySelector('.cleide-audit-bi-kpi-value').textContent = kpi.value;
+      card.querySelector('.cleide-audit-bi-kpi-hint').textContent = kpi.hint;
+      kpiGrid.appendChild(card);
     });
   }
 
@@ -1451,15 +1713,11 @@
   function auditBiHandleChartClick(chartKey, label) {
     var selected = auditBiSafeText(label);
     if (!selected || selected === '-') return;
-    if (chartKey === 'transportadora' || chartKey === 'volume_transportadora' || chartKey === 'pareto_transportadora') {
+    if (chartKey === 'transportadora' || chartKey === 'pareto_transportadora') {
       auditBiApplyFilterToggle('carrier', selected);
       return;
     }
-    if (chartKey === 'uf_origem') {
-      auditBiApplyFilterToggle('origin_uf', selected);
-      return;
-    }
-    if (chartKey === 'uf_destino' || chartKey === 'pareto_uf') {
+    if (chartKey === 'uf_destino') {
       auditBiApplyFilterToggle('destination_uf', selected);
       return;
     }
@@ -1547,7 +1805,7 @@
     if (!canvas) return false;
     auditBiDestroyChart(chartKey);
     var labels = rows.map(function (row) { return auditBiSafeText(row.chave) || '-'; });
-    var quantidade = rows.map(function (row) { return auditBiGetNumeric(row.quantidade); });
+    var values = rows.map(function (row) { return auditBiGetNumeric(row.valor); });
     var acumulado = rows.map(function (row) { return auditBiGetNumeric(row.percentual_acumulado); });
     var percentual = rows.map(function (row) { return auditBiGetNumeric(row.percentual); });
     var instance = new window.Chart(canvas, {
@@ -1556,11 +1814,11 @@
         datasets: [
           {
             type: 'bar',
-            label: 'Ocorrências',
-            data: quantidade,
+            label: 'Cobrado a mais',
+            data: values,
             yAxisID: 'y',
-            backgroundColor: 'rgba(37, 176, 255, 0.45)',
-            borderColor: '#25b0ff',
+            backgroundColor: 'rgba(255, 77, 106, 0.42)',
+            borderColor: '#FF4D6A',
             borderWidth: 1,
             maxBarThickness: 28
           },
@@ -1586,6 +1844,12 @@
           legend: { display: true, labels: { color: '#c6d7f2' } },
           tooltip: {
             callbacks: {
+              label: function (ctx) {
+                if (ctx.dataset && ctx.dataset.yAxisID === 'y1') {
+                  return ctx.dataset.label + ': ' + auditBiFormatPercent(ctx.parsed.y || 0);
+                }
+                return ctx.dataset.label + ': ' + auditBiFormatCurrency(ctx.parsed.y || 0);
+              },
               afterBody: function (items) {
                 var idx = items[0] ? items[0].dataIndex : 0;
                 return [
@@ -1602,7 +1866,7 @@
             beginAtZero: true,
             position: 'left',
             grid: { color: 'rgba(124, 148, 189, 0.14)' },
-            ticks: { color: '#c6d7f2' }
+            ticks: { color: '#c6d7f2', callback: function (v) { return auditBiFormatCurrency(v); } }
           },
           y1: {
             beginAtZero: true,
@@ -1611,6 +1875,87 @@
             max: 100,
             grid: { drawOnChartArea: false },
             ticks: { color: '#f4d27a', callback: function (v) { return auditBiFormatNumber(v, 0) + '%'; } }
+          }
+        },
+        onClick: function (_event, elements) {
+          if (!elements || !elements.length) return;
+          auditBiHandleChartClick(chartKey, labels[elements[0].index]);
+        }
+      }
+    });
+    auditBiDashboardState.chartInstances[chartKey] = instance;
+    return true;
+  }
+
+  function auditBiRenderCarrierDivergenceChart(rows) {
+    var chartKey = 'transportadora';
+    if (!auditBiEnsureChartJs()) {
+      auditBiSetCardEmpty(chartKey, 'Chart.js indisponível nesta página.', false);
+      return false;
+    }
+    var canvas = auditBiGetCanvas(chartKey);
+    if (!canvas) return false;
+    auditBiDestroyChart(chartKey);
+    var labels = rows.map(function (row) { return auditBiSafeText(row.chave) || '-'; });
+    var overcharged = rows.map(function (row) { return auditBiGetNumeric(row.cobrado_a_mais); });
+    var undercharged = rows.map(function (row) { return auditBiGetNumeric(row.cobrado_a_menor); });
+    var netDivergence = rows.map(function (row) { return auditBiGetNumeric(row.divergencia_liquida); });
+    var instance = new window.Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Cobrado a mais',
+            data: overcharged,
+            borderColor: '#FF4D6A',
+            backgroundColor: 'rgba(255, 77, 106, 0.42)',
+            borderWidth: 1,
+            maxBarThickness: 22
+          },
+          {
+            label: 'Cobrado a menor',
+            data: undercharged,
+            borderColor: '#f4b400',
+            backgroundColor: 'rgba(244, 180, 0, 0.42)',
+            borderWidth: 1,
+            maxBarThickness: 22
+          },
+          {
+            label: 'Divergência líquida',
+            data: netDivergence,
+            borderColor: '#7cc4ff',
+            backgroundColor: 'rgba(124, 196, 255, 0.22)',
+            borderWidth: 1,
+            maxBarThickness: 22
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        indexAxis: 'y',
+        plugins: {
+          legend: { display: true, labels: { color: '#c6d7f2' } },
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                var parsed = ctx.parsed || {};
+                return ctx.dataset.label + ': ' + auditBiFormatCurrency(parsed.x);
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            grid: { color: 'rgba(124, 148, 189, 0.14)' },
+            ticks: { color: '#c6d7f2' }
+          },
+          y: {
+            grid: { color: 'rgba(124, 148, 189, 0.14)' },
+            ticks: { color: '#c6d7f2' }
           }
         },
         onClick: function (_event, elements) {
@@ -1745,105 +2090,101 @@
     if (wrapEl) wrapEl.style.display = '';
     var emptyMessage = filteredRows.length ? 'Sem dados para os filtros atuais.' : 'Sem dados no lote auditado atual.';
     if (chartKey === 'transportadora') {
-      var carrierRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'carrier'), 'valor_total', 'valor_total');
+      if (auditBiDashboardState.fieldPresence.carrier === false ||
+          (filteredRows.length > 0 && !auditBiHasCarrierValue(filteredRows))) {
+        auditBiSetCardEmpty(chartKey, AUDIT_BI_CARRIER_UNAVAILABLE_MESSAGE, false);
+        return;
+      }
+      if (auditBiDashboardState.fieldPresence.expected_freight === false ||
+          (filteredRows.length > 0 && !auditBiHasDivergenceValue(filteredRows))) {
+        auditBiSetCardEmpty(chartKey, AUDIT_BI_DIVERGENCE_UNAVAILABLE_MESSAGE, false);
+        return;
+      }
+      var carrierRows = auditBiAggregateCarrierDivergence(filteredRows).slice(0, AUDIT_BI_TOP_N);
       if (!carrierRows.length) {
         auditBiSetCardEmpty(chartKey, emptyMessage, false);
         return;
       }
       auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Top ' + carrierRows.length + ' transportadoras por frete cobrado.';
-      auditBiRenderSimpleChart(chartKey, carrierRows.map(function (row) { return row.label; }), carrierRows.map(function (row) { return row.value; }), {
-        type: 'bar',
-        indexAxis: 'y',
-        datasetLabel: 'Frete cobrado',
-        valueFormatter: auditBiFormatCurrency
-      });
+      if (noteEl) noteEl.textContent = 'Top ' + carrierRows.length + ' transportadoras por impacto financeiro absoluto.';
+      auditBiRenderCarrierDivergenceChart(carrierRows);
       return;
     }
     if (chartKey === 'uf_destino') {
-      var ufDestRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'destination_uf'), 'valor_total', 'valor_total');
+      if (auditBiDashboardState.fieldPresence.destination_uf === false ||
+          (filteredRows.length > 0 && !auditBiHasDestinationUfValue(filteredRows))) {
+        auditBiSetCardEmpty(chartKey, AUDIT_BI_DESTINATION_UF_UNAVAILABLE_MESSAGE, false);
+        return;
+      }
+      if (auditBiDashboardState.fieldPresence.expected_freight === false ||
+          (filteredRows.length > 0 && !auditBiHasDivergenceValue(filteredRows))) {
+        auditBiSetCardEmpty(chartKey, AUDIT_BI_DIVERGENCE_UNAVAILABLE_MESSAGE, false);
+        return;
+      }
+      var ufDestRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'destination_uf'), 'impacto_total', 'divergencia_liquida');
       if (!ufDestRows.length) {
         auditBiSetCardEmpty(chartKey, emptyMessage, false);
         return;
       }
       auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Custo agregado por UF destino.';
+      if (noteEl) noteEl.textContent = 'Top UFs por impacto total, exibindo a divergência líquida.';
       auditBiRenderSimpleChart(chartKey, ufDestRows.map(function (row) { return row.label; }), ufDestRows.map(function (row) { return row.value; }), {
-        datasetLabel: 'Frete cobrado',
-        valueFormatter: auditBiFormatCurrency
+        datasetLabel: 'Divergência líquida',
+        valueFormatter: auditBiFormatCurrency,
+        chartColor: '#f4b400',
+        areaColor: 'rgba(244, 180, 0, 0.28)'
       });
       return;
     }
     if (chartKey === 'temporal') {
-      var temporalRows = auditBiTopRows(auditBiAggregateByDate(filteredRows), 'valor_total', 'valor_total');
+      if (auditBiDashboardState.fieldPresence.issue_date === false) {
+        auditBiSetCardEmpty(chartKey, AUDIT_BI_FIELD_UNAVAILABLE_MESSAGE, false);
+        return;
+      }
+      if (auditBiDashboardState.fieldPresence.expected_freight === false ||
+          (filteredRows.length > 0 && !auditBiHasDivergenceValue(filteredRows))) {
+        auditBiSetCardEmpty(chartKey, AUDIT_BI_DIVERGENCE_UNAVAILABLE_MESSAGE, false);
+        return;
+      }
+      var temporalRows = auditBiAggregateByDate(filteredRows).map(function (row) {
+        return {
+          label: auditBiSafeText(row.data) || '-',
+          value: auditBiGetNumeric(row.divergencia_liquida)
+        };
+      });
       if (!temporalRows.length) {
         auditBiSetCardEmpty(chartKey, emptyMessage, false);
         return;
       }
       auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Evolução diária do frete cobrado.';
+      if (noteEl) noteEl.textContent = 'Série diária da divergência líquida no período auditado.';
       auditBiRenderSimpleChart(chartKey, temporalRows.map(function (row) { return row.label; }), temporalRows.map(function (row) { return row.value; }), {
         type: 'line',
-        datasetLabel: 'Frete cobrado',
+        datasetLabel: 'Divergência líquida',
         valueFormatter: auditBiFormatCurrency,
         chartColor: '#7cc4ff',
         areaColor: 'rgba(124, 196, 255, 0.18)'
       });
       return;
     }
-    if (chartKey === 'uf_origem') {
-      var ufOrigRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'origin_uf'), 'valor_total', 'valor_total');
-      if (!ufOrigRows.length) {
-        auditBiSetCardEmpty(chartKey, emptyMessage, false);
-        return;
-      }
-      auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Custo agregado por UF origem.';
-      auditBiRenderSimpleChart(chartKey, ufOrigRows.map(function (row) { return row.label; }), ufOrigRows.map(function (row) { return row.value; }), {
-        type: 'bar',
-        indexAxis: 'y',
-        datasetLabel: 'Frete cobrado',
-        valueFormatter: auditBiFormatCurrency
-      });
-      return;
-    }
-    if (chartKey === 'volume_transportadora') {
-      var volumeRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'carrier'), 'peso_total', 'peso_total');
-      if (!volumeRows.length) {
-        auditBiSetCardEmpty(chartKey, emptyMessage, false);
-        return;
-      }
-      auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Volume auditado por transportadora.';
-      auditBiRenderSimpleChart(chartKey, volumeRows.map(function (row) { return row.label; }), volumeRows.map(function (row) { return row.value; }), {
-        type: 'bar',
-        indexAxis: 'y',
-        datasetLabel: 'Peso auditado',
-        valueFormatter: function (value) { return auditBiFormatNumber(value, 2) + ' kg'; },
-        chartColor: '#6fd3a4',
-        areaColor: 'rgba(111, 211, 164, 0.22)'
-      });
-      return;
-    }
-    if (chartKey === 'pareto_uf') {
-      var paretoUfRows = auditBiBuildParetoRows(filteredRows, 'destination_uf');
-      if (!paretoUfRows.length) {
-        auditBiSetCardEmpty(chartKey, 'Sem ocorrências auditáveis para UF destino.', false);
-        return;
-      }
-      auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Ocorrências auditáveis por UF destino.';
-      auditBiRenderParetoChart(chartKey, paretoUfRows);
-      return;
-    }
     if (chartKey === 'pareto_transportadora') {
-      var paretoCarrierRows = auditBiBuildParetoRows(filteredRows, 'carrier');
+      if (auditBiDashboardState.fieldPresence.carrier === false ||
+          (filteredRows.length > 0 && !auditBiHasCarrierValue(filteredRows))) {
+        auditBiSetCardEmpty(chartKey, AUDIT_BI_CARRIER_UNAVAILABLE_MESSAGE, false);
+        return;
+      }
+      if (auditBiDashboardState.fieldPresence.expected_freight === false ||
+          (filteredRows.length > 0 && !auditBiHasDivergenceValue(filteredRows))) {
+        auditBiSetCardEmpty(chartKey, AUDIT_BI_DIVERGENCE_UNAVAILABLE_MESSAGE, false);
+        return;
+      }
+      var paretoCarrierRows = auditBiBuildOverchargeParetoRows(filteredRows, 'carrier');
       if (!paretoCarrierRows.length) {
-        auditBiSetCardEmpty(chartKey, 'Sem ocorrências auditáveis por transportadora.', false);
+        auditBiSetCardEmpty(chartKey, 'Sem valor cobrado a mais por transportadora nos filtros atuais.', false);
         return;
       }
       auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Ocorrências auditáveis por transportadora.';
+      if (noteEl) noteEl.textContent = 'Concentração do valor cobrado a mais por transportadora.';
       auditBiRenderParetoChart(chartKey, paretoCarrierRows);
     }
   }
@@ -1852,6 +2193,7 @@
     var filteredRows = auditBiFilteredRows();
     auditBiRenderFilterUi();
     auditBiRenderHiddenChartsUi();
+    auditBiRenderExecutiveSummary(filteredRows);
     AUDIT_BI_CHART_KEYS.forEach(function (chartKey) {
       auditBiRenderChartCard(chartKey, filteredRows);
     });
@@ -1896,6 +2238,13 @@
 
   function initAuditBiDashboard(auditBi) {
     auditBiBindDashboardEvents();
+    auditBiDestroyAllCharts();
+    auditBiDashboardState.activeFilters = {
+      carrier: null,
+      origin_uf: null,
+      destination_uf: null,
+      issue_date: null
+    };
     var unavailableEl = byId('cleideAuditBiUnavailable');
     var dashboardEl = byId('cleideAuditBiDashboard');
     var legacyContentEl = byId('cleideAuditBiContent');
@@ -1918,10 +2267,25 @@
     auditBiRenderDashboard();
   }
 
+  function refreshAuditBiDashboardFromCurrentTempTable() {
+    var section = byId('cleideAuditBiSection');
+    if (!section || section.hidden) return;
+    var latestAuditBi = currentTempTable && currentTempTable.audit_bi ? currentTempTable.audit_bi : null;
+    initAuditBiDashboard(latestAuditBi);
+  }
+
+  function setCurrentTempTable(tempTable, options) {
+    options = options || {};
+    currentTempTable = tempTable || null;
+    if (options.refreshAuditBi !== false) {
+      refreshAuditBiDashboardFromCurrentTempTable();
+    }
+  }
+
   function showAuditBiSection(auditBi) {
     var section = byId('cleideAuditBiSection');
     if (!section) return;
-    initAuditBiDashboard(auditBi);
+    initAuditBiDashboard((currentTempTable && currentTempTable.audit_bi) || auditBi);
     section.hidden = false;
     section.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -2082,7 +2446,7 @@ function renderDocumentItem(doc) {
           } else {
             setError(friendlyError(errData));
           }
-          currentTempTable = null;
+          setCurrentTempTable(null);
           resetCoveragePromptState();
           resetAuditFileStepState();
           renderDocuments([], null);
@@ -2187,7 +2551,7 @@ function renderDocumentItem(doc) {
           return;
         }
         renderDocuments([], null);
-        currentTempTable = null;
+        setCurrentTempTable(null);
         lastAnnouncedTempTableStatus = null;
         stopTempTablePolling();
         resetCoveragePromptState();
@@ -3476,7 +3840,11 @@ function renderDocumentItem(doc) {
       }, getAccessorialFeeValidationError(feeIndex, 'calculation_base_id'));
       appendAccessorialFieldCell(tr, item.notes, function (newValue) {
         if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].notes = newValue;
-      }, 'Observações');
+        refreshTempTableValidationErrorsAfterAccessorialEdit();
+      }, 'Observações', {
+        field: 'notes',
+        validationError: getAccessorialFeeValidationError(feeIndex, 'notes')
+      });
       appendAccessorialFieldCell(tr, item.scope, function (newValue) {
         if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].scope = newValue;
       }, 'general');
@@ -3677,7 +4045,10 @@ function renderDocumentItem(doc) {
       card.appendChild(runStatus);
 
       renderAuditRunSummary(card, batch.summary);
-      renderAuditRunResults(card, batch.results);
+      renderAuditGlobalErrorButton(card, batch.audit_diagnostics);
+      renderAuditDiagnostics(card, batch.audit_diagnostics);
+      renderLegacyAuditDiagnosticsNotice(card, batch);
+      renderAuditRunResults(card, batch.results, batch.audit_diagnostics);
     }
 
     fileInput.addEventListener('change', function () {
@@ -3758,7 +4129,7 @@ function renderDocumentItem(doc) {
         return fetchDocuments().then(function (statusData) {
           if (statusData) return statusData;
           if (res.data.temp_table) {
-            currentTempTable = res.data.temp_table;
+            setCurrentTempTable(res.data.temp_table);
           }
           return res.data;
         }).then(function () {
@@ -4161,6 +4532,305 @@ function renderDocumentItem(doc) {
     return labels[key] || key || '—';
   }
 
+  function auditDiagnosticsHasErrors(diagnostics) {
+    if (!diagnostics || typeof diagnostics !== 'object') return false;
+    return diagnostics.has_errors === true && Number(diagnostics.total_errors || 0) > 0;
+  }
+
+  function auditRowHasFailure(row) {
+    if (!row || typeof row !== 'object') return false;
+    var status = String(row.status || '');
+    return !!status && status !== 'ok' && status !== 'divergent';
+  }
+
+  function auditBatchHasFailureResults(batch) {
+    var rows = batch && Array.isArray(batch.results) ? batch.results : [];
+    return rows.some(auditRowHasFailure);
+  }
+
+  function findAuditDiagnosticGroupForRow(row, diagnostics) {
+    var groups = diagnostics && Array.isArray(diagnostics.groups) ? diagnostics.groups : [];
+    var diagnostic = row && row.diagnostic && typeof row.diagnostic === 'object' ? row.diagnostic : null;
+    var code = diagnostic && diagnostic.diagnostic_group_code ? String(diagnostic.diagnostic_group_code) : '';
+    if (!groups.length || !code) return null;
+    return groups.find(function (group) {
+      return group && String(group.code || '') === code;
+    }) || null;
+  }
+
+  function auditDiagnosticListText(values) {
+    return Array.isArray(values) && values.length ? values.join(', ') : '—';
+  }
+
+  function auditCorrectionSuggestionForGroup(group) {
+    var batch = currentTempTable && currentTempTable.audit_batch ? currentTempTable.audit_batch : null;
+    var diagnostics = batch && batch.audit_diagnostics ? batch.audit_diagnostics : null;
+    var suggestions = diagnostics && Array.isArray(diagnostics.suggestions) ? diagnostics.suggestions : [];
+    if (!group || !suggestions.length) return null;
+    return suggestions.find(function (suggestion) {
+      return suggestion && String(suggestion.diagnostic_code || '') === String(group.code || '');
+    }) || null;
+  }
+
+  function auditPreviewErrorCount(previewPart) {
+    var summary = previewPart && previewPart.summary ? previewPart.summary : {};
+    return Number(summary.missing_coverage_mapping || 0)
+      + Number(summary.ambiguous_coverage_mapping || 0)
+      + Number(summary.missing_freight_rule || 0)
+      + Number(summary.invalid_rows || 0)
+      + Number(summary.unsupported_pricing_model || 0);
+  }
+
+  function requestAuditCorrectionUndo(applicationId, resultContainer, button) {
+    if (!applicationId) return;
+    button.disabled = true;
+    button.textContent = 'Desfazendo...';
+    fetch(API_AUDIT_CORRECTION_UNDO, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ application_id: applicationId })
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true || !res.data.temp_table) {
+          resultContainer.textContent = (res.data && res.data.message) || 'Não foi possível desfazer a correção.';
+          return;
+        }
+        setCurrentTempTable(res.data.temp_table);
+        resultContainer.textContent = 'Correção desfeita. A auditoria voltou ao estado anterior.';
+        renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
+      })
+      .catch(function () {
+        resultContainer.textContent = 'Não foi possível desfazer a correção. Verifique sua conexão e tente novamente.';
+      })
+      .finally(function () {
+        button.disabled = false;
+        button.textContent = 'Desfazer correção';
+      });
+  }
+
+  function renderAuditCorrectionUndoAction(container, applicationId) {
+    if (!applicationId) return;
+    var undoWrap = document.createElement('div');
+    undoWrap.className = 'cleide-audit-correction-choice-actions';
+    var undoBtn = document.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.className = 'cleide-audit-correction-secondary-btn';
+    undoBtn.textContent = 'Desfazer correção';
+    var undoStatus = document.createElement('p');
+    undoStatus.className = 'cleide-audit-correction-help';
+    undoBtn.addEventListener('click', function () {
+      requestAuditCorrectionUndo(applicationId, undoStatus, undoBtn);
+    });
+    undoWrap.appendChild(undoBtn);
+    container.appendChild(undoWrap);
+    container.appendChild(undoStatus);
+  }
+
+  function requestAuditCorrectionApply(preview, resultContainer, button) {
+    if (!preview || !preview.preview_id || !preview.suggestion_id) return;
+    button.disabled = true;
+    button.textContent = 'Aplicando...';
+    fetch(API_AUDIT_CORRECTION_APPLY, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        preview_id: preview.preview_id,
+        suggestion_id: preview.suggestion_id
+      })
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true || !res.data.temp_table) {
+          resultContainer.textContent = (res.data && res.data.message) || 'Não foi possível aplicar a correção.';
+          return;
+        }
+        setCurrentTempTable(res.data.temp_table);
+        resultContainer.textContent = 'Correção aplicada e auditoria reprocessada.';
+        renderAuditCorrectionUndoAction(resultContainer, res.data.application_id);
+        renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
+      })
+      .catch(function () {
+        resultContainer.textContent = 'Não foi possível aplicar a correção. Verifique sua conexão e tente novamente.';
+      })
+      .finally(function () {
+        button.disabled = !preview.safe_to_apply;
+        button.textContent = 'Aplicar correção';
+      });
+  }
+
+  function renderAuditCorrectionPreviewResult(container, preview) {
+    if (!preview || typeof preview !== 'object') return;
+    var panel = document.createElement('div');
+    panel.className = 'cleide-audit-correction-choice-panel';
+    var title = document.createElement('p');
+    title.className = 'cleide-audit-correction-choice-title';
+    title.textContent = 'Resultado da simulação';
+    panel.appendChild(title);
+
+    var transformation = preview.transformation || {};
+    var params = transformation.parameters || {};
+    appendDetailRow(panel, 'Transformação simulada', transformation.type || '—');
+    appendDetailRow(panel, 'Coluna atual', params.current_column || '—');
+    appendDetailRow(panel, 'Coluna candidata', params.candidate_column || '—');
+    appendDetailRow(panel, 'Linhas analisadas', preview.before && preview.before.summary ? preview.before.summary.total_rows : '—');
+    appendDetailRow(panel, 'Erros antes', auditPreviewErrorCount(preview.before));
+    appendDetailRow(panel, 'Erros depois', auditPreviewErrorCount(preview.after));
+    appendDetailRow(panel, 'Erros resolvidos', preview.delta ? preview.delta.resolved_errors : 0);
+    appendDetailRow(panel, 'Erros restantes', preview.delta ? preview.delta.remaining_errors : 0);
+    appendDetailRow(panel, 'Novas linhas calculáveis', preview.delta ? Number(preview.delta.new_ok || 0) + Number(preview.delta.new_divergent || 0) : 0);
+    appendDetailRow(panel, 'Regressões', Array.isArray(preview.regressions) ? preview.regressions.length : 0);
+    appendDetailRow(panel, 'Confiança', preview.confidence || '—');
+
+    var conclusion = document.createElement('p');
+    conclusion.className = 'cleide-audit-correction-warning';
+    conclusion.textContent = preview.safe_to_apply
+      ? 'A simulação não encontrou regressões.'
+      : (Array.isArray(preview.regressions) && preview.regressions.length
+        ? 'A simulação criou regressões e não poderá ser aplicada.'
+        : 'A simulação ainda não atende aos critérios de segurança.');
+    panel.appendChild(conclusion);
+
+    if (Array.isArray(preview.sample_changes) && preview.sample_changes.length) {
+      appendDetailRow(panel, 'Amostras antes/depois', preview.sample_changes.map(function (item) {
+        var before = item.before || {};
+        var after = item.after || {};
+        return 'Linha ' + String(after.row_index || before.row_index || '—') + ': ' + String(before.status || '—') + ' → ' + String(after.status || '—');
+      }).join('; '));
+    }
+    if (Array.isArray(preview.remaining_errors) && preview.remaining_errors.length) {
+      appendDetailRow(panel, 'Erros restantes', preview.remaining_errors.map(function (item) {
+        return 'Linha ' + String(item.row_index || '—') + ': ' + String(item.status || item.reason_code || 'erro');
+      }).join('; '));
+    }
+
+    var applyBtn = document.createElement('button');
+    applyBtn.type = 'button';
+    applyBtn.className = 'cleide-audit-correction-primary-btn';
+    applyBtn.textContent = 'Aplicar correção';
+    applyBtn.disabled = !preview.safe_to_apply;
+    panel.appendChild(applyBtn);
+    var applyHelp = document.createElement('p');
+    applyHelp.className = 'cleide-audit-correction-help';
+    applyHelp.textContent = preview.safe_to_apply
+      ? 'A correção será aplicada somente na tabela temporária e poderá ser desfeita.'
+      : 'A aplicação será habilitada após uma simulação segura.';
+    panel.appendChild(applyHelp);
+    var applyStatus = document.createElement('p');
+    applyStatus.className = 'cleide-audit-correction-help';
+    panel.appendChild(applyStatus);
+    applyBtn.addEventListener('click', function () {
+      requestAuditCorrectionApply(preview, applyStatus, applyBtn);
+    });
+    container.appendChild(panel);
+  }
+
+  function requestAuditCorrectionPreview(group, resultContainer, button) {
+    var suggestion = auditCorrectionSuggestionForGroup(group);
+    if (!suggestion || !suggestion.suggestion_id) {
+      resultContainer.textContent = 'Nenhuma sugestão de preview está disponível para o artefato atual.';
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Simulando...';
+    resultContainer.textContent = 'Simulando correção...';
+    fetch(API_AUDIT_CORRECTION_PREVIEW, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ suggestion_id: suggestion.suggestion_id })
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        resultContainer.textContent = '';
+        if (!res.data || res.data.ok !== true || !res.data.preview) {
+          resultContainer.textContent = (res.data && res.data.message) || 'Não foi possível simular a correção.';
+          return;
+        }
+        renderAuditCorrectionPreviewResult(resultContainer, res.data.preview);
+      })
+      .catch(function () {
+        resultContainer.textContent = 'Não foi possível simular a correção. Verifique sua conexão e tente novamente.';
+      })
+      .finally(function () {
+        button.disabled = false;
+        button.textContent = 'Simular correção';
+      });
+  }
+
+  function scrollToAuditDiagnostics() {
+    var section = byId('cleideAuditDiagnostics');
+    if (!section) return;
+    section.hidden = false;
+    section.classList.add('is-highlighted');
+    try {
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      section.scrollIntoView();
+    }
+    window.setTimeout(function () {
+      section.classList.remove('is-highlighted');
+    }, 1400);
+  }
+
+  function renderAuditGlobalErrorButton(container, diagnostics) {
+    if (!auditDiagnosticsHasErrors(diagnostics)) return;
+    var wrap = document.createElement('div');
+    wrap.className = 'cleide-audit-error-global-actions';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cleide-audit-error-global-btn';
+    btn.textContent = 'Ver erros da auditoria';
+    btn.addEventListener('click', function () {
+      scrollToAuditDiagnostics();
+    });
+    wrap.appendChild(btn);
+    container.appendChild(wrap);
+  }
+
+  function renderLegacyAuditDiagnosticsNotice(container, batch) {
+    if (!batch || batch.audit_diagnostics || !auditBatchHasFailureResults(batch)) return;
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-diagnostics cleide-audit-diagnostics-legacy';
+    var title = document.createElement('p');
+    title.className = 'cleide-audit-diagnostics-title';
+    title.textContent = 'Diagnóstico da auditoria';
+    section.appendChild(title);
+    var message = document.createElement('p');
+    message.className = 'cleide-audit-diagnostics-subtitle';
+    message.textContent = 'Este lote foi processado antes da geração do diagnóstico detalhado. Processe a auditoria novamente para analisar as causas.';
+    section.appendChild(message);
+    var actions = document.createElement('div');
+    actions.className = 'cleide-audit-error-global-actions';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cleide-audit-error-global-btn';
+    btn.textContent = 'Atualizar diagnóstico';
+    btn.disabled = auditRunInFlight;
+    btn.addEventListener('click', function () {
+      runAuditProcessing();
+    });
+    actions.appendChild(btn);
+    section.appendChild(actions);
+    container.appendChild(section);
+  }
+
   function appendAuditSummaryItem(container, label, value) {
     var item = document.createElement('div');
     item.className = 'cleide-audit-run-summary-item';
@@ -4192,7 +4862,408 @@ function renderDocumentItem(doc) {
     container.appendChild(block);
   }
 
-  function renderAuditRunResults(container, results) {
+  function appendAuditDiagnosticValueList(container, label, values) {
+    var safeValues = Array.isArray(values) ? values.filter(hasFieldValue) : [];
+    if (!safeValues.length) return;
+    var wrap = document.createElement('div');
+    wrap.className = 'cleide-audit-diagnostic-list-wrap';
+    var labelEl = document.createElement('span');
+    labelEl.className = 'cleide-audit-diagnostic-list-label';
+    labelEl.textContent = label;
+    wrap.appendChild(labelEl);
+    var list = document.createElement('div');
+    list.className = 'cleide-audit-diagnostic-chip-list';
+    safeValues.forEach(function (value) {
+      var chip = document.createElement('span');
+      chip.className = 'cleide-audit-diagnostic-chip';
+      chip.textContent = String(value);
+      list.appendChild(chip);
+    });
+    wrap.appendChild(list);
+    container.appendChild(wrap);
+  }
+
+  function diagnosticGroupTitle(group) {
+    if (!group || typeof group !== 'object') return 'Diagnóstico da auditoria';
+    if (hasFieldValue(group.title)) return String(group.title);
+    if (group.code === 'pricing_dimension_mismatch') return 'Dimensão tarifária incompatível';
+    return 'Diagnóstico da auditoria';
+  }
+
+  function renderAuditDiagnosticGroup(container, group) {
+    if (!group || typeof group !== 'object') return;
+    var card = document.createElement('article');
+    card.className = 'cleide-audit-diagnostic-card';
+
+    var header = document.createElement('div');
+    header.className = 'cleide-audit-diagnostic-card-header';
+    var title = document.createElement('p');
+    title.className = 'cleide-audit-diagnostic-card-title';
+    title.textContent = diagnosticGroupTitle(group);
+    header.appendChild(title);
+    if (hasFieldValue(group.confidence)) {
+      var confidence = document.createElement('span');
+      confidence.className = 'cleide-audit-diagnostic-confidence';
+      confidence.textContent = String(group.confidence) === 'high' ? 'confiança alta' : String(group.confidence);
+      header.appendChild(confidence);
+    }
+    card.appendChild(header);
+
+    var message = document.createElement('p');
+    message.className = 'cleide-audit-diagnostic-message';
+    message.textContent = group.message || 'A auditoria encontrou um padrão de falha que precisa de revisão na tabela registrada.';
+    card.appendChild(message);
+
+    var meta = document.createElement('div');
+    meta.className = 'cleide-audit-diagnostic-meta';
+    appendDetailRow(meta, 'Etapa', group.failure_stage || 'pricing_rule_match');
+    appendDetailRow(meta, 'Linhas afetadas', group.affected_rows != null ? String(group.affected_rows) : '');
+    if (Array.isArray(group.sample_row_indexes) && group.sample_row_indexes.length) {
+      appendDetailRow(meta, 'Amostra de linhas', group.sample_row_indexes.join(', '));
+    }
+    if (hasFieldValue(group.candidate_column)) {
+      appendDetailRow(meta, 'Coluna candidata encontrada', group.candidate_column);
+    }
+    card.appendChild(meta);
+
+    appendAuditDiagnosticValueList(card, 'Valores solicitados pela cobertura', group.requested_values);
+    appendAuditDiagnosticValueList(card, 'Valores da dimensão tarifária atual', group.available_values);
+    appendAuditDiagnosticValueList(card, 'Valores encontrados na coluna candidata', group.candidate_values);
+
+    var actionability = group.actionability && typeof group.actionability === 'object' ? group.actionability : {};
+    var note = document.createElement('p');
+    note.className = 'cleide-audit-diagnostic-actionability';
+    note.textContent = actionability.can_apply_automatically
+      ? 'Este diagnóstico é apenas informativo nesta fase. Nenhuma correção será aplicada automaticamente.'
+      : 'Diagnóstico informativo: revise a tabela registrada ou os arquivos de origem. Nenhuma correção automática será aplicada nesta fase.';
+    card.appendChild(note);
+
+    if (actionability.can_review_registered_table === true) {
+      var actions = document.createElement('div');
+      actions.className = 'cleide-audit-diagnostic-actions';
+      var fixBtn = document.createElement('button');
+      fixBtn.type = 'button';
+      fixBtn.className = 'cleide-audit-diagnostic-fix-table-btn';
+      fixBtn.textContent = 'Corrigir tabela cadastrada';
+      fixBtn.addEventListener('click', function () {
+        openAuditCorrectionExplanation(group);
+      });
+      actions.appendChild(fixBtn);
+      card.appendChild(actions);
+    }
+
+    container.appendChild(card);
+  }
+
+  function renderAuditDiagnostics(container, diagnostics) {
+    if (!auditDiagnosticsHasErrors(diagnostics)) return;
+    var groups = Array.isArray(diagnostics.groups) ? diagnostics.groups : [];
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-diagnostics';
+    section.id = 'cleideAuditDiagnostics';
+    var title = document.createElement('p');
+    title.className = 'cleide-audit-diagnostics-title';
+    title.textContent = 'Diagnóstico da auditoria';
+    section.appendChild(title);
+    var subtitle = document.createElement('p');
+    subtitle.className = 'cleide-audit-diagnostics-subtitle';
+    subtitle.textContent = 'A Cleide identificou padrões agregados nos erros do processamento. Esta fase apenas explica o problema.';
+    section.appendChild(subtitle);
+    if (groups.length) {
+      groups.forEach(function (group) {
+        renderAuditDiagnosticGroup(section, group);
+      });
+    } else {
+      var generic = document.createElement('article');
+      generic.className = 'cleide-audit-diagnostic-card';
+      var genericTitle = document.createElement('p');
+      genericTitle.className = 'cleide-audit-diagnostic-card-title';
+      genericTitle.textContent = 'Erros encontrados na auditoria';
+      generic.appendChild(genericTitle);
+      var genericMessage = document.createElement('p');
+      genericMessage.className = 'cleide-audit-diagnostic-message';
+      genericMessage.textContent = 'A auditoria encontrou erros no lote, mas não identificou um grupo de causa específico para exibir nesta etapa.';
+      generic.appendChild(genericMessage);
+      section.appendChild(generic);
+    }
+    container.appendChild(section);
+  }
+
+  var auditDiagnosticModalEl = null;
+  var auditDiagnosticEscapeHandler = null;
+
+  function ensureAuditDiagnosticModal() {
+    if (auditDiagnosticModalEl) return auditDiagnosticModalEl;
+
+    var modal = document.createElement('div');
+    modal.className = 'cleide-audit-temp-table-modal cleide-audit-diagnostic-modal';
+    modal.id = 'cleideAuditDiagnosticModal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'cleideAuditDiagnosticModalTitle');
+    modal.hidden = true;
+
+    var backdrop = document.createElement('div');
+    backdrop.className = 'cleide-audit-temp-table-modal-backdrop';
+    backdrop.id = 'cleideAuditDiagnosticModalBackdrop';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'cleide-audit-temp-table-modal-dialog';
+
+    var header = document.createElement('div');
+    header.className = 'cleide-audit-temp-table-modal-header';
+
+    var headerMain = document.createElement('div');
+    headerMain.className = 'cleide-audit-temp-table-modal-header-main';
+
+    var title = document.createElement('h2');
+    title.className = 'cleide-audit-temp-table-modal-title';
+    title.id = 'cleideAuditDiagnosticModalTitle';
+    title.textContent = 'Detalhe do erro';
+
+    var subtitle = document.createElement('p');
+    subtitle.className = 'cleide-audit-temp-table-modal-subtitle';
+    subtitle.id = 'cleideAuditDiagnosticModalSubtitle';
+    subtitle.textContent = 'Diagnóstico explicativo da auditoria.';
+
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'cleide-audit-temp-table-modal-close-btn';
+    closeBtn.id = 'cleideAuditDiagnosticModalClose';
+    closeBtn.setAttribute('aria-label', 'Fechar diagnóstico');
+    closeBtn.innerHTML = '<span aria-hidden="true">&times;</span>';
+
+    headerMain.appendChild(title);
+    headerMain.appendChild(subtitle);
+    header.appendChild(headerMain);
+    header.appendChild(closeBtn);
+
+    var body = document.createElement('div');
+    body.className = 'cleide-audit-temp-table-modal-body';
+    body.id = 'cleideAuditDiagnosticModalBody';
+
+    dialog.appendChild(header);
+    dialog.appendChild(body);
+    modal.appendChild(backdrop);
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+
+    closeBtn.addEventListener('click', closeAuditDiagnosticModal);
+    backdrop.addEventListener('click', closeAuditDiagnosticModal);
+
+    auditDiagnosticModalEl = modal;
+    return modal;
+  }
+
+  function isAuditDiagnosticModalOpen() {
+    return !!(auditDiagnosticModalEl && !auditDiagnosticModalEl.hidden);
+  }
+
+  function closeAuditDiagnosticModal() {
+    if (!auditDiagnosticModalEl || auditDiagnosticModalEl.hidden) return;
+    auditDiagnosticModalEl.hidden = true;
+    var body = byId('cleideAuditDiagnosticModalBody');
+    if (body) body.textContent = '';
+    if (auditDiagnosticEscapeHandler) {
+      document.removeEventListener('keydown', auditDiagnosticEscapeHandler, true);
+      auditDiagnosticEscapeHandler = null;
+    }
+  }
+
+  function openAuditDiagnosticModal(titleText, subtitleText, renderContent) {
+    var modal = ensureAuditDiagnosticModal();
+    var title = byId('cleideAuditDiagnosticModalTitle');
+    var subtitle = byId('cleideAuditDiagnosticModalSubtitle');
+    var body = byId('cleideAuditDiagnosticModalBody');
+    if (title) title.textContent = titleText || 'Diagnóstico da auditoria';
+    if (subtitle) subtitle.textContent = subtitleText || 'Diagnóstico explicativo da auditoria.';
+    if (body) {
+      body.textContent = '';
+      renderContent(body);
+    }
+    modal.hidden = false;
+    var closeBtn = byId('cleideAuditDiagnosticModalClose');
+    if (closeBtn && typeof closeBtn.focus === 'function') closeBtn.focus();
+
+    if (!auditDiagnosticEscapeHandler) {
+      auditDiagnosticEscapeHandler = function (e) {
+        if (e.key === 'Escape' && isAuditDiagnosticModalOpen()) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeAuditDiagnosticModal();
+        }
+      };
+      document.addEventListener('keydown', auditDiagnosticEscapeHandler, true);
+    }
+  }
+
+  function renderLineErrorDetail(body, row, group) {
+    var diagnostic = row && row.diagnostic && typeof row.diagnostic === 'object' ? row.diagnostic : {};
+    var context = diagnostic.search_context && typeof diagnostic.search_context === 'object'
+      ? diagnostic.search_context
+      : {};
+    var summary = document.createElement('div');
+    summary.className = 'cleide-audit-line-error-summary';
+    appendDetailRow(summary, 'Documento', row.numero_documento || '—');
+    appendDetailRow(summary, 'UF destino', context.destination_uf || row.destination_uf || '—');
+    appendDetailRow(summary, 'Cidade destino', context.destination_city || row.destination_city || '—');
+    appendDetailRow(summary, 'Classificação de cobertura identificada', context.coverage_classification || row.freight_region || '—');
+    appendDetailRow(summary, 'Peso', hasFieldValue(row.audited_weight) ? String(row.audited_weight) : '—');
+    appendDetailRow(summary, 'Status', auditStatusLabel(row.status));
+    appendDetailRow(summary, 'Etapa da falha', diagnostic.failure_stage || (group && group.failure_stage) || '—');
+    appendDetailRow(
+      summary,
+      'Critérios usados na busca',
+      [
+        context.destination_uf || row.destination_uf,
+        context.destination_city || row.destination_city,
+        context.coverage_classification || row.freight_region
+      ].filter(hasFieldValue).join(' / ') || '—'
+    );
+    if (Array.isArray(diagnostic.attempted_keys) && diagnostic.attempted_keys.length) {
+      appendDetailRow(summary, 'Tentativas de correspondência', diagnostic.attempted_keys.join(', '));
+    }
+    if (group) {
+      appendDetailRow(summary, 'Valores da dimensão tarifária atual', auditDiagnosticListText(group.available_values));
+      if (hasFieldValue(group.candidate_column)) {
+        appendDetailRow(summary, 'Coluna candidata', group.candidate_column);
+      }
+      if (Array.isArray(group.candidate_values) && group.candidate_values.length) {
+        appendDetailRow(summary, 'Valores da coluna candidata', auditDiagnosticListText(group.candidate_values));
+      }
+    }
+    appendDetailRow(summary, 'Mensagem', diagnostic.message || (group && group.message) || 'A linha não pôde ser calculada com os dados registrados.');
+    if (group) {
+      appendDetailRow(summary, 'Causa relacionada', diagnosticGroupTitle(group));
+    }
+    body.appendChild(summary);
+  }
+
+  function openLineErrorDetail(row, diagnostics) {
+    if (!auditRowHasFailure(row)) return;
+    var group = findAuditDiagnosticGroupForRow(row, diagnostics);
+    openAuditDiagnosticModal(
+      'Detalhe do erro',
+      'Linha ' + String(row.row_index == null ? '—' : row.row_index),
+      function (body) {
+        renderLineErrorDetail(body, row, group);
+      }
+    );
+  }
+
+  function renderCorrectionFileInstructions(body, group) {
+    var info = document.createElement('div');
+    info.className = 'cleide-audit-correction-choice-panel';
+    var title = document.createElement('p');
+    title.className = 'cleide-audit-correction-choice-title';
+    title.textContent = 'Corrigir arquivos e refazer o upload';
+    info.appendChild(title);
+    var instructions = document.createElement('p');
+    instructions.className = 'cleide-audit-correction-choice-text';
+    instructions.textContent = 'Revise os arquivos de origem para que a cobertura e a tabela de frete usem a mesma dimensão tarifária. Depois, faça o upload novamente pelo fluxo normal da auditoria.';
+    info.appendChild(instructions);
+    appendDetailRow(info, 'Coluna candidata', group && group.candidate_column ? group.candidate_column : '—');
+    appendDetailRow(info, 'Valores atuais', group ? auditDiagnosticListText(group.available_values) : '—');
+    appendDetailRow(info, 'Valores sugeridos', group ? auditDiagnosticListText(group.candidate_values) : '—');
+
+    var actions = document.createElement('div');
+    actions.className = 'cleide-audit-correction-choice-actions';
+    var backBtn = document.createElement('button');
+    backBtn.type = 'button';
+    backBtn.className = 'cleide-audit-correction-secondary-btn';
+    backBtn.textContent = 'Voltar';
+    backBtn.addEventListener('click', function () {
+      openAuditCorrectionExplanation(group);
+    });
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'cleide-audit-correction-secondary-btn';
+    closeBtn.textContent = 'Fechar';
+    closeBtn.addEventListener('click', closeAuditDiagnosticModal);
+    actions.appendChild(backBtn);
+    actions.appendChild(closeBtn);
+    info.appendChild(actions);
+    body.appendChild(info);
+  }
+
+  function renderCorrectionExplanation(body, group) {
+    var content = document.createElement('div');
+    content.className = 'cleide-audit-correction-explanation';
+    appendDetailRow(content, 'Causa', group && group.message ? group.message : 'Dimensão tarifária incompatível.');
+    appendDetailRow(content, 'Coluna candidata', group && group.candidate_column ? group.candidate_column : '—');
+    appendDetailRow(content, 'Valores atuais', group ? auditDiagnosticListText(group.available_values) : '—');
+    appendDetailRow(content, 'Valores sugeridos', group ? auditDiagnosticListText(group.candidate_values) : '—');
+    appendDetailRow(content, 'Evidências', group ? auditDiagnosticListText(group.evidence) : '—');
+    var warning = document.createElement('p');
+    warning.className = 'cleide-audit-correction-warning';
+    warning.textContent = 'Nenhuma alteração foi aplicada.';
+    content.appendChild(warning);
+
+    var choices = document.createElement('div');
+    choices.className = 'cleide-audit-correction-choices';
+    var previewChoice = document.createElement('button');
+    previewChoice.type = 'button';
+    previewChoice.className = 'cleide-audit-correction-primary-btn';
+    previewChoice.textContent = 'Simular correção';
+    choices.appendChild(previewChoice);
+    var previewHelp = document.createElement('p');
+    previewHelp.className = 'cleide-audit-correction-help';
+    previewHelp.textContent = 'A simulação não altera os resultados atuais nem a tabela cadastrada.';
+    choices.appendChild(previewHelp);
+
+    var fileChoice = document.createElement('button');
+    fileChoice.type = 'button';
+    fileChoice.className = 'cleide-audit-correction-secondary-btn';
+    fileChoice.textContent = 'Prefiro corrigir os arquivos e refazer o upload';
+    fileChoice.addEventListener('click', function () {
+      openAuditDiagnosticModal(
+        'Corrigir arquivos',
+        'Nenhum documento será removido e nenhum estado será alterado.',
+        function (fileBody) {
+          renderCorrectionFileInstructions(fileBody, group);
+        }
+      );
+    });
+    choices.appendChild(fileChoice);
+    content.appendChild(choices);
+    var previewResult = document.createElement('div');
+    previewResult.className = 'cleide-audit-correction-preview-result';
+    content.appendChild(previewResult);
+    previewChoice.addEventListener('click', function () {
+      requestAuditCorrectionPreview(group, previewResult, previewChoice);
+    });
+    body.appendChild(content);
+  }
+
+  function openAuditCorrectionExplanation(group) {
+    openAuditDiagnosticModal(
+      'Corrigir tabela cadastrada',
+      'Etapa explicativa. Nenhuma correção real será aplicada.',
+      function (body) {
+        renderCorrectionExplanation(body, group);
+      }
+    );
+  }
+
+  function appendAuditRowActionCell(tr, row, diagnostics) {
+    var td = document.createElement('td');
+    td.className = 'cleide-audit-run-actions-cell';
+    if (auditRowHasFailure(row)) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cleide-audit-run-row-error-btn';
+      btn.textContent = 'Ver erro';
+      btn.addEventListener('click', function () {
+        openLineErrorDetail(row, diagnostics);
+      });
+      td.appendChild(btn);
+    } else {
+      td.textContent = '—';
+    }
+    tr.appendChild(td);
+  }
+
+  function renderAuditRunResults(container, results, diagnostics) {
     var rows = Array.isArray(results) ? results : [];
     if (!rows.length) return;
     var section = document.createElement('div');
@@ -4208,7 +5279,7 @@ function renderDocumentItem(doc) {
     table.className = 'cleide-audit-temp-table-modal-freight-table cleide-audit-run-results-table';
     var thead = document.createElement('thead');
     var headerRow = document.createElement('tr');
-    ['Linha', 'Documento', 'UF', 'Cidade', 'Região', 'Peso', 'Cobrado', 'Esperado', 'Diferença', 'Status'].forEach(function (label) {
+    ['Linha', 'Documento', 'UF', 'Cidade', 'Região', 'Peso', 'Cobrado', 'Esperado', 'Diferença', 'Status', 'Ações'].forEach(function (label) {
       appendTableCell(headerRow, label, true, false);
     });
     thead.appendChild(headerRow);
@@ -4228,6 +5299,7 @@ function renderDocumentItem(doc) {
       appendExpectedFreightCell(tr, row);
       appendTableCell(tr, formatAuditMoney(row.divergence_value), false, true);
       appendTableCell(tr, auditStatusLabel(row.status), false, false);
+      appendAuditRowActionCell(tr, row, diagnostics);
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
@@ -4262,7 +5334,7 @@ function renderDocumentItem(doc) {
           return;
         }
         if (res.data.temp_table) {
-          currentTempTable = res.data.temp_table;
+          setCurrentTempTable(res.data.temp_table);
         }
         auditFileStepActive = true;
         tempTableModalActiveTab = 'audit';
