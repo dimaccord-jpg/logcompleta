@@ -1,162 +1,58 @@
 ﻿# Estado Oficial Consolidado
 
-Data de consolidacao: `2026-06-30`
-Commit de referencia: `homolog@28904e4` e `producao@0afe528`
+Data de consolidacao: `2026-07-08`
+Commit de referencia: `homolog@efd54b5` e `producao@3d5332b`
 
-## Escopo promovido
-
-Estado confirmado no codigo e na promocao:
+## Escopo confirmado
 
 - Copilot de discovery na Home publica
 - Home logada consolidada como superficie operacional da Julia
-- upload documental governado da Julia
-- observabilidade de onboarding e operacional mantida
-- configuracao documental no admin do Cleiton sem migration nova
-- Cleide Auditoria com tabela temporaria estabilizada no fluxo pos-upload/status
+- Julia documental governada pelo Cleiton
+- Roberto com upload, BI e chat privados em `/fretes`
+- Cleide BI estrutural em `/cleide-bi-frete`
+- Cleide Auditoria em `/auditoria-frete`
+- observabilidade de IA e processamento mantida
 
-## Estado oficial de ambiente
+## Estado de ambiente
 
-- `homolog` contem `28904e4`
+- `homolog` contem `efd54b5`
 - `origin/homolog` esta sincronizada com `homolog`
-- `producao` contem `0afe528`
-- producao foi validada e aprovada apos deploy
-- apos o push, `origin/producao` ficou em `0afe528`
-- o ambiente local voltou para `homolog`, limpo e sincronizado
+- a promocao recente de producao ocorreu por cherry-pick seletivo
+- `producao` contem `3d5332b`
 - nao houve migration nova
 - nao houve schema novo
-- nao houve campos novos
-- nao houve tabelas novas
-
-## Superficies oficiais
-
-- `/`: Home publica com Copilot
-- `/`: Home logada com Julia operacional
-- `/chat_julia?mode=operational`: acesso dedicado da Julia
-- `/fretes`: Roberto
-- `/cleide-bi-frete`: Cleide BI operacional
-- `/auditoria-frete`: Cleide Auditoria documental
-- `/feed`: editorial
-- `/admin/dashboard`: admin
-
-## Copilot da Home
-
-- backend oficial: `POST /api/onboarding_discovery`
-- reset oficial: `POST /api/onboarding_discovery/reset`
-- limite anonimo por sessao: `5`
-- CTA de login ao atingir o limite
-- contexto so e preservado para Julia quando houver handoff `julia_operational`
-
-## Julia
-
-- endpoint oficial: `POST /api/chat_julia`
-- exige login
-- valida autorizacao operacional por franquia
-- funciona na Home logada como superficie principal
-- mantem a rota dedicada `/chat_julia?mode=operational`
-
-## Fluxo documental
-
-O fluxo documental atual da Julia:
-
-- faz parte da experiencia operacional logada
-- usa Cleiton como camada de governanca
-- respeita autorizacao, plano/franquia, limites e seguranca
-
-Tipos aceitos:
-
-- `TXT`
-- `XML`
-- `CSV`
-- `XLSX`
-- `DOCX`
-- `PDF`
-
-Sobre PDF:
-
-- tem tratamento governado proprio
-- pode usar Gemini Files quando aplicavel
-- nao deve simular leitura quando so houver placeholder ou contexto nao pronto
-
-## Cleiton
-
-Papel correto no estado atual:
-
-- governanca operacional
-- autorizacao por franquia
-- observabilidade
-- upload documental
-- validacao e seguranca
-- TTL, cleanup e sessao
-- preparo de contexto e integracao com IA
-- ownership operacional da tabela temporaria da Cleide Auditoria
+- nao houve tabela nova
+- nao houve campo novo
 
 ## Cleide Auditoria
 
-Estado promovido:
+- upload documental, `temp_table`, coverage, lote auditado e chat estao ativos
+- a `temp_table` continua artefato temporario governado pelo dominio Cleiton
+- a extração tecnica permanece separada do chat
+- a revisao humana pode editar e salvar a tabela antes de avancar
+- ha correcoes assistidas com preview, apply e undo
+- o BI executivo da auditoria usa 4 graficos:
+- Impacto Financeiro por Transportadora
+- Divergencia Financeira por UF Destino
+- Evolucao da Divergencia no Periodo
+- Pareto do Valor Cobrado a Mais
 
-- upload documental e chat ativos em `/auditoria-frete`
-- upload/documentos alimentam a tabela temporaria
-- extracao tecnica pos-upload/status permanece separada do chat conversacional
-- retorno de `temp_table` no upload quando disponivel
-- retorno de `temp_table` no status documental
-- revisao humana da `temp_table` disponivel em `POST /api/cleide-auditoria/temp-table/save`
-- coverage complementar em `POST /api/cleide-auditoria/coverage/upload`
-- template do lote auditado em `GET /api/cleide-auditoria/audit-template`
-- upload do lote auditado em `POST /api/cleide-auditoria/audit/upload`
-- processamento do lote auditado em `POST /api/cleide-auditoria/audit/run`
-- o chat consulta o contexto, mas nao deve recriar, alterar ou sobrescrever a tabela temporaria
-- a interface exibe card clicavel da tabela temporaria no painel de anexos/documentos
-- o modal da tabela temporaria e somente leitura
-- a validacao da `temp_table` e humana e governada, nao uma nova conversa de IA
+## Admin
 
-Garantias:
-
-- a tabela temporaria e descartavel e nao representa auditoria final
-- a validacao humana continua obrigatoria
-- nao houve migration, nova tabela de banco ou alteracao estrutural de schema
-- nao houve banco local ou arquivo `.db` versionado
-- o `operational_owner` da tabela temporaria e `cleiton`
-- o ciclo de vida acompanha o TTL dos documentos da sessao
-
-## Configuracao administrativa
-
-O admin de Cleiton possui bloco documental governado em `agentes_cleiton`.
-
-Persistencia:
-
-- usa `ConfigRegras`
-- nao adicionou migration
-- nao criou tabela nova nesta entrega
-
-## Banco e migrations
-
-Esta entrega:
-
-- nao adicionou arquivo em `migrations/versions`
-- nao criou tabela para upload documental
-- nao criou campo para a temp table da Cleide
-- manteve o mecanismo existente de configuracao
+- `/admin/agentes/cleide` separa configuracao do BI estrutural e da auditoria documental
+- `/admin/agentes/cleiton` continua dono dos limites globais documentais, TTL, cleanup e limites por tipo
+- persistencia continua em `ConfigRegras`
 
 ## Git e temporarios
 
-- `app/cleiton_doc_tmp/` permanece local, temporaria e ignorada no Git
-- `app/cleiton_doc_tmp/` esta protegido pelo `.gitignore`
-- `tt_*.json`, `.cleanup_meta.json` e outros `.json` dessa pasta nao devem ser versionados
-- residuos `app/.tmp_repro_unit*` nao devem ser versionados
+- `app/cleiton_doc_tmp/` permanece temporaria e ignorada
+- `tt_*.json`, caches e residuos tecnicos nao entram em commit
+- `.db`, `__pycache__` e `.pytest_cache` nao fazem parte do estado oficial
 
-## Testes e validacao
+## Testes validados
 
-Validacoes registradas para a promocao:
+```powershell
+pytest tests/test_cleide_audit_correction_service.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_chat_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_context.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py -q
+```
 
-- `pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_routes.py`
-- resultado: `572 passed, 2 warnings` em aproximadamente `220.39s`
-- warnings conhecidos: `DeprecationWarning` de `flask_session` filesystem e `DeprecationWarning` de `google genai` / `_UnionGenericAlias` em Python 3.14
-- esses warnings nao foram tratados como falha funcional nem bloqueio da promocao
-
-## Ponto de atencao operacional
-
-- `homolog` e a branch oficial de homologacao
-- `producao` e a branch funcional de producao usada no painel do Render
-- `main` nao deve ser usada como destino operacional automatico de producao neste momento
-- o `render.yaml` do repositorio ainda referencia `branch: main` no servico de producao
-- manter a confirmacao do painel Render como etapa obrigatoria antes de novas promocoes
+- resultado conhecido: `717 passed, 2 warnings`

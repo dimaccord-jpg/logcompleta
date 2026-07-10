@@ -98,9 +98,9 @@ Objetivo:
 Ler os anexos desta sessao e extrair dados brutos de frete para validacao humana.
 
 Prioridades de extracao (partial-first):
-1. rotas/tabelas de frete (freight_routes e/ou freight_tables)
-2. faixas de peso (weight_ranges e colunas/faixas nas tabelas)
-3. excedente por kg, quando presente (ex.: freight_weight_kg)
+1. tabelas tarifarias observadas no documento (freight_tables) — representacao fiel para revisao humana
+2. faixas de peso e colunas reais do documento (dentro de freight_tables.columns e/ou weight_ranges)
+3. matriz tecnica opcional (freight_routes) — somente quando houver origem/destino/faixas estruturaveis
 4. generalidades e servicos adicionais (accessorial_fees)
 5. evidencias e alertas (evidence_refs, reading_alerts)
 
@@ -117,7 +117,14 @@ Regras obrigatorias:
 - Nao presuma layout fixo, transportadora fixa ou formato unico.
 - Aceite extracao parcial.
 - Para cada tabela tarifaria identificada, crie uma entrada em freight_tables com table_title, context, columns e rows reais.
-- Preencha freight_routes apenas quando houver matriz clara de origem/destino/tipo/faixas estruturaveis.
+- Em freight_tables, preserve os rotulos originais das colunas exatamente como aparecem no documento (ex.: "Até 50 kg", "Excedente por kg", "Frete Valor %", "Pedágio").
+- Nao invente faixas de peso ausentes (ex.: nao crie "Até 30 kg" ou "Até 70 kg" se o documento so tiver 50/100).
+- Nao preencha colunas padrao ausentes no documento com null ou placeholders.
+- Nao complete faixas faltantes para encaixar em schema fixo.
+- Diferencie: (A) coluna observada no documento -> freight_tables.columns/rows; (B) coluna inferida -> marque em column_meta com origin "inferred"; (C) campo tecnico para calculo -> freight_routes ou chaves tecnicas opcionais, nunca como cabecalho observado.
+- Preencha freight_routes apenas quando houver matriz clara de origem/destino/tipo/faixas estruturaveis E freight_tables nao bastar.
+- Em freight_routes, inclua somente campos realmente encontrados no documento; omita campos ausentes (nao envie weight_30: null se a coluna nao existir).
+- Use column_labels em freight_routes para mapear chave tecnica -> rotulo do documento (ex.: freight_weight_kg -> "Excedente por kg").
 - Nao reconstrua freight_tables a partir de freight_routes.
 - Nao coloque generalidades em freight_routes.
 - Nao coloque servicos adicionais em freight_routes.
@@ -185,32 +192,88 @@ Formato sugerido para freight_tables (uma entrada por tabela tarifaria identific
         "Imposto": "(+) ICMS"
       }
     ],
+    "column_meta": {
+      "Frete Peso": {"origin": "observed"},
+      "Frete": {"origin": "observed"}
+    },
     "notes": "",
     "evidence_ref": "Proposta HENGST 20252026.pdf (page 1)",
+    "confidence": "needs_review"
+  },
+  {
+    "table_title": "Tabela Intercargo",
+    "table_type": "route_matrix",
+    "context": {
+      "route_label": null,
+      "origin": "Joinville",
+      "destination": null,
+      "customer": null,
+      "supplier": "Intercargo",
+      "valid_from": null,
+      "valid_to": null,
+      "delivery_deadline": null
+    },
+    "columns": [
+      "Origem",
+      "Destino",
+      "Até 50 kg",
+      "Até 100 kg",
+      "Excedente por kg",
+      "Frete Valor %",
+      "Pedágio"
+    ],
+    "rows": [
+      {
+        "Origem": "Joinville",
+        "Destino": "São Paulo",
+        "Até 50 kg": "120,00",
+        "Até 100 kg": "180,00",
+        "Excedente por kg": "1,20",
+        "Frete Valor %": "0,30",
+        "Pedágio": "15,00"
+      },
+      {
+        "Origem": "Joinville",
+        "Destino": "Campinas",
+        "Até 50 kg": "115,00",
+        "Até 100 kg": "175,00",
+        "Excedente por kg": "1,15",
+        "Frete Valor %": "0,30",
+        "Pedágio": "14,50"
+      }
+    ],
+    "notes": "",
+    "evidence_ref": "Tabela Intercargo.pdf (page 1)",
     "confidence": "needs_review"
   }
 ]
 
 O campo context aceita dados parciais. Se algo nao estiver claro, use null.
+column_meta e opcional; use origin "observed" ou "inferred" quando relevante.
 
-Formato sugerido para freight_routes (opcional — apenas quando houver matriz origem/destino/tipo/faixas estruturaveis):
+Formato sugerido para freight_routes (opcional — fallback tecnico; omita campos ausentes no documento):
 [
   {
     "origin": "DF",
     "destination": "JOINVILLE",
     "freight_type": "FOB",
-    "weight_30": "115,00",
     "weight_50": "135,00",
-    "weight_70": "168,00",
     "weight_100": "190,00",
-    "boarding_fee": "190,0000",
     "freight_value_pct": "0,3000",
     "freight_weight_kg": "1,5000",
+    "column_labels": {
+      "weight_50": "Até 50 kg",
+      "weight_100": "Até 100 kg",
+      "freight_weight_kg": "Excedente por kg",
+      "freight_value_pct": "Frete Valor %"
+    },
     "notes": "",
     "evidence_ref": "TABELA ALFA ATUAL.pdf (page 1)",
     "confidence": "needs_review"
   }
 ]
+
+Inclua em freight_routes apenas os campos de faixa/taxa que existirem no documento. Nao envie weight_30, weight_70 ou boarding_fee se essas colunas nao aparecerem.
 
 Formato sugerido para freight_values (fallback parcial/legado):
 [
@@ -269,10 +332,11 @@ Voce e um extrator tecnico de frete para a Cleide Auditoria.
 Extraia apenas dados brutos do anexo, em JSON puro, sem markdown e sem texto extra.
 
 Priorize:
-1. freight_routes (origem, destino, faixas weight_30/50/70/100, freight_weight_kg quando existir)
-2. weight_ranges
-3. accessorial_fees (name, value, unit, calculation_basis, raw_calculation_basis)
-4. reading_alerts e evidence_refs
+1. freight_tables (columns e rows com rotulos reais do documento; nao invente faixas ausentes)
+2. freight_routes (somente campos realmente presentes; use column_labels para rotulos do documento)
+3. weight_ranges
+4. accessorial_fees (name, value, unit, calculation_basis, raw_calculation_basis)
+5. reading_alerts e evidence_refs
 
 Nao calcule frete, divergencia, minimo aplicado nem auditoria.
 Aceite extracao parcial. Se houver qualquer dado util, use status "needs_review".

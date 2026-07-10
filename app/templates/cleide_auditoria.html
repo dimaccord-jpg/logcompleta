@@ -346,7 +346,7 @@
 
               <div class="cleide-audit-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Divergência Financeira por UF Destino</h3>
+                <h3 class="cleide-audit-bi-chart-title">Impacto Financeiro por UF Destino</h3>
 
                 <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="uf_destino">Ocultar</button>
 
@@ -364,7 +364,7 @@
 
               <div class="cleide-audit-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Evolução da Divergência no Período</h3>
+                <h3 class="cleide-audit-bi-chart-title">Evolução do Impacto Financeiro no Período</h3>
 
                 <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="temporal">Ocultar</button>
 
@@ -1708,6 +1708,97 @@
       white-space: normal;
       word-break: break-word;
     }
+  }
+
+  .cleide-audit-tax-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .cleide-audit-tax-question {
+    margin: 0;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .cleide-audit-tax-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .cleide-audit-tax-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.84rem;
+    color: var(--af-text-primary, #F0F0F5);
+    cursor: pointer;
+  }
+
+  .cleide-audit-tax-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.65rem;
+  }
+
+  .cleide-audit-tax-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.78rem;
+    color: var(--af-text-secondary, #A0A0B0);
+  }
+
+  .cleide-audit-tax-input,
+  .cleide-audit-tax-rate-input {
+    font-size: 0.82rem;
+  }
+
+  .cleide-audit-tax-hint {
+    margin: 0;
+    font-size: 0.76rem;
+    line-height: 1.4;
+    color: var(--af-text-secondary, #A0A0B0);
+  }
+
+  .cleide-audit-tax-table-scroll {
+    margin-top: 0.35rem;
+  }
+
+  .cleide-audit-tax-table th,
+  .cleide-audit-tax-table td {
+    font-size: 0.76rem;
+    white-space: nowrap;
+  }
+
+  .cleide-audit-tax-rate-input {
+    min-width: 5rem;
+    max-width: 7rem;
+  }
+
+  .cleide-audit-tax-destination-ufs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .cleide-audit-tax-destination-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .cleide-audit-tax-add-uf-btn,
+  .cleide-audit-tax-remove-uf-btn {
+    font-size: 0.78rem;
+  }
+
+  .cleide-audit-tax-empty-uf-alert {
+    color: var(--af-warning, #E0B050);
   }
 
   .cleide-audit-audit-file-section {

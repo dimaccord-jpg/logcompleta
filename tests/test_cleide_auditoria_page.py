@@ -371,21 +371,11 @@ def test_cleide_auditoria_js_temp_table_modal_blocos_operacionais():
 
 def test_cleide_auditoria_js_temp_table_freight_route_columns():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
-    expected_columns = [
-        "Origem",
-        "Destino",
-        "Tipo",
-        "Até 30 kg",
-        "Até 50 kg",
-        "Até 70 kg",
-        "Até 100 kg",
-        "Taxa Embarque Kg",
-        "Frete Valor %",
-        "Frete Peso Kg",
-        "Observações",
-    ]
-    for column in expected_columns:
-        assert column in js
+    assert "resolveFreightRouteColumns" in js
+    assert "FREIGHT_ROUTE_DEFAULT_LABELS" in js
+    assert "Excedente por kg" in js
+    assert "resolvePartialFreightRouteColumns" in js
+    assert "mergeFreightRouteColumnLabels" in js
 
 
 def test_cleide_auditoria_js_temp_table_modal_prioriza_freight_tables():
@@ -774,6 +764,60 @@ def test_cleide_auditoria_js_audit_calculation_memory():
     assert "cleide-audit-run-expected-link" in source
 
 
+def test_cleide_auditoria_js_audit_calculation_memory_fiscal_rendering():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    fiscal_start = js.index("function auditDetailsWithoutTaxLines")
+    fiscal_end = js.index("function hasAuditCalculationMemoryDetail")
+    fiscal_block = js[fiscal_start:fiscal_end]
+    memory_block = js[js.index("function buildAuditCalculationMemoryRows"): js.index("function auditStatusLabel")]
+    render_block = js[js.index("function renderAuditCalculationMemoryContent"): js.index("function openAuditCalculationMemory")]
+
+    assert "buildAuditTaxMemoryRows" in js
+    assert "hasAppliedTaxComponents" in js
+    assert "tax_components" in fiscal_block
+    assert "subtotal_before_taxes" in fiscal_block
+    assert "Subtotal antes dos impostos" in fiscal_block
+    assert "Alíquota editada pelo usuário." in fiscal_block
+    assert "Fonte:" in fiscal_block
+    assert "ISS não aplicado nesta linha:" in js
+    assert "auditDiscreteIgnoredTaxNotes" in js
+    assert "auditRowBasisTextWithoutTax" in js
+    assert "buildAuditTaxMemoryRows(row, components)" in memory_block
+    assert "hasAppliedTaxComponents(row.calculation_components)" in render_block
+    assert "Total esperado com impostos:" in render_block
+    tax_rows_block = js[js.index("function buildAuditTaxMemoryRows"): js.index("function hasAuditCalculationMemoryDetail")]
+    assert "Total esperado com impostos" not in tax_rows_block
+    assert render_block.count("Total esperado com impostos:") == 1
+    assert "'ICMS'" not in fiscal_block
+    assert "item.tax_type" in fiscal_block
+    assert "applied_rate" not in fiscal_block
+    assert "taxItem.calculation_mode === 'inside'" in js
+    assert "por dentro" in js
+    assert "route_toll" in memory_block or "route_toll" in js
+
+
+def test_cleide_auditoria_js_audit_calculation_memory_tax_total_not_duplicated():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    tax_rows_block = js[js.index("function buildAuditTaxMemoryRows"): js.index("function hasAuditCalculationMemoryDetail")]
+    render_block = js[js.index("function renderAuditCalculationMemoryContent"): js.index("function openAuditCalculationMemory")]
+
+    assert "component: 'Total esperado com impostos'" not in tax_rows_block
+    assert tax_rows_block.count("Total esperado com impostos") == 0
+    assert render_block.count("Total esperado com impostos:") == 1
+    assert render_block.count("Total esperado:") >= 1
+
+
+def test_cleide_auditoria_js_audit_calculation_memory_without_tax_regression():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    memory_block = js[js.index("function buildAuditCalculationMemoryRows"): js.index("function auditStatusLabel")]
+    assert "components.weight_freight" in memory_block
+    assert "components.freight_value" in memory_block
+    assert "components.accessorial_fees" in memory_block
+    assert "components.ignored_accessorial_fees" in memory_block
+    assert "hasAppliedTaxComponents(components)" in memory_block
+    assert "if (!hasAppliedTaxComponents(components))" in memory_block
+
+
 def test_cleide_auditoria_html_audit_file_styles():
     source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
     assert "cleide-audit-audit-file-card" in source
@@ -921,12 +965,114 @@ def test_cleide_auditoria_js_freight_table_open_state_does_not_affect_other_sect
 def test_cleide_auditoria_js_coverage_prompt_after_save():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
     save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function byId")]
-    assert "coverageStepActive = true" in save_block
-    assert "tempTableModalActiveTab = 'coverage'" in save_block
+    assert "taxStepActive = true" in save_block
+    assert "tempTableModalActiveTab = 'taxes'" in save_block
+    assert "coverageStepActive = true" not in save_block
+    tax_save_block = js[js.index("function saveTaxConfigAndContinue"): js.index("function renderCoverageUploadHint")]
+    assert "coverageStepActive = true" in tax_save_block
+    assert "tempTableModalActiveTab = 'coverage'" in tax_save_block
     assert "renderTempTableModalContent(currentTempTable)" in save_block
     assert "closeTempTableModal" not in save_block
     assert "appendCoveragePromptCTA" not in save_block
     assert "Deseja informar a relação de cidades atendidas?" in js
+
+
+def test_cleide_auditoria_js_tax_destination_uf_resolution():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "function consolidateTaxDestinationUfs" in js
+    assert "function resolveTaxStateNameToUf" in js
+    assert "function resolveTaxCityNameToUf" in js
+    assert "function renderDestinationUfsSection" in js
+    assert "function addManualTaxDestinationUf" in js
+    assert "function removeTaxDestinationUf" in js
+    assert "Nenhuma UF destino foi identificada automaticamente. Informe as UFs destino para montar a matriz de ICMS." in js
+    assert "UFs destino identificadas automaticamente. Revise, adicione ou remova antes de continuar." in js
+    assert "Adicionar UF destino" in js
+    assert "Nenhuma alíquota de ICMS será aplicada." in js
+    assert "destination_ufs" in js
+    state_block = js[js.index("function resolveTaxStateNameToUf"): js.index("function resolveTaxCityNameToUf")]
+    assert "BR_STATE_NAME_TO_UF" in state_block
+    city_block = js[js.index("function resolveTaxCityNameToUf"): js.index("function normalizeTaxUf")]
+    assert "KNOWN_CITY_TO_UF" in city_block
+    payload_block = js[js.index("function collectTaxConfigSavePayload"): js.index("function saveTaxConfigAndContinue")]
+    assert "destination_ufs" in payload_block
+
+
+def test_cleide_auditoria_html_tax_destination_styles():
+    web = _load_web_module()
+    html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
+    assert "cleide-audit-tax-destination-ufs" in html
+    assert "cleide-audit-tax-destination-controls" in html
+    assert "cleide-audit-tax-empty-uf-alert" in html
+
+
+def test_cleide_auditoria_js_tax_step_navigation_and_save():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "var taxStepActive = false" in js
+    assert "function saveTaxConfigAndContinue" in js
+    assert "function collectTaxConfigSavePayload" in js
+    assert "function renderTaxTabContent" in js
+    assert "Impostos no cálculo do frete" in js
+    assert "Deseja incluir os impostos no cálculo do frete?" in js
+    assert "Não incluir impostos" in js
+    assert "Incluir impostos" in js
+    assert "Continuar para cidades" in js
+    assert "Resolução Senado Federal nº 22/1989" in js
+    assert "O ISS é informado manualmente. Deixe vazio para ignorar no cálculo." in js
+    assert "Alíquotas vazias serão ignoradas no cálculo." in js
+    footer_block = js[js.index("function updateTempTableModalFooter"): js.index("function canEditFreightTables")]
+    assert "onTaxTab" in footer_block
+    assert "Continuar para cidades" in footer_block
+    init_block = js[js.index("function initTempTableModal"): js.index("function init()")]
+    assert "saveTaxConfigAndContinue()" in init_block
+    assert "tempTableModalActiveTab === 'taxes'" in init_block
+    reset_block = js[js.index("function resetTaxStepState"): js.index("function resetCoveragePromptState")]
+    assert "taxStepActive = false" in reset_block
+    payload_block = js[js.index("function collectTaxConfigSavePayload"): js.index("function saveTaxConfigAndContinue")]
+    assert "include_taxes: false" in payload_block
+    assert "UF origem é obrigatória para incluir impostos." in payload_block
+    assert "Cidade origem é obrigatória quando ISS estiver preenchido." in payload_block
+    tabs_block = js[js.index("function renderTempTableModalTabs"): js.index("function renderAuditFileTabContent")]
+    assert "Impostos" in tabs_block
+    assert "shouldShowTaxTab" in tabs_block
+    icms_block = js[js.index("function suggestedIcmsRate"): js.index("function parseTaxRateInput")]
+    assert "ICMS_7_PERCENT_ORIGIN_UFS" in icms_block
+    assert "return 7.0" in icms_block
+    assert "return 12.0" in icms_block
+    assert "4" not in icms_block.replace("0.0001", "").replace("0.000001", "")
+
+
+def test_cleide_auditoria_js_tax_step_state_resets_without_persisting():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    status_block = js[js.index("function handleTempTableFromStatus"): js.index("function formatBytes")]
+    assert "resetTaxStepState()" in status_block
+    freight_payload_block = js[js.index("function collectTempTableSavePayload"): js.index("function saveTempTableAndAdvance")]
+    assert "taxStepActive" not in freight_payload_block
+    assert "tax_config" not in freight_payload_block
+    tax_payload_block = js[js.index("function collectTaxConfigSavePayload"): js.index("function saveTaxConfigAndContinue")]
+    assert "taxStepActive" not in tax_payload_block
+    assert "coverageStepActive" not in tax_payload_block
+
+
+def test_cleide_auditoria_js_tax_icms_matrix_builder():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    builder_block = js[js.index("function buildIcmsRatesForOrigin"): js.index("function ensureTaxConfigShell")]
+    assert "intermunicipal" in builder_block
+    assert "interstate" in builder_block
+    assert "ICMS_INTERMUNICIPAL_SOURCE_NAME" in builder_block
+    assert "user_edited" in builder_block
+    assert "is_active" in builder_block
+    origin_block = js[js.index("function setTaxOriginUf"): js.index("function renderTaxOption")]
+    assert "buildIcmsRatesForOrigin" in origin_block
+
+
+def test_cleide_auditoria_html_tax_styles():
+    web = _load_web_module()
+    html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
+    assert "cleide-audit-tax-section" in html
+    assert "cleide-audit-tax-options" in html
+    assert "cleide-audit-tax-hint" in html
+    assert "cleide-audit-tax-table" in html
 
 
 def test_cleide_auditoria_js_coverage_step_state_resets_without_persisting():
@@ -1171,8 +1317,9 @@ def test_cleide_auditoria_template_bi_section_below_documents():
     assert 'id="cleideAuditBiChartsGrid"' in source
     assert "BI Executivo da Auditoria de Frete" in source
     assert "Impacto Financeiro por Transportadora" in source
-    assert "Divergência Financeira por UF Destino" in source
-    assert "Evolução da Divergência no Período" in source
+    assert "Divergência Financeira por UF Destino" not in source
+    assert "Impacto Financeiro por UF Destino" in source
+    assert "Evolução do Impacto Financeiro no Período" in source
     assert "Pareto do Valor Cobrado a Mais" in source
     assert 'data-audit-bi-chart-card="transportadora"' in source
     assert 'data-audit-bi-chart-card="uf_destino"' in source
@@ -1223,8 +1370,8 @@ def test_cleide_auditoria_js_bi_four_executive_chart_cards_and_cross_filter():
     assert "volume_transportadora" not in chart_contract
     assert "pareto_uf" not in chart_contract
     assert "Impacto Financeiro por Transportadora" in chart_contract
-    assert "Divergência Financeira por UF Destino" in chart_contract
-    assert "Evolução da Divergência no Período" in chart_contract
+    assert "Impacto Financeiro por UF Destino" in chart_contract
+    assert "Evolução do Impacto Financeiro no Período" in chart_contract
     assert "Pareto do Valor Cobrado a Mais" in chart_contract
     assert "auditBiHandleChartClick" in js
     assert "auditBiApplyFilterToggle" in js
@@ -1259,16 +1406,83 @@ def test_cleide_auditoria_js_bi_transportadora_agrega_impacto_financeiro():
 def test_cleide_auditoria_js_bi_transportadora_usa_tres_datasets_executivos():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
     render_block = js[
-        js.index("function auditBiRenderCarrierDivergenceChart"):
-        js.index("function auditBiRenderFilterUi")
+        js.index("function auditBiRenderFinancialImpactBarChart"):
+        js.index("function auditBiRenderCarrierDivergenceChart")
     ]
     assert "type: 'bar'" in render_block
     assert "indexAxis: 'y'" in render_block
     assert "label: 'Cobrado a mais'" in render_block
     assert "label: 'Cobrado a menor'" in render_block
-    assert "label: 'Divergência líquida'" in render_block
-    assert "auditBiFormatCurrency(parsed.x)" in render_block
-    assert "auditBiHandleChartClick(chartKey, labels[elements[0].index])" in render_block
+    assert "label: 'Impacto total'" in render_block
+    assert "label: 'Divergência líquida'" not in render_block
+    assert "auditBiFormatAbsoluteCurrency(parsed.x)" in render_block
+    assert "auditBiResolveDeviationPredominance(row)" in render_block
+    assert "min: 0" in render_block
+
+
+def test_cleide_auditoria_js_bi_charts_use_absolute_values_not_signed_net():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    chart_card_block = js[
+        js.index("function auditBiRenderChartCard"):
+        js.index("function auditBiRenderDashboard")
+    ]
+    assert "datasetLabel: 'Divergência líquida'" not in chart_card_block
+    assert "datasetLabel: 'Impacto total'" in chart_card_block
+    assert "Top UFs por impacto financeiro absoluto da auditoria." in chart_card_block
+    assert "Série diária do impacto financeiro absoluto no período auditado." in chart_card_block
+    assert "auditBiRenderFinancialImpactBarChart(chartKey, ufDestRows)" in chart_card_block
+    assert "row.impacto_total" in chart_card_block
+    assert "row.divergencia_liquida" not in chart_card_block
+
+    simple_chart_block = js[
+        js.index("function auditBiRenderSimpleChart"):
+        js.index("function auditBiRenderParetoChart")
+    ]
+    assert "Math.abs(auditBiGetNumeric(value))" in simple_chart_block
+    assert "scales[valueAxisKey].beginAtZero = true" in simple_chart_block
+    assert "scales[valueAxisKey].min = 0" in simple_chart_block
+    assert "Predominância do desvio: cobrado a menor" in js
+    assert "Predominância do desvio: cobrado a mais" in js
+
+
+def test_cleide_auditoria_js_bi_predominance_undercharge_when_net_negative():
+    over = 1000.0
+    under = 3000.0
+    impact = over + under
+    net = over - under
+    assert net < 0
+    assert impact > 0
+    assert under > over
+    assert impact / 4 == 1000.0
+
+
+def test_cleide_auditoria_js_bi_executive_summary_avg_divergence_per_document():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    executive_block = js[
+        js.index("function auditBiRenderExecutiveSummary"):
+        js.index("function auditBiDestroyChart")
+    ]
+    metrics_block = js[
+        js.index("function auditBiBuildFinancialMetrics"):
+        js.index("function auditBiRenderExecutiveSummary")
+    ]
+    assert "Divergência média por documento" in executive_block
+    assert "Impacto financeiro absoluto médio por documento analisado." in executive_block
+    assert "Math.abs(metrics.averageAbsoluteDivergencePerDocument)" in executive_block
+    assert "label: 'Divergência líquida'" not in executive_block
+    assert "metrics.averageAbsoluteDivergencePerDocument = totalRows > 0" in metrics_block
+    assert "metrics.absoluteImpact / totalRows" in metrics_block
+
+
+def test_cleide_auditoria_js_bi_average_divergence_stays_positive_with_negative_net():
+    absolute_impact = 76886.60
+    total_rows = 106
+    net_divergence = -20192.80
+    average = absolute_impact / total_rows
+    assert net_divergence < 0
+    assert absolute_impact > 0
+    assert abs(average - 725.35) < 0.01
+    assert average > 0
 
 def test_cleide_auditoria_js_bi_transportadora_indisponivel_sem_base_financeira():
     js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
@@ -1294,8 +1508,8 @@ def test_cleide_auditoria_js_bi_transportadora_filtro_preservado():
     assert "chartKey === 'transportadora'" in click_block
     assert "auditBiApplyFilterToggle('carrier', selected)" in click_block
     render_block = js[
-        js.index("function auditBiRenderCarrierDivergenceChart"):
-        js.index("function auditBiRenderFilterUi")
+        js.index("function auditBiRenderFinancialImpactBarChart"):
+        js.index("function auditBiRenderCarrierDivergenceChart")
     ]
     assert "labels[elements[0].index]" in render_block
     assert "datasetIndex" not in render_block

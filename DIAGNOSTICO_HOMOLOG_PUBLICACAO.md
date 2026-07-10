@@ -5,17 +5,17 @@ Use o `README.md` da raiz como fonte unica do estado funcional e visual atual.
 
 ## Estado Atual Confirmado
 
-- pacote funcional da fase atual integrado localmente
-- homolog validada no commit `28904e4`
-- producao atualizada e aprovada no commit `0afe528`
-- apos o push, `origin/producao` ficou no commit `0afe528`
+- pacote funcional atual integrado em `homolog`
+- homolog validada no commit `efd54b5`
+- producao atualizada e aprovada no commit `3d5332b`
 - o ambiente local retornou para `homolog`, limpo e sincronizado
-- estabilizacao da auditoria documental da Cleide promovida sem nova migration
+- a promocao recente ocorreu por cherry-pick seletivo
+- a auditoria documental da Cleide segue sem nova migration
 - tabela temporaria da auditoria Cleide estabilizada como artefato tecnico temporario, descartavel e sujeito a validacao humana
 - owner operacional da tabela temporaria: Cleiton
 - chat da Cleide permanece separado da extracao/atualizacao da tabela temporaria
-- modal da tabela temporaria mantido em modo somente leitura
 - a validacao da tabela temporaria e humana e governada; nao e uma nova conversa de IA
+- o BI executivo da auditoria em `/auditoria-frete` opera com 4 graficos executivos
 - documentos legais estabilizados com storage persistente em `settings.data_dir`, sem dependencia operacional de `app/static/...`
 - rota publica `/termos-de-uso` restaurada como entrada canonica para fluxo publico
 
@@ -54,23 +54,22 @@ Somente quando todos forem verdadeiros:
 6. chat Julia validado com autorizacao por franquia
 7. upload Roberto e chat Roberto validados no fluxo real da `/fretes`
 8. `/auditoria-frete` validado com upload, status documental e `temp_table`
-9. tabela temporaria validada como artefato temporario com revisao humana obrigatoria
-10. chat da Cleide validado sem recriar, alterar ou sobrescrever a `temp_table`
-11. nenhum temporario local entrou em commit
-12. producao aprovada apos deploy
+9. tabela temporaria validada como artefato temporario com revisao humana
+10. preview/apply/undo de correcao validados quando houver diagnostico suportado
+11. chat da Cleide validado sem recriar, alterar ou sobrescrever a `temp_table`
+12. nenhum temporario local entrou em commit
+13. producao aprovada apos deploy
 
 ## Ponto de atencao Render
 
-- a configuracao versionada em `render.yaml` ainda aponta o servico de producao para `branch: main`
-- o fluxo operacional aprovado desta entrega usa `producao` como branch de producao
-- manter esse item documentado como divergencia a validar no painel do Render antes de nova publicacao, sem forcar alteracao de codigo nesta tarefa
+- a operacao aprovada desta entrega usa `producao` como branch de producao
+- manter a confirmacao do painel do Render como etapa obrigatoria antes de nova publicacao
 
 ## Historico operacional recente
 
-- `homolog` recebeu os commits finais `faae3b0`, `7cc884e` e `28904e4`
-- `main` nao foi usada como base de promocao porque nao refletia a base estrutural atual da Cleide
-- a promocao segura foi feita em `producao` via cherry-pick dos equivalentes `5db6f98`, `2581baa` e `0afe528`
-- o painel do Render ficou com deploy manual de producao em `0afe528`
+- `homolog` contem `efd54b5`
+- a promocao segura recente foi feita em `producao` por cherry-pick seletivo
+- o commit promovido em producao foi `3d5332b`
 
 ## Referencia Principal
 

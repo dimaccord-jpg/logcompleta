@@ -1,17 +1,13 @@
 ﻿# Runtime IA e Observabilidade
 
-Data de consolidacao: `2026-06-30`
-Commit de referencia: `homolog@28904e4` e `producao@0afe528`
-
-## Objetivo
-
-Consolidar o runtime oficial de IA, consumo tecnico e governanca documental no estado homologado em `28904e4` e promovido em producao por `0afe528`.
+Data de consolidacao: `2026-07-08`
+Commit de referencia: `homolog@efd54b5`
 
 ## Eventos oficiais
 
 ### `IaConsumoEvento`
 
-Representa tentativa real de chamada LLM com:
+Representa tentativa real de chamada LLM governada, com persistencia de:
 
 - `provider`
 - `operation`
@@ -20,82 +16,63 @@ Representa tentativa real de chamada LLM com:
 - `flow_type`
 - `api_key_label`
 - `status`
-- tokens
+- `input_tokens`
+- `output_tokens`
+- `total_tokens`
 - `conta_id`
 - `franquia_id`
 - `usuario_id`
 
 ### `ProcessingEvent`
 
-Representa processamento tecnico nao-LLM e etapas auxiliares auditaveis.
+Representa processamento tecnico nao-LLM e etapas auxiliares auditaveis, como eventos de processamento do Roberto e fluxos tecnicos governados pelo Cleiton.
 
-## Fluxos oficiais
+## Fluxos observados
 
 - `onboarding_discovery`
-- `operacional`
-- `administrativo`
-
-Leitura pratica:
-
-- `onboarding_discovery`: Copilot da Home
-- `operacional`: Julia, Roberto e Cleide em consumo real
-- `administrativo`: paineis e agregacoes administrativas
+- fluxos operacionais de Julia, Roberto e Cleide
+- fluxos administrativos que registram evento interno ou agregado
 
 ## Onboarding discovery
-
-Contrato real:
 
 - endpoint: `POST /api/onboarding_discovery`
 - reset: `POST /api/onboarding_discovery/reset`
 - limite anonimo: `5`
-- bloqueio com CTA de login quando atinge o limite
 - fallback local quando Gemini falha
+- onboarding continua consumo interno e nao abate franquia operacional
 
-Regra critica:
-
-- onboarding conta como consumo interno
-- onboarding nao abate franquia
-
-## Julia documental e observabilidade
-
-O upload documental da Julia opera no trilho operacional, com governanca do Cleiton.
-
-Pontos observaveis:
+## Julia documental
 
 - autorizacao por franquia antes do upload
 - limites por sessao e por tipo
-- contexto textual preparado para prompt
+- contexto textual governado
 - `gemini_file_parts` para PDF quando disponivel
-- degradacao segura para chat textual se a montagem de contexto falhar
+- degradacao segura quando o contexto documental nao puder ser montado
 
-O sistema deve deixar explicito quando o PDF ainda nao esta pronto para leitura pela IA ou quando o contexto e apenas multimodal.
+## Cleide Auditoria
 
-## Cleide Auditoria e observabilidade
+Pontos efetivamente observaveis no codigo atual:
 
-O fluxo documental da Cleide Auditoria tambem opera no trilho oficial do Cleiton.
+- upload e status documental podem retornar `temp_table`
+- a extração tecnica da `temp_table` ocorre no fluxo pos-upload
+- o estado tecnico pode transitar por `processing`, `awaiting_validation`, `validated`, `needs_review`, `failed`, `expired` e `discarded`
+- a revisao humana salva via endpoint dedicado
+- coverage complementar e lote auditado compartilham a mesma trilha autenticada
+- preview/apply/undo de correcao assistida existem para diagnosticos suportados
 
-Pontos observaveis:
+Ponto importante:
 
-- upload/status documental podem expor `temp_table` quando houver artefato ativo
-- a extracao da tabela temporaria ocorre no fluxo pos-upload/status
-- a revisao humana governada pode salvar alteracoes da `temp_table` via endpoint dedicado
-- o runtime tambem observa coverage complementar e lote auditado no mesmo trilho autenticado
-- o chat da Cleide consome contexto, mas nao deve alterar o ciclo de vida da `temp_table`
-- a tabela temporaria continua descartavel, sujeita a TTL e a validacao humana
-- a visualizacao da `temp_table` na UI e readonly e nao representa persistencia de banco
-- o status tecnico da extracao pode transitar entre `processing`, `awaiting_validation`, `validated`, `needs_review`, `failed`, `expired` e `discarded`
+- nao documentar metrica inexistente por grafico, por clique de UI ou por detalhe de BI
+- o que existe hoje e observabilidade de consumo IA, eventos de processamento e estados documentais principais
 
 ## Metricas administrativas
 
 - `operational_tokens_month`
 - `onboarding_tokens_month`
 - `total_internal_tokens_month`
-
-Regras:
-
-- `operational_tokens_month`: consumo operacional do mes
-- `onboarding_tokens_month`: apenas `flow_type=onboarding_discovery`
-- `total_internal_tokens_month`: soma de operacional e onboarding
+- agregacoes por `api_key_label`
+- contagem de eventos com e sem metricas
+- contagem de falhas
 
 ## Configuracao documental do Cleiton
 
@@ -112,4 +89,4 @@ Campos principais:
 - `prompt_max_files_considered`
 - limites por tipo para `pdf`, `excel`, `docx`, `txt`, `xml`, `csv`
 
-Nao houve migration nova, tabela nova, campo novo, alteracao manual de schema ou `.db` versionado para essa configuracao ou para os ajustes finais da auditoria de frete da Cleide.
+Nao houve migration nova, tabela nova, campo novo ou `.db` versionado para esse runtime.

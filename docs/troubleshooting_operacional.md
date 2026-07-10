@@ -1,7 +1,7 @@
 ﻿# Troubleshooting Operacional
 
-Data de consolidacao: `2026-06-19`
-Commit de referencia: `0afe528`
+Data de consolidacao: `2026-07-08`
+Commit de referencia: `efd54b5`
 
 ## 1. Home publica sem responder
 
@@ -104,7 +104,7 @@ Regra oficial:
 - o chat da Cleide continua separado da extracao tecnica
 - Cleiton e o owner operacional da tabela temporaria
 - `temp_table` pode nao existir se a extracao falhar, expirar ou se os documentos fonte mudarem
-- o modal da tabela temporaria permanece somente leitura
+- a tabela pode voltar em `processing`, `failed` ou outro estado tecnico do ciclo documental
 
 ## 10. Revisao humana da tabela temporaria falhou
 
@@ -122,7 +122,23 @@ Regra oficial:
 - o chat da Cleide nao substitui esse fluxo de revisao
 - a revisao humana nao deve ser tratada como nova conversa de IA
 
-## 11. Tabela temporaria sumiu depois de remover ou trocar documentos
+## 11. Correcao assistida da auditoria falhou
+
+Conferir:
+
+1. `POST /api/cleide-auditoria/audit/correction/preview`
+2. `POST /api/cleide-auditoria/audit/correction/apply`
+3. `POST /api/cleide-auditoria/audit/correction/undo`
+4. `app/cleide_audit_correction_service.py`
+
+Regra oficial:
+
+- preview expira
+- apply so pode ocorrer sobre preview seguro
+- undo so desfaz a ultima aplicacao
+- a correcao assistida hoje cobre apenas diagnosticos suportados, especialmente `pricing_dimension_mismatch`
+
+## 12. Tabela temporaria sumiu depois de remover ou trocar documentos
 
 Comportamento esperado:
 
@@ -132,7 +148,7 @@ Comportamento esperado:
 
 Isso nao e regressao por si so. E o comportamento oficial do ciclo temporario governado.
 
-## 12. Chat da Cleide alterou a tabela temporaria
+## 13. Chat da Cleide alterou a tabela temporaria
 
 Isso deve ser tratado como regressao.
 
@@ -147,7 +163,24 @@ Regra oficial:
 - o chat consulta contexto documental
 - o chat nao deve recriar, alterar ou sobrescrever a tabela temporaria
 
-## 13. Arquivos temporarios tecnicos apareceram no Git
+## 14. BI executivo da auditoria divergiu do contrato esperado
+
+Conferir:
+
+1. `app/templates/cleide_auditoria.html`
+2. `app/static/js/cleide_auditoria.js`
+3. `tests/test_cleide_auditoria_page.py`
+
+Contrato atual:
+
+- Impacto Financeiro por Transportadora
+- Divergencia Financeira por UF Destino
+- Evolucao da Divergencia no Periodo
+- Pareto do Valor Cobrado a Mais
+
+Se aparecer documentacao ou leitura operacional falando em 7 graficos, `UF origem`, `Volume por Transportadora` ou `Pareto por UF` como contrato atual desse BI da auditoria, tratar como documentacao obsoleta.
+
+## 15. Arquivos temporarios tecnicos apareceram no Git
 
 Conferir:
 

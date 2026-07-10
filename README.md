@@ -1,307 +1,159 @@
-﻿# Agentefrete / Log Completa
+﻿# LogCompleta / AgenteFrete
 
-Data de consolidacao: `2026-06-30`
-Estado de referencia: `homolog@28904e4` e `producao@0afe528`
+Data de consolidacao: `2026-07-08`
+Branch operacional esperada: `homolog`
+Commit de referencia em homolog: `efd54b5`
+Commit promovido em producao: `3d5332b`
 
-Este `README.md` resume o estado real homologado e promovido apos os ajustes finais da auditoria de frete da Cleide:
+## Estado oficial atual
 
-- `faae3b0 fix: estabiliza auditoria de frete da Cleide`
-- `7cc884e fix: ajusta regra contextual de frete da Cleide`
-- `28904e4 fix: refina resolucao contextual de rotas da Cleide`
-
-Confirmacoes operacionais:
-
-- `homolog` contem `28904e4`
+- `homolog` contem `efd54b5`
 - `origin/homolog` esta sincronizada com `homolog`
-- `producao` contem `0afe528`
-- homolog foi validada antes da promocao
-- producao foi validada e aprovada apos deploy
-- apos o push, `origin/producao` ficou no commit `0afe528`
-- o ambiente local retornou para `homolog`, limpo e sincronizado
-- nao houve migration nova, nova tabela, novo campo ou alteracao manual de schema
+- a promocao mais recente para producao foi feita por cherry-pick seletivo
+- `producao` recebeu `3d5332b`
+- a entrega foi validada sem alteracao de schema, migration, tabela, campo ou banco
+- os temporarios `app/cleiton_doc_tmp/tt_*.json` continuam fora de versionamento
 
-## Estado atual do produto
+## Superficies oficiais
 
-Superficies oficiais ativas:
-
-- `/`: Home publica com Copilot de discovery para usuario anonimo ou logado
-- `/`: Home logada com Julia operacional embutida como superficie principal do usuario autenticado
-- `/chat_julia?mode=operational`: rota operacional dedicada da Julia, mantida para handoff e acesso direto
-- `/fretes`: Roberto BI operacional e preditivo
-- `/cleide-bi-frete`: Cleide BI operacional (upload, KPIs, dashboard e chat)
-- `/auditoria-frete`: Cleide Auditoria documental com upload, chat e tabela temporaria extraida
+- `/`: Home publica com Copilot de discovery; Home logada com Julia operacional
+- `/chat_julia?mode=operational`: rota dedicada da Julia
+- `/fretes`: Roberto BI e chat analitico
+- `/cleide-bi-frete`: BI operacional legado/estrutural da Cleide sobre dataset de sessao
+- `/auditoria-frete`: Cleide Auditoria documental com upload, tabela temporaria, auditoria e BI executivo da auditoria
 - `/feed`: superficie editorial
-- `/admin/dashboard`: painel administrativo
-
-## Personas do produto
-
-- Copilot: descoberta publica e onboarding sem login
-- Julia: assistente estrategica e operacional logada, com suporte documental governado
-- Cleiton: governanca operacional, autorizacao, observabilidade, upload documental, limites e integracao com IA
-- Roberto: BI, previsoes e leitura forward-looking de fretes
-- Cleide: auditoria documental assistida, conferencia retrospectiva e orientacao operacional
-
-## Cleide Auditoria documental
-
-Estado atual promovido:
-
-- a rota visual oficial e `/auditoria-frete`
-- o upload documental usa a governanca existente do Cleiton
-- apos cada upload valido, o backend tenta extrair uma tabela temporaria de frete
-- a extracao/atualizacao da tabela temporaria ocorre no fluxo pos-upload/status/documentos
-- a tabela temporaria fica separada do chat conversacional da Cleide
-- o chat consulta contexto documental, mas nao deve criar, alterar ou sobrescrever a tabela temporaria
-- a interface exibe a tabela temporaria na area de documentos anexados/estado documental como card clicavel
-- o modal da tabela temporaria opera em modo somente leitura, com revisao e validacao humana
-- a validacao humana da tabela temporaria nao deve ser tratada como nova conversa de IA
-- a extracao nao cria rota paralela de produto nem nova tabela de banco
-
-Contratos oficiais do fluxo:
-
-- upload: `POST /api/cleide-auditoria/documents/upload`
-- status documental: `GET /api/cleide-auditoria/documents/status`
-- remocao: `DELETE /api/cleide-auditoria/documents/<doc_id>`
-- limpeza: `POST /api/cleide-auditoria/documents/clear`
-- revisao humana governada da tabela temporaria ativa: `POST /api/cleide-auditoria/temp-table/save`
-- upload complementar de coverage: `POST /api/cleide-auditoria/coverage/upload`
-- download do template de auditoria: `GET /api/cleide-auditoria/audit-template`
-- upload do lote auditado: `POST /api/cleide-auditoria/audit/upload`
-- processamento do lote auditado: `POST /api/cleide-auditoria/audit/run`
-- chat: `POST /api/cleide-auditoria/chat`
-
-Tabela temporaria extraida:
-
-- exibida na interface como `Tabela temporaria extraida`
-- persistida apenas como artefato tecnico temporario em arquivo/session/JSON
-- descartavel, derivada dos documentos da sessao e sujeita a TTL
-- governada operacionalmente pelo Cleiton, nao pela Cleide
-- vinculada ao ciclo documental da sessao
-- invalidada quando os documentos fonte mudam, sao removidos ou deixam de existir na sessao
-- obrigatoriamente sujeita a validacao humana
-- nao substitui auditoria final nem deve ser descrita como dado persistente
-- nao cria migration, tabela, campo nem alteracao manual de schema
-
-Estados documentados no codigo atual:
-
-- `processing`
-- `awaiting_validation`
-- `validated`
-- `needs_review`
-- `failed`
-- `expired`
-- `discarded`
-
-Extracao tecnica:
-
-- modulo principal: `app/run_cleide_audit_temp_table.py`
-- prompt tecnico: `build_cleide_audit_temp_table_technical_prompt()` em `app/cleide_audit_prompt.py`
-- usa Gemini governado pelo Cleiton, com timeout proprio e fallback de modelo
-- responde JSON tecnico para estruturacao de tabela temporaria, sem montar auditoria final
-
-Arquivos principais da auditoria refletidos no codigo atual:
-
-- `app/cleide_audit_doc_service.py`: sessao documental da Cleide Auditoria, ciclo de vida da `temp_table`, revisao humana, coverage table e lote auditado
-- `app/cleide_audit_prompt.py`: prompt conversacional da auditoria e prompt tecnico da extracao pos-upload
-- `app/run_cleide_audit_temp_table.py`: pipeline tecnico separado do chat, com parsing seguro de JSON, timeout dedicado e fallback de modelo
-- `app/static/js/cleide_auditoria.js`: UI da experiencia `/auditoria-frete`, polling da `temp_table`, upload documental, coverage, lote auditado e chat
-- `app/templates/cleide_auditoria.html`: shell visual da auditoria com anexos, card/modal readonly e fluxo guiado
-- `app/cleide_audit_routes.py`: endpoints documentais, coverage, template, lote auditado e chat autenticado com autorizacao por franquia
-- `tests/test_cleide_audit_temp_table.py`: cobertura do pipeline pos-upload, ciclo de vida da `temp_table`, coverage e regras de revisao humana
-- `tests/test_cleide_auditoria_page.py`: contrato da pagina `/auditoria-frete`, template e JS acoplado
-- `tests/test_cleide_admin_routes.py`: admin da Cleide, incluindo bloco da auditoria e bases de calculo
-- `tests/test_cleide_audit_config_service.py`: persistencia e validacao das configuracoes da auditoria em `ConfigRegras`
-- `tests/test_cleide_audit_doc_routes.py`: contratos HTTP dos endpoints documentais da auditoria
-
-## Copilot da Home
-
-Contrato oficial:
+- `/admin/...`: configuracao e operacao administrativa
 
-- endpoint: `POST /api/onboarding_discovery`
-- reset: `POST /api/onboarding_discovery/reset`
-- funciona com ou sem login
-- limite anonimo: `5` interacoes por sessao
-- ao atingir o limite, retorna CTA de login para continuar gratuitamente com a Julia
-- usa Gemini governado por Cleiton Discovery, com fallback local quando necessario
-- nao consome franquia operacional do cliente
+## Dominios
 
-O Copilot nao se confunde com a Julia. Onboarding publico continua separado da experiencia operacional logada.
+- Julia: superficie operacional principal do usuario autenticado
+- Roberto: leitura quantitativa, historico, previsao e explicacao analitica sobre fretes
+- Cleide: duas superficies separadas
+- Cleide BI em `/cleide-bi-frete`: upload de XLSX/CSV, validacao estrutural, KPIs e dashboard estrutural
+- Cleide Auditoria em `/auditoria-frete`: auditoria de frete com upload documental, tabela temporaria, lote auditado e BI executivo da auditoria
+- Cleiton: governanca central de autorizacao, limites, sessao documental, observabilidade e identidade de consumo
+
+## Cleide Auditoria
 
-## Julia operacional
+### Contrato da pagina
 
-A Julia e a superficie operacional logada na Home. A rota `/chat_julia?mode=operational` continua valida, mas a experiencia principal consolidada no codigo atual e a Home autenticada.
+- a rota visual `/auditoria-frete` e publica
+- os endpoints de upload, status, auditoria e chat exigem autenticacao e autorizacao operacional por franquia
+- a pagina nao e um produto paralelo ao Cleiton; ela reutiliza a trilha documental governada
+
+### Fluxo real
+
+1. upload documental em `POST /api/cleide-auditoria/documents/upload`
+2. extracao tecnica pos-upload tenta gerar a `temp_table`
+3. revisao humana da tabela temporaria em `POST /api/cleide-auditoria/temp-table/save`
+4. etapa opcional de coverage em `POST /api/cleide-auditoria/coverage/upload`
+5. download do template do lote auditado em `GET /api/cleide-auditoria/audit-template`
+6. upload do lote auditado em `POST /api/cleide-auditoria/audit/upload`
+7. processamento da auditoria em `POST /api/cleide-auditoria/audit/run`
+8. correcoes assistidas em:
+- `POST /api/cleide-auditoria/audit/correction/preview`
+- `POST /api/cleide-auditoria/audit/correction/apply`
+- `POST /api/cleide-auditoria/audit/correction/undo`
+9. chat contextual em `POST /api/cleide-auditoria/chat`
 
-Contrato real:
+### Regras de arquitetura
 
-- endpoint oficial: `POST /api/chat_julia`
-- exige autenticacao
-- valida autorizacao operacional por franquia antes de consumir IA
-- pode receber contexto resumido do Copilot quando houver handoff `julia_operational`
-- exibe o botao de documentos como parte da experiencia operacional logada
+- a `temp_table` e artefato temporario, descartavel e governado pelo dominio Cleiton
+- a Cleide nao e camada de persistencia definitiva da `temp_table`
+- o chat da Cleide consulta contexto documental, mas nao cria nem gerencia o ciclo de vida da `temp_table`
+- a extração tecnica e separada do chat conversacional
+- a extração tecnica nao e checklist fixo de chat, entrevista rigida, regex de negocio nem Q&A engessado
 
-## Upload documental governado
+### BI executivo da auditoria
 
-O upload documental da Julia nao e um fluxo solto nem uma rota de produto paralela. Ele faz parte da conversa operacional logada e e governado pelo Cleiton.
+O BI executivo da auditoria fica dentro de `/auditoria-frete` e hoje trabalha com 4 graficos:
 
-Fluxo oficial:
+- Impacto Financeiro por Transportadora
+- Divergencia Financeira por UF Destino
+- Evolucao da Divergencia no Periodo
+- Pareto do Valor Cobrado a Mais
 
-- upload: `POST /api/julia/documents/upload`
-- listagem: `GET /api/julia/documents`
-- remocao: `DELETE /api/julia/documents/<doc_id>`
-- limpeza: `POST /api/julia/documents/clear`
+Regras documentadas no frontend atual:
 
-Tipos aceitos na UI e nos conversores atuais:
+- o calculo financeiro usa `charged_freight`, `expected_freight` e `divergence_value` quando esses campos estao disponiveis
+- o BI executivo da auditoria nao usa mais o contrato antigo de 7 graficos
+- referencias a `UF origem`, `Volume por Transportadora` e `Pareto por UF` nao representam o contrato atual desse BI da auditoria
 
-- `TXT`
-- `XML`
-- `CSV`
-- `XLSX`
-- `DOCX`
-- `PDF`
+### Modulos centrais
 
-Governanca aplicada pelo Cleiton:
+- `app/cleide_audit_doc_service.py`: sessao documental da auditoria, ciclo de vida da `temp_table`, coverage table, lote auditado e calculo da auditoria
+- `app/run_cleide_audit_temp_table.py`: pipeline tecnico pos-upload, separado do chat, com fallback de modelo e parsing seguro de JSON
+- `app/cleide_audit_prompt.py`: prompt tecnico da extração e prompt conversacional da auditoria
+- `app/cleide_audit_routes.py`: endpoints documentais, lote auditado, correcoes e chat
+- `app/cleide_audit_correction_service.py`: preview, apply e undo de correcoes assistidas sobre a tabela cadastrada
+- `app/static/js/cleide_auditoria.js`: experiencia completa de `/auditoria-frete`, incluindo BI executivo, modal da `temp_table`, coverage, auditoria e correcoes
+- `app/templates/cleide_auditoria.html`: shell visual da auditoria
 
-- autenticacao obrigatoria
-- autorizacao operacional por franquia
-- validacao por extensao/tamanho/tipo habilitado
-- limite por sessao e por arquivo
-- TTL de contexto documental
-- limpeza automatica opcional
-- preparo de contexto textual e multimodal para a IA
-- integracao governada com Gemini Files para PDF quando aplicavel
+## Cleide BI em `/cleide-bi-frete`
 
-Garantias importantes:
+- continua existindo como superficie separada
+- trabalha com upload operacional de XLSX/CSV, validacao estrutural, KPIs e dashboard estrutural
+- o dashboard atual dessa superficie ainda expoe agregacoes como transportadora, UF origem, UF destino, serie temporal e paretos estruturais
+- esse contrato nao deve ser confundido com o BI executivo da auditoria em `/auditoria-frete`
 
-- PDF pode entrar como contexto multimodal via Gemini Files
-- o sistema nao deve fingir leitura quando houver apenas placeholder ou quando o conteudo nao estiver pronto
-- arquivos temporarios ficam em `app/cleiton_doc_tmp/` e nao devem ser versionados
-- `app/cleiton_doc_tmp/` esta protegido no `.gitignore`
-- arquivos `tt_*.json`, `.cleanup_meta.json` e residuos `.json` dessa pasta nao devem entrar em commit
-- residuos `app/.tmp_repro_unit*` nao devem ser versionados
-- o store temporario persiste apenas JSON tecnico, sem bruto documental no banco
+## Admin
 
-## Cleiton
+### `/admin/agentes/cleide`
 
-Cleiton nao deve ser descrito apenas como agente de chat. No estado atual ele e a camada central de governanca operacional.
+Hoje ha dois blocos independentes:
 
-Responsabilidades relevantes nesta entrega:
+- configuracao do BI estrutural da Cleide (`cleide_cfg_*`)
+- configuracao da Cleide Auditoria (`cleide_audit_cfg_*`)
 
-- autorizacao operacional por franquia
-- observabilidade do consumo
-- validacao e seguranca documental
-- controle de sessao e TTL
-- limites administrativos por tipo de arquivo
-- preparo de contexto para Julia
-- integracao com Gemini Files para PDF
-- ownership operacional da tabela temporaria da Cleide Auditoria
+Opcoes reais da Cleide Auditoria:
 
-Configuracao administrativa documental:
+- `chat_enabled`
+- `upload_enabled`
+- `chat_max_history`
+- `document_context_max_chars`
+- `max_documents_considered`
+- `question_max_chars`
+- `audited_file_max_bytes`
+- `audited_file_max_rows`
+- `no_documents_behavior`
+- `show_documents_used`
+- `no_hallucination_instruction_enabled`
+- `fallback_message`
+- `calculation_bases`
 
-- fica no admin de Cleiton
-- usa `ConfigRegras`, sem nova migration nesta entrega
-- bloco oficial: upload habilitado, maximo de arquivos por sessao, bytes totais da sessao, TTL, cleanup, limite de caracteres de contexto, maximo de arquivos considerados por resposta e limites por tipo
+As bases de calculo administrativas sao configuraveis e usadas para orientar a interpretacao de taxas e operacoes como percentual sobre NF, valor fixo por CTe/documento, por kg e por fracao de 100kg.
 
-## Observabilidade oficial
+## Governanca, observabilidade e seguranca
 
-Eventos oficiais:
+- a autorizacao operacional central vem de `avaliar_autorizacao_operacao_por_franquia`
+- o upload documental governado do Cleiton continua sendo o teto superior para sessao, TTL, cleanup e limites por tipo
+- a observabilidade de consumo LLM persiste `IaConsumoEvento`
+- o processamento tecnico nao-LLM persiste `ProcessingEvent`
+- ha metricas administrativas de tokens, custos e contagem de eventos em `app/services/ia_metrics_service.py`
+- a identidade de consumo considera `conta_id`, `franquia_id` e `usuario_id`
+- onboarding discovery continua consumo interno e nao abate franquia operacional
+- na auditoria da Cleide ha observabilidade parcial do ciclo documental e do processamento; nao documentar metricas inexistentes por grafico ou por acao da UI
 
-- `IaConsumoEvento`: chamadas LLM reais
-- `ProcessingEvent`: processamento tecnico e snapshots auxiliares
+## Deploy e operacao
 
-Fluxos documentados:
+- branch oficial de homologacao: `homolog`
+- branch funcional de producao: `producao`
+- em divergencia entre `homolog` e `producao`, a promocao deve continuar seletiva por cherry-pick e nao por merge cego
+- validar schema do ambiente antes de commit/push/deploy
+- manter fora de commit: `.db`, `__pycache__`, `.pytest_cache`, caches e temporarios locais
+- validar producao apos deploy
 
-- `onboarding_discovery`
-- `operacional`
-- `administrativo`
+## Testes
 
-Leituras administrativas:
+Suite recentemente validada:
 
-- `operational_tokens_month`
-- `onboarding_tokens_month`
-- `total_internal_tokens_month`
+```powershell
+pytest tests/test_cleide_audit_correction_service.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_chat_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_context.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py -q
+```
 
-Regra critica:
+Resultado conhecido:
 
-- onboarding conta como consumo interno
-- onboarding nao abate franquia
-
-## Banco e migrations
-
-Esta entrega da Cleide Auditoria:
-
-- nao criou migration nova em `migrations/versions`
-- nao alterou `app/models.py`
-- nao criou nova tabela de banco nem novo campo
-- nao exigiu alteracao manual de schema
-- nao versiona banco local nem arquivo `.db`
-- reutiliza o store temporario e a governanca existente
-
-Migration relevante ja existente e mantida:
-
-- `r2s3t4u5v6w7_onboarding_word_cloud_hidden_term.py`
-
-## Testes relevantes da entrega
-
-Cobertura diretamente relacionada:
-
-- `tests/test_cleide_audit_config_service.py`
-- `tests/test_cleide_admin_routes.py`
-- `tests/test_cleide_audit_doc_routes.py`
-- `tests/test_cleide_audit_temp_table.py`
-- `tests/test_cleide_auditoria_page.py`
-
-Validacoes registradas antes da promocao:
-
-- `pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_routes.py`
-- resultado validado antes do deploy: `572 passed, 2 warnings` em aproximadamente `220.39s`
-- warnings conhecidos: `DeprecationWarning` de `flask_session` filesystem e `DeprecationWarning` de `google genai` / `_UnionGenericAlias` em Python 3.14
-- esses warnings nao foram tratados como falha de implantacao
-
-## Deploy e branches
-
-- `homolog` e a branch oficial de homologacao
-- `producao` e a branch funcional de producao usada pelo Render
-- `main` nao deve ser usada como destino operacional automatico de producao neste momento
-- validar `git status --short` limpo antes de promover
-- rodar primeiro os testes especificos da Cleide Auditoria e, quando possivel, a suite completa
-- confirmar que residuos como `.tmp_*`, `*_tmp`, uploads locais e JSONs ficticios nao entraram no versionamento
-- validar Render e `/health` apos o push controlado
-- Render homolog: servico `logcompleta-web-homolog`, branch `homolog`, `autoDeploy: true`, health `/health`
-- Render producao: servico `logcompleta-web-prod`, branch real configurada no painel `producao`, `autoDeploy: false`, deploy manual no painel, health `/health`
-- ponto de atencao: o `render.yaml` do repositorio ainda referencia `branch: main` no servico `logcompleta-web-prod`; reconciliar isso com cuidado e somente apos confirmar o painel real do Render
-
-## Historico operacional recente
-
-- `homolog` recebeu os commits finais `faae3b0`, `7cc884e` e `28904e4`
-- como `main` nao tinha a base estrutural da Cleide, a promocao direta para `main` foi descartada
-- a promocao segura ocorreu em `producao` via cherry-pick:
-  `5db6f98` equivalente a `faae3b0`
-  `2581baa` equivalente a `7cc884e`
-  `0afe528` equivalente a `28904e4`
-- o deploy de producao foi manual no Render e ficou live em `0afe528`
-
-## Documentos oficiais de apoio
-
-Ler nesta ordem:
-
-1. `docs/estado_oficial_consolidado.md`
-2. `docs/arquitetura_oficial.md`
-3. `docs/runtime_ia_e_observabilidade.md`
-4. `docs/onboarding_tecnico.md`
-5. `docs/troubleshooting_operacional.md`
-6. `docs/runbook_onboarding_copilot.md`
-7. `app/README_RUN.md`
-8. `app/README_DEPLOY.md`
-9. `migrations/README`
-
-## Honestidade de produto
-
-Nao documentar nem prometer:
-
-- cotacao automatizada de fretes
-- BID
-- TMS/WMS
-- automacao operacional inexistente
-- leitura documental fingida quando o conteudo nao foi extraido
-- tabela temporaria da Cleide como auditoria final
-- checklist rigido no chat da Cleide para validar a tabela temporaria
-- regex como solucao principal de interpretacao de frete
+- `717 passed, 2 warnings`
+- warnings conhecidos:
+- `DeprecationWarning` de `flask_session.filesystem.FileSystemSessionInterface`
+- `DeprecationWarning` de `google.genai.types._UnionGenericAlias`
