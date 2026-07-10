@@ -255,3 +255,59 @@ def test_undo_restores_previous_table_and_reprocesses(session_app):
         raw = audit_svc.load_temp_table_record("tt-test", ttl_hours=24)
         assert raw["edit_version"] == 2
         assert raw["correction_history"] == []
+
+
+def test_correction_apply_undo_preserves_tax_fiscal_snapshot(session_app):
+    record = _record()
+    record["tax_config"] = {
+        "include_taxes": True,
+        "origin_uf": "SP",
+        "origin_city": "Sao Paulo",
+        "iss_rate": None,
+        "destination_ufs": [{"uf": "SP", "source": "manual", "evidence": [], "user_confirmed": True}],
+        "icms_rates": [
+            {
+                "destination_uf": "SP",
+                "operation_type": "intermunicipal",
+                "suggested_rate": 12.0,
+                "applied_rate": 12.0,
+                "source_name": audit_svc.ICMS_INTERMUNICIPAL_SOURCE_NAME,
+                "source_type": "manual",
+                "user_edited": False,
+                "is_active": True,
+            }
+        ],
+    }
+    processed = _processed_record(record)
+    outputs = audit_svc.compute_audit_outputs(processed, processed["audit_batch"]["normalized_rows"])
+    processed["audit_batch"] = audit_svc._apply_tax_fiscal_snapshot_to_audit_batch(
+        processed["audit_batch"],
+        outputs["fiscal_snapshot"],
+    )
+    processed["audit_batch"]["results"] = outputs["results"]
+    processed["audit_batch"]["summary"] = outputs["summary"]
+    processed["audit_batch"]["audit_diagnostics"] = outputs["audit_diagnostics"]
+
+    with session_app.test_request_context("/"):
+        saved = _save_current_record(processed)
+        suggestion = _suggestion(saved)
+        preview = correction_svc.preview_audit_correction_for_session(suggestion["suggestion_id"])
+        applied = correction_svc.apply_audit_correction_for_session(
+            preview_id=preview["preview_id"],
+            suggestion_id=preview["suggestion_id"],
+        )
+        batch_after_apply = applied["temp_table"]["audit_batch"]
+        assert batch_after_apply.get("tax_calculation_mode") == "inside"
+        assert batch_after_apply.get("tax_calculation_version") == "cleide_audit_tax_v2"
+        assert "tax_config_snapshot" in batch_after_apply
+
+        raw = audit_svc.load_temp_table_record("tt-test", ttl_hours=24)
+        assert raw["correction_history"][0]["snapshot"]["tax_config"] == record["tax_config"]
+
+        undone = correction_svc.undo_last_audit_correction_for_session(
+            application_id=applied["application_id"],
+        )
+        batch_after_undo = undone["temp_table"]["audit_batch"]
+        assert batch_after_undo.get("tax_calculation_mode") == "inside"
+        assert batch_after_undo.get("tax_calculation_version") == "cleide_audit_tax_v2"
+        assert batch_after_undo.get("tax_config_snapshot", {}).get("origin_uf") == "SP"

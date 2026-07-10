@@ -8,6 +8,7 @@ Sem rotas, chat, IA ou billing.
 from __future__ import annotations
 
 import csv
+import copy
 import io
 import json
 import logging
@@ -151,6 +152,17 @@ COVERAGE_TABLE_STATUS_NEEDS_REVIEW = "needs_review"
 COVERAGE_UPLOAD_MAX_BYTES = 512 * 1024
 COVERAGE_UPLOAD_MAX_ROWS = 10000
 
+ICMS_INTERSTATE_SOURCE_NAME = "Resolução Senado Federal nº 22/1989"
+ICMS_INTERMUNICIPAL_SOURCE_NAME = "Cadastro estadual/manual"
+UF_NORTH = frozenset({"AC", "AP", "AM", "PA", "RO", "RR", "TO"})
+UF_NORTHEAST = frozenset({"AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"})
+UF_CENTER_WEST = frozenset({"DF", "GO", "MT", "MS"})
+UF_SOUTHEAST = frozenset({"ES", "MG", "RJ", "SP"})
+UF_SOUTH = frozenset({"PR", "RS", "SC"})
+BRAZILIAN_UFS = UF_NORTH | UF_NORTHEAST | UF_CENTER_WEST | UF_SOUTHEAST | UF_SOUTH
+ICMS_7_PERCENT_ORIGIN_UFS = UF_SOUTH | UF_SOUTHEAST
+ICMS_7_PERCENT_DESTINATION_UFS = UF_NORTH | UF_NORTHEAST | UF_CENTER_WEST | {"ES"}
+
 ERROR_COVERAGE_NO_TEMP_TABLE = "cleide_audit_coverage_no_temp_table"
 ERROR_COVERAGE_INVALID_FORMAT = "cleide_audit_coverage_invalid_format"
 ERROR_COVERAGE_EMPTY_FILE = "cleide_audit_coverage_empty_file"
@@ -242,6 +254,31 @@ AUDIT_BI_NOT_READY_MESSAGE = (
     "Ainda não há dados auditados disponíveis para gráficos. "
     "Envie o arquivo auditado para habilitar esta área."
 )
+
+TAX_CALCULATION_VERSION = "cleide_audit_tax_v2"
+TAX_CALCULATION_MODE_INSIDE = "inside"
+TAX_CALCULATION_MODE_OUTSIDE = "outside"
+PRICING_RULE_PARSER_VERSION = "cleide_pricing_matrix_v2"
+_WEIGHT_KG_HEADER_RE = re.compile(r"\bkg\b|\bkgs\b|\bpeso\b")
+ISS_SOURCE_NAME = "Cadastro municipal/manual"
+ISS_SOURCE_TYPE = "manual"
+AUDIT_BATCH_STALE_TAX_CONFIG_REASON = "tax_config_changed"
+AUDIT_BATCH_STALE_TAX_CONFIG_ALERT = (
+    "Configuração fiscal alterada após processamento da auditoria. "
+    "Reprocesse o lote para atualizar os resultados."
+)
+AUDIT_BATCH_STALE_PRICING_RULE_REASON = "pricing_rule_changed"
+AUDIT_BATCH_STALE_PRICING_RULE_ALERT = (
+    "Tabela tarifária, rotas ou generalidades alteradas após processamento da auditoria. "
+    "Reprocesse o lote para atualizar os resultados."
+)
+AUDIT_BATCH_STALE_FISCAL_OUTDATED_REASON = "fiscal_calculation_outdated"
+AUDIT_BATCH_STALE_FISCAL_OUTDATED_ALERT = (
+    "O lote foi calculado com regra fiscal anterior. "
+    "Reprocesse o lote para aplicar a metodologia fiscal atual."
+)
+AUDIT_REASON_ROUTE_TOLL_APPLIED = "route_toll_applied"
+AUDIT_REASON_ROUTE_TOLL_DUPLICATE_IGNORED = "route_toll_duplicate_ignored"
 
 AUDIT_REASON_ACCESSORIAL_PERCENTAGE_CALCULATED = "accessorial_percentage_calculated"
 AUDIT_REASON_DUPLICATE_INVOICE_PERCENTAGE_FEE_IGNORED = "duplicate_invoice_percentage_fee_ignored"
@@ -2071,12 +2108,17 @@ def _parse_weight_number(value) -> float | None:
 
 
 def _parse_range_from_label(label) -> tuple[float | None, float | None] | None:
+    if _is_excess_column(label):
+        return None
     normalized = _normalize_coverage_header(label)
-    if not normalized:
+    if not normalized or "acima" in normalized:
         return None
     numbers = [float(item.replace(",", ".")) for item in re.findall(r"\d+(?:[,.]\d+)?", normalized)]
     if not numbers:
         return None
+    has_weight_unit = bool(_WEIGHT_KG_HEADER_RE.search(normalized))
+    if re.search(r"\bate\b", normalized) and has_weight_unit:
+        return (0.0, numbers[-1])
     if normalized.startswith("ate ") or normalized.startswith("ate"):
         return (0.0, numbers[-1])
     if len(numbers) >= 2 and (
@@ -2085,7 +2127,7 @@ def _parse_range_from_label(label) -> tuple[float | None, float | None] | None:
         or " ate " in f" {normalized} "
     ):
         return (numbers[0], numbers[1])
-    if len(numbers) == 1 and re.search(r"\bkg\b|\bpeso\b", normalized):
+    if len(numbers) == 1 and has_weight_unit:
         return (0.0, numbers[0])
     return None
 
@@ -2174,7 +2216,37 @@ def _is_value_column(column_name) -> bool:
 
 def _is_excess_column(column_name) -> bool:
     normalized = _normalize_coverage_header(column_name)
-    return "excedente" in normalized or "excesso" in normalized
+    if not normalized:
+        return False
+    if "excedente" in normalized or "excesso" in normalized:
+        return True
+    if "adicional por kg" in normalized or "kg excedente" in normalized:
+        return True
+    if "acima" in normalized and _WEIGHT_KG_HEADER_RE.search(normalized):
+        return True
+    return False
+
+
+def _is_toll_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    return normalized == "pedagio" or normalized.startswith("pedagio ")
+
+
+def _extract_route_toll_from_row(columns: list, row: dict) -> dict | None:
+    for column in columns:
+        if not _is_toll_column(column):
+            continue
+        source_value = _sanitize_cell_string(row.get(column))
+        rate = _parse_brazilian_money(source_value)
+        if rate is None:
+            continue
+        return {
+            "rate_per_fraction": float(rate),
+            "fraction_size_kg": 100.0,
+            "source_column": column,
+            "source_value": source_value,
+        }
+    return None
 
 
 def _is_direct_kg_column(column_name) -> bool:
@@ -2292,6 +2364,36 @@ def _extract_freight_value_from_row(columns: list, row: dict) -> dict | None:
             "calculation_base": "invoice_value",
         }
     return None
+
+
+def _calculate_route_toll_amount(route_toll: dict, weight_kg) -> tuple[Decimal, dict] | None:
+    if not isinstance(route_toll, dict):
+        return None
+    weight = _parse_weight_number(weight_kg)
+    if weight is None:
+        return None
+    rate = _decimal_money(route_toll.get("rate_per_fraction"))
+    fraction_size = _parse_decimal_number(route_toll.get("fraction_size_kg")) or Decimal("100")
+    if rate is None or rate <= 0 or fraction_size <= 0:
+        return None
+    weight_decimal = Decimal(str(weight))
+    fractions = int((weight_decimal / fraction_size).to_integral_value(rounding=ROUND_CEILING))
+    amount = rate * Decimal(fractions)
+    component = {
+        "amount": _round_money(amount),
+        "rate_per_fraction": _round_money(rate),
+        "fraction_size_kg": float(fraction_size),
+        "fractions": fractions,
+        "source_column": route_toll.get("source_column"),
+        "source_value": route_toll.get("source_value"),
+        "details": (
+            f"ceil({_format_brazilian_decimal(weight_decimal)} / "
+            f"{_format_brazilian_decimal(fraction_size)}) x "
+            f"{_format_brazilian_decimal(rate)} = {_format_brazilian_decimal(amount)}"
+        ),
+        "reason_code": AUDIT_REASON_ROUTE_TOLL_APPLIED,
+    }
+    return amount, component
 
 
 _ACCESSORIAL_NOT_APPLIED_ALIASES = {
@@ -2747,6 +2849,7 @@ def _build_accessorial_percent_fee_components(
     invoice_value: Decimal | None,
     audit_variables: dict[str, Decimal | None] | None = None,
     has_tariff_freight_value: bool,
+    has_route_toll: bool = False,
 ) -> tuple[list[dict], list[dict], Decimal]:
     calculated: list[dict] = []
     ignored: list[dict] = []
@@ -2774,6 +2877,15 @@ def _build_accessorial_percent_fee_components(
     for fee in normalized_fees:
         canonical_component = fee.get("canonical_component")
         if fee.get("calculation_type") == "minimum_amount":
+            continue
+        if has_route_toll and canonical_component == "toll":
+            ignored.append(
+                _accessorial_ignored_component(
+                    fee,
+                    canonical_component,
+                    AUDIT_REASON_ROUTE_TOLL_DUPLICATE_IGNORED,
+                )
+            )
             continue
         if _accessorial_is_configured_calculation_base(fee):
             component, ignored_component, amount = _build_configured_accessorial_fee_component(
@@ -3143,16 +3255,25 @@ def _build_rule_from_row_range_table(table: dict) -> dict | None:
             excess_rate = _parse_brazilian_money(row.get(excess_col))
             if excess_rate is not None:
                 break
-    return {
+    route_toll = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        route_toll = _extract_route_toll_from_row(columns, row)
+        if route_toll is not None:
+            break
+    rule = {
         "pricing_type": "range_plus_excess_per_kg" if excess_rate is not None else "fixed_range",
         "region": region,
         "source_table_title": table.get("table_title"),
         "brackets": brackets,
         "excess": {"rate_per_kg": excess_rate} if excess_rate is not None else None,
         "freight_value": freight_value,
+        "route_toll": route_toll,
         "unit": "kg",
         "normalization_notes": [],
     }
+    return rule
 
 
 def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
@@ -3166,8 +3287,13 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
     if region_col is None:
         region_col = next((col for col in columns if _is_region_column(col)), None)
     uf_col = next((col for col in columns if _is_destination_uf_column(col)), None)
-    range_cols = [(col, _parse_range_from_label(col)) for col in columns]
-    range_cols = [(col, parsed) for col, parsed in range_cols if parsed is not None]
+    range_cols = [
+        (col, parsed)
+        for col in columns
+        if not _is_excess_column(col)
+        for parsed in [_parse_range_from_label(col)]
+        if parsed is not None
+    ]
     direct_kg_col = next((col for col in columns if _is_direct_kg_column(col)), None)
     direct_ton_col = next((col for col in columns if _is_direct_ton_column(col)), None)
     excess_col = next((col for col in columns if _is_excess_column(col)), None)
@@ -3186,6 +3312,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
             value = _parse_brazilian_money(row.get(direct_ton_col))
             if value is not None:
                 freight_value = _extract_freight_value_from_row(columns, row)
+                route_toll = _extract_route_toll_from_row(columns, row)
                 rule = {
                     "pricing_type": "direct_weight_rate",
                     "region": region,
@@ -3195,6 +3322,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                     "unit": "ton",
                     "value_per_ton": value,
                     "freight_value": freight_value,
+                    "route_toll": route_toll,
                     "normalization_notes": [],
                 }
                 rules.extend(
@@ -3210,6 +3338,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
             value = _parse_brazilian_money(row.get(direct_kg_col))
             if value is not None:
                 freight_value = _extract_freight_value_from_row(columns, row)
+                route_toll = _extract_route_toll_from_row(columns, row)
                 rule = {
                     "pricing_type": "direct_weight_rate",
                     "region": region,
@@ -3219,6 +3348,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                     "unit": "kg",
                     "value_per_kg": value,
                     "freight_value": freight_value,
+                    "route_toll": route_toll,
                     "normalization_notes": [],
                 }
                 rules.extend(
@@ -3247,6 +3377,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
         if brackets:
             excess_rate = _parse_brazilian_money(row.get(excess_col)) if excess_col else None
             freight_value = _extract_freight_value_from_row(columns, row)
+            route_toll = _extract_route_toll_from_row(columns, row)
             rule = {
                 "pricing_type": "range_plus_excess_per_kg" if excess_rate is not None else "fixed_range",
                 "region": region,
@@ -3254,6 +3385,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                 "brackets": brackets,
                 "excess": {"rate_per_kg": excess_rate} if excess_rate is not None else None,
                 "freight_value": freight_value,
+                "route_toll": route_toll,
                 "unit": "kg",
                 "normalization_notes": [],
             }
@@ -3302,6 +3434,15 @@ def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
             )
     brackets = _normalize_brackets(brackets)
     excess_rate = _parse_brazilian_money(route.get("freight_weight_kg") or route.get("frete_peso_kg"))
+    route_toll_rate = _parse_brazilian_money(route.get("pedagio") or route.get("pedagio_valor"))
+    route_toll = None
+    if route_toll_rate is not None:
+        route_toll = {
+            "rate_per_fraction": float(route_toll_rate),
+            "fraction_size_kg": 100.0,
+            "source_column": "pedagio",
+            "source_value": _sanitize_cell_string(route.get("pedagio") or route.get("pedagio_valor")),
+        }
     if brackets:
         return (
             region,
@@ -3311,6 +3452,7 @@ def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
                 "source_table_title": "freight_routes",
                 "brackets": brackets,
                 "excess": {"rate_per_kg": excess_rate} if excess_rate is not None else None,
+                "route_toll": route_toll,
                 "unit": "kg",
                 "normalization_notes": [],
             },
@@ -3455,6 +3597,469 @@ def compare_charged_vs_expected(charged_freight, expected_freight) -> dict:
     }
 
 
+def _format_brazilian_money_display(value) -> str:
+    money = _decimal_money(value)
+    if money is None:
+        return "R$ 0,00"
+    quantized = money.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"R$ {f'{quantized:.2f}'.replace('.', ',')}"
+
+
+def _format_brazilian_percent_display(rate: float) -> str:
+    quantized = Decimal(str(rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{f'{quantized:.2f}'.replace('.', ',')}%"
+
+
+def _tax_config_fingerprint(tax_config) -> str | None:
+    if not isinstance(tax_config, dict):
+        return None
+    try:
+        return json.dumps(tax_config, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
+def _serialize_pricing_rule_for_fingerprint(rule: dict) -> dict:
+    brackets = []
+    for bracket in rule.get("brackets") or []:
+        if not isinstance(bracket, dict):
+            continue
+        brackets.append(
+            {
+                "min_kg": bracket.get("min_kg"),
+                "max_kg": bracket.get("max_kg"),
+                "value": bracket.get("value"),
+            }
+        )
+    return {
+        "pricing_type": rule.get("pricing_type"),
+        "brackets": brackets,
+        "excess": rule.get("excess"),
+        "value_per_kg": rule.get("value_per_kg"),
+        "value_per_ton": rule.get("value_per_ton"),
+        "unit": rule.get("unit"),
+        "freight_value": rule.get("freight_value"),
+        "route_toll": rule.get("route_toll"),
+    }
+
+
+def _pricing_rule_fingerprint(temp_table) -> str | None:
+    if not isinstance(temp_table, dict):
+        return None
+    index = build_freight_pricing_index(temp_table)
+    try:
+        payload = {
+            "parser_version": PRICING_RULE_PARSER_VERSION,
+            "rules": {
+                key: _serialize_pricing_rule_for_fingerprint(rule)
+                for key, rule in sorted(index.items())
+                if isinstance(rule, dict)
+            },
+        }
+        return json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cities_match_reliably(origin_city, destination_city) -> bool:
+    origin = _normalize_audit_lookup_text(origin_city)
+    destination = _normalize_audit_lookup_text(destination_city)
+    return bool(origin and destination and origin == destination)
+
+
+def _resolve_applicable_tax_type(row: dict, tax_config: dict) -> str | None:
+    origin_uf = _normalize_uf(tax_config.get("origin_uf"))
+    destination_uf = _normalize_destination_uf(row.get("destination_uf"))
+    if not origin_uf or not destination_uf:
+        return None
+    if origin_uf != destination_uf:
+        return "icms"
+    if _cities_match_reliably(tax_config.get("origin_city"), row.get("destination_city")):
+        iss_rate = tax_config.get("iss_rate")
+        if iss_rate is not None:
+            try:
+                if float(iss_rate) > 0:
+                    return "iss"
+            except (TypeError, ValueError):
+                return None
+        return None
+    return "icms"
+
+
+def _find_active_icms_rate(tax_config: dict, destination_uf) -> dict | None:
+    destination = _normalize_destination_uf(destination_uf)
+    if not destination:
+        return None
+    for item in tax_config.get("icms_rates") or []:
+        if not isinstance(item, dict):
+            continue
+        if _normalize_uf(item.get("destination_uf")) != destination:
+            continue
+        if not item.get("is_active"):
+            continue
+        rate = item.get("applied_rate")
+        if rate is None:
+            continue
+        try:
+            rate_float = float(rate)
+        except (TypeError, ValueError):
+            continue
+        if rate_float <= 0:
+            continue
+        return item
+    return None
+
+
+def _build_pre_tax_subtotal_info(calculated: dict) -> dict:
+    components = calculated.get("calculation_components") if isinstance(calculated.get("calculation_components"), dict) else {}
+    ignored = components.get("ignored_accessorial_fees") if isinstance(components.get("ignored_accessorial_fees"), list) else []
+    subtotal = _decimal_money(calculated.get("expected_freight"))
+    return {
+        "subtotal_before_taxes": subtotal,
+        "is_partial_base": bool(ignored),
+        "ignored_components_count": len(ignored),
+    }
+
+
+def _append_tax_memory_to_details(existing_details: str | None, memory_lines: list[str]) -> str:
+    if not memory_lines:
+        return existing_details or ""
+    tax_details = " | ".join(memory_lines)
+    if existing_details:
+        return f"{existing_details} | {tax_details}"
+    return tax_details
+
+
+def _calculate_inside_tax_amounts(subtotal: Decimal, rate: float) -> tuple[Decimal, Decimal]:
+    rate_decimal = Decimal(str(rate)) / Decimal("100")
+    if rate_decimal <= 0 or rate_decimal >= 1:
+        return Decimal("0"), subtotal
+    total_with_tax = (subtotal / (Decimal("1") - rate_decimal)).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    tax_amount = (total_with_tax - subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return tax_amount, total_with_tax
+
+
+def _build_icms_tax_component(
+    *,
+    icms_rate: dict,
+    row: dict,
+    tax_config: dict,
+    subtotal: Decimal,
+    tax_amount: Decimal,
+) -> dict:
+    rate = float(icms_rate["applied_rate"])
+    return {
+        "tax_type": "ICMS",
+        "base_amount": _round_money(subtotal),
+        "rate": rate,
+        "amount": _round_money(tax_amount),
+        "calculation_mode": TAX_CALCULATION_MODE_INSIDE,
+        "source_name": _sanitize_cell_string(icms_rate.get("source_name")),
+        "source_type": _sanitize_cell_string(icms_rate.get("source_type")),
+        "user_edited": bool(icms_rate.get("user_edited")),
+        "suggested_rate": icms_rate.get("suggested_rate"),
+        "applied": True,
+        "ignored_reason": None,
+        "origin_uf": _normalize_uf(tax_config.get("origin_uf")),
+        "destination_uf": _normalize_destination_uf(row.get("destination_uf")),
+    }
+
+
+def _build_iss_tax_component(
+    *,
+    row: dict,
+    tax_config: dict,
+    subtotal: Decimal,
+    tax_amount: Decimal,
+) -> dict:
+    rate = float(tax_config["iss_rate"])
+    return {
+        "tax_type": "ISS",
+        "base_amount": _round_money(subtotal),
+        "rate": rate,
+        "amount": _round_money(tax_amount),
+        "calculation_mode": TAX_CALCULATION_MODE_INSIDE,
+        "source_name": ISS_SOURCE_NAME,
+        "source_type": ISS_SOURCE_TYPE,
+        "user_edited": False,
+        "suggested_rate": None,
+        "applied": True,
+        "ignored_reason": None,
+        "origin_uf": _normalize_uf(tax_config.get("origin_uf")),
+        "destination_uf": _normalize_destination_uf(row.get("destination_uf")),
+    }
+
+
+def _build_unapplied_tax_component(
+    *,
+    tax_type: str,
+    row: dict,
+    tax_config: dict,
+    ignored_reason: str,
+) -> dict:
+    return {
+        "tax_type": tax_type,
+        "base_amount": None,
+        "rate": None,
+        "amount": None,
+        "calculation_mode": TAX_CALCULATION_MODE_INSIDE,
+        "source_name": None,
+        "source_type": None,
+        "user_edited": False,
+        "suggested_rate": None,
+        "applied": False,
+        "ignored_reason": ignored_reason,
+        "origin_uf": _normalize_uf(tax_config.get("origin_uf")),
+        "destination_uf": _normalize_destination_uf(row.get("destination_uf")),
+    }
+
+
+def _apply_row_tax_components(
+    calculated: dict,
+    row: dict,
+    tax_config: dict | None,
+) -> dict:
+    if not isinstance(tax_config, dict) or tax_config.get("include_taxes") is not True:
+        return calculated
+
+    subtotal_info = _build_pre_tax_subtotal_info(calculated)
+    subtotal = subtotal_info["subtotal_before_taxes"]
+    if subtotal is None or subtotal <= 0:
+        return calculated
+
+    components = dict(calculated.get("calculation_components") or {})
+    components["subtotal_before_taxes"] = _round_money(subtotal)
+    components["expected_freight_before_taxes"] = _round_money(subtotal)
+
+    tax_type = _resolve_applicable_tax_type(row, tax_config)
+    tax_components: list[dict] = []
+    memory_lines: list[str] = []
+    tax_amount = Decimal("0")
+    total_with_tax = None
+
+    memory_lines.append(f"Subtotal antes dos impostos: {_format_brazilian_money_display(subtotal)}")
+    if subtotal_info["is_partial_base"]:
+        memory_lines.append(
+            "Base parcial: imposto calculado sobre componentes disponíveis "
+            "(alguns componentes foram ignorados)."
+        )
+
+    iss_rate_configured = tax_config.get("iss_rate") is not None
+    try:
+        iss_rate_positive = iss_rate_configured and float(tax_config.get("iss_rate")) > 0
+    except (TypeError, ValueError):
+        iss_rate_positive = False
+
+    if tax_type == "icms":
+        icms_rate = _find_active_icms_rate(tax_config, row.get("destination_uf"))
+        if icms_rate:
+            rate = float(icms_rate["applied_rate"])
+            tax_amount, total_with_tax = _calculate_inside_tax_amounts(subtotal, rate)
+            tax_components.append(
+                _build_icms_tax_component(
+                    icms_rate=icms_rate,
+                    row=row,
+                    tax_config=tax_config,
+                    subtotal=subtotal,
+                    tax_amount=tax_amount,
+                )
+            )
+            memory_lines.append(
+                f"ICMS por dentro: {_format_brazilian_percent_display(rate)} — base "
+                f"{_format_brazilian_money_display(subtotal)}, imposto "
+                f"{_format_brazilian_money_display(tax_amount)}, total "
+                f"{_format_brazilian_money_display(total_with_tax)}"
+            )
+            source_name = _sanitize_cell_string(icms_rate.get("source_name"))
+            if source_name:
+                memory_lines.append(f"Fonte: {source_name}")
+            if icms_rate.get("user_edited"):
+                memory_lines.append("Alíquota editada pelo usuário.")
+        else:
+            tax_components.append(
+                _build_unapplied_tax_component(
+                    tax_type="ICMS",
+                    row=row,
+                    tax_config=tax_config,
+                    ignored_reason="Alíquota ICMS não disponível, inativa ou ausente para a UF destino.",
+                )
+            )
+        if iss_rate_positive:
+            memory_lines.append(
+                "ISS não aplicado nesta linha: transporte não identificado como municipal."
+            )
+    elif tax_type == "iss":
+        rate = float(tax_config["iss_rate"])
+        tax_amount, total_with_tax = _calculate_inside_tax_amounts(subtotal, rate)
+        tax_components.append(
+            _build_iss_tax_component(
+                row=row,
+                tax_config=tax_config,
+                subtotal=subtotal,
+                tax_amount=tax_amount,
+            )
+        )
+        memory_lines.append(
+            f"ISS por dentro: {_format_brazilian_percent_display(rate)} — base "
+            f"{_format_brazilian_money_display(subtotal)}, imposto "
+            f"{_format_brazilian_money_display(tax_amount)}, total "
+            f"{_format_brazilian_money_display(total_with_tax)}"
+        )
+        memory_lines.append(f"Fonte: {ISS_SOURCE_NAME}")
+    elif iss_rate_positive:
+        memory_lines.append(
+            "ISS não aplicado nesta linha: transporte não identificado como municipal."
+        )
+
+    if tax_amount > 0 and total_with_tax is not None:
+        calculated["expected_freight"] = _round_money(total_with_tax)
+        components["tax_total"] = _round_money(tax_amount)
+        memory_lines.append(
+            f"Total esperado com impostos: {_format_brazilian_money_display(total_with_tax)}"
+        )
+    else:
+        components["tax_total"] = 0.0
+
+    components["tax_components"] = tax_components
+    calculated["calculation_components"] = components
+    calculated["calculation_details"] = _append_tax_memory_to_details(
+        calculated.get("calculation_details"),
+        memory_lines,
+    )
+    return calculated
+
+
+def _build_tax_fiscal_snapshot(tax_config, results: list[dict]) -> dict:
+    snapshot = {
+        "tax_applied": False,
+        "tax_calculation_version": TAX_CALCULATION_VERSION,
+        "tax_calculation_mode": TAX_CALCULATION_MODE_INSIDE,
+    }
+    if not isinstance(tax_config, dict) or tax_config.get("include_taxes") is not True:
+        return snapshot
+
+    snapshot["tax_config_snapshot"] = copy.deepcopy(tax_config)
+    rows_with_tax = 0
+    total_tax = Decimal("0")
+    icms_rows = 0
+    iss_rows = 0
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        tax_items = (result.get("calculation_components") or {}).get("tax_components") or []
+        applied_item = next(
+            (
+                item
+                for item in tax_items
+                if isinstance(item, dict) and item.get("applied") and item.get("amount")
+            ),
+            None,
+        )
+        if applied_item is None:
+            continue
+        rows_with_tax += 1
+        total_tax += _decimal_money(applied_item.get("amount")) or Decimal("0")
+        if applied_item.get("tax_type") == "ICMS":
+            icms_rows += 1
+        elif applied_item.get("tax_type") == "ISS":
+            iss_rows += 1
+
+    snapshot["tax_applied"] = rows_with_tax > 0
+    snapshot["tax_summary"] = {
+        "rows_with_tax": rows_with_tax,
+        "total_tax_amount": _round_money(total_tax),
+        "icms_rows": icms_rows,
+        "iss_rows": iss_rows,
+    }
+    return snapshot
+
+
+def _apply_tax_fiscal_snapshot_to_audit_batch(audit_batch: dict, fiscal_snapshot: dict) -> dict:
+    updated = dict(audit_batch)
+    for key in (
+        "tax_config_snapshot",
+        "tax_applied",
+        "tax_calculation_version",
+        "tax_calculation_mode",
+        "tax_summary",
+    ):
+        if key in fiscal_snapshot:
+            updated[key] = fiscal_snapshot[key]
+    updated.pop("needs_reprocess", None)
+    updated.pop("stale_reason", None)
+    updated.pop("stale_at", None)
+    return updated
+
+
+def _audit_batch_is_fiscally_outdated(audit_batch) -> bool:
+    if not isinstance(audit_batch, dict):
+        return False
+    if audit_batch.get("status") != AUDIT_BATCH_STATUS_PROCESSED:
+        return False
+    if not audit_batch.get("tax_applied"):
+        return False
+    version = audit_batch.get("tax_calculation_version")
+    mode = audit_batch.get("tax_calculation_mode")
+    return version != TAX_CALCULATION_VERSION or mode != TAX_CALCULATION_MODE_INSIDE
+
+
+def _audit_batch_is_pricing_rule_parser_outdated(audit_batch) -> bool:
+    if not isinstance(audit_batch, dict):
+        return False
+    if audit_batch.get("status") != AUDIT_BATCH_STATUS_PROCESSED:
+        return False
+    return audit_batch.get("pricing_rule_parser_version") != PRICING_RULE_PARSER_VERSION
+
+
+def _audit_batch_effective_needs_reprocess(audit_batch) -> bool:
+    if not isinstance(audit_batch, dict):
+        return False
+    if audit_batch.get("needs_reprocess"):
+        return True
+    if _audit_batch_is_fiscally_outdated(audit_batch):
+        return True
+    return _audit_batch_is_pricing_rule_parser_outdated(audit_batch)
+
+
+def _mark_audit_batch_stale_if_processed(record: dict, *, reason: str, alert: str) -> dict:
+    audit_batch = record.get("audit_batch")
+    if not isinstance(audit_batch, dict):
+        return record
+    if audit_batch.get("status") != AUDIT_BATCH_STATUS_PROCESSED:
+        return record
+
+    updated = dict(record)
+    updated_batch = dict(audit_batch)
+    updated_batch["needs_reprocess"] = True
+    updated_batch["stale_reason"] = reason
+    updated_batch["stale_at"] = _utcnow().isoformat()
+    updated["audit_batch"] = updated_batch
+
+    alerts = list(updated.get("reading_alerts") or [])
+    if alert not in alerts:
+        alerts.append(alert)
+    updated["reading_alerts"] = alerts
+    return updated
+
+
+def _audit_bi_methodology(audit_batch) -> dict:
+    if not isinstance(audit_batch, dict):
+        return {
+            "taxes_included": False,
+            "tax_calculation_mode": None,
+            "tax_calculation_version": None,
+            "needs_reprocess": False,
+        }
+    return {
+        "taxes_included": bool(audit_batch.get("tax_applied")),
+        "tax_calculation_mode": audit_batch.get("tax_calculation_mode"),
+        "tax_calculation_version": audit_batch.get("tax_calculation_version"),
+        "needs_reprocess": _audit_batch_effective_needs_reprocess(audit_batch),
+    }
+
+
 def _apply_freight_value_component(
     calculated: dict,
     row: dict,
@@ -3476,6 +4081,7 @@ def _apply_freight_value_component(
         **calculated,
         "weight_freight": _round_money(weight_freight),
         "freight_value_amount": None,
+        "route_toll_amount": None,
         "accessorial_fees_amount": None,
         "accessorial_percent_fees_amount": None,
         "calculation_components": components,
@@ -3483,6 +4089,8 @@ def _apply_freight_value_component(
 
     freight_value = pricing_rule.get("freight_value")
     has_tariff_freight_value = isinstance(freight_value, dict)
+    route_toll = pricing_rule.get("route_toll")
+    has_route_toll = isinstance(route_toll, dict)
     invoice_value = _decimal_money(row.get("invoice_value"))
     audited_weight = _parse_weight_number(row.get("audited_weight"))
     audit_variables = {
@@ -3514,11 +4122,22 @@ def _apply_freight_value_component(
             components["freight_value"] = tariff_component
             components["tariff_freight_value"] = dict(tariff_component)
 
+    if has_route_toll:
+        toll_result = _calculate_route_toll_amount(route_toll, row.get("audited_weight"))
+        if toll_result is not None:
+            toll_amount, toll_component = toll_result
+            expected += toll_amount
+            result["route_toll_amount"] = _round_money(toll_amount)
+            result["expected_freight"] = _round_money(expected)
+            components["route_toll"] = toll_component
+            components["tariff_route_toll"] = dict(toll_component)
+
     accessorial_components, ignored_accessorial_fees, accessorial_total = _build_accessorial_percent_fee_components(
         accessorial_fees,
         invoice_value=invoice_value,
         audit_variables=audit_variables,
         has_tariff_freight_value=has_tariff_freight_value,
+        has_route_toll=has_route_toll and result.get("route_toll_amount") is not None,
     )
     accessorial_percent_total = sum(
         (
@@ -3672,6 +4291,7 @@ def _base_audit_result(row: dict) -> dict:
         "expected_freight": None,
         "weight_freight": None,
         "freight_value_amount": None,
+        "route_toll_amount": None,
         "accessorial_fees_amount": None,
         "accessorial_percent_fees_amount": None,
         "divergence_value": None,
@@ -3755,6 +4375,7 @@ def _audit_single_row(
     pricing_index: dict,
     has_coverage: bool,
     accessorial_fees=None,
+    tax_config=None,
 ) -> dict:
     weight = _parse_weight_number(row.get("audited_weight"))
     if weight is None:
@@ -3898,6 +4519,8 @@ def _audit_single_row(
             ),
         )
 
+    calculated = _apply_row_tax_components(calculated, row, tax_config)
+
     comparison = compare_charged_vs_expected(charged, calculated["expected_freight"])
     result = _base_audit_result(row)
     result.update(comparison)
@@ -3905,6 +4528,7 @@ def _audit_single_row(
     result["audited_weight"] = weight
     result["weight_freight"] = calculated.get("weight_freight")
     result["freight_value_amount"] = calculated.get("freight_value_amount")
+    result["route_toll_amount"] = calculated.get("route_toll_amount")
     result["accessorial_fees_amount"] = calculated.get("accessorial_fees_amount")
     result["accessorial_percent_fees_amount"] = calculated.get("accessorial_percent_fees_amount")
     result["reason_code"] = None if comparison["status"] == AUDIT_STATUS_OK else AUDIT_STATUS_DIVERGENT
@@ -4177,6 +4801,7 @@ def compute_audit_outputs(record: dict, normalized_rows: list[dict]) -> dict:
     coverage_index = build_coverage_index(coverage_table or {"rows": []})
     pricing_index = build_freight_pricing_index(record)
     accessorial_fees = record.get("accessorial_fees") if isinstance(record.get("accessorial_fees"), list) else []
+    tax_config = record.get("tax_config") if isinstance(record.get("tax_config"), dict) else None
     results = [
         _audit_single_row(
             row if isinstance(row, dict) else {},
@@ -4184,6 +4809,7 @@ def compute_audit_outputs(record: dict, normalized_rows: list[dict]) -> dict:
             pricing_index=pricing_index,
             has_coverage=has_coverage,
             accessorial_fees=accessorial_fees,
+            tax_config=tax_config,
         )
         for row in normalized_rows
     ]
@@ -4196,11 +4822,13 @@ def compute_audit_outputs(record: dict, normalized_rows: list[dict]) -> dict:
         generated_at=now,
     )
     _attach_audit_diagnostic_groups(results, audit_diagnostics)
+    fiscal_snapshot = _build_tax_fiscal_snapshot(tax_config, results)
     audit_batch = {
         "normalized_rows": normalized_rows,
         "results": results,
         "summary": summary,
         "audit_diagnostics": audit_diagnostics,
+        **fiscal_snapshot,
     }
     return {
         "results": results,
@@ -4209,6 +4837,7 @@ def compute_audit_outputs(record: dict, normalized_rows: list[dict]) -> dict:
         "audit_bi": _public_audit_bi(audit_batch),
         "pricing_index": pricing_index,
         "generated_at": now,
+        "fiscal_snapshot": fiscal_snapshot,
     }
 
 
@@ -4262,6 +4891,7 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
     now = outputs["generated_at"]
     summary = outputs["summary"]
     audit_diagnostics = outputs["audit_diagnostics"]
+    fiscal_snapshot = outputs.get("fiscal_snapshot") or {}
     preserved_expires_at = record.get("expires_at")
     updated_batch = dict(audit_batch)
     updated_batch["status"] = AUDIT_BATCH_STATUS_PROCESSED
@@ -4271,6 +4901,9 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
     updated_batch["updated_at"] = now
     updated_batch["processed_at"] = now
     updated_batch["expires_at"] = audit_batch.get("expires_at") or preserved_expires_at
+    updated_batch = _apply_tax_fiscal_snapshot_to_audit_batch(updated_batch, fiscal_snapshot)
+    updated_batch["pricing_rule_parser_version"] = PRICING_RULE_PARSER_VERSION
+    updated_batch["pricing_rule_fingerprint"] = _pricing_rule_fingerprint(record)
 
     updated = dict(record)
     updated["audit_batch"] = updated_batch
@@ -4377,6 +5010,13 @@ def _public_audit_batch(audit_batch) -> dict | None:
         "summary": audit_batch.get("summary"),
         "audit_diagnostics": _public_audit_diagnostics(audit_batch.get("audit_diagnostics")),
         "processed_at": audit_batch.get("processed_at"),
+        "needs_reprocess": _audit_batch_effective_needs_reprocess(audit_batch),
+        "stale_reason": audit_batch.get("stale_reason"),
+        "tax_applied": audit_batch.get("tax_applied"),
+        "tax_calculation_mode": audit_batch.get("tax_calculation_mode"),
+        "tax_calculation_version": audit_batch.get("tax_calculation_version"),
+        "tax_config_snapshot": audit_batch.get("tax_config_snapshot"),
+        "tax_summary": audit_batch.get("tax_summary"),
     }
 
 
@@ -4610,6 +5250,7 @@ def _public_audit_bi(audit_batch) -> dict:
             "row_count": 0,
             "rows": [],
             "field_presence": {field: False for field in AUDIT_BI_FIELD_PRESENCE_FIELDS},
+            "methodology": _audit_bi_methodology(audit_batch if isinstance(audit_batch, dict) else None),
             "message": AUDIT_BI_NOT_READY_MESSAGE,
         }
 
@@ -4633,6 +5274,7 @@ def _public_audit_bi(audit_batch) -> dict:
         "row_count": len(public_rows),
         "rows": public_rows,
         "field_presence": _audit_bi_compute_field_presence(public_rows),
+        "methodology": _audit_bi_methodology(audit_batch if isinstance(audit_batch, dict) else None),
     }
 
 
@@ -4676,6 +5318,7 @@ def _public_temp_table(record: dict | None) -> dict | None:
         "human_edited_at": record.get("human_edited_at"),
         "human_edited_by_user_id": record.get("human_edited_by_user_id"),
         "edit_version": record.get("edit_version"),
+        "tax_config": copy.deepcopy(record.get("tax_config")) if isinstance(record.get("tax_config"), dict) else None,
         "audit_correction": {
             "can_undo": bool(correction_history),
             "last_application_id": record.get("last_correction_application_id") or last_correction.get("application_id"),
@@ -4813,6 +5456,522 @@ def _validate_freight_tables_for_save(raw_tables) -> list[dict]:
     if not raw_tables:
         return []
     return [_validate_freight_table_item_for_save(item) for item in raw_tables]
+
+
+def _normalize_uf(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    if len(text) != 2 or text not in BRAZILIAN_UFS:
+        return None
+    return text
+
+
+_BR_STATE_NAME_TO_UF = {
+    "ACRE": "AC",
+    "ALAGOAS": "AL",
+    "AMAPA": "AP",
+    "AMAZONAS": "AM",
+    "BAHIA": "BA",
+    "CEARA": "CE",
+    "DISTRITO FEDERAL": "DF",
+    "ESPIRITO SANTO": "ES",
+    "GOIAS": "GO",
+    "MARANHAO": "MA",
+    "MATO GROSSO": "MT",
+    "MATO GROSSO DO SUL": "MS",
+    "MINAS GERAIS": "MG",
+    "PARA": "PA",
+    "PARAIBA": "PB",
+    "PARANA": "PR",
+    "PERNAMBUCO": "PE",
+    "PIAUI": "PI",
+    "RIO DE JANEIRO": "RJ",
+    "RIO GRANDE DO NORTE": "RN",
+    "RIO GRANDE DO SUL": "RS",
+    "RONDONIA": "RO",
+    "RORAIMA": "RR",
+    "SANTA CATARINA": "SC",
+    "SAO PAULO": "SP",
+    "SERGIPE": "SE",
+    "TOCANTINS": "TO",
+}
+
+_KNOWN_CITY_TO_UF = {
+    "CAMPINAS": "SP",
+    "SAO PAULO": "SP",
+    "JOINVILLE": "SC",
+}
+
+_TAX_DESTINATION_SOURCE_PRIORITY = {
+    "manual": 4,
+    "automatic": 3,
+    "inferred_state": 2,
+    "inferred_city": 1,
+}
+
+_VALID_TAX_DESTINATION_SOURCES = frozenset(_TAX_DESTINATION_SOURCE_PRIORITY.keys())
+
+_TAX_DESTINATION_RECORD_SOURCES = (
+    "destinations",
+    "routes",
+    "freight_routes",
+    "freight_tables",
+    "extracted_items",
+)
+
+
+def _extract_uf_tokens(value) -> set[str]:
+    if value is None:
+        return set()
+    text = str(value).upper()
+    return {match.group(1) for match in re.finditer(r"\b([A-Z]{2})\b", text) if match.group(1) in BRAZILIAN_UFS}
+
+
+def _normalize_state_name_key(value) -> str:
+    return _normalize_audit_lookup_text(value)
+
+
+def resolve_state_name_to_uf(value) -> str | None:
+    key = _normalize_state_name_key(value)
+    if not key:
+        return None
+    return _BR_STATE_NAME_TO_UF.get(key)
+
+
+def _resolve_city_name_to_uf(value) -> str | None:
+    city_key = _normalize_state_name_key(value)
+    if not city_key:
+        return None
+    if city_key in _KNOWN_CITY_TO_UF:
+        return _KNOWN_CITY_TO_UF[city_key]
+    ufs = _lookup_city_ufs_from_base_localidades(value)
+    if len(ufs) == 1:
+        return ufs[0]
+    return None
+
+
+def _lookup_city_ufs_from_base_localidades(city_text: str) -> list[str]:
+    city_key = str(city_text or "").strip().lower()
+    if not city_key:
+        return []
+    city_key = unicodedata.normalize("NFKD", city_key)
+    city_key = "".join(ch for ch in city_key if not unicodedata.combining(ch))
+    city_key = re.sub(r"\s+", " ", city_key).strip()
+    if not city_key:
+        return []
+    try:
+        from app.models import BaseLocalidades
+
+        rows = BaseLocalidades.query.filter(
+            BaseLocalidades.chave_busca.like(f"{city_key}-%")
+        ).all()
+    except Exception:
+        return []
+    ufs: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        uf_sigla = resolve_state_name_to_uf(row.uf_nome)
+        if uf_sigla and uf_sigla not in seen:
+            seen.add(uf_sigla)
+            ufs.append(uf_sigla)
+    return sorted(ufs)
+
+
+def _tax_destination_field_kind(key) -> str | None:
+    normalized = _normalize_audit_lookup_text(key).lower()
+    compact = normalized.replace(" ", "_")
+    if compact in {"destination_uf", "uf_destino", "destino_uf"}:
+        return "uf"
+    if "uf_destino" in compact or "destination_uf" in compact:
+        return "uf"
+    if "estado" in compact and ("destino" in compact or "destination" in compact):
+        return "state"
+    if "cidade" in compact and ("destino" in compact or "destination" in compact):
+        return "city"
+    if "destino" in compact or "destination" in compact:
+        if "estado" in compact:
+            return "state"
+        if "uf" in compact:
+            return "uf"
+        return "city"
+    return None
+
+
+def _destination_uf_field_score(key) -> int:
+    field_kind = _tax_destination_field_kind(key)
+    if field_kind == "uf":
+        return 3
+    if field_kind == "state":
+        return 2
+    if field_kind == "city":
+        return 1
+    return 0
+
+
+def _resolve_tax_location_findings(value, field_kind: str) -> list[tuple[str, str, str]]:
+    text = _sanitize_cell_string(value)
+    if not text:
+        return []
+
+    findings: list[tuple[str, str, str]] = []
+    seen_ufs: set[str] = set()
+
+    def _append(uf: str | None, source: str) -> None:
+        if not uf or uf in seen_ufs:
+            return
+        seen_ufs.add(uf)
+        findings.append((uf, source, text))
+
+    if field_kind == "uf":
+        direct_uf = _normalize_uf(text)
+        if direct_uf:
+            _append(direct_uf, "automatic")
+        else:
+            for token in sorted(_extract_uf_tokens(text)):
+                _append(token, "automatic")
+        return findings
+
+    if field_kind == "state":
+        state_uf = resolve_state_name_to_uf(text)
+        if state_uf:
+            _append(state_uf, "inferred_state")
+            return findings
+        for token in sorted(_extract_uf_tokens(text)):
+            _append(token, "automatic")
+        return findings
+
+    city_uf = _resolve_city_name_to_uf(text)
+    if city_uf:
+        _append(city_uf, "inferred_city")
+        return findings
+
+    state_uf = resolve_state_name_to_uf(text)
+    if state_uf:
+        _append(state_uf, "inferred_state")
+        return findings
+
+    for token in sorted(_extract_uf_tokens(text)):
+        _append(token, "automatic")
+    return findings
+
+
+def _merge_tax_destination_entry(
+    by_uf: dict[str, dict],
+    *,
+    uf: str,
+    source: str,
+    evidence: str | None = None,
+    user_confirmed: bool = False,
+) -> None:
+    normalized_uf = _normalize_uf(uf)
+    if not normalized_uf:
+        return
+    if source not in _VALID_TAX_DESTINATION_SOURCES:
+        source = "manual"
+    evidence_text = _sanitize_cell_string(evidence)
+    if normalized_uf not in by_uf:
+        by_uf[normalized_uf] = {
+            "uf": normalized_uf,
+            "source": source,
+            "evidence": [evidence_text] if evidence_text else [],
+            "user_confirmed": bool(user_confirmed),
+        }
+        return
+    entry = by_uf[normalized_uf]
+    if evidence_text and evidence_text not in entry["evidence"]:
+        entry["evidence"].append(evidence_text)
+    current_priority = _TAX_DESTINATION_SOURCE_PRIORITY.get(entry["source"], 0)
+    incoming_priority = _TAX_DESTINATION_SOURCE_PRIORITY.get(source, 0)
+    if incoming_priority > current_priority:
+        entry["source"] = source
+    if user_confirmed:
+        entry["user_confirmed"] = True
+
+
+def _collect_tax_destination_findings_from_value(
+    value,
+    findings: list[tuple[str, str, str]],
+    *,
+    key_hint: str | None = None,
+) -> None:
+    if value is None:
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                continue
+            field_kind = _tax_destination_field_kind(key)
+            if field_kind:
+                findings.extend(_resolve_tax_location_findings(item, field_kind))
+            _collect_tax_destination_findings_from_value(item, findings, key_hint=key)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_tax_destination_findings_from_value(item, findings, key_hint=key_hint)
+        return
+    if key_hint:
+        field_kind = _tax_destination_field_kind(key_hint)
+        if field_kind:
+            findings.extend(_resolve_tax_location_findings(value, field_kind))
+
+
+def _extract_tax_destination_findings_from_record(record: dict | None) -> list[tuple[str, str, str]]:
+    if not isinstance(record, dict):
+        return []
+    findings: list[tuple[str, str, str]] = []
+    for key in _TAX_DESTINATION_RECORD_SOURCES:
+        _collect_tax_destination_findings_from_value(record.get(key), findings)
+    return findings
+
+
+def _normalize_tax_destination_evidence(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        evidence: list[str] = []
+        for item in value:
+            text = _sanitize_cell_string(item)
+            if text and text not in evidence:
+                evidence.append(text)
+        return evidence
+    text = _sanitize_cell_string(value)
+    return [text] if text else []
+
+
+def _normalize_tax_destination_entry(raw_entry, *, default_source: str = "manual") -> dict | None:
+    if not isinstance(raw_entry, dict):
+        return None
+    uf = _normalize_uf(raw_entry.get("uf"))
+    if not uf:
+        return None
+    source = str(raw_entry.get("source") or default_source).strip()
+    if source not in _VALID_TAX_DESTINATION_SOURCES:
+        source = default_source
+    user_confirmed = bool(raw_entry.get("user_confirmed"))
+    if source == "manual":
+        user_confirmed = True
+    return {
+        "uf": uf,
+        "source": source,
+        "evidence": _normalize_tax_destination_evidence(raw_entry.get("evidence")),
+        "user_confirmed": user_confirmed,
+    }
+
+
+def consolidate_tax_destination_ufs(
+    record: dict | None,
+    *,
+    submitted_destination_ufs: list | None = None,
+) -> list[dict]:
+    by_uf: dict[str, dict] = {}
+
+    if submitted_destination_ufs is None:
+        for uf, source, evidence in _extract_tax_destination_findings_from_record(record):
+            _merge_tax_destination_entry(by_uf, uf=uf, source=source, evidence=evidence)
+    else:
+        if not isinstance(submitted_destination_ufs, list):
+            return []
+        for raw_entry in submitted_destination_ufs:
+            normalized = _normalize_tax_destination_entry(raw_entry)
+            if not normalized:
+                continue
+            evidence = normalized["evidence"]
+            evidence_text = evidence[0] if evidence else None
+            _merge_tax_destination_entry(
+                by_uf,
+                uf=normalized["uf"],
+                source=normalized["source"],
+                evidence=evidence_text,
+                user_confirmed=normalized["user_confirmed"],
+            )
+            entry = by_uf[normalized["uf"]]
+            for extra in evidence[1:]:
+                if extra not in entry["evidence"]:
+                    entry["evidence"].append(extra)
+
+    return [by_uf[uf] for uf in sorted(by_uf)]
+
+
+def _collect_destination_ufs_from_value(value, destination_ufs: set[str], *, key_hint: str | None = None) -> None:
+    findings: list[tuple[str, str, str]] = []
+    _collect_tax_destination_findings_from_value(value, findings, key_hint=key_hint)
+    destination_ufs.update(uf for uf, _source, _evidence in findings)
+
+
+def extract_tax_destination_ufs_from_temp_table(record: dict | None) -> list[str]:
+    return [entry["uf"] for entry in consolidate_tax_destination_ufs(record)]
+
+
+def suggested_icms_interstate_rate(origin_uf: str, destination_uf: str) -> float:
+    origin = _normalize_uf(origin_uf)
+    destination = _normalize_uf(destination_uf)
+    if origin in ICMS_7_PERCENT_ORIGIN_UFS and destination in ICMS_7_PERCENT_DESTINATION_UFS:
+        return 7.0
+    return 12.0
+
+
+def _parse_optional_rate(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Alíquota fiscal inválida.",
+        )
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.replace("%", "").replace(",", ".")
+    try:
+        parsed = Decimal(text)
+    except (InvalidOperation, ValueError):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Alíquota fiscal inválida.",
+        ) from None
+    if parsed < 0:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Alíquota fiscal inválida.",
+        )
+    return float(parsed)
+
+
+def _normalize_tax_rate_for_compare(value) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.000001"))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _validate_tax_config_for_save(raw_tax_config) -> dict:
+    if not isinstance(raw_tax_config, dict):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "tax_config deve ser um objeto.",
+        )
+    include_taxes = raw_tax_config.get("include_taxes")
+    if include_taxes is not True:
+        return {"include_taxes": False}
+
+    origin_uf = _normalize_uf(raw_tax_config.get("origin_uf"))
+    if not origin_uf:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "UF origem é obrigatória para incluir impostos.",
+        )
+    origin_city = _sanitize_cell_string(raw_tax_config.get("origin_city"))
+    iss_rate = _parse_optional_rate(raw_tax_config.get("iss_rate"))
+    if iss_rate is not None and not origin_city:
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Cidade origem é obrigatória quando ISS estiver preenchido.",
+        )
+
+    raw_rates = raw_tax_config.get("icms_rates") or []
+    if not isinstance(raw_rates, list):
+        raise CleideAuditTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "tax_config.icms_rates deve ser uma lista.",
+        )
+    incoming_rates: dict[str, float | None] = {}
+    for item in raw_rates:
+        if not isinstance(item, dict):
+            raise CleideAuditTempTableError(
+                ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                "Cada item de tax_config.icms_rates deve ser um objeto.",
+            )
+        destination_uf = _normalize_uf(item.get("destination_uf"))
+        if not destination_uf:
+            continue
+        incoming_rates[destination_uf] = _parse_optional_rate(item.get("applied_rate"))
+
+    raw_destination_ufs = raw_tax_config.get("destination_ufs")
+    destination_ufs: list[dict] | None = None
+    if raw_destination_ufs is not None:
+        if not isinstance(raw_destination_ufs, list):
+            raise CleideAuditTempTableError(
+                ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                "tax_config.destination_ufs deve ser uma lista.",
+            )
+        destination_ufs = []
+        seen_destination_ufs: set[str] = set()
+        for item in raw_destination_ufs:
+            normalized = _normalize_tax_destination_entry(item)
+            if not normalized:
+                raise CleideAuditTempTableError(
+                    ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                    "Cada item de tax_config.destination_ufs deve conter uma UF válida.",
+                )
+            if normalized["uf"] in seen_destination_ufs:
+                continue
+            seen_destination_ufs.add(normalized["uf"])
+            destination_ufs.append(normalized)
+
+    return {
+        "include_taxes": True,
+        "origin_uf": origin_uf,
+        "origin_city": origin_city or None,
+        "iss_rate": iss_rate,
+        "_incoming_icms_rates": incoming_rates,
+        "_destination_ufs": destination_ufs,
+    }
+
+
+def build_tax_config_for_temp_table(record: dict, validated_tax_config: dict) -> dict:
+    if not validated_tax_config.get("include_taxes"):
+        return {"include_taxes": False}
+
+    origin_uf = validated_tax_config["origin_uf"]
+    incoming_rates = validated_tax_config.get("_incoming_icms_rates") or {}
+    submitted_destination_ufs = validated_tax_config.get("_destination_ufs")
+    destination_ufs = consolidate_tax_destination_ufs(
+        record,
+        submitted_destination_ufs=submitted_destination_ufs,
+    )
+    icms_rates: list[dict] = []
+    for destination_entry in destination_ufs:
+        destination_uf = destination_entry["uf"]
+        if destination_uf == origin_uf:
+            operation_type = "intermunicipal"
+            suggested_rate = None
+            source_name = ICMS_INTERMUNICIPAL_SOURCE_NAME
+            source_type = "manual"
+        else:
+            operation_type = "interstate"
+            suggested_rate = suggested_icms_interstate_rate(origin_uf, destination_uf)
+            source_name = ICMS_INTERSTATE_SOURCE_NAME
+            source_type = "official"
+
+        has_incoming_rate = destination_uf in incoming_rates
+        applied_rate = incoming_rates[destination_uf] if has_incoming_rate else suggested_rate
+        suggested_cmp = _normalize_tax_rate_for_compare(suggested_rate)
+        applied_cmp = _normalize_tax_rate_for_compare(applied_rate)
+        user_edited = bool(has_incoming_rate and applied_cmp != suggested_cmp)
+        icms_rates.append(
+            {
+                "destination_uf": destination_uf,
+                "operation_type": operation_type,
+                "suggested_rate": suggested_rate,
+                "applied_rate": applied_rate,
+                "source_name": source_name,
+                "source_type": source_type,
+                "user_edited": user_edited,
+                "is_active": applied_rate is not None,
+            }
+        )
+
+    return {
+        "include_taxes": True,
+        "origin_uf": origin_uf,
+        "origin_city": validated_tax_config.get("origin_city"),
+        "iss_rate": validated_tax_config.get("iss_rate"),
+        "destination_ufs": destination_ufs,
+        "icms_rates": icms_rates,
+    }
 
 
 def _validate_freight_routes_for_save(raw_routes) -> list[dict]:
@@ -6328,6 +7487,7 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
     has_freight_routes_key = "freight_routes" in edit_target
     has_accessorial_fees_key = "accessorial_fees" in edit_target
     has_coverage_table_key = "coverage_table" in edit_target
+    has_tax_config_key = "tax_config" in edit_target
 
     freight_tables = (
         _validate_freight_tables_for_save(edit_target.get("freight_tables"))
@@ -6349,6 +7509,11 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
         if has_coverage_table_key
         else None
     )
+    tax_config = (
+        _validate_tax_config_for_save(edit_target.get("tax_config"))
+        if has_tax_config_key
+        else None
+    )
 
     has_freight_structural_edit = bool(
         (freight_tables if has_freight_tables_key else [])
@@ -6363,6 +7528,7 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
         or has_freight_routes_key
         or has_accessorial_fees_key
         or has_coverage_table_key
+        or has_tax_config_key
     ):
         raise CleideAuditTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
@@ -6375,13 +7541,15 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
         "freight_routes": freight_routes,
         "accessorial_fees": accessorial_fees,
         "coverage_table": coverage_table,
+        "tax_config": tax_config,
         "has_freight_tables_key": has_freight_tables_key,
         "has_freight_routes_key": has_freight_routes_key,
         "has_accessorial_fees_key": has_accessorial_fees_key,
         "has_coverage_table_key": has_coverage_table_key,
+        "has_tax_config_key": has_tax_config_key,
         "has_freight_structural_edit": has_freight_structural_edit,
         "has_coverage_structural_edit": has_coverage_structural_edit,
-        "has_structural_edit": bool(has_freight_structural_edit or has_coverage_structural_edit),
+        "has_structural_edit": bool(has_freight_structural_edit or has_coverage_structural_edit or has_tax_config_key),
         "review_action": review_action or TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE,
     }
 
@@ -6436,6 +7604,7 @@ def save_temp_table_edit(
 
     now = _utcnow().isoformat()
     preserved_expires_at = record.get("expires_at")
+    previous_tax_fingerprint = _tax_config_fingerprint(record.get("tax_config"))
     updated = dict(record)
     if validated["freight_tables"]:
         updated["freight_tables"] = validated["freight_tables"]
@@ -6443,6 +7612,8 @@ def save_temp_table_edit(
         updated["freight_routes"] = validated["freight_routes"]
     if validated["has_accessorial_fees_key"] and validated["accessorial_fees"] is not None:
         updated["accessorial_fees"] = validated["accessorial_fees"]
+    if validated["has_tax_config_key"] and validated["tax_config"] is not None:
+        updated["tax_config"] = build_tax_config_for_temp_table(updated, validated["tax_config"])
 
     has_freight_edit = (
         validated["has_freight_tables_key"]
@@ -6455,6 +7626,21 @@ def save_temp_table_edit(
             if validated["has_freight_structural_edit"]
             else HUMAN_REVIEW_STATUS_REVIEWED
         )
+        updated["human_edited_at"] = now
+        if user_scope is not None:
+            updated["human_edited_by_user_id"] = user_scope
+        current_edit_version = updated.get("edit_version")
+        if isinstance(current_edit_version, int) and current_edit_version >= 0:
+            updated["edit_version"] = current_edit_version + 1
+        else:
+            updated["edit_version"] = 1
+        updated = _mark_audit_batch_stale_if_processed(
+            updated,
+            reason=AUDIT_BATCH_STALE_PRICING_RULE_REASON,
+            alert=AUDIT_BATCH_STALE_PRICING_RULE_ALERT,
+        )
+
+    if validated["has_tax_config_key"] and not has_freight_edit:
         updated["human_edited_at"] = now
         if user_scope is not None:
             updated["human_edited_by_user_id"] = user_scope
@@ -6494,12 +7680,21 @@ def save_temp_table_edit(
     if validated["review_action"] == TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE:
         _validate_accessorial_fees_ready_to_advance(updated.get("accessorial_fees"))
 
+    if validated["has_tax_config_key"]:
+        new_tax_fingerprint = _tax_config_fingerprint(updated.get("tax_config"))
+        if previous_tax_fingerprint != new_tax_fingerprint:
+            updated = _mark_audit_batch_stale_if_processed(
+                updated,
+                reason=AUDIT_BATCH_STALE_TAX_CONFIG_REASON,
+                alert=AUDIT_BATCH_STALE_TAX_CONFIG_ALERT,
+            )
+
     updated["updated_at"] = now
     updated["expires_at"] = preserved_expires_at
 
     saved = save_temp_table_record(updated)
     logger.info(
-        "Cleide temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s coverage_rows=%s",
+        "Cleide temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s coverage_rows=%s taxes=%s",
         saved.get("temp_table_id"),
         user_scope,
         updated.get("human_review_status"),
@@ -6507,6 +7702,7 @@ def save_temp_table_edit(
         len(saved.get("freight_routes") or []),
         len(saved.get("accessorial_fees") or []),
         len((saved.get("coverage_table") or {}).get("rows") or []),
+        bool((saved.get("tax_config") or {}).get("include_taxes")),
     )
     public = _public_temp_table(saved)
     if public is None:
@@ -6556,10 +7752,41 @@ def load_temp_table_record(temp_table_id: str, *, ttl_hours: int) -> dict | None
     return payload
 
 
+def _sync_outdated_fiscal_stale(record: dict) -> dict:
+    if not isinstance(record, dict):
+        return record
+    audit_batch = record.get("audit_batch")
+    if not _audit_batch_is_fiscally_outdated(audit_batch):
+        return record
+    if isinstance(audit_batch, dict) and audit_batch.get("needs_reprocess"):
+        return record
+    return _mark_audit_batch_stale_if_processed(
+        record,
+        reason=AUDIT_BATCH_STALE_FISCAL_OUTDATED_REASON,
+        alert=AUDIT_BATCH_STALE_FISCAL_OUTDATED_ALERT,
+    )
+
+
+def _sync_outdated_pricing_rule_stale(record: dict) -> dict:
+    if not isinstance(record, dict):
+        return record
+    audit_batch = record.get("audit_batch")
+    if not _audit_batch_is_pricing_rule_parser_outdated(audit_batch):
+        return record
+    if isinstance(audit_batch, dict) and audit_batch.get("needs_reprocess"):
+        return record
+    return _mark_audit_batch_stale_if_processed(
+        record,
+        reason=AUDIT_BATCH_STALE_PRICING_RULE_REASON,
+        alert=AUDIT_BATCH_STALE_PRICING_RULE_ALERT,
+    )
+
+
 def save_temp_table_record(record: dict) -> dict:
     _require_session()
     temp_table_id = (record.get("temp_table_id") or uuid4().hex).strip()
-    record = dict(record)
+    record = _sync_outdated_fiscal_stale(dict(record))
+    record = _sync_outdated_pricing_rule_stale(record)
     record["temp_table_id"] = temp_table_id
     path = _temp_table_path(temp_table_id)
     _write_temp_table_atomic(path, record)
@@ -6842,24 +8069,270 @@ def _freight_route_field(item: dict, primary: str, *aliases: str) -> str | None:
     return None
 
 
+def _freight_route_key_present(item: dict, primary: str, *aliases: str) -> bool:
+    return any(key in item for key in (primary, *aliases))
+
+
+FREIGHT_ROUTE_TECHNICAL_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("weight_30", ("weight_30kg",)),
+    ("weight_50", ("weight_50kg",)),
+    ("weight_70", ("weight_70kg",)),
+    ("weight_100", ("weight_100kg",)),
+    ("boarding_fee", ("taxa_embarque_kg",)),
+    ("freight_value_pct", ("frete_valor_pct",)),
+    ("freight_weight_kg", ("frete_peso_kg",)),
+    ("pedagio", ("toll", "pedagio_valor")),
+)
+
+FREIGHT_ROUTE_RESERVED_KEYS = frozenset(
+    {
+        "origin",
+        "destination",
+        "freight_type",
+        "type",
+        "notes",
+        "observations",
+        "observacoes",
+        "evidence_ref",
+        "confidence",
+        "column_labels",
+        *(alias for _, aliases in FREIGHT_ROUTE_TECHNICAL_FIELDS for alias in aliases),
+        *(primary for primary, _ in FREIGHT_ROUTE_TECHNICAL_FIELDS),
+    }
+)
+
+FREIGHT_ROUTE_DEFAULT_LABELS = {
+    "origin": "Origem",
+    "destination": "Destino",
+    "freight_type": "Tipo",
+    "weight_30": "Até 30 kg",
+    "weight_50": "Até 50 kg",
+    "weight_70": "Até 70 kg",
+    "weight_100": "Até 100 kg",
+    "boarding_fee": "Taxa embarque",
+    "freight_value_pct": "Frete Valor %",
+    "freight_weight_kg": "Excedente por kg",
+    "pedagio": "Pedágio",
+    "notes": "Observações",
+}
+
+
+def _normalize_column_labels(raw) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    labels: dict[str, str] = {}
+    for key, val in raw.items():
+        if not isinstance(key, str):
+            continue
+        normalized_key = key.strip()
+        normalized_val = _optional_normalized_str(val)
+        if normalized_key and normalized_val:
+            labels[normalized_key] = normalized_val
+    return labels
+
+
+def _normalize_freight_table_column_meta(raw_meta, columns: list[str]) -> dict[str, dict]:
+    if not isinstance(raw_meta, dict):
+        return {}
+    normalized: dict[str, dict] = {}
+    for key, val in raw_meta.items():
+        if not isinstance(key, str):
+            continue
+        col = key.strip()
+        if col not in columns or not isinstance(val, dict):
+            continue
+        origin = _optional_normalized_str(val.get("origin"))
+        if origin in {"observed", "inferred", "technical"}:
+            normalized[col] = {"origin": origin}
+    return normalized
+
+
+def _should_keep_freight_table_column(
+    col: str,
+    rows: list[dict],
+    column_meta: dict[str, dict],
+) -> bool:
+    if column_meta.get(col, {}).get("origin") == "observed":
+        return True
+    if not rows:
+        return True
+    return any(
+        _optional_normalized_str(row.get(col)) is not None
+        for row in rows
+        if isinstance(row, dict)
+    )
+
+
+def _prune_freight_table_columns(table: dict) -> dict:
+    columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+    rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+    column_meta = table.get("column_meta") if isinstance(table.get("column_meta"), dict) else {}
+    if not columns:
+        return table
+    kept_columns = [
+        col for col in columns if _should_keep_freight_table_column(col, rows, column_meta)
+    ]
+    if kept_columns == columns:
+        return table
+    pruned_rows: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        pruned_rows.append({col: row.get(col) for col in kept_columns})
+    pruned_meta = {col: column_meta[col] for col in kept_columns if col in column_meta}
+    updated = dict(table)
+    updated["columns"] = kept_columns
+    updated["rows"] = pruned_rows
+    if pruned_meta:
+        updated["column_meta"] = pruned_meta
+    elif "column_meta" in updated:
+        updated.pop("column_meta", None)
+    return updated
+
+
+def _route_has_visible_value(route: dict, key: str) -> bool:
+    return _optional_normalized_str(route.get(key)) is not None
+
+
+def _collect_route_column_specs(routes: list[dict]) -> list[dict[str, str]]:
+    if not routes:
+        return []
+    merged_labels: dict[str, str] = {}
+    for route in routes:
+        labels = route.get("column_labels")
+        if isinstance(labels, dict):
+            merged_labels.update(_normalize_column_labels(labels))
+
+    ordered_keys = [
+        "origin",
+        "destination",
+        "freight_type",
+        "weight_30",
+        "weight_50",
+        "weight_70",
+        "weight_100",
+        "boarding_fee",
+        "freight_value_pct",
+        "freight_weight_kg",
+        "pedagio",
+    ]
+    specs: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for key in ordered_keys:
+        if not any(_route_has_visible_value(route, key) for route in routes):
+            continue
+        label = merged_labels.get(key) or FREIGHT_ROUTE_DEFAULT_LABELS.get(key, key)
+        specs.append({"key": key, "label": label})
+        seen.add(key)
+
+    for route in routes:
+        for key, val in route.items():
+            if key in seen or key in FREIGHT_ROUTE_RESERVED_KEYS or not isinstance(key, str):
+                continue
+            if _optional_normalized_str(val) is None:
+                continue
+            label = merged_labels.get(key) or key
+            specs.append({"key": key, "label": label})
+            seen.add(key)
+    return specs
+
+
+def _synthesize_freight_tables_from_routes(routes: list[dict]) -> list[dict]:
+    if not routes:
+        return []
+    specs = _collect_route_column_specs(routes)
+    if not specs:
+        return []
+    columns = [spec["label"] for spec in specs]
+    rows: list[dict] = []
+    for route in routes:
+        row: dict = {}
+        for spec in specs:
+            value = route.get(spec["key"])
+            row[spec["label"]] = value if _optional_normalized_str(value) is not None else None
+        if _row_has_any_value(row):
+            rows.append(row)
+    if not rows:
+        return []
+    first = routes[0]
+    return [
+        {
+            "table_title": None,
+            "table_type": "route_matrix_synthesized",
+            "context": {
+                "route_label": None,
+                "origin": first.get("origin"),
+                "destination": None,
+                "customer": None,
+                "supplier": None,
+                "valid_from": None,
+                "valid_to": None,
+                "delivery_deadline": None,
+            },
+            "columns": columns,
+            "rows": rows,
+            "notes": "",
+            "evidence_ref": first.get("evidence_ref"),
+            "confidence": first.get("confidence"),
+        }
+    ]
+
+
 def _normalize_freight_route_item(item) -> dict | None:
     if not isinstance(item, dict):
         return None
-    return {
-        "origin": _freight_route_field(item, "origin"),
-        "destination": _freight_route_field(item, "destination"),
-        "freight_type": _freight_route_field(item, "freight_type", "type"),
-        "weight_30": _freight_route_field(item, "weight_30", "weight_30kg"),
-        "weight_50": _freight_route_field(item, "weight_50", "weight_50kg"),
-        "weight_70": _freight_route_field(item, "weight_70", "weight_70kg"),
-        "weight_100": _freight_route_field(item, "weight_100", "weight_100kg"),
-        "boarding_fee": _freight_route_field(item, "boarding_fee", "taxa_embarque_kg"),
-        "freight_value_pct": _freight_route_field(item, "freight_value_pct", "frete_valor_pct"),
-        "freight_weight_kg": _freight_route_field(item, "freight_weight_kg", "frete_peso_kg"),
-        "notes": _freight_route_field(item, "notes", "observations", "observacoes") or "",
-        "evidence_ref": _freight_route_field(item, "evidence_ref"),
-        "confidence": _freight_route_field(item, "confidence"),
-    }
+    result: dict = {}
+    has_useful_value = False
+
+    for primary, aliases in (
+        ("origin", ("origin",)),
+        ("destination", ("destination",)),
+        ("freight_type", ("freight_type", "type")),
+    ):
+        if not _freight_route_key_present(item, primary, *aliases):
+            continue
+        value = _freight_route_field(item, primary, *aliases)
+        result[primary] = value
+        if value is not None:
+            has_useful_value = True
+
+    for primary, aliases in FREIGHT_ROUTE_TECHNICAL_FIELDS:
+        if not _freight_route_key_present(item, primary, *aliases):
+            continue
+        value = _freight_route_field(item, primary, *aliases)
+        if value is None:
+            continue
+        result[primary] = value
+        has_useful_value = True
+
+    for key, val in item.items():
+        if key in FREIGHT_ROUTE_RESERVED_KEYS or not isinstance(key, str):
+            continue
+        candidate = key.strip()
+        if not candidate:
+            continue
+        normalized_val = _optional_normalized_str(val)
+        if normalized_val is None:
+            continue
+        result[candidate] = normalized_val
+        has_useful_value = True
+
+    column_labels = _normalize_column_labels(item.get("column_labels"))
+    if column_labels:
+        result["column_labels"] = column_labels
+
+    if _freight_route_key_present(item, "notes", "observations", "observacoes"):
+        result["notes"] = _freight_route_field(item, "notes", "observations", "observacoes") or ""
+    else:
+        result["notes"] = ""
+
+    for meta_key in ("evidence_ref", "confidence"):
+        if _freight_route_key_present(item, meta_key):
+            result[meta_key] = _freight_route_field(item, meta_key)
+
+    if not has_useful_value and not result.get("notes") and not result.get("evidence_ref"):
+        return None
+    return result
 
 
 def _is_useful_freight_route(item) -> bool:
@@ -6877,8 +8350,15 @@ def _is_useful_freight_route(item) -> bool:
         "boarding_fee",
         "freight_value_pct",
         "freight_weight_kg",
+        "pedagio",
     )
-    return any(normalized.get(field) is not None for field in useful_fields)
+    if any(normalized.get(field) is not None for field in useful_fields):
+        return True
+    return any(
+        key not in FREIGHT_ROUTE_RESERVED_KEYS
+        and _optional_normalized_str(normalized.get(key)) is not None
+        for key in normalized
+    )
 
 
 def _normalize_freight_routes(raw_routes) -> list[dict]:
@@ -6958,7 +8438,8 @@ def _normalize_freight_table_item(item) -> dict | None:
             normalized_row = _normalize_freight_table_row(row, columns)
             if normalized_row:
                 rows.append(normalized_row)
-    return {
+    column_meta = _normalize_freight_table_column_meta(item.get("column_meta"), columns)
+    table = {
         "table_title": _optional_normalized_str(item.get("table_title")),
         "table_type": _optional_normalized_str(item.get("table_type")),
         "context": _normalize_freight_table_context(item.get("context")),
@@ -6968,6 +8449,9 @@ def _normalize_freight_table_item(item) -> dict | None:
         "evidence_ref": _optional_normalized_str(item.get("evidence_ref")),
         "confidence": _optional_normalized_str(item.get("confidence")),
     }
+    if column_meta:
+        table["column_meta"] = column_meta
+    return _prune_freight_table_columns(table)
 
 
 def _row_has_any_value(row: dict) -> bool:
@@ -7098,6 +8582,10 @@ def normalize_partial_first_extraction_to_temp_table(raw: dict) -> dict:
         "franquia_scope": raw.get("franquia_scope"),
         "user_scope": raw.get("user_scope"),
     }
+    if not expanded["freight_tables"] and expanded["freight_routes"]:
+        synthesized = _synthesize_freight_tables_from_routes(expanded["freight_routes"])
+        if synthesized:
+            expanded["freight_tables"] = synthesized
     expanded["status"] = _resolve_extraction_status(raw, expanded)
     return expanded
 

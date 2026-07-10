@@ -25,6 +25,10 @@ from app.cleide_audit_doc_service import (
     TEMP_TABLE_STATUS_PROCESSING,
     apply_temp_table_extraction_from_model_payload,
     build_document_status_metadata,
+    build_tax_config_for_temp_table,
+    consolidate_tax_destination_ufs,
+    extract_tax_destination_ufs_from_temp_table,
+    resolve_state_name_to_uf,
     get_cleide_audit_doc_ids,
     invalidate_temp_table_for_session,
     mark_temp_table_processing,
@@ -33,6 +37,7 @@ from app.cleide_audit_doc_service import (
     save_temp_table_edit,
     should_attempt_temp_table_extraction,
     split_temp_table_block_from_answer,
+    suggested_icms_interstate_rate,
     temp_table_status_message,
     CleideAuditCoverageError,
     CleideAuditTempTableError,
@@ -41,9 +46,12 @@ from app.cleide_audit_doc_service import (
     ERROR_TEMP_TABLE_NOT_FOUND,
     HUMAN_REVIEW_STATUS_EDITED,
     HUMAN_REVIEW_STATUS_REVIEWED,
+    ICMS_INTERMUNICIPAL_SOURCE_NAME,
+    ICMS_INTERSTATE_SOURCE_NAME,
     TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES,
     _parse_coverage_tabular_rows,
     _resolve_coverage_field,
+    _validate_tax_config_for_save,
 )
 from app.cleide_audit_prompt import (
     build_cleide_audit_temp_table_fallback_prompt,
@@ -1195,9 +1203,9 @@ def test_freight_routes_missing_fields_preserved_as_none(web_client):
     route = saved["freight_routes"][0]
     assert route["origin"] == "DF"
     assert route["destination"] == "JOINVILLE"
-    assert route["freight_type"] is None
-    assert route["weight_30"] is None
-    assert route["boarding_fee"] is None
+    assert "freight_type" not in route
+    assert "weight_30" not in route
+    assert "boarding_fee" not in route
     assert route["notes"] == ""
 
 
@@ -1267,8 +1275,11 @@ def test_temp_table_prompt_includes_freight_routes_contract():
     prompt = build_cleide_audit_temp_table_technical_prompt()
     assert "freight_tables" in prompt
     assert "freight_routes" in prompt
-    assert "rotas/tabelas de frete" in prompt.lower()
+    assert "rotas/tabelas de frete" in prompt.lower() or "tabelas tarifarias observadas" in prompt.lower()
     assert "nao reconstrua freight_tables a partir de freight_routes" in prompt.lower()
+    assert "nao invente faixas de peso ausentes" in prompt.lower()
+    assert "column_meta" in prompt
+    assert "Excedente por kg" in prompt
     assert (
         "generalidades em freight_routes" in prompt.lower()
         or "nao coloque generalidades em freight_routes" in prompt.lower()
@@ -1604,6 +1615,174 @@ def test_hengst_like_payload_not_forced_to_alfa_columns(web_client):
     assert "Frete Peso" in table["columns"]
     assert "weight_30" not in table["columns"]
     assert "origin" not in table["columns"]
+
+
+def _sample_intercargo_freight_tables_payload(**overrides) -> dict:
+    payload = {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "Tabela Intercargo",
+                "table_type": "route_matrix",
+                "context": {
+                    "route_label": None,
+                    "origin": "Joinville",
+                    "destination": None,
+                    "customer": None,
+                    "supplier": "Intercargo",
+                    "valid_from": None,
+                    "valid_to": None,
+                    "delivery_deadline": None,
+                },
+                "columns": [
+                    "Origem",
+                    "Destino",
+                    "Até 50 kg",
+                    "Até 100 kg",
+                    "Excedente por kg",
+                    "Frete Valor %",
+                    "Pedágio",
+                ],
+                "rows": [
+                    {
+                        "Origem": "Joinville",
+                        "Destino": "São Paulo",
+                        "Até 50 kg": "73,30",
+                        "Até 100 kg": "84,00",
+                        "Excedente por kg": "0,3750",
+                        "Frete Valor %": "0,35",
+                        "Pedágio": "5,25",
+                    },
+                    {
+                        "Origem": "Joinville",
+                        "Destino": "Campinas",
+                        "Até 50 kg": "89,25",
+                        "Até 100 kg": "103,90",
+                        "Excedente por kg": "0,4580",
+                        "Frete Valor %": "0,35",
+                        "Pedágio": "6,30",
+                    },
+                ],
+                "notes": "",
+                "evidence_ref": "Tabela Intercargo.pdf (page 1)",
+                "confidence": "needs_review",
+            }
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_intercargo_payload_preserves_document_columns(web_client):
+    saved = _apply_payload(web_client, _sample_intercargo_freight_tables_payload())
+    table = saved["freight_tables"][0]
+    assert "Até 50 kg" in table["columns"]
+    assert "Até 100 kg" in table["columns"]
+    assert "Excedente por kg" in table["columns"]
+    assert "Frete Valor %" in table["columns"]
+    assert "Pedágio" in table["columns"]
+    assert "Até 30 kg" not in table["columns"]
+    assert "Até 70 kg" not in table["columns"]
+    assert "Taxa Embarque Kg" not in table["columns"]
+    assert "Frete Peso Kg" not in table["columns"]
+
+
+def test_freight_routes_null_technical_fields_are_stripped(web_client):
+    payload = {
+        "status": "needs_review",
+        "freight_routes": [
+            {
+                "origin": "Joinville",
+                "destination": "São Paulo",
+                "weight_30": None,
+                "weight_50": "120,00",
+                "weight_70": None,
+                "weight_100": "180,00",
+                "boarding_fee": None,
+                "freight_weight_kg": "1,20",
+                "freight_value_pct": "0,30",
+            }
+        ],
+        "freight_tables": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    route = saved["freight_routes"][0]
+    assert "weight_30" not in route
+    assert "weight_70" not in route
+    assert "boarding_fee" not in route
+    assert route["weight_50"] == "120,00"
+    assert route["weight_100"] == "180,00"
+
+
+def test_sparse_freight_routes_synthesized_into_observed_table(web_client):
+    payload = {
+        "status": "needs_review",
+        "freight_routes": [
+            {
+                "origin": "Joinville",
+                "destination": "São Paulo",
+                "weight_50": "120,00",
+                "weight_100": "180,00",
+                "freight_weight_kg": "1,20",
+                "freight_value_pct": "0,30",
+                "pedagio": "15,00",
+                "column_labels": {"freight_weight_kg": "Excedente por kg"},
+            }
+        ],
+        "freight_tables": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    assert len(saved["freight_routes"]) == 1
+    assert len(saved["freight_tables"]) == 1
+    table = saved["freight_tables"][0]
+    assert "Até 30 kg" not in table["columns"]
+    assert "Até 70 kg" not in table["columns"]
+    assert "Até 50 kg" in table["columns"]
+    assert "Até 100 kg" in table["columns"]
+    assert "Excedente por kg" in table["columns"]
+    assert "Frete Valor %" in table["columns"]
+    assert "Pedágio" in table["columns"]
+    assert "Frete Peso Kg" not in table["columns"]
+    assert "Taxa Embarque Kg" not in table["columns"]
+
+
+def test_freight_table_prunes_invented_empty_columns(web_client):
+    payload = {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "Parcial",
+                "columns": ["Origem", "Até 30 kg", "Até 50 kg"],
+                "rows": [{"Origem": "Joinville", "Até 50 kg": "120,00"}],
+            }
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    saved = _apply_payload(web_client, payload)
+    columns = saved["freight_tables"][0]["columns"]
+    assert "Até 50 kg" in columns
+    assert "Até 30 kg" not in columns
 
 
 def test_alfa_like_payload_still_works_with_freight_routes(web_client):
@@ -4585,6 +4764,442 @@ def test_extraction_force_overwrite_bypasses_human_review_guard(web_client):
             )
     assert len(result["accessorial_fees"]) == 1
     assert result.get("human_review_status") is None
+
+
+def _sample_tax_destinations_payload(**overrides) -> dict:
+    payload = _sample_hengst_freight_tables_payload(
+        destinations=[
+            {"destination_uf": "PR"},
+            {"destination_uf": "BA"},
+            {"destination_uf": "SP"},
+            {"destination_uf": "ES"},
+        ]
+    )
+    payload.update(overrides)
+    return payload
+
+
+def _tax_save_payload(record: dict, tax_config: dict, *, review_action: str = "save_draft") -> dict:
+    return {
+        "temp_table_id": record["temp_table_id"],
+        "edit_target": {"tax_config": tax_config},
+        "review_action": review_action,
+    }
+
+
+def test_suggested_icms_interstate_rate_matrix():
+    assert suggested_icms_interstate_rate("SP", "PR") == 12.0
+    assert suggested_icms_interstate_rate("SP", "BA") == 7.0
+    assert suggested_icms_interstate_rate("PR", "ES") == 7.0
+    assert suggested_icms_interstate_rate("BA", "SP") == 12.0
+    assert suggested_icms_interstate_rate("SP", "AM") == 7.0
+    assert suggested_icms_interstate_rate("MG", "DF") == 7.0
+    assert suggested_icms_interstate_rate("RS", "SC") == 12.0
+
+
+def test_suggested_icms_interstate_rate_does_not_apply_four_percent():
+    rates = {
+        suggested_icms_interstate_rate(origin, dest)
+        for origin in ("SP", "PR", "BA", "AM", "MG")
+        for dest in ("PR", "BA", "SP", "ES", "AM", "DF", "RS")
+        if origin != dest
+    }
+    assert 4.0 not in rates
+
+
+def test_validate_tax_config_include_false():
+    validated = _validate_tax_config_for_save({"include_taxes": False})
+    assert validated == {"include_taxes": False}
+
+
+def test_validate_tax_config_requires_origin_uf_when_including_taxes():
+    with pytest.raises(CleideAuditTempTableError) as exc:
+        _validate_tax_config_for_save({"include_taxes": True, "origin_uf": ""})
+    assert exc.value.error_code == ERROR_TEMP_TABLE_INVALID_PAYLOAD
+    assert "UF origem" in exc.value.message
+
+
+def test_validate_tax_config_city_optional_without_iss():
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SP",
+            "origin_city": "",
+            "iss_rate": None,
+            "icms_rates": [],
+        }
+    )
+    assert validated["origin_uf"] == "SP"
+    assert validated["origin_city"] is None
+    assert validated["iss_rate"] is None
+
+
+def test_validate_tax_config_city_required_with_iss():
+    with pytest.raises(CleideAuditTempTableError) as exc:
+        _validate_tax_config_for_save(
+            {
+                "include_taxes": True,
+                "origin_uf": "SP",
+                "origin_city": "",
+                "iss_rate": 2.5,
+                "icms_rates": [],
+            }
+        )
+    assert "Cidade origem" in exc.value.message
+
+
+def test_build_tax_config_interstate_and_intermunicipal_rows():
+    record = {
+        "destinations": [
+            {"destination_uf": "PR"},
+            {"destination_uf": "BA"},
+            {"destination_uf": "SP"},
+        ]
+    }
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SP",
+            "origin_city": "Paulínia",
+            "iss_rate": None,
+            "icms_rates": [],
+        }
+    )
+    built = build_tax_config_for_temp_table(record, validated)
+    by_dest = {row["destination_uf"]: row for row in built["icms_rates"]}
+    assert built["include_taxes"] is True
+    assert built["origin_uf"] == "SP"
+    assert built["origin_city"] == "Paulínia"
+    assert by_dest["PR"]["operation_type"] == "interstate"
+    assert by_dest["PR"]["suggested_rate"] == 12.0
+    assert by_dest["PR"]["applied_rate"] == 12.0
+    assert by_dest["PR"]["source_name"] == ICMS_INTERSTATE_SOURCE_NAME
+    assert by_dest["BA"]["suggested_rate"] == 7.0
+    assert by_dest["BA"]["applied_rate"] == 7.0
+    assert by_dest["SP"]["operation_type"] == "intermunicipal"
+    assert by_dest["SP"]["suggested_rate"] is None
+    assert by_dest["SP"]["applied_rate"] is None
+    assert by_dest["SP"]["source_name"] == ICMS_INTERMUNICIPAL_SOURCE_NAME
+    assert by_dest["SP"]["is_active"] is False
+
+
+def test_build_tax_config_marks_user_edited_and_allows_empty_rate():
+    record = {"destinations": [{"destination_uf": "PR"}]}
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SP",
+            "icms_rates": [{"destination_uf": "PR", "applied_rate": 18.0}],
+        }
+    )
+    edited = build_tax_config_for_temp_table(record, validated)
+    row = edited["icms_rates"][0]
+    assert row["suggested_rate"] == 12.0
+    assert row["applied_rate"] == 18.0
+    assert row["user_edited"] is True
+
+    cleared = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SP",
+            "icms_rates": [{"destination_uf": "PR", "applied_rate": None}],
+        }
+    )
+    cleared_built = build_tax_config_for_temp_table(record, cleared)
+    cleared_row = cleared_built["icms_rates"][0]
+    assert cleared_row["applied_rate"] is None
+    assert cleared_row["is_active"] is False
+
+
+def test_build_tax_config_recalculates_when_origin_changes():
+    record = {"destinations": [{"destination_uf": "AM"}]}
+    sp_validated = _validate_tax_config_for_save(
+        {"include_taxes": True, "origin_uf": "SP", "icms_rates": []}
+    )
+    ba_validated = _validate_tax_config_for_save(
+        {"include_taxes": True, "origin_uf": "BA", "icms_rates": []}
+    )
+    sp_rates = build_tax_config_for_temp_table(record, sp_validated)["icms_rates"][0]
+    ba_rates = build_tax_config_for_temp_table(record, ba_validated)["icms_rates"][0]
+    assert sp_rates["suggested_rate"] == 7.0
+    assert ba_rates["suggested_rate"] == 12.0
+
+
+def test_extract_tax_destination_ufs_from_temp_table():
+    record = _sample_tax_destinations_payload()
+    assert extract_tax_destination_ufs_from_temp_table(record) == ["BA", "ES", "PR", "SP"]
+
+
+def test_intercargo_freight_table_destinations_resolve_sp():
+    record = _sample_intercargo_freight_tables_payload()
+    destination_ufs = consolidate_tax_destination_ufs(record)
+    assert len(destination_ufs) == 1
+    assert destination_ufs[0]["uf"] == "SP"
+    assert destination_ufs[0]["source"] == "inferred_city"
+    assert set(destination_ufs[0]["evidence"]) == {"São Paulo", "Campinas"}
+    assert destination_ufs[0]["user_confirmed"] is False
+
+
+def test_tax_destination_city_sao_paulo_resolves_sp():
+    record = {
+        "freight_tables": [
+            {"rows": [{"Destino": "São Paulo"}]},
+        ]
+    }
+    assert consolidate_tax_destination_ufs(record)[0]["uf"] == "SP"
+
+
+def test_tax_destination_city_campinas_resolves_sp():
+    record = {"freight_tables": [{"rows": [{"Destino": "Campinas"}]}]}
+    assert consolidate_tax_destination_ufs(record)[0]["uf"] == "SP"
+
+
+def test_tax_destination_city_joinville_resolves_sc():
+    record = {"freight_tables": [{"rows": [{"Destino": "Joinville"}]}]}
+    assert consolidate_tax_destination_ufs(record)[0]["uf"] == "SC"
+
+
+def test_tax_destination_region_sao_paulo_resolves_sp():
+    record = {"freight_tables": [{"rows": [{"Região destino": "São Paulo"}]}]}
+    assert consolidate_tax_destination_ufs(record)[0]["uf"] == "SP"
+
+
+def test_tax_destination_state_names_resolve_uf():
+    assert resolve_state_name_to_uf("São Paulo") == "SP"
+    assert resolve_state_name_to_uf("Sao Paulo") == "SP"
+    assert resolve_state_name_to_uf("SÃO PAULO") == "SP"
+    assert resolve_state_name_to_uf("Santa Catarina") == "SC"
+    assert resolve_state_name_to_uf("Paraná") == "PR"
+    assert resolve_state_name_to_uf("Parana") == "PR"
+    assert resolve_state_name_to_uf("Espírito Santo") == "ES"
+    assert resolve_state_name_to_uf("Espirito Santo") == "ES"
+
+
+def test_tax_destination_state_field_resolves_sp():
+    record = {"freight_tables": [{"rows": [{"Estado destino": "São Paulo"}]}]}
+    entry = consolidate_tax_destination_ufs(record)[0]
+    assert entry["uf"] == "SP"
+    assert entry["source"] == "inferred_state"
+
+
+def test_build_tax_config_intercargo_sc_to_sp_twelve_percent():
+    record = _sample_intercargo_freight_tables_payload()
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SC",
+            "origin_city": "Joinville",
+            "iss_rate": 5.0,
+            "destination_ufs": consolidate_tax_destination_ufs(record),
+            "icms_rates": [],
+        }
+    )
+    built = build_tax_config_for_temp_table(record, validated)
+    assert built["origin_uf"] == "SC"
+    assert built["origin_city"] == "Joinville"
+    assert built["iss_rate"] == 5.0
+    assert len(built["destination_ufs"]) == 1
+    assert built["destination_ufs"][0]["uf"] == "SP"
+    assert set(built["destination_ufs"][0]["evidence"]) == {"São Paulo", "Campinas"}
+    row = built["icms_rates"][0]
+    assert row["destination_uf"] == "SP"
+    assert row["operation_type"] == "interstate"
+    assert row["suggested_rate"] == 12.0
+    assert row["applied_rate"] == 12.0
+
+
+def test_build_tax_config_sc_to_ba_seven_percent():
+    record = {"destinations": [{"destination_uf": "BA"}]}
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SC",
+            "destination_ufs": [{"uf": "BA", "source": "manual", "evidence": [], "user_confirmed": True}],
+            "icms_rates": [],
+        }
+    )
+    built = build_tax_config_for_temp_table(record, validated)
+    assert built["icms_rates"][0]["suggested_rate"] == 7.0
+
+
+def test_build_tax_config_manual_destination_uf_creates_icms_row():
+    record = {"freight_tables": []}
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SC",
+            "destination_ufs": [{"uf": "PR", "source": "manual", "evidence": [], "user_confirmed": True}],
+            "icms_rates": [],
+        }
+    )
+    built = build_tax_config_for_temp_table(record, validated)
+    assert len(built["icms_rates"]) == 1
+    assert built["icms_rates"][0]["destination_uf"] == "PR"
+    assert built["icms_rates"][0]["suggested_rate"] == 12.0
+
+
+def test_build_tax_config_manual_destination_does_not_duplicate_inferred():
+    record = _sample_intercargo_freight_tables_payload()
+    inferred = consolidate_tax_destination_ufs(record)
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SC",
+            "destination_ufs": inferred + [{"uf": "SP", "source": "manual", "evidence": [], "user_confirmed": True}],
+            "icms_rates": [],
+        }
+    )
+    built = build_tax_config_for_temp_table(record, validated)
+    assert [row["destination_uf"] for row in built["icms_rates"]] == ["SP"]
+    assert len(built["destination_ufs"]) == 1
+
+
+def test_build_tax_config_recalculates_when_origin_changes_with_destination_ufs():
+    record = {"destination_ufs": [{"uf": "AM", "source": "manual", "evidence": [], "user_confirmed": True}]}
+    sp_validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SP",
+            "destination_ufs": [{"uf": "AM", "source": "manual", "evidence": [], "user_confirmed": True}],
+            "icms_rates": [],
+        }
+    )
+    ba_validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "BA",
+            "destination_ufs": [{"uf": "AM", "source": "manual", "evidence": [], "user_confirmed": True}],
+            "icms_rates": [],
+        }
+    )
+    sp_rates = build_tax_config_for_temp_table(record, sp_validated)["icms_rates"][0]
+    ba_rates = build_tax_config_for_temp_table(record, ba_validated)["icms_rates"][0]
+    assert sp_rates["suggested_rate"] == 7.0
+    assert ba_rates["suggested_rate"] == 12.0
+
+
+def test_build_tax_config_allows_empty_destination_ufs():
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SC",
+            "origin_city": "Joinville",
+            "iss_rate": None,
+            "destination_ufs": [],
+            "icms_rates": [],
+        }
+    )
+    built = build_tax_config_for_temp_table({"freight_tables": []}, validated)
+    assert built["destination_ufs"] == []
+    assert built["icms_rates"] == []
+
+
+def test_validate_tax_config_rejects_invalid_destination_uf():
+    with pytest.raises(CleideAuditTempTableError) as exc:
+        _validate_tax_config_for_save(
+            {
+                "include_taxes": True,
+                "origin_uf": "SC",
+                "destination_ufs": [{"uf": "XX", "source": "manual"}],
+                "icms_rates": [],
+            }
+        )
+    assert "UF válida" in exc.value.message
+
+
+def test_temp_table_save_tax_config_persists_destination_ufs(web_client):
+    saved = _apply_payload(web_client, _sample_intercargo_freight_tables_payload())
+    destination_ufs = consolidate_tax_destination_ufs(saved)
+    resp = _post_temp_table_save(
+        web_client,
+        _tax_save_payload(
+            saved,
+            {
+                "include_taxes": True,
+                "origin_uf": "SC",
+                "origin_city": "Joinville",
+                "iss_rate": 5.0,
+                "destination_ufs": destination_ufs,
+                "icms_rates": [{"destination_uf": "SP", "applied_rate": 12.0}],
+            },
+        ),
+    )
+    assert resp.status_code == 200
+    tax_config = resp.get_json()["temp_table"]["tax_config"]
+    assert tax_config["destination_ufs"][0]["uf"] == "SP"
+    assert tax_config["destination_ufs"][0]["source"] == "inferred_city"
+    assert set(tax_config["destination_ufs"][0]["evidence"]) == {"São Paulo", "Campinas"}
+    assert tax_config["icms_rates"][0]["applied_rate"] == 12.0
+
+
+def test_temp_table_save_tax_config_include_false(web_client):
+    saved = _apply_payload(web_client, _sample_tax_destinations_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        _tax_save_payload(saved, {"include_taxes": False}),
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["temp_table"]["tax_config"] == {"include_taxes": False}
+    assert body["temp_table"]["edit_version"] == 1
+
+
+def test_temp_table_save_tax_config_include_true(web_client):
+    saved = _apply_payload(web_client, _sample_tax_destinations_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        _tax_save_payload(
+            saved,
+            {
+                "include_taxes": True,
+                "origin_uf": "SP",
+                "origin_city": "Paulínia",
+                "iss_rate": None,
+                "icms_rates": [
+                    {"destination_uf": "PR", "applied_rate": 12.0},
+                    {"destination_uf": "BA", "applied_rate": 7.0},
+                    {"destination_uf": "SP", "applied_rate": None},
+                ],
+            },
+        ),
+    )
+    assert resp.status_code == 200
+    tax_config = resp.get_json()["temp_table"]["tax_config"]
+    assert tax_config["include_taxes"] is True
+    assert tax_config["origin_uf"] == "SP"
+    assert tax_config["origin_city"] == "Paulínia"
+    by_dest = {row["destination_uf"]: row for row in tax_config["icms_rates"]}
+    assert by_dest["PR"]["suggested_rate"] == 12.0
+    assert by_dest["BA"]["suggested_rate"] == 7.0
+    assert by_dest["SP"]["operation_type"] == "intermunicipal"
+    assert by_dest["SP"]["suggested_rate"] is None
+
+
+def test_temp_table_save_tax_config_rejects_missing_origin_uf(web_client):
+    saved = _apply_payload(web_client, _sample_tax_destinations_payload())
+    resp = _post_temp_table_save(
+        web_client,
+        _tax_save_payload(saved, {"include_taxes": True, "origin_uf": ""}),
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == ERROR_TEMP_TABLE_INVALID_PAYLOAD
+
+
+def test_temp_table_save_tax_config_does_not_touch_freight_or_coverage(web_client):
+    saved = _apply_payload(web_client, _sample_tax_destinations_payload())
+    freight_tables = saved["freight_tables"]
+    coverage_before = saved.get("coverage_table")
+    resp = _post_temp_table_save(
+        web_client,
+        _tax_save_payload(saved, {"include_taxes": False}),
+    )
+    assert resp.status_code == 200
+    temp_table = resp.get_json()["temp_table"]
+    assert temp_table["freight_tables"] == freight_tables
+    assert temp_table.get("coverage_table") == coverage_before
+    assert "tax_config" not in (temp_table.get("source_documents") or {})
+    assert "tax_config" not in (temp_table.get("freight_routes") or [])
 
 
 def _sample_coverage_csv() -> bytes:
@@ -7683,3 +8298,880 @@ def test_audit_bi_enriched_from_results_after_audit_run(web_client):
     assert audit_bi["field_presence"]["divergence_value"] is True
     assert audit_bi["field_presence"]["status"] is True
     assert saved["temp_table_id"] == resp.get_json()["temp_table"]["temp_table_id"]
+
+
+def _audit_record_with_coverage(pricing_payload: dict, *, tax_config=None) -> dict:
+    record = dict(pricing_payload)
+    record["coverage_table"] = {
+        "rows": [
+            {"destination_uf": "SP", "destination_city": "Campinas", "freight_region": "SP-Interior 1"},
+        ]
+    }
+    if tax_config is not None:
+        record["tax_config"] = tax_config
+    return record
+
+
+def _normalized_audit_row_for_tax(**overrides) -> dict:
+    row = {
+        "row_index": 1,
+        "carrier": "Transportadora X",
+        "document_number": "123",
+        "origin_city": "Joinville",
+        "origin_uf": "SC",
+        "destination_city": "Campinas",
+        "destination_uf": "SP",
+        "invoice_value": 1000.0,
+        "charged_freight": 112.56,
+        "audited_weight": 48.0,
+    }
+    row.update(overrides)
+    return row
+
+
+def _built_tax_config_sc_sp(*, applied_rate=12.0, iss_rate=5.0, user_edited=False, suggested_rate=12.0):
+    record = _sample_intercargo_freight_tables_payload()
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SC",
+            "origin_city": "Joinville",
+            "iss_rate": iss_rate,
+            "destination_ufs": consolidate_tax_destination_ufs(record),
+            "icms_rates": [{"destination_uf": "SP", "applied_rate": applied_rate}],
+        }
+    )
+    built = build_tax_config_for_temp_table(record, validated)
+    if user_edited:
+        built["icms_rates"][0]["applied_rate"] = applied_rate
+        built["icms_rates"][0]["suggested_rate"] = suggested_rate
+        built["icms_rates"][0]["user_edited"] = True
+    return built
+
+
+def _run_tax_audit(record: dict, normalized_row: dict) -> dict:
+    outputs = audit_doc_service.compute_audit_outputs(record, [normalized_row])
+    return outputs["results"][0]
+
+
+def test_tax_include_false_does_not_change_expected_freight():
+    record = _audit_record_with_coverage(_sample_pricing_payload(), tax_config={"include_taxes": False})
+    row = _normalized_audit_row_for_tax(origin_uf="SP", origin_city="São Paulo", charged_freight=100.50)
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == 100.50
+    assert "Subtotal antes dos impostos" not in (result.get("calculation_details") or "")
+
+
+def test_tax_missing_tax_config_does_not_change_calculation():
+    record = _audit_record_with_coverage(_sample_pricing_payload())
+    row = _normalized_audit_row_for_tax(origin_uf="SP", origin_city="São Paulo", charged_freight=100.50)
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == 100.50
+    assert not (result.get("calculation_components") or {}).get("tax_components")
+
+
+def test_tax_empty_icms_does_not_change_calculation():
+    record = _audit_record_with_coverage(
+        _sample_pricing_payload(),
+        tax_config={
+            "include_taxes": True,
+            "origin_uf": "SC",
+            "origin_city": "Joinville",
+            "iss_rate": None,
+            "destination_ufs": [],
+            "icms_rates": [{"destination_uf": "SP", "applied_rate": None, "is_active": False}],
+        },
+    )
+    row = _normalized_audit_row_for_tax(charged_freight=100.50)
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == 100.50
+
+
+def test_tax_icms_active_by_destination_adds_inside_tax():
+    tax_config = _built_tax_config_sc_sp(applied_rate=12.0)
+    record = _audit_record_with_coverage(_sample_pricing_payload(), tax_config=tax_config)
+    row = _normalized_audit_row_for_tax(charged_freight=114.20)
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == pytest.approx(114.20)
+    components = result["calculation_components"]
+    assert components["subtotal_before_taxes"] == 100.50
+    assert components["expected_freight_before_taxes"] == 100.50
+    assert components["tax_total"] == pytest.approx(13.70)
+    tax_item = components["tax_components"][0]
+    assert tax_item["tax_type"] == "ICMS"
+    assert tax_item["applied"] is True
+    assert tax_item["rate"] == 12.0
+    assert tax_item["amount"] == pytest.approx(13.70)
+    assert tax_item["calculation_mode"] == "inside"
+    details = result["calculation_details"]
+    assert "Subtotal antes dos impostos: R$ 100,50" in details
+    assert "ICMS por dentro: 12,00%" in details
+    assert "Total esperado com impostos: R$ 114,20" in details
+
+
+def test_tax_icms_edited_uses_applied_rate():
+    tax_config = _built_tax_config_sc_sp(applied_rate=10.0, suggested_rate=12.0, user_edited=True)
+    record = _audit_record_with_coverage(_sample_pricing_payload(), tax_config=tax_config)
+    row = _normalized_audit_row_for_tax(charged_freight=111.67)
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == pytest.approx(111.67)
+    tax_item = result["calculation_components"]["tax_components"][0]
+    assert tax_item["rate"] == 10.0
+    assert tax_item["user_edited"] is True
+    assert tax_item["suggested_rate"] == 12.0
+    assert "Alíquota editada pelo usuário" in result["calculation_details"]
+
+
+def test_tax_same_uf_without_icms_rate_ignores():
+    tax_config = {
+        "include_taxes": True,
+        "origin_uf": "SP",
+        "origin_city": "Campinas",
+        "iss_rate": None,
+        "destination_ufs": [{"uf": "SP", "source": "manual", "evidence": [], "user_confirmed": True}],
+        "icms_rates": [
+            {
+                "destination_uf": "SP",
+                "operation_type": "intermunicipal",
+                "suggested_rate": None,
+                "applied_rate": None,
+                "source_name": ICMS_INTERMUNICIPAL_SOURCE_NAME,
+                "source_type": "manual",
+                "user_edited": False,
+                "is_active": False,
+            }
+        ],
+    }
+    record = _audit_record_with_coverage(_sample_pricing_payload(), tax_config=tax_config)
+    row = _normalized_audit_row_for_tax(
+        origin_uf="SP",
+        origin_city="São Paulo",
+        destination_uf="SP",
+        destination_city="Campinas",
+        charged_freight=100.50,
+    )
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == 100.50
+
+
+def test_tax_empty_iss_ignores():
+    tax_config = {
+        "include_taxes": True,
+        "origin_uf": "SP",
+        "origin_city": "Campinas",
+        "iss_rate": None,
+        "destination_ufs": [],
+        "icms_rates": [],
+    }
+    record = _audit_record_with_coverage(_sample_pricing_payload(), tax_config=tax_config)
+    row = _normalized_audit_row_for_tax(
+        origin_uf="SP",
+        origin_city="Campinas",
+        destination_uf="SP",
+        destination_city="Campinas",
+        charged_freight=100.50,
+    )
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == 100.50
+    assert all(item.get("tax_type") != "ISS" for item in result["calculation_components"].get("tax_components") or [])
+
+
+def test_tax_iss_applies_only_same_municipality():
+    tax_config = {
+        "include_taxes": True,
+        "origin_uf": "SP",
+        "origin_city": "Campinas",
+        "iss_rate": 5.0,
+        "destination_ufs": [],
+        "icms_rates": [],
+    }
+    record = _audit_record_with_coverage(_sample_pricing_payload(), tax_config=tax_config)
+    row = _normalized_audit_row_for_tax(
+        origin_uf="SP",
+        origin_city="Campinas",
+        destination_uf="SP",
+        destination_city="Campinas",
+        charged_freight=105.53,
+    )
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == pytest.approx(105.79)
+    tax_item = result["calculation_components"]["tax_components"][0]
+    assert tax_item["tax_type"] == "ISS"
+    assert tax_item["rate"] == 5.0
+    assert "ISS por dentro: 5,00%" in result["calculation_details"]
+
+
+def test_tax_icms_and_iss_not_applied_together():
+    tax_config = _built_tax_config_sc_sp(applied_rate=12.0, iss_rate=5.0)
+    record = _audit_record_with_coverage(_sample_pricing_payload(), tax_config=tax_config)
+    row = _normalized_audit_row_for_tax(charged_freight=114.20)
+    result = _run_tax_audit(record, row)
+    tax_types = {item["tax_type"] for item in result["calculation_components"]["tax_components"] if item.get("applied")}
+    assert tax_types == {"ICMS"}
+    assert "ISS não aplicado nesta linha" in result["calculation_details"]
+
+
+def test_tax_intercargo_sc_to_sp_applies_icms_not_iss():
+    tax_config = _built_tax_config_sc_sp(applied_rate=12.0, iss_rate=5.0)
+    record = _audit_record_with_coverage(_sample_intercargo_freight_tables_payload(), tax_config=tax_config)
+    record["coverage_table"] = {
+        "rows": [
+            {"destination_uf": "SP", "destination_city": "São Paulo", "freight_region": "São Paulo"},
+            {"destination_uf": "SP", "destination_city": "Campinas", "freight_region": "Campinas"},
+        ]
+    }
+    row = _normalized_audit_row_for_tax(
+        origin_city="Joinville",
+        origin_uf="SC",
+        destination_city="São Paulo",
+        destination_uf="SP",
+        audited_weight=40.0,
+        invoice_value=1000.0,
+        charged_freight=200.0,
+    )
+    result = _run_tax_audit(record, row)
+    applied = [item for item in result["calculation_components"]["tax_components"] if item.get("applied")]
+    assert len(applied) == 1
+    assert applied[0]["tax_type"] == "ICMS"
+    assert "ISS não aplicado nesta linha" in result["calculation_details"]
+
+
+def test_tax_ignored_components_excluded_from_base_with_partial_note():
+    tax_config = _built_tax_config_sc_sp(applied_rate=12.0)
+    record = _audit_record_with_coverage(
+        _freight_value_pricing_payload(header="ADV", freight_value="0,1%"),
+        tax_config=tax_config,
+    )
+    record["accessorial_fees"] = [_accessorial_fee("ADV", "0,1%")]
+    row = _normalized_audit_row_for_tax(charged_freight=114.77, invoice_value=1000.0)
+    result = _run_tax_audit(record, row)
+    assert result["expected_freight"] == pytest.approx(114.77)
+    ignored = result["calculation_components"].get("ignored_accessorial_fees") or []
+    assert ignored
+    assert "Base parcial" in result["calculation_details"]
+
+
+def test_tax_partial_base_when_accessorial_ignored(web_client):
+    saved = _apply_payload(
+        web_client,
+        _freight_value_pricing_payload(header="ADV", freight_value="0,1%"),
+    )
+    _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {
+                "accessorial_fees": [_accessorial_fee("ADV", "0,1%")],
+            },
+            "review_action": "save_draft",
+        },
+    )
+    _post_temp_table_save(
+        web_client,
+        _tax_save_payload(
+            saved,
+            {
+                "include_taxes": True,
+                "origin_uf": "SC",
+                "origin_city": "Joinville",
+                "iss_rate": None,
+                "destination_ufs": [{"uf": "SP", "source": "manual", "evidence": [], "user_confirmed": True}],
+                "icms_rates": [{"destination_uf": "SP", "applied_rate": 12.0}],
+            },
+        ),
+    )
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Campinas", "SP-Interior 1"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(_sample_audit_row(valor_frete="114,77", peso="48", valor_nf="1000")),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    result = resp.get_json()["temp_table"]["audit_batch"]["results"][0]
+    assert result["expected_freight"] == pytest.approx(114.77)
+    assert "Subtotal antes dos impostos" in result["calculation_details"]
+    assert "Base parcial" in result["calculation_details"]
+
+
+def test_tax_fiscal_snapshot_on_audit_batch(web_client):
+    saved = _apply_payload(web_client, _sample_pricing_payload())
+    _post_temp_table_save(
+        web_client,
+        _tax_save_payload(
+            saved,
+            {
+                "include_taxes": True,
+                "origin_uf": "SC",
+                "origin_city": "Joinville",
+                "destination_ufs": [{"uf": "SP", "source": "manual", "evidence": [], "user_confirmed": True}],
+                "icms_rates": [{"destination_uf": "SP", "applied_rate": 12.0}],
+            },
+        ),
+    )
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Campinas", "SP-Interior 1"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(_sample_audit_row(valor_frete="112,56", peso="48")),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    batch = resp.get_json()["temp_table"]["audit_batch"]
+    assert batch["tax_applied"] is True
+    assert batch["tax_calculation_mode"] == "inside"
+    assert batch["tax_calculation_version"] == "cleide_audit_tax_v2"
+    assert batch["tax_config_snapshot"]["origin_uf"] == "SC"
+    assert batch["tax_summary"]["rows_with_tax"] == 1
+
+
+def test_tax_bi_reflects_expected_freight_with_tax(web_client):
+    saved = _apply_payload(web_client, _sample_pricing_payload())
+    _post_temp_table_save(
+        web_client,
+        _tax_save_payload(
+            saved,
+            {
+                "include_taxes": True,
+                "origin_uf": "SC",
+                "origin_city": "Joinville",
+                "destination_ufs": [{"uf": "SP", "source": "manual", "evidence": [], "user_confirmed": True}],
+                "icms_rates": [{"destination_uf": "SP", "applied_rate": 12.0}],
+            },
+        ),
+    )
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Campinas", "SP-Interior 1"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(_sample_audit_row(valor_frete="112,56", peso="48")),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    resp = _post_audit_run(web_client)
+    temp_table = resp.get_json()["temp_table"]
+    result = temp_table["audit_batch"]["results"][0]
+    bi_row = temp_table["audit_bi"]["rows"][0]
+    assert bi_row["expected_freight"] == result["expected_freight"]
+    assert temp_table["audit_bi"]["methodology"]["taxes_included"] is True
+    assert temp_table["audit_bi"]["methodology"]["tax_calculation_mode"] == "inside"
+    assert temp_table["audit_bi"]["methodology"]["tax_calculation_version"] == "cleide_audit_tax_v2"
+
+
+def test_tax_config_change_after_audit_marks_batch_needs_reprocess(web_client):
+    saved = _apply_payload(web_client, _sample_pricing_payload())
+    _post_temp_table_save(
+        web_client,
+        _tax_save_payload(
+            saved,
+            {
+                "include_taxes": True,
+                "origin_uf": "SC",
+                "origin_city": "Joinville",
+                "destination_ufs": [{"uf": "SP", "source": "manual", "evidence": [], "user_confirmed": True}],
+                "icms_rates": [{"destination_uf": "SP", "applied_rate": 12.0}],
+            },
+        ),
+    )
+    coverage = make_csv([["UF destino", "Cidade destino", "Região de frete"], ["SP", "Campinas", "SP-Interior 1"]])
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(_sample_audit_row(valor_frete="112,56", peso="48")),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    assert _post_audit_run(web_client).status_code == 200
+
+    changed = _post_temp_table_save(
+        web_client,
+        _tax_save_payload(
+            saved,
+            {
+                "include_taxes": True,
+                "origin_uf": "SC",
+                "origin_city": "Joinville",
+                "destination_ufs": [{"uf": "SP", "source": "manual", "evidence": [], "user_confirmed": True}],
+                "icms_rates": [{"destination_uf": "SP", "applied_rate": 7.0}],
+            },
+        ),
+    )
+    temp_table = changed.get_json()["temp_table"]
+    assert temp_table["audit_batch"]["needs_reprocess"] is True
+    assert temp_table["audit_batch"]["stale_reason"] == audit_doc_service.AUDIT_BATCH_STALE_TAX_CONFIG_REASON
+    assert audit_doc_service.AUDIT_BATCH_STALE_TAX_CONFIG_ALERT in temp_table["reading_alerts"]
+
+
+def test_validate_tax_config_rejects_negative_rate():
+    with pytest.raises(CleideAuditTempTableError):
+        _validate_tax_config_for_save(
+            {
+                "include_taxes": True,
+                "origin_uf": "SP",
+                "icms_rates": [{"destination_uf": "PR", "applied_rate": -1}],
+            }
+        )
+
+
+def test_validate_tax_config_accepts_brazilian_comma_rate():
+    validated = _validate_tax_config_for_save(
+        {
+            "include_taxes": True,
+            "origin_uf": "SP",
+            "origin_city": "Campinas",
+            "iss_rate": "2,5%",
+            "icms_rates": [{"destination_uf": "PR", "applied_rate": "12,5%"}],
+        }
+    )
+    assert validated["iss_rate"] == 2.5
+    assert validated["_incoming_icms_rates"]["PR"] == 12.5
+
+
+def test_tax_suggested_rate_does_not_auto_apply_four_percent():
+    tax_config = _built_tax_config_sc_sp(applied_rate=12.0)
+    record = _audit_record_with_coverage(_sample_pricing_payload(), tax_config=tax_config)
+    row = _normalized_audit_row_for_tax(charged_freight=114.20)
+    result = _run_tax_audit(record, row)
+    tax_item = result["calculation_components"]["tax_components"][0]
+    assert tax_item["rate"] != 4.0
+    assert tax_item["rate"] == 12.0
+
+
+def _intercargo_sp_coverage_record(*, tax_config=None) -> dict:
+    record = _audit_record_with_coverage(_sample_intercargo_freight_tables_payload(), tax_config=tax_config)
+    record["coverage_table"] = {
+        "rows": [
+            {"destination_uf": "SP", "destination_city": "São Paulo", "freight_region": "São Paulo"},
+            {"destination_uf": "SP", "destination_city": "Campinas", "freight_region": "Campinas"},
+        ]
+    }
+    return record
+
+
+def _intercargo_sp_audit_row(**overrides) -> dict:
+    row = {
+        "row_index": 1,
+        "carrier": "Intercargo",
+        "document_number": "NF-001",
+        "origin_city": "Joinville",
+        "origin_uf": "SC",
+        "destination_city": "São Paulo",
+        "destination_uf": "SP",
+        "invoice_value": 93650.67,
+        "charged_freight": 1100.0,
+        "audited_weight": 1285.30,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_intercargo_pricing_rule_captures_route_toll_from_matrix_table():
+    index = audit_doc_service.build_freight_pricing_index(_sample_intercargo_freight_tables_payload())
+    rule = index.get("São Paulo") or index.get("SP|São Paulo")
+    assert rule is not None
+    route_toll = rule.get("route_toll")
+    assert isinstance(route_toll, dict)
+    assert route_toll["rate_per_fraction"] == pytest.approx(5.25)
+    assert route_toll["fraction_size_kg"] == pytest.approx(100.0)
+    assert route_toll["source_column"] == "Pedágio"
+
+
+def test_intercargo_route_toll_uses_ceil_weight_fraction():
+    route_toll = {
+        "rate_per_fraction": 5.25,
+        "fraction_size_kg": 100.0,
+        "source_column": "Pedágio",
+        "source_value": "5,25",
+    }
+    amount, component = audit_doc_service._calculate_route_toll_amount(route_toll, 1285.30)
+    assert float(amount) == pytest.approx(68.25)
+    assert component["fractions"] == 13
+    assert component["amount"] == pytest.approx(68.25)
+
+
+def test_intercargo_sao_paulo_weight_freight_1285kg_range_plus_excess():
+    index = audit_doc_service.build_freight_pricing_index(_sample_intercargo_freight_tables_payload())
+    rule = index["São Paulo"]
+    weight_result = audit_doc_service.calculate_weight_freight(1285.30, rule)
+    assert weight_result is not None
+    assert weight_result["expected_freight"] == pytest.approx(528.49)
+    assert "excedente" in (weight_result.get("calculation_details") or "").lower()
+
+
+def test_intercargo_sao_paulo_route_toll_1285kg():
+    tax_config = _built_tax_config_sc_sp(applied_rate=12.0, iss_rate=5.0)
+    record = _intercargo_sp_coverage_record(tax_config=tax_config)
+    row = _intercargo_sp_audit_row()
+    result = _run_tax_audit(record, row)
+    components = result["calculation_components"]
+    assert components.get("route_toll", {}).get("amount") == pytest.approx(68.25)
+    assert result.get("route_toll_amount") == pytest.approx(68.25)
+
+
+def test_intercargo_sao_paulo_freight_value_on_invoice():
+    record = _intercargo_sp_coverage_record()
+    row = _intercargo_sp_audit_row()
+    result = audit_doc_service.compute_audit_outputs(record, [row])["results"][0]
+    components = result["calculation_components"]
+    assert components.get("freight_value", {}).get("amount") == pytest.approx(327.78)
+
+
+def test_intercargo_sao_paulo_full_line_inside_icms_1285kg():
+    tax_config = _built_tax_config_sc_sp(applied_rate=12.0, iss_rate=5.0)
+    record = _intercargo_sp_coverage_record(tax_config=tax_config)
+    row = _intercargo_sp_audit_row()
+    result = _run_tax_audit(record, row)
+    components = result["calculation_components"]
+    assert components["subtotal_before_taxes"] == pytest.approx(924.52, abs=0.02)
+    assert result["expected_freight"] == pytest.approx(1050.59, abs=0.02)
+    assert components["tax_total"] == pytest.approx(126.07, abs=0.02)
+    tax_item = next(item for item in components["tax_components"] if item.get("applied"))
+    assert tax_item["tax_type"] == "ICMS"
+    assert tax_item["calculation_mode"] == "inside"
+    assert tax_item["rate"] == 12.0
+    details = result["calculation_details"]
+    assert "Frete peso" in details or "excedente" in details.lower()
+    assert "Pedágio" in details or components.get("route_toll")
+    assert "Subtotal antes dos impostos" in details
+    assert "ICMS por dentro: 12,00%" in details
+    assert "Total esperado com impostos" in details
+    assert "ISS não aplicado nesta linha" in details
+
+
+def test_pricing_edit_after_audit_marks_batch_needs_reprocess(web_client):
+    saved = _apply_payload(web_client, _sample_intercargo_freight_tables_payload())
+    coverage = make_csv(
+        [
+            ["UF destino", "Cidade destino", "Região de frete"],
+            ["SP", "São Paulo", "São Paulo"],
+            ["SP", "Campinas", "Campinas"],
+        ]
+    )
+    assert _post_coverage_upload(web_client, "coverage.csv", coverage, "text/csv").status_code == 200
+    assert _post_audit_upload(
+        web_client,
+        "auditado.xlsx",
+        _sample_audit_xlsx(_sample_audit_row(valor_frete="200,00", peso="40", valor_nf="1000")),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).status_code == 200
+    assert _post_audit_run(web_client).status_code == 200
+
+    table = dict(saved["freight_tables"][0])
+    rows = [dict(row) for row in table["rows"]]
+    rows[0]["Até 100 kg"] = "85,00"
+    table["rows"] = rows
+    changed = _post_temp_table_save(
+        web_client,
+        {
+            "temp_table_id": saved["temp_table_id"],
+            "edit_target": {"freight_tables": [table]},
+            "review_action": "save_draft",
+        },
+    )
+    temp_table = changed.get_json()["temp_table"]
+    assert temp_table["audit_batch"]["needs_reprocess"] is True
+    assert temp_table["audit_batch"]["stale_reason"] == audit_doc_service.AUDIT_BATCH_STALE_PRICING_RULE_REASON
+    assert audit_doc_service.AUDIT_BATCH_STALE_PRICING_RULE_ALERT in temp_table["reading_alerts"]
+
+
+def test_fiscal_outdated_batch_effective_needs_reprocess():
+    batch = {
+        "status": audit_doc_service.AUDIT_BATCH_STATUS_PROCESSED,
+        "tax_applied": True,
+        "tax_calculation_version": "cleide_audit_tax_v1",
+        "tax_calculation_mode": "outside",
+    }
+    assert audit_doc_service._audit_batch_effective_needs_reprocess(batch) is True
+
+
+def test_sync_outdated_fiscal_stale_marks_processed_batch():
+    record = {
+        "audit_batch": {
+            "status": audit_doc_service.AUDIT_BATCH_STATUS_PROCESSED,
+            "tax_applied": True,
+            "tax_calculation_version": "cleide_audit_tax_v1",
+            "tax_calculation_mode": "outside",
+            "results": [],
+        },
+        "reading_alerts": [],
+    }
+    updated = audit_doc_service._sync_outdated_fiscal_stale(record)
+    assert updated["audit_batch"]["needs_reprocess"] is True
+    assert updated["audit_batch"]["stale_reason"] == audit_doc_service.AUDIT_BATCH_STALE_FISCAL_OUTDATED_REASON
+    assert audit_doc_service.AUDIT_BATCH_STALE_FISCAL_OUTDATED_ALERT in updated["reading_alerts"]
+
+
+def _freight_route_pedagio_valor_payload() -> dict:
+    return {
+        "status": "needs_review",
+        "freight_tables": [],
+        "freight_routes": [
+            {
+                "origin": "Joinville",
+                "destination": "Campinas",
+                "weight_50": "40,00",
+                "weight_100": "50,00",
+                "freight_weight_kg": "0,50",
+                "pedagio_valor": "6,00",
+            }
+        ],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+
+
+def test_freight_routes_pedagio_valor_captures_route_toll_and_calculates_by_fraction():
+    payload = _freight_route_pedagio_valor_payload()
+    index = audit_doc_service.build_freight_pricing_index(payload)
+    rule = index.get("Campinas")
+    assert rule is not None
+    route_toll = rule.get("route_toll")
+    assert isinstance(route_toll, dict)
+    assert route_toll["rate_per_fraction"] == pytest.approx(6.0)
+    assert route_toll["fraction_size_kg"] == pytest.approx(100.0)
+    assert route_toll["source_value"] == "6,00"
+    assert "pedagio" not in payload["freight_routes"][0]
+
+    record = _audit_record_with_coverage(payload)
+    record["coverage_table"] = {
+        "rows": [
+            {"destination_uf": "SP", "destination_city": "Campinas", "freight_region": "Campinas"},
+        ]
+    }
+    row = {
+        "row_index": 1,
+        "carrier": "Transportadora X",
+        "document_number": "123",
+        "origin_city": "Joinville",
+        "origin_uf": "SC",
+        "destination_city": "Campinas",
+        "destination_uf": "SP",
+        "invoice_value": 1000.0,
+        "charged_freight": 200.0,
+        "audited_weight": 250.0,
+    }
+    result = audit_doc_service.compute_audit_outputs(record, [row])["results"][0]
+    components = result["calculation_components"]
+    assert components.get("route_toll", {}).get("amount") == pytest.approx(18.0)
+    assert components.get("route_toll", {}).get("fractions") == 3
+    assert result.get("route_toll_amount") == pytest.approx(18.0)
+    assert result["expected_freight"] == pytest.approx(143.0)
+
+
+def test_route_toll_prevails_over_generic_accessorial_pedagio_no_duplicate():
+    record = _intercargo_sp_coverage_record()
+    record["accessorial_fees"] = [
+        _accessorial_fee(
+            "Pedágio",
+            "R$ 10,24",
+            unit="R$",
+            calculation_basis="para cada 100Kg ou fração",
+        ),
+    ]
+    row = _intercargo_sp_audit_row()
+    result = audit_doc_service.compute_audit_outputs(record, [row])["results"][0]
+    components = result["calculation_components"]
+    assert components.get("route_toll", {}).get("amount") == pytest.approx(68.25)
+    assert result.get("route_toll_amount") == pytest.approx(68.25)
+    assert result["expected_freight"] == pytest.approx(924.52, abs=0.02)
+    accessorial_labels = [item.get("label") for item in components.get("accessorial_fees") or []]
+    assert "Pedágio" not in accessorial_labels
+    ignored = components.get("ignored_accessorial_fees") or []
+    ignored_toll = next((item for item in ignored if item.get("canonical_component") == "toll"), None)
+    assert ignored_toll is not None
+    assert ignored_toll["reason_code"] == audit_doc_service.AUDIT_REASON_ROUTE_TOLL_DUPLICATE_IGNORED
+    generic_toll_amount = 10.24 * 13
+    assert result["expected_freight"] != pytest.approx(924.52 + generic_toll_amount, abs=0.02)
+
+
+def _sample_intercargo_multiline_freight_tables_payload(**overrides) -> dict:
+    col_ate_50 = "Taxa\nAté 50 kgs"
+    col_ate_100 = "Taxa\nAté 100 kgs"
+    col_excess = "Acima de 100kgs\nExcedente por kg"
+    payload = {
+        "status": "needs_review",
+        "freight_tables": [
+            {
+                "table_title": "Tabela Intercargo",
+                "table_type": "route_matrix",
+                "context": {
+                    "route_label": None,
+                    "origin": "Joinville",
+                    "destination": None,
+                    "customer": None,
+                    "supplier": "Intercargo",
+                    "valid_from": None,
+                    "valid_to": None,
+                    "delivery_deadline": None,
+                },
+                "columns": [
+                    "Origem",
+                    "Destino",
+                    col_ate_50,
+                    col_ate_100,
+                    col_excess,
+                    "Frete Valor %",
+                    "Pedágio",
+                ],
+                "rows": [
+                    {
+                        "Origem": "Joinville",
+                        "Destino": "São Paulo",
+                        col_ate_50: "73,30",
+                        col_ate_100: "84,00",
+                        col_excess: "0,3750",
+                        "Frete Valor %": "0,35",
+                        "Pedágio": "5,25",
+                    },
+                    {
+                        "Origem": "Joinville",
+                        "Destino": "Campinas",
+                        col_ate_50: "89,25",
+                        col_ate_100: "103,90",
+                        col_excess: "0,4580",
+                        "Frete Valor %": "0,35",
+                        "Pedágio": "6,30",
+                    },
+                ],
+                "notes": "",
+                "evidence_ref": "Tabela Intercargo.pdf (page 1)",
+                "confidence": "needs_review",
+            }
+        ],
+        "freight_routes": [],
+        "freight_values": [],
+        "accessorial_fees": [],
+        "weight_ranges": [],
+        "reading_alerts": [],
+        "evidence_refs": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _intercargo_multiline_sp_audit_row(**overrides) -> dict:
+    row = {
+        "row_index": 2,
+        "carrier": "Intercargo",
+        "document_number": "82987",
+        "origin_city": "Joinville",
+        "origin_uf": "SC",
+        "destination_city": "São Paulo",
+        "destination_uf": "SP",
+        "invoice_value": 93650.67,
+        "charged_freight": 955.57,
+        "audited_weight": 1285.309,
+    }
+    row.update(overrides)
+    return row
+
+
+@pytest.mark.parametrize(
+    ("header", "expected_bracket_max", "expected_excess"),
+    [
+        ("Taxa\nAté 50 kgs", 50.0, False),
+        ("Taxa\nAté 100 kgs", 100.0, False),
+        ("Acima de 100kgs\nExcedente por kg", None, True),
+        ("Até 100 kg", 100.0, False),
+        ("Excedente por kg", None, True),
+        ("Acima de 100 kg", None, True),
+    ],
+)
+def test_matrix_header_classifier_bracket_vs_excess(header, expected_bracket_max, expected_excess):
+    parsed = audit_doc_service._parse_range_from_label(header)
+    is_excess = audit_doc_service._is_excess_column(header)
+    assert is_excess is expected_excess
+    if expected_bracket_max is None:
+        assert parsed is None
+    else:
+        assert parsed is not None
+        assert parsed[0] == pytest.approx(0.0)
+        assert parsed[1] == pytest.approx(expected_bracket_max)
+
+
+def test_intercargo_multiline_headers_build_correct_pricing_rule():
+    index = audit_doc_service.build_freight_pricing_index(
+        _sample_intercargo_multiline_freight_tables_payload()
+    )
+    rule = index["São Paulo"]
+    assert rule["pricing_type"] == "range_plus_excess_per_kg"
+    brackets = rule["brackets"]
+    assert len(brackets) == 2
+    assert brackets[0]["max_kg"] == pytest.approx(50.0)
+    assert brackets[0]["value"] == pytest.approx(73.30)
+    assert brackets[1]["max_kg"] == pytest.approx(100.0)
+    assert brackets[1]["value"] == pytest.approx(84.00)
+    assert rule["excess"]["rate_per_kg"] == pytest.approx(0.375)
+
+
+def test_intercargo_multiline_sao_paulo_weight_freight_1285kg():
+    index = audit_doc_service.build_freight_pricing_index(
+        _sample_intercargo_multiline_freight_tables_payload()
+    )
+    rule = index["São Paulo"]
+    weight_result = audit_doc_service.calculate_weight_freight(1285.309, rule)
+    assert weight_result is not None
+    assert weight_result["expected_freight"] == pytest.approx(528.49)
+
+
+def test_intercargo_multiline_sao_paulo_full_line_inside_icms_1285kg():
+    tax_config = _built_tax_config_sc_sp(applied_rate=12.0, iss_rate=5.0)
+    record = _audit_record_with_coverage(
+        _sample_intercargo_multiline_freight_tables_payload(),
+        tax_config=tax_config,
+    )
+    record["coverage_table"] = {
+        "rows": [
+            {"destination_uf": "SP", "destination_city": "São Paulo", "freight_region": "São Paulo"},
+            {"destination_uf": "SP", "destination_city": "Campinas", "freight_region": "Campinas"},
+        ]
+    }
+    row = _intercargo_multiline_sp_audit_row()
+    result = _run_tax_audit(record, row)
+    components = result["calculation_components"]
+    assert components["weight_freight"]["amount"] == pytest.approx(528.49)
+    assert components.get("freight_value", {}).get("amount") == pytest.approx(327.78)
+    assert components.get("route_toll", {}).get("amount") == pytest.approx(68.25)
+    assert components["subtotal_before_taxes"] == pytest.approx(924.52, abs=0.02)
+    assert result["expected_freight"] == pytest.approx(1050.59, abs=0.02)
+    assert components["tax_total"] == pytest.approx(126.07, abs=0.02)
+    tax_item = next(item for item in components["tax_components"] if item.get("applied"))
+    assert tax_item["tax_type"] == "ICMS"
+    assert tax_item["calculation_mode"] == "inside"
+    assert tax_item["rate"] == 12.0
+    assert "ISS não aplicado nesta linha" in result["calculation_details"]
+
+
+def test_sync_outdated_pricing_rule_stale_marks_processed_batch():
+    record = {
+        "freight_tables": _sample_intercargo_freight_tables_payload()["freight_tables"],
+        "freight_routes": [],
+        "audit_batch": {
+            "status": audit_doc_service.AUDIT_BATCH_STATUS_PROCESSED,
+            "pricing_rule_parser_version": "cleide_pricing_matrix_v1",
+            "results": [],
+        },
+        "reading_alerts": [],
+    }
+    updated = audit_doc_service._sync_outdated_pricing_rule_stale(record)
+    assert updated["audit_batch"]["needs_reprocess"] is True
+    assert updated["audit_batch"]["stale_reason"] == audit_doc_service.AUDIT_BATCH_STALE_PRICING_RULE_REASON
+    assert audit_doc_service.AUDIT_BATCH_STALE_PRICING_RULE_ALERT in updated["reading_alerts"]
+
+
+def test_pricing_rule_parser_outdated_effective_needs_reprocess():
+    batch = {
+        "status": audit_doc_service.AUDIT_BATCH_STATUS_PROCESSED,
+        "pricing_rule_parser_version": "cleide_pricing_matrix_v1",
+    }
+    assert audit_doc_service._audit_batch_effective_needs_reprocess(batch) is True
+    batch_current = {
+        "status": audit_doc_service.AUDIT_BATCH_STATUS_PROCESSED,
+        "pricing_rule_parser_version": audit_doc_service.PRICING_RULE_PARSER_VERSION,
+    }
+    assert audit_doc_service._audit_batch_effective_needs_reprocess(batch_current) is False

@@ -1,102 +1,54 @@
 ﻿# Arquitetura Oficial
 
-Data de consolidacao: `2026-06-30`
-Commit de referencia: `homolog@28904e4` e `producao@0afe528`
+Data de consolidacao: `2026-07-08`
+Commit de referencia: `homolog@efd54b5`
 
-Este documento registra a arquitetura oficial do projeto no estado promovido em producao apos os ajustes finais da auditoria de frete da Cleide.
+## Superficies
 
-## Principios
+- `/`: discovery publico ou Julia operacional, conforme autenticacao
+- `/fretes`: Roberto
+- `/cleide-bi-frete`: BI estrutural da Cleide
+- `/auditoria-frete`: auditoria documental da Cleide
+- `/admin/...`: operacao administrativa
 
-Nao criar:
-
-- rota paralela de produto para upload documental
-- bypass de autorizacao ou franquia
-- leitura documental inventada
-- persistencia desnecessaria em banco para contexto temporario
-- documentacao que trate a tabela temporaria como auditoria final ou dado persistente
-
-Sempre:
-
-- usar os trilhos oficiais
-- tratar o codigo atual como fonte de verdade
-- manter observabilidade e governanca centrais no Cleiton
-- manter a separacao entre extracao documental e chat conversacional da Cleide
-
-## Superficies e papeis
-
-### Copilot
-
-- superficie: Home publica `/`
-- papel: discovery, onboarding e esclarecimento da atividade-fim
-- publico: anonimo ou logado
-- nao executa a conversa operacional plena da Julia
+## Separacao de dominios
 
 ### Julia
 
-- superficie principal do usuario autenticado: Home `/`
-- superficie dedicada mantida: `/chat_julia?mode=operational`
-- endpoint: `POST /api/chat_julia`
-- papel: estrategia, supply chain, negociacao, interpretacao executiva e plano de acao
-- requisito: login e autorizacao operacional
+- superficie operacional principal do usuario autenticado
+- usa governanca Cleiton para autorizacao, contexto documental e consumo IA
+
+### Roberto
+
+- leitura quantitativa, previsao e interpretacao analitica de fretes
+- upload, BI e chat privados em `/fretes`
+
+### Cleide BI
+
+- superficie estrutural separada em `/cleide-bi-frete`
+- upload de XLSX/CSV por sessao
+- validacao estrutural
+- KPIs e dashboard estrutural sobre dataset da sessao
+
+### Cleide Auditoria
+
+- superficie separada em `/auditoria-frete`
+- pagina publica, com endpoints privados e autorizados
+- upload documental, `temp_table`, coverage, lote auditado, BI executivo da auditoria e chat contextual
 
 ### Cleiton
 
-- papel: governanca operacional central
-- controla autorizacao, observabilidade, limites, upload documental, preparo de contexto e integracao com IA
-- e o owner operacional da tabela temporaria da auditoria documental
-- nao deve ser descrito apenas como agente de chat
+- governanca operacional central
+- autorizacao por franquia
+- identidade de consumo
+- limites documentais
+- TTL e cleanup
+- observabilidade de IA e processamento
+- ownership operacional da `temp_table` da Cleide Auditoria
 
-### Roberto
+## Rotas principais da Cleide Auditoria
 
-- superficie: `/fretes`
-- papel: BI operacional, tendencias, previsoes e horizonte futuro
-
-### Cleide
-
-- superficie BI atual: `/cleide-bi-frete`
-- superficie documental atual: `/auditoria-frete`
-- papel: auditoria documental assistida, conferencia, desvios e horizonte historico
-- na superficie documental, o chat e separado da extracao tecnica de tabela temporaria
-
-## Regra-mae de handoff
-
-- artefato nao define agente
-- atividade-fim e horizonte temporal definem agente
-
-Tabela canonica:
-
-| Objetivo do usuario | Agente |
-| --- | --- |
-| Prever, projetar, estimar tendencia futura | Roberto |
-| Auditar, conferir, investigar o ocorrido | Cleide |
-| Decidir, negociar, planejar, interpretar executivamente | Julia |
-
-## Fronteiras tecnicas oficiais
-
-### Copilot
-
-- `POST /api/onboarding_discovery`
-- `POST /api/onboarding_discovery/reset`
-
-### Julia
-
-- `POST /api/chat_julia`
-- `POST /api/julia/documents/upload`
-- `GET /api/julia/documents`
-- `DELETE /api/julia/documents/<doc_id>`
-- `POST /api/julia/documents/clear`
-
-### Roberto
-
-- `POST /api/chat_roberto`
-- `/fretes`
-
-### Cleide
-
-- `POST /api/chat_cleide`
-- `/api/cleide/upload`
-- `/api/cleide/upload/status`
-- `/api/cleide/upload/clear`
+- `GET /auditoria-frete`
 - `POST /api/cleide-auditoria/documents/upload`
 - `GET /api/cleide-auditoria/documents/status`
 - `DELETE /api/cleide-auditoria/documents/<doc_id>`
@@ -106,80 +58,59 @@ Tabela canonica:
 - `GET /api/cleide-auditoria/audit-template`
 - `POST /api/cleide-auditoria/audit/upload`
 - `POST /api/cleide-auditoria/audit/run`
+- `POST /api/cleide-auditoria/audit/correction/preview`
+- `POST /api/cleide-auditoria/audit/correction/apply`
+- `POST /api/cleide-auditoria/audit/correction/undo`
 - `POST /api/cleide-auditoria/chat`
 
-## Arquitetura documental da Cleide Auditoria
+## Arquitetura da auditoria
 
-O fluxo documental da Cleide Auditoria opera dentro da governanca existente e nao deve ser tratado como produto paralelo.
+- o upload documental e governado pelos limites e TTL do Cleiton
+- a extração tecnica da `temp_table` ocorre apos upload e permanece separada do chat
+- a `temp_table` e temporaria, descartavel e vinculada ao estado documental da sessao
+- a `temp_table` nao e auditoria final nem persistencia definitiva
+- o chat da Cleide consulta contexto documental; nao gere o ciclo de vida da `temp_table`
+- a revisao humana pode editar tabela de frete, taxas acessorias e coverage table antes de avancar
 
-Contratos reais:
+## Responsabilidade dos modulos centrais
 
-- o upload registra o documento na sessao e tenta acionar extracao tecnica pos-upload
-- a atualizacao da tabela temporaria continua no fluxo documental/status, nao no chat
-- a extracao tecnica usa `app/run_cleide_audit_temp_table.py`
-- o prompt tecnico fica em `build_cleide_audit_temp_table_technical_prompt()`
-- a resposta esperada do modelo e JSON tecnico, sem auditoria final
-- o endpoint de status devolve `temp_table` quando houver artefato ativo
-- o endpoint `POST /api/cleide-auditoria/temp-table/save` registra revisao humana governada da tabela temporaria quando o artefato esta ativo
-- coverage complementar e lote auditado operam no mesmo trilho autenticado da auditoria
-- a UI exibe um card clicavel de tabela temporaria e abre modal somente leitura
-- a priorizacao visual e operacional recai sobre blocos operacionais, rotas/tabelas de frete e informacoes adicionais
+- `app/cleide_audit_doc_service.py`: store e ciclo de vida documental, `temp_table`, lote auditado, calculo da auditoria, payloads publicos
+- `app/run_cleide_audit_temp_table.py`: extração tecnica pos-upload, parsing JSON e fallback de modelo
+- `app/cleide_audit_prompt.py`: prompt tecnico da extração e prompt do chat
+- `app/cleide_audit_routes.py`: API oficial da auditoria
+- `app/cleide_audit_correction_service.py`: correcoes assistidas com preview, apply e undo
+- `app/static/js/cleide_auditoria.js`: experiencia visual da auditoria, BI executivo, modal da `temp_table`, coverage e correcao
+- `app/templates/cleide_auditoria.html`: contrato visual da pagina
 
-Garantias:
+## BI executivo da auditoria
 
-- a tabela temporaria e separada do chat conversacional
-- a tabela temporaria e temporaria, descartavel e sujeita a validacao humana
-- a tabela temporaria e readonly na experiencia da Cleide
-- a validacao da tabela temporaria nao e modelada como nova conversa de IA
-- o `operational_owner` e `cleiton`
-- o ciclo de vida depende do TTL dos documentos da sessao
-- invalidacoes ocorrem quando os documentos fonte mudam ou sao removidos
-- nao ha migration nova, nova tabela de banco, novo campo ou alteracao manual de schema para esse fluxo
-- nao ha conexao nova com APIs da Julia ou do BI nessa superficie documental
-- a promocao segura mais recente ocorreu via `producao`, a partir dos equivalentes `5db6f98`, `2581baa` e `0afe528`, sem alteracao estrutural de banco
+O BI executivo dentro de `/auditoria-frete` possui 4 graficos:
 
-## Arquitetura documental da Julia
+- Impacto Financeiro por Transportadora
+- Divergencia Financeira por UF Destino
+- Evolucao da Divergencia no Periodo
+- Pareto do Valor Cobrado a Mais
 
-O fluxo documental faz parte da experiencia operacional logada da Julia. Nao existe fluxo documental independente de produto.
+Base de calculo do BI:
 
-Contratos reais:
+- quando existem `charged_freight` e `expected_freight`, o frontend trabalha com a divergencia entre cobrado e esperado
+- o contrato atual nao deve ser documentado como o BI antigo de 7 graficos
 
-- a UI da Julia aceita `.txt,.xml,.csv,.xlsx,.docx,.pdf`
-- a API exige autenticacao
-- a API chama `avaliar_autorizacao_operacao_por_franquia`
-- o store temporario usa `app/cleiton_doc_tmp/`
-- o store persiste JSON tecnico temporario, nao cria tabela nova
-- o diretorio `app/cleiton_doc_tmp/` esta protegido no `.gitignore`
-- PDF pode usar Gemini Files como contexto multimodal governado
+## Admin da Cleide
 
-Tipos suportados na implementacao atual:
+`/admin/agentes/cleide` contem dois blocos independentes:
 
-- `TXT`
-- `XML`
-- `CSV`
-- `XLSX`
-- `DOCX`
-- `PDF`
+- bloco `cleide_cfg_*` do BI estrutural
+- bloco `cleide_audit_cfg_*` da auditoria documental
 
-Garantias:
+No bloco da auditoria, o codigo atual expoe configuracao de:
 
-- limites de sessao e por tipo sao configuraveis no admin do Cleiton
-- placeholder nao deve fingir leitura de conteudo inexistente
-- TTL e cleanup sao governados pelo Cleiton
-
-## Configuracao administrativa
-
-O bloco documental do Cleiton fica no admin e reutiliza `ConfigRegras`.
-
-Campos documentados pelo codigo atual:
-
-- `upload_enabled`
-- `max_files_per_session`
-- `session_max_bytes`
-- `upload_ttl_hours`
-- `cleanup_enabled`
-- `prompt_context_max_chars`
-- `prompt_max_files_considered`
-- chaves `pdf_*`, `excel_*`, `docx_*`, `txt_*`, `xml_*`, `csv_*`
-
-Nao ha migration nova nem tabela nova para esse bloco.
+- habilitacao de chat e upload
+- janela de historico
+- limites de contexto e documentos considerados
+- limite de pergunta
+- comportamento sem documentos
+- exibicao de documentos usados
+- mensagem de fallback
+- limites do arquivo auditado
+- bases de calculo administrativas

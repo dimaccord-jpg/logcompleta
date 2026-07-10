@@ -490,6 +490,11 @@ def _audit_batch_with_outputs(audit_batch: dict, outputs: dict, *, now: str, exp
     updated_batch["updated_at"] = now
     updated_batch["processed_at"] = now
     updated_batch["expires_at"] = audit_batch.get("expires_at") or expires_at
+    fiscal_snapshot = outputs.get("fiscal_snapshot") or {}
+    if fiscal_snapshot:
+        from app.cleide_audit_doc_service import _apply_tax_fiscal_snapshot_to_audit_batch
+
+        updated_batch = _apply_tax_fiscal_snapshot_to_audit_batch(updated_batch, fiscal_snapshot)
     return updated_batch
 
 
@@ -500,6 +505,7 @@ def _correction_snapshot(record: dict) -> dict:
         "freight_routes": copy.deepcopy(record.get("freight_routes") or []),
         "accessorial_fees": copy.deepcopy(record.get("accessorial_fees") or []),
         "coverage_table": copy.deepcopy(record.get("coverage_table") or None),
+        "tax_config": copy.deepcopy(record.get("tax_config") or None),
         "audit_batch": copy.deepcopy(record.get("audit_batch") or None),
         "human_review_status": record.get("human_review_status"),
         "human_edited_at": record.get("human_edited_at"),
@@ -644,6 +650,7 @@ def undo_last_audit_correction_for_session(
         "freight_routes",
         "accessorial_fees",
         "coverage_table",
+        "tax_config",
         "human_review_status",
         "human_edited_at",
         "human_edited_by_user_id",

@@ -69,6 +69,8 @@
   var openFreightTableKeys = new Set();
   var hasUserTouchedFreightTableOpenState = false;
   var tempTableModalActiveTab = 'freight';
+  var taxStepActive = false;
+  var taxSaveInFlight = false;
   var coverageStepActive = false;
   var coveragePromptAnswered = false;
   var coveragePromptAccepted = false;
@@ -85,6 +87,52 @@
     { key: 'freight_region', label: 'Região de frete' },
     { key: 'notes', label: 'Observações' }
   ];
+
+  var BRAZILIAN_UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
+  var ICMS_7_PERCENT_ORIGIN_UFS = ['PR', 'RS', 'SC', 'ES', 'MG', 'RJ', 'SP'];
+  var ICMS_7_PERCENT_DESTINATION_UFS = ['AC', 'AP', 'AM', 'PA', 'RO', 'RR', 'TO', 'AL', 'BA', 'CE', 'MA', 'PB', 'PE', 'PI', 'RN', 'SE', 'DF', 'GO', 'MT', 'MS', 'ES'];
+  var BR_STATE_NAME_TO_UF = {
+    'ACRE': 'AC',
+    'ALAGOAS': 'AL',
+    'AMAPA': 'AP',
+    'AMAZONAS': 'AM',
+    'BAHIA': 'BA',
+    'CEARA': 'CE',
+    'DISTRITO FEDERAL': 'DF',
+    'ESPIRITO SANTO': 'ES',
+    'GOIAS': 'GO',
+    'MARANHAO': 'MA',
+    'MATO GROSSO': 'MT',
+    'MATO GROSSO DO SUL': 'MS',
+    'MINAS GERAIS': 'MG',
+    'PARA': 'PA',
+    'PARAIBA': 'PB',
+    'PARANA': 'PR',
+    'PERNAMBUCO': 'PE',
+    'PIAUI': 'PI',
+    'RIO DE JANEIRO': 'RJ',
+    'RIO GRANDE DO NORTE': 'RN',
+    'RIO GRANDE DO SUL': 'RS',
+    'RONDONIA': 'RO',
+    'RORAIMA': 'RR',
+    'SANTA CATARINA': 'SC',
+    'SAO PAULO': 'SP',
+    'SERGIPE': 'SE',
+    'TOCANTINS': 'TO'
+  };
+  var KNOWN_CITY_TO_UF = {
+    'CAMPINAS': 'SP',
+    'SAO PAULO': 'SP',
+    'JOINVILLE': 'SC'
+  };
+  var TAX_DESTINATION_SOURCE_LABELS = {
+    automatic: 'Automática',
+    inferred_city: 'Inferida por cidade',
+    inferred_state: 'Inferida por estado',
+    manual: 'Manual'
+  };
+  var ICMS_INTERSTATE_SOURCE_NAME = 'Resolução Senado Federal nº 22/1989';
+  var ICMS_INTERMUNICIPAL_SOURCE_NAME = 'Cadastro estadual/manual';
 
   function deepCloneValue(value) {
     if (value === null || typeof value !== 'object') return value;
@@ -155,8 +203,24 @@
     return false;
   }
 
+  function hasTaxConfig(tempTable) {
+    return !!(tempTable && tempTable.tax_config && typeof tempTable.tax_config === 'object');
+  }
+
+  function shouldShowTaxTab(tempTable) {
+    return !!(taxStepActive || hasTaxConfig(tempTable));
+  }
+
   function canEditCoverageTable(tempTable) {
     return hasCoverageRows(tempTable);
+  }
+
+  function resetTaxStepState() {
+    taxStepActive = false;
+    taxSaveInFlight = false;
+    if (tempTableModalActiveTab === 'taxes') {
+      tempTableModalActiveTab = 'freight';
+    }
   }
 
   function resetCoveragePromptState() {
@@ -510,26 +574,31 @@
     var saveBtn = byId('cleideAuditTempTableModalSave');
     var startAuditBtn = byId('cleideAuditTempTableModalStartAudit');
     var banner = byId('cleideAuditTempTableModalEditBanner');
+    var onTaxTab = tempTableModalActiveTab === 'taxes' && shouldShowTaxTab(currentTempTable);
     var onCoverageTab = tempTableModalActiveTab === 'coverage' && shouldShowCoverageTab(currentTempTable);
     var onAuditTab = tempTableModalActiveTab === 'audit' && shouldShowAuditTab(currentTempTable);
     var coverageHasRows = hasCoverageRows(currentTempTable);
     var canStartAudit = coverageHasRows || (coveragePromptAnswered && !coveragePromptAccepted);
     var hideEditOnEmptyCoverage = onCoverageTab && !coverageHasRows;
+    var hideEditOnTaxTab = onTaxTab;
     var hideEditOnAuditTab = onAuditTab;
     if (editBtn) {
-      editBtn.hidden = !!tempTableEditMode || hideEditOnEmptyCoverage || hideEditOnAuditTab;
-      editBtn.disabled = hideEditOnEmptyCoverage || hideEditOnAuditTab;
+      editBtn.hidden = !!tempTableEditMode || hideEditOnEmptyCoverage || hideEditOnTaxTab || hideEditOnAuditTab;
+      editBtn.disabled = hideEditOnEmptyCoverage || hideEditOnTaxTab || hideEditOnAuditTab;
     }
     if (startAuditBtn) {
-      startAuditBtn.hidden = !!tempTableEditMode || !onCoverageTab || !canStartAudit || onAuditTab || hasAuditBatch(currentTempTable);
+      startAuditBtn.hidden = !!tempTableEditMode || !onCoverageTab || !canStartAudit || onTaxTab || onAuditTab || hasAuditBatch(currentTempTable);
     }
     if (cancelBtn) cancelBtn.hidden = !tempTableEditMode;
     if (banner) banner.hidden = !tempTableEditMode;
     document.body.classList.toggle('cleide-audit-temp-table-modal-editing', !!tempTableEditMode);
     if (saveBtn) {
-      saveBtn.disabled = !!(tempTableSaveInFlight || coverageSaveInFlight);
-      saveBtn.setAttribute('aria-busy', (tempTableSaveInFlight || coverageSaveInFlight) ? 'true' : 'false');
-      if (onCoverageTab) {
+      saveBtn.disabled = !!(tempTableSaveInFlight || taxSaveInFlight || coverageSaveInFlight);
+      saveBtn.setAttribute('aria-busy', (tempTableSaveInFlight || taxSaveInFlight || coverageSaveInFlight) ? 'true' : 'false');
+      if (onTaxTab) {
+        saveBtn.textContent = 'Continuar para cidades';
+        saveBtn.hidden = false;
+      } else if (onCoverageTab) {
         saveBtn.textContent = 'Salvar';
         saveBtn.hidden = !tempTableEditMode;
       } else if (onAuditTab) {
@@ -1050,8 +1119,8 @@
         clearTempTableValidationErrors();
         tempTableEditMode = false;
         tempTableEditSnapshot = null;
-        coverageStepActive = true;
-        tempTableModalActiveTab = 'coverage';
+        taxStepActive = true;
+        tempTableModalActiveTab = 'taxes';
         renderTempTableModalContent(currentTempTable);
         updateTempTableModalFooter();
         fetchDocuments();
@@ -1127,9 +1196,11 @@
     var previousTempTableId = currentTempTable && currentTempTable.temp_table_id;
     var nextTempTableId = tempTable && tempTable.temp_table_id;
     if (previousTempTableId && nextTempTableId && previousTempTableId !== nextTempTableId) {
+      resetTaxStepState();
       resetCoveragePromptState();
       resetAuditFileStepState();
     } else if (previousTempTableId && !nextTempTableId) {
+      resetTaxStepState();
       resetCoveragePromptState();
       resetAuditFileStepState();
     }
@@ -1286,8 +1357,8 @@
 
   var AUDIT_BI_CHART_LABELS = {
     transportadora: 'Impacto Financeiro por Transportadora',
-    uf_destino: 'Divergência Financeira por UF Destino',
-    temporal: 'Evolução da Divergência no Período',
+    uf_destino: 'Impacto Financeiro por UF Destino',
+    temporal: 'Evolução do Impacto Financeiro no Período',
     pareto_transportadora: 'Pareto do Valor Cobrado a Mais'
   };
 
@@ -1377,6 +1448,19 @@
 
   function auditBiFormatPercent(value) {
     return auditBiFormatNumber(value, 2) + '%';
+  }
+
+  function auditBiFormatAbsoluteCurrency(value) {
+    return auditBiFormatCurrency(Math.abs(auditBiGetNumeric(value)));
+  }
+
+  function auditBiResolveDeviationPredominance(row) {
+    if (!row || typeof row !== 'object') return 'Predominância do desvio: indisponível';
+    var over = auditBiGetNumeric(row.cobrado_a_mais);
+    var under = auditBiGetNumeric(row.cobrado_a_menor);
+    if (over > under + 0.004) return 'Predominância do desvio: cobrado a mais';
+    if (under > over + 0.004) return 'Predominância do desvio: cobrado a menor';
+    return 'Predominância do desvio: equilibrada';
   }
 
   function auditBiChartRequirementsMet(chartKey) {
@@ -1582,6 +1666,9 @@
       }
     });
     metrics.confidenceRatio = totalRows > 0 ? (metrics.financialRows / totalRows) * 100 : 0;
+    metrics.averageAbsoluteDivergencePerDocument = totalRows > 0
+      ? metrics.absoluteImpact / totalRows
+      : 0;
     if (metrics.confidenceRatio >= 95) {
       metrics.confidenceLabel = 'Alta';
       metrics.confidenceClass = 'high';
@@ -1633,10 +1720,10 @@
         className: 'is-negative'
       },
       {
-        label: 'Divergência líquida',
-        value: auditBiFormatCurrency(metrics.netDivergence),
-        hint: 'Cobrado - esperado no filtro',
-        className: metrics.netDivergence >= 0 ? 'is-negative' : 'is-warning'
+        label: 'Divergência média por documento',
+        value: auditBiFormatCurrency(Math.abs(metrics.averageAbsoluteDivergencePerDocument)),
+        hint: 'Impacto financeiro absoluto médio por documento analisado.',
+        className: ''
       },
       {
         label: 'Linhas divergentes',
@@ -1743,13 +1830,33 @@
     var chartColor = options.chartColor || '#25b0ff';
     var areaColor = options.areaColor || 'rgba(37, 176, 255, 0.20)';
     var isHorizontal = indexAxis === 'y';
+    var displayValues = values.map(function (value) {
+      return Math.abs(auditBiGetNumeric(value));
+    });
+    var tooltipRows = Array.isArray(options.tooltipRows) ? options.tooltipRows : null;
+    var valueAxisKey = isHorizontal ? 'x' : 'y';
+    var scales = {
+      x: {
+        grid: { color: 'rgba(124, 148, 189, 0.14)' },
+        ticks: { color: '#c6d7f2' }
+      },
+      y: {
+        grid: { color: 'rgba(124, 148, 189, 0.14)' },
+        ticks: { color: '#c6d7f2' }
+      }
+    };
+    scales[valueAxisKey].beginAtZero = true;
+    scales[valueAxisKey].min = 0;
+    if (valueFormatter === auditBiFormatCurrency || options.nonNegativeCurrency) {
+      scales[valueAxisKey].ticks.callback = function (v) { return auditBiFormatAbsoluteCurrency(v); };
+    }
     var instance = new window.Chart(canvas, {
       type: type,
       data: {
         labels: labels,
         datasets: [{
           label: datasetLabel,
-          data: values,
+          data: displayValues,
           borderColor: chartColor,
           backgroundColor: areaColor,
           fill: type === 'line',
@@ -1771,21 +1878,23 @@
               label: function (ctx) {
                 var parsed = ctx.parsed || {};
                 var raw = isHorizontal ? parsed.x : parsed.y;
-                return datasetLabel + ': ' + valueFormatter(raw);
+                return datasetLabel + ': ' + valueFormatter(Math.abs(raw));
+              },
+              afterBody: function (items) {
+                if (!tooltipRows || !items || !items.length) return [];
+                var row = tooltipRows[items[0].dataIndex];
+                if (!row) return [];
+                return [
+                  'Cobrado a mais: ' + auditBiFormatAbsoluteCurrency(row.cobrado_a_mais),
+                  'Cobrado a menor: ' + auditBiFormatAbsoluteCurrency(row.cobrado_a_menor),
+                  'Impacto total: ' + auditBiFormatAbsoluteCurrency(row.impacto_total),
+                  auditBiResolveDeviationPredominance(row)
+                ];
               }
             }
           }
         },
-        scales: {
-          x: {
-            grid: { color: 'rgba(124, 148, 189, 0.14)' },
-            ticks: { color: '#c6d7f2' }
-          },
-          y: {
-            grid: { color: 'rgba(124, 148, 189, 0.14)' },
-            ticks: { color: '#c6d7f2' }
-          }
-        },
+        scales: scales,
         onClick: function (_event, elements) {
           if (!elements || !elements.length) return;
           auditBiHandleChartClick(chartKey, labels[elements[0].index]);
@@ -1887,8 +1996,7 @@
     return true;
   }
 
-  function auditBiRenderCarrierDivergenceChart(rows) {
-    var chartKey = 'transportadora';
+  function auditBiRenderFinancialImpactBarChart(chartKey, rows) {
     if (!auditBiEnsureChartJs()) {
       auditBiSetCardEmpty(chartKey, 'Chart.js indisponível nesta página.', false);
       return false;
@@ -1899,7 +2007,7 @@
     var labels = rows.map(function (row) { return auditBiSafeText(row.chave) || '-'; });
     var overcharged = rows.map(function (row) { return auditBiGetNumeric(row.cobrado_a_mais); });
     var undercharged = rows.map(function (row) { return auditBiGetNumeric(row.cobrado_a_menor); });
-    var netDivergence = rows.map(function (row) { return auditBiGetNumeric(row.divergencia_liquida); });
+    var totalImpact = rows.map(function (row) { return auditBiGetNumeric(row.impacto_total); });
     var instance = new window.Chart(canvas, {
       type: 'bar',
       data: {
@@ -1922,8 +2030,8 @@
             maxBarThickness: 22
           },
           {
-            label: 'Divergência líquida',
-            data: netDivergence,
+            label: 'Impacto total',
+            data: totalImpact,
             borderColor: '#7cc4ff',
             backgroundColor: 'rgba(124, 196, 255, 0.22)',
             borderWidth: 1,
@@ -1942,7 +2050,13 @@
             callbacks: {
               label: function (ctx) {
                 var parsed = ctx.parsed || {};
-                return ctx.dataset.label + ': ' + auditBiFormatCurrency(parsed.x);
+                return ctx.dataset.label + ': ' + auditBiFormatAbsoluteCurrency(parsed.x);
+              },
+              afterBody: function (items) {
+                if (!items || !items.length) return [];
+                var row = rows[items[0].dataIndex];
+                if (!row) return [];
+                return [auditBiResolveDeviationPredominance(row)];
               }
             }
           }
@@ -1950,8 +2064,9 @@
         scales: {
           x: {
             beginAtZero: true,
+            min: 0,
             grid: { color: 'rgba(124, 148, 189, 0.14)' },
-            ticks: { color: '#c6d7f2' }
+            ticks: { color: '#c6d7f2', callback: function (v) { return auditBiFormatAbsoluteCurrency(v); } }
           },
           y: {
             grid: { color: 'rgba(124, 148, 189, 0.14)' },
@@ -1966,6 +2081,10 @@
     });
     auditBiDashboardState.chartInstances[chartKey] = instance;
     return true;
+  }
+
+  function auditBiRenderCarrierDivergenceChart(rows) {
+    return auditBiRenderFinancialImpactBarChart('transportadora', rows);
   }
 
   function auditBiRenderFilterUi() {
@@ -2121,19 +2240,14 @@
         auditBiSetCardEmpty(chartKey, AUDIT_BI_DIVERGENCE_UNAVAILABLE_MESSAGE, false);
         return;
       }
-      var ufDestRows = auditBiTopRows(auditBiAggregateByField(filteredRows, 'destination_uf'), 'impacto_total', 'divergencia_liquida');
+      var ufDestRows = auditBiSortRows(auditBiAggregateByField(filteredRows, 'destination_uf'), 'impacto_total', 'desc').slice(0, AUDIT_BI_TOP_N);
       if (!ufDestRows.length) {
         auditBiSetCardEmpty(chartKey, emptyMessage, false);
         return;
       }
       auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Top UFs por impacto total, exibindo a divergência líquida.';
-      auditBiRenderSimpleChart(chartKey, ufDestRows.map(function (row) { return row.label; }), ufDestRows.map(function (row) { return row.value; }), {
-        datasetLabel: 'Divergência líquida',
-        valueFormatter: auditBiFormatCurrency,
-        chartColor: '#f4b400',
-        areaColor: 'rgba(244, 180, 0, 0.28)'
-      });
+      if (noteEl) noteEl.textContent = 'Top UFs por impacto financeiro absoluto da auditoria.';
+      auditBiRenderFinancialImpactBarChart(chartKey, ufDestRows);
       return;
     }
     if (chartKey === 'temporal') {
@@ -2146,10 +2260,14 @@
         auditBiSetCardEmpty(chartKey, AUDIT_BI_DIVERGENCE_UNAVAILABLE_MESSAGE, false);
         return;
       }
-      var temporalRows = auditBiAggregateByDate(filteredRows).map(function (row) {
+      var temporalAggregated = auditBiAggregateByDate(filteredRows);
+      var temporalRows = temporalAggregated.map(function (row) {
         return {
           label: auditBiSafeText(row.data) || '-',
-          value: auditBiGetNumeric(row.divergencia_liquida)
+          value: auditBiGetNumeric(row.impacto_total),
+          cobrado_a_mais: auditBiGetNumeric(row.cobrado_a_mais),
+          cobrado_a_menor: auditBiGetNumeric(row.cobrado_a_menor),
+          impacto_total: auditBiGetNumeric(row.impacto_total)
         };
       });
       if (!temporalRows.length) {
@@ -2157,14 +2275,21 @@
         return;
       }
       auditBiSetCardEmpty(chartKey, '', true);
-      if (noteEl) noteEl.textContent = 'Série diária da divergência líquida no período auditado.';
-      auditBiRenderSimpleChart(chartKey, temporalRows.map(function (row) { return row.label; }), temporalRows.map(function (row) { return row.value; }), {
-        type: 'line',
-        datasetLabel: 'Divergência líquida',
-        valueFormatter: auditBiFormatCurrency,
-        chartColor: '#7cc4ff',
-        areaColor: 'rgba(124, 196, 255, 0.18)'
-      });
+      if (noteEl) noteEl.textContent = 'Série diária do impacto financeiro absoluto no período auditado.';
+      auditBiRenderSimpleChart(
+        chartKey,
+        temporalRows.map(function (row) { return row.label; }),
+        temporalRows.map(function (row) { return row.value; }),
+        {
+          type: 'line',
+          datasetLabel: 'Impacto total',
+          valueFormatter: auditBiFormatAbsoluteCurrency,
+          nonNegativeCurrency: true,
+          chartColor: '#7cc4ff',
+          areaColor: 'rgba(124, 196, 255, 0.18)',
+          tooltipRows: temporalRows
+        }
+      );
       return;
     }
     if (chartKey === 'pareto_transportadora') {
@@ -2952,6 +3077,79 @@ function renderDocumentItem(doc) {
   var FREIGHT_WEIGHT_LIMITS = [30, 50, 70, 100];
   var NOT_IDENTIFIED_LABEL = 'não identificado';
 
+  var FREIGHT_ROUTE_DEFAULT_LABELS = {
+    origin: 'Origem',
+    destination: 'Destino',
+    freight_type: 'Tipo',
+    weight_30: 'Até 30 kg',
+    weight_50: 'Até 50 kg',
+    weight_70: 'Até 70 kg',
+    weight_100: 'Até 100 kg',
+    boarding_fee: 'Taxa embarque',
+    freight_value_pct: 'Frete Valor %',
+    freight_weight_kg: 'Excedente por kg',
+    pedagio: 'Pedágio',
+    notes: 'Observações'
+  };
+
+  var FREIGHT_ROUTE_COLUMN_ORDER = [
+    'origin',
+    'destination',
+    'freight_type',
+    'weight_30',
+    'weight_50',
+    'weight_70',
+    'weight_100',
+    'boarding_fee',
+    'freight_value_pct',
+    'freight_weight_kg',
+    'pedagio',
+    'notes'
+  ];
+
+  var FREIGHT_ROUTE_RESERVED_KEYS = {
+    origin: true,
+    destination: true,
+    freight_type: true,
+    type: true,
+    weight_30: true,
+    weight_30kg: true,
+    weight_50: true,
+    weight_50kg: true,
+    weight_70: true,
+    weight_70kg: true,
+    weight_100: true,
+    weight_100kg: true,
+    boarding_fee: true,
+    taxa_embarque_kg: true,
+    freight_value_pct: true,
+    frete_valor_pct: true,
+    freight_weight_kg: true,
+    frete_peso_kg: true,
+    pedagio: true,
+    notes: true,
+    observations: true,
+    observacoes: true,
+    evidence_ref: true,
+    confidence: true,
+    column_labels: true
+  };
+
+  var FREIGHT_ROUTE_EDIT_FIELDS = [
+    { key: 'origin', alt: null },
+    { key: 'destination', alt: null },
+    { key: 'freight_type', alt: 'type' },
+    { key: 'weight_30', alt: 'weight_30kg' },
+    { key: 'weight_50', alt: 'weight_50kg' },
+    { key: 'weight_70', alt: 'weight_70kg' },
+    { key: 'weight_100', alt: 'weight_100kg' },
+    { key: 'boarding_fee', alt: 'taxa_embarque_kg' },
+    { key: 'freight_value_pct', alt: 'frete_valor_pct' },
+    { key: 'freight_weight_kg', alt: 'frete_peso_kg' },
+    { key: 'pedagio', alt: null },
+    { key: 'notes', alt: 'observations' }
+  ];
+
   var PRIMARY_FREIGHT_FEE_PATTERNS = [
     /^taxa\s+embarque(\s+kg)?$/i,
     /^frete\s+valor(\s+%)?$/i,
@@ -2967,34 +3165,6 @@ function renderDocumentItem(doc) {
     { key: 'excluded_items', label: 'Itens não inclusos', altKeys: ['itens_nao_inclusos'] },
     { key: 'termination', label: 'Rescisão', altKeys: ['rescisao'] },
     { key: 'commercial_notes', label: 'Observações comerciais', altKeys: ['observacoes_comerciais'] }
-  ];
-
-  var FREIGHT_ROUTE_TABLE_HEADERS = [
-    'Origem',
-    'Destino',
-    'Tipo',
-    'Até 30 kg',
-    'Até 50 kg',
-    'Até 70 kg',
-    'Até 100 kg',
-    'Taxa Embarque Kg',
-    'Frete Valor %',
-    'Frete Peso Kg',
-    'Observações'
-  ];
-
-  var FREIGHT_ROUTE_EDIT_FIELDS = [
-    { key: 'origin', alt: null },
-    { key: 'destination', alt: null },
-    { key: 'freight_type', alt: 'type' },
-    { key: 'weight_30', alt: 'weight_30kg' },
-    { key: 'weight_50', alt: 'weight_50kg' },
-    { key: 'weight_70', alt: 'weight_70kg' },
-    { key: 'weight_100', alt: 'weight_100kg' },
-    { key: 'boarding_fee', alt: 'taxa_embarque_kg' },
-    { key: 'freight_value_pct', alt: 'frete_valor_pct' },
-    { key: 'freight_weight_kg', alt: 'frete_peso_kg' },
-    { key: 'notes', alt: 'observations' }
   ];
 
   function normalizeTextKey(value) {
@@ -3118,24 +3288,22 @@ function renderDocumentItem(doc) {
     return freightRoutes.map(function (route) {
       if (!route || typeof route !== 'object') return null;
       var routeType = route.freight_type || route.type;
-      function routeField(primary, alias) {
-        var value = route[primary];
-        if (!hasFieldValue(value) && alias) value = route[alias];
-        return hasFieldValue(value) ? String(value) : '';
-      }
-      return {
+      var row = {
         origin: hasFieldValue(route.origin) ? String(route.origin) : NOT_IDENTIFIED_LABEL,
         destination: hasFieldValue(route.destination) ? String(route.destination) : NOT_IDENTIFIED_LABEL,
-        type: hasFieldValue(routeType) ? String(routeType) : NOT_IDENTIFIED_LABEL,
-        weight_30: routeField('weight_30', 'weight_30kg'),
-        weight_50: routeField('weight_50', 'weight_50kg'),
-        weight_70: routeField('weight_70', 'weight_70kg'),
-        weight_100: routeField('weight_100', 'weight_100kg'),
-        boarding_fee: routeField('boarding_fee', 'taxa_embarque_kg'),
-        freight_value_pct: routeField('freight_value_pct', 'frete_valor_pct'),
-        freight_weight_kg: routeField('freight_weight_kg', 'frete_peso_kg'),
-        notes: routeField('notes') || routeField('observations') || routeField('observacoes')
+        freight_type: hasFieldValue(routeType) ? String(routeType) : NOT_IDENTIFIED_LABEL
       };
+      FREIGHT_ROUTE_COLUMN_ORDER.forEach(function (key) {
+        if (key === 'origin' || key === 'destination' || key === 'freight_type') return;
+        var value = readFreightRouteColumnValue(route, key);
+        if (hasFieldValue(value)) row[key] = value;
+      });
+      Object.keys(route).forEach(function (key) {
+        if (FREIGHT_ROUTE_RESERVED_KEYS[key] || key in row) return;
+        var extraValue = readFreightRouteColumnValue(route, key);
+        if (hasFieldValue(extraValue)) row[key] = extraValue;
+      });
+      return row;
     }).filter(Boolean);
   }
 
@@ -3151,27 +3319,36 @@ function renderDocumentItem(doc) {
 
     if (!hasAnyWeight && !hasAnyFee && !textualNotes.length) return [];
 
-    return [{
+    var partialRow = {
       origin: NOT_IDENTIFIED_LABEL,
       destination: NOT_IDENTIFIED_LABEL,
-      type: NOT_IDENTIFIED_LABEL,
-      weight_30: cols[30],
-      weight_50: cols[50],
-      weight_70: cols[70],
-      weight_100: cols[100],
-      boarding_fee: primaryFees.boarding_fee,
-      freight_value_pct: primaryFees.freight_value_pct,
-      freight_weight_kg: primaryFees.freight_weight_kg,
-      notes: textualNotes.join('; ')
-    }];
+      freight_type: NOT_IDENTIFIED_LABEL
+    };
+    FREIGHT_WEIGHT_LIMITS.forEach(function (limit) {
+      if (hasFieldValue(cols[limit])) partialRow['weight_' + limit] = cols[limit];
+    });
+    if (hasFieldValue(primaryFees.boarding_fee)) partialRow.boarding_fee = primaryFees.boarding_fee;
+    if (hasFieldValue(primaryFees.freight_value_pct)) partialRow.freight_value_pct = primaryFees.freight_value_pct;
+    if (hasFieldValue(primaryFees.freight_weight_kg)) partialRow.freight_weight_kg = primaryFees.freight_weight_kg;
+    if (textualNotes.length) partialRow.notes = textualNotes.join('; ');
+    return [partialRow];
   }
 
   function resolveFreightRouteRows(tempTable) {
     var freightRoutes = Array.isArray(tempTable.freight_routes) ? tempTable.freight_routes : [];
     if (freightRoutes.length) {
-      return { rows: buildStructuredFreightRows(freightRoutes), isPartial: false };
+      return {
+        rows: buildStructuredFreightRows(freightRoutes),
+        columns: resolveFreightRouteColumns(freightRoutes),
+        isPartial: false
+      };
     }
-    return { rows: buildPartialFreightRows(tempTable), isPartial: true };
+    var partialRows = buildPartialFreightRows(tempTable);
+    return {
+      rows: partialRows,
+      columns: resolvePartialFreightRouteColumns(tempTable),
+      isPartial: true
+    };
   }
 
   function appendTableCell(tr, text, isHeader, allowEmpty) {
@@ -3194,8 +3371,107 @@ function renderDocumentItem(doc) {
     }
   }
 
+  function mergeFreightRouteColumnLabels(routes) {
+    var labels = {};
+    (Array.isArray(routes) ? routes : []).forEach(function (route) {
+      if (!route || typeof route !== 'object' || !route.column_labels || typeof route.column_labels !== 'object') {
+        return;
+      }
+      Object.keys(route.column_labels).forEach(function (key) {
+        if (hasFieldValue(route.column_labels[key])) {
+          labels[key] = String(route.column_labels[key]);
+        }
+      });
+    });
+    return labels;
+  }
+
+  function routeFieldHasVisibleValue(route, key) {
+    if (!route || typeof route !== 'object') return false;
+    if (hasFieldValue(route[key])) return true;
+    var field = FREIGHT_ROUTE_EDIT_FIELDS.find(function (item) { return item.key === key; });
+    if (field && field.alt && hasFieldValue(route[field.alt])) return true;
+    return false;
+  }
+
+  function readFreightRouteColumnValue(route, key) {
+    if (!route || typeof route !== 'object') return '';
+    if (hasFieldValue(route[key])) return String(route[key]);
+    var field = FREIGHT_ROUTE_EDIT_FIELDS.find(function (item) { return item.key === key; });
+    if (field && field.alt && hasFieldValue(route[field.alt])) return String(route[field.alt]);
+    return '';
+  }
+
+  function resolveFreightRouteColumnLabel(key, mergedLabels) {
+    if (mergedLabels && hasFieldValue(mergedLabels[key])) return String(mergedLabels[key]);
+    if (FREIGHT_ROUTE_DEFAULT_LABELS[key]) return FREIGHT_ROUTE_DEFAULT_LABELS[key];
+    return String(key);
+  }
+
+  function resolveFreightRouteColumns(routes) {
+    var mergedLabels = mergeFreightRouteColumnLabels(routes);
+    var specs = [];
+    var seen = {};
+    FREIGHT_ROUTE_COLUMN_ORDER.forEach(function (key) {
+      var hasValue = (Array.isArray(routes) ? routes : []).some(function (route) {
+        return routeFieldHasVisibleValue(route, key);
+      });
+      if (!hasValue) return;
+      specs.push({
+        key: key,
+        label: resolveFreightRouteColumnLabel(key, mergedLabels)
+      });
+      seen[key] = true;
+    });
+    (Array.isArray(routes) ? routes : []).forEach(function (route) {
+      if (!route || typeof route !== 'object') return;
+      Object.keys(route).forEach(function (key) {
+        if (seen[key] || FREIGHT_ROUTE_RESERVED_KEYS[key]) return;
+        if (!routeFieldHasVisibleValue(route, key)) return;
+        specs.push({
+          key: key,
+          label: resolveFreightRouteColumnLabel(key, mergedLabels)
+        });
+        seen[key] = true;
+      });
+    });
+    return specs;
+  }
+
+  function resolvePartialFreightRouteColumns(tempTable) {
+    var weightData = getWeightColumnValues(tempTable);
+    var primaryFees = getPrimaryFreightFees(tempTable.accessorial_fees);
+    var specs = [];
+    FREIGHT_WEIGHT_LIMITS.forEach(function (limit) {
+      if (hasFieldValue(weightData.cols[limit])) {
+        specs.push({ key: 'weight_' + limit, label: 'Até ' + limit + ' kg' });
+      }
+    });
+    if (hasFieldValue(primaryFees.boarding_fee)) {
+      specs.push({ key: 'boarding_fee', label: FREIGHT_ROUTE_DEFAULT_LABELS.boarding_fee });
+    }
+    if (hasFieldValue(primaryFees.freight_value_pct)) {
+      specs.push({ key: 'freight_value_pct', label: FREIGHT_ROUTE_DEFAULT_LABELS.freight_value_pct });
+    }
+    if (hasFieldValue(primaryFees.freight_weight_kg)) {
+      specs.push({ key: 'freight_weight_kg', label: FREIGHT_ROUTE_DEFAULT_LABELS.freight_weight_kg });
+    }
+    if (specs.length || weightData.notes.length) {
+      specs.unshift(
+        { key: 'origin', label: FREIGHT_ROUTE_DEFAULT_LABELS.origin },
+        { key: 'destination', label: FREIGHT_ROUTE_DEFAULT_LABELS.destination },
+        { key: 'freight_type', label: FREIGHT_ROUTE_DEFAULT_LABELS.freight_type }
+      );
+      if (weightData.notes.length) {
+        specs.push({ key: 'notes', label: FREIGHT_ROUTE_DEFAULT_LABELS.notes });
+      }
+    }
+    return specs;
+  }
+
   function renderEditableFreightRoutesTable(container, tempTable) {
     var routes = Array.isArray(tempTable.freight_routes) ? tempTable.freight_routes : [];
+    var columns = resolveFreightRouteColumns(routes);
     var scrollWrap = document.createElement('div');
     scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll';
 
@@ -3204,8 +3480,8 @@ function renderDocumentItem(doc) {
 
     var thead = document.createElement('thead');
     var headerRow = document.createElement('tr');
-    FREIGHT_ROUTE_TABLE_HEADERS.forEach(function (heading) {
-      appendTableCell(headerRow, heading, true, false);
+    columns.forEach(function (column) {
+      appendTableCell(headerRow, column.label, true, false);
     });
     var actionsHeader = document.createElement('th');
     actionsHeader.scope = 'col';
@@ -3219,11 +3495,19 @@ function renderDocumentItem(doc) {
     routes.forEach(function (route, rowIndex) {
       if (!route || typeof route !== 'object') return;
       var tr = document.createElement('tr');
-      FREIGHT_ROUTE_EDIT_FIELDS.forEach(function (field) {
-        appendEditableCell(tr, readFreightRouteField(route, field), function (newValue) {
-          if (!currentTempTable.freight_routes[rowIndex]) return;
-          writeFreightRouteField(currentTempTable.freight_routes[rowIndex], field, newValue);
-        });
+      columns.forEach(function (column) {
+        var field = FREIGHT_ROUTE_EDIT_FIELDS.find(function (item) { return item.key === column.key; });
+        if (field) {
+          appendEditableCell(tr, readFreightRouteField(route, field), function (newValue) {
+            if (!currentTempTable.freight_routes[rowIndex]) return;
+            writeFreightRouteField(currentTempTable.freight_routes[rowIndex], field, newValue);
+          });
+        } else {
+          appendEditableCell(tr, readFreightRouteColumnValue(route, column.key), function (newValue) {
+            if (!currentTempTable.freight_routes[rowIndex]) return;
+            currentTempTable.freight_routes[rowIndex][column.key] = newValue;
+          });
+        }
       });
       appendRowDeleteCell(tr, function () {
         if (!Array.isArray(currentTempTable.freight_routes)) return;
@@ -3258,6 +3542,7 @@ function renderDocumentItem(doc) {
 
     var resolved = resolveFreightRouteRows(tempTable);
     var rows = resolved.rows;
+    var columns = resolved.columns;
 
     if (resolved.isPartial) {
       var badgeRow = document.createElement('div');
@@ -3290,8 +3575,8 @@ function renderDocumentItem(doc) {
 
     var thead = document.createElement('thead');
     var headerRow = document.createElement('tr');
-    FREIGHT_ROUTE_TABLE_HEADERS.forEach(function (heading) {
-      appendTableCell(headerRow, heading, true, false);
+    columns.forEach(function (column) {
+      appendTableCell(headerRow, column.label, true, false);
     });
     thead.appendChild(headerRow);
     table.appendChild(thead);
@@ -3299,17 +3584,11 @@ function renderDocumentItem(doc) {
     var tbody = document.createElement('tbody');
     rows.forEach(function (row) {
       var tr = document.createElement('tr');
-      appendTableCell(tr, row.origin, false, false);
-      appendTableCell(tr, row.destination, false, false);
-      appendTableCell(tr, row.type, false, false);
-      appendTableCell(tr, row.weight_30, false, false);
-      appendTableCell(tr, row.weight_50, false, false);
-      appendTableCell(tr, row.weight_70, false, false);
-      appendTableCell(tr, row.weight_100, false, false);
-      appendTableCell(tr, row.boarding_fee, false, false);
-      appendTableCell(tr, row.freight_value_pct, false, false);
-      appendTableCell(tr, row.freight_weight_kg, false, false);
-      appendTableCell(tr, row.notes, false, true);
+      columns.forEach(function (column) {
+        var cellValue = row[column.key];
+        var allowEmpty = column.key !== 'origin' && column.key !== 'destination' && column.key !== 'freight_type';
+        appendTableCell(tr, cellValue, false, allowEmpty);
+      });
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
@@ -3481,7 +3760,7 @@ function renderDocumentItem(doc) {
               currentTempTable.freight_tables[tableIndex].rows[rowIndex][col] = newValue;
             });
           } else {
-            appendTableCell(tr, row[col], false, false);
+            appendTableCell(tr, row[col], false, true);
           }
         });
       } else if (!editMode) {
@@ -3933,6 +4212,13 @@ function renderDocumentItem(doc) {
       updateTempTableModalFooter();
     });
 
+    var taxTab = makeTab('cleideAuditTempTableTabTaxes', 'Impostos', tempTableModalActiveTab === 'taxes');
+    taxTab.addEventListener('click', function () {
+      tempTableModalActiveTab = 'taxes';
+      renderTempTableModalContent(tempTable);
+      updateTempTableModalFooter();
+    });
+
     var coverageTab = makeTab('cleideAuditTempTableTabCoverage', 'Cidades atendidas', tempTableModalActiveTab === 'coverage');
     coverageTab.addEventListener('click', function () {
       tempTableModalActiveTab = 'coverage';
@@ -3941,6 +4227,9 @@ function renderDocumentItem(doc) {
     });
 
     tabs.appendChild(freightTab);
+    if (shouldShowTaxTab(tempTable)) {
+      tabs.appendChild(taxTab);
+    }
     if (shouldShowCoverageTab(tempTable)) {
       tabs.appendChild(coverageTab);
     }
@@ -4217,6 +4506,157 @@ function renderDocumentItem(doc) {
     return 'Ignorado — ' + reasonCode.replace(/_/g, ' ');
   }
 
+  function formatAuditPercent(value) {
+    if (!hasFieldValue(value)) return '—';
+    var n = Number(value);
+    if (!isFinite(n)) return String(value);
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
+  }
+
+  function auditDetailsWithoutTaxLines(details) {
+    var text = auditMemoryDisplayText(details);
+    if (!text) return '';
+    return text.split(' | ').filter(function (part) {
+      var trimmed = part.trim();
+      if (!trimmed) return false;
+      if (trimmed.indexOf('Subtotal antes dos impostos:') === 0) return false;
+      if (trimmed.indexOf('ICMS:') === 0) return false;
+      if (trimmed.indexOf('ICMS por dentro:') === 0) return false;
+      if (trimmed.indexOf('ISS:') === 0) return false;
+      if (trimmed.indexOf('ISS por dentro:') === 0) return false;
+      if (trimmed.indexOf('Fonte:') === 0) return false;
+      if (trimmed === 'Alíquota editada pelo usuário.') return false;
+      if (trimmed.indexOf('Total esperado com impostos:') === 0) return false;
+      if (trimmed.indexOf('ISS não aplicado nesta linha:') === 0) return false;
+      if (trimmed.indexOf('Base parcial:') === 0) return false;
+      return true;
+    }).join(' — ');
+  }
+
+  function auditRowBasisTextWithoutTax(row) {
+    if (!row || typeof row !== 'object') return '';
+    var basis = auditMemoryDisplayText(row.calculation_basis);
+    var details = auditDetailsWithoutTaxLines(row.calculation_details);
+    var parts = [];
+    if (basis) parts.push(basis);
+    if (details && details !== basis) parts.push(details);
+    return parts.join(' — ');
+  }
+
+  function hasAppliedTaxComponents(components) {
+    if (!components || typeof components !== 'object') return false;
+    if (!Array.isArray(components.tax_components)) return false;
+    return components.tax_components.some(function (item) {
+      if (!item || typeof item !== 'object' || item.applied !== true) return false;
+      if (!hasFieldValue(item.amount)) return false;
+      return Number(item.amount) > 0;
+    });
+  }
+
+  function auditDiscreteIgnoredTaxNotes(row, components) {
+    var notes = [];
+    if (components && Array.isArray(components.tax_components)) {
+      components.tax_components.forEach(function (item) {
+        if (!item || typeof item !== 'object' || item.applied === true) return;
+        var reason = auditMemoryDisplayText(item.ignored_reason);
+        if (!reason) return;
+        var taxType = auditMemoryDisplayText(item.tax_type) || 'Imposto';
+        notes.push({
+          component: taxType,
+          basis: reason,
+          amount: null,
+          ignored: true
+        });
+      });
+    }
+    var details = auditMemoryDisplayText(row && row.calculation_details);
+    if (details && details.indexOf('ISS não aplicado nesta linha:') >= 0) {
+      var issNote = details.split(' | ').filter(function (part) {
+        return part.trim().indexOf('ISS não aplicado nesta linha:') === 0;
+      })[0];
+      if (issNote) {
+        var alreadyListed = notes.some(function (note) {
+          return note.component === 'ISS' && note.basis === issNote.trim();
+        });
+        if (!alreadyListed) {
+          notes.push({
+            component: 'ISS',
+            basis: issNote.trim(),
+            amount: null,
+            ignored: true
+          });
+        }
+      }
+    }
+    return notes;
+  }
+
+  function auditTaxPartialBaseNote(row) {
+    var details = auditMemoryDisplayText(row && row.calculation_details);
+    if (!details) return '';
+    var note = details.split(' | ').filter(function (part) {
+      return part.trim().indexOf('Base parcial:') === 0;
+    })[0];
+    return note ? note.trim() : '';
+  }
+
+  function buildAuditTaxBasisText(taxItem) {
+    if (!taxItem || typeof taxItem !== 'object') return '';
+    if (taxItem.calculation_mode === 'inside') {
+      var parts = [];
+      if (hasFieldValue(taxItem.rate) && hasFieldValue(taxItem.base_amount)) {
+        parts.push(
+          formatAuditPercent(taxItem.rate) + ' por dentro sobre ' + formatAuditMoneyWithCurrency(taxItem.base_amount)
+        );
+      }
+      if (hasFieldValue(taxItem.amount)) {
+        parts.push('imposto ' + formatAuditMoneyWithCurrency(taxItem.amount));
+      }
+      var sourceName = auditMemoryDisplayText(taxItem.source_name);
+      if (sourceName) parts.push('Fonte: ' + sourceName);
+      if (taxItem.user_edited === true) parts.push('Alíquota editada pelo usuário.');
+      return parts.join(' — ');
+    }
+    var parts = [];
+    if (hasFieldValue(taxItem.rate) && hasFieldValue(taxItem.base_amount)) {
+      parts.push(
+        formatAuditPercent(taxItem.rate) + ' sobre ' + formatAuditMoneyWithCurrency(taxItem.base_amount)
+      );
+    }
+    var sourceName = auditMemoryDisplayText(taxItem.source_name);
+    if (sourceName) parts.push('Fonte: ' + sourceName);
+    if (taxItem.user_edited === true) parts.push('Alíquota editada pelo usuário.');
+    return parts.join(' — ');
+  }
+
+  function buildAuditTaxMemoryRows(row, components) {
+    if (!hasAppliedTaxComponents(components)) return [];
+    var memoryRows = [];
+    var partialNote = auditTaxPartialBaseNote(row);
+    if (hasFieldValue(components.subtotal_before_taxes)) {
+      memoryRows.push({
+        component: 'Subtotal antes dos impostos',
+        basis: partialNote || 'Soma dos componentes antes dos impostos',
+        amount: components.subtotal_before_taxes,
+        ignored: false
+      });
+    }
+
+    components.tax_components.forEach(function (item) {
+      if (!item || typeof item !== 'object' || item.applied !== true) return;
+      if (!hasFieldValue(item.amount) || Number(item.amount) <= 0) return;
+      var taxType = auditMemoryDisplayText(item.tax_type) || 'Imposto';
+      memoryRows.push({
+        component: taxType,
+        basis: buildAuditTaxBasisText(item),
+        amount: item.amount,
+        ignored: false
+      });
+    });
+
+    return memoryRows;
+  }
+
   function hasAuditCalculationMemoryDetail(row) {
     if (!row || typeof row !== 'object') return false;
     if (auditRowBasisText(row)) return true;
@@ -4226,6 +4666,8 @@ function renderDocumentItem(doc) {
     if (components.freight_value && typeof components.freight_value === 'object') return true;
     if (components.tariff_freight_value && typeof components.tariff_freight_value === 'object') return true;
     if (Array.isArray(components.accessorial_fees) && components.accessorial_fees.length) return true;
+    if (hasAppliedTaxComponents(components)) return true;
+    if (auditDiscreteIgnoredTaxNotes(row, components).length) return true;
     if (Array.isArray(components.ignored_accessorial_fees) && components.ignored_accessorial_fees.length) {
       return components.ignored_accessorial_fees.some(function (item) {
         return !!auditIgnoredReasonText(item);
@@ -4280,6 +4722,25 @@ function renderDocumentItem(doc) {
       });
     }
 
+    if (hasComponents) {
+      var routeToll = components.route_toll || components.tariff_route_toll;
+      if (routeToll && typeof routeToll === 'object' && hasFieldValue(routeToll.amount)) {
+        memoryRows.push({
+          component: auditMemoryDisplayText(routeToll.source_column) || 'Pedágio',
+          basis: auditComponentBasisText(routeToll, row),
+          amount: routeToll.amount,
+          ignored: false
+        });
+      } else if (hasFieldValue(row.route_toll_amount)) {
+        memoryRows.push({
+          component: 'Pedágio',
+          basis: '',
+          amount: row.route_toll_amount,
+          ignored: false
+        });
+      }
+    }
+
     if (hasComponents && Array.isArray(components.accessorial_fees)) {
       components.accessorial_fees.forEach(function (item) {
         if (!item || typeof item !== 'object') return;
@@ -4306,6 +4767,15 @@ function renderDocumentItem(doc) {
           ignored: true
         });
       });
+    }
+
+    if (hasComponents) {
+      memoryRows = memoryRows.concat(buildAuditTaxMemoryRows(row, components));
+      if (!hasAppliedTaxComponents(components)) {
+        auditDiscreteIgnoredTaxNotes(row, components).forEach(function (note) {
+          memoryRows.push(note);
+        });
+      }
     }
 
     return memoryRows;
@@ -4412,7 +4882,9 @@ function renderDocumentItem(doc) {
     appendDetailRow(summary, 'Status', auditStatusLabel(row.status));
     body.appendChild(summary);
 
-    var basisText = auditRowBasisText(row);
+    var basisText = hasAppliedTaxComponents(row.calculation_components)
+      ? auditRowBasisTextWithoutTax(row)
+      : auditRowBasisText(row);
     if (basisText) {
       appendDetailRow(body, 'Regra/base', basisText);
     }
@@ -4461,7 +4933,9 @@ function renderDocumentItem(doc) {
     totalRow.className = 'cleide-audit-calculation-memory-total';
     var totalLabel = document.createElement('span');
     totalLabel.className = 'cleide-audit-calculation-memory-total-label';
-    totalLabel.textContent = 'Total esperado:';
+    totalLabel.textContent = hasAppliedTaxComponents(row.calculation_components)
+      ? 'Total esperado com impostos:'
+      : 'Total esperado:';
     var totalValue = document.createElement('strong');
     totalValue.className = 'cleide-audit-calculation-memory-total-value';
     totalValue.textContent = formatAuditMoneyWithCurrency(row.expected_freight);
@@ -5351,6 +5825,742 @@ function renderDocumentItem(doc) {
       });
   }
 
+  function normalizeTaxLocationText(value) {
+    var text = String(value == null ? '' : value).trim();
+    if (!text) return '';
+    text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    text = text.toUpperCase().replace(/[_\-\/.,:;]+/g, ' ').replace(/[^A-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    return text;
+  }
+
+  function resolveTaxStateNameToUf(value) {
+    var key = normalizeTaxLocationText(value);
+    return key ? (BR_STATE_NAME_TO_UF[key] || '') : '';
+  }
+
+  function resolveTaxCityNameToUf(value) {
+    var key = normalizeTaxLocationText(value);
+    if (!key) return '';
+    return KNOWN_CITY_TO_UF[key] || '';
+  }
+
+  function normalizeTaxUf(value) {
+    var text = String(value || '').trim().toUpperCase();
+    return BRAZILIAN_UFS.indexOf(text) !== -1 ? text : '';
+  }
+
+  function extractTaxUfTokens(value) {
+    var text = String(value || '').toUpperCase();
+    var tokens = [];
+    var parts = text.split(/[^A-Z]+/);
+    parts.forEach(function (part) {
+      if (BRAZILIAN_UFS.indexOf(part) !== -1 && tokens.indexOf(part) === -1) {
+        tokens.push(part);
+      }
+    });
+    return tokens;
+  }
+
+  function taxDestinationFieldKind(key) {
+    var normalized = normalizeTextKey(key).replace(/\s+/g, '_');
+    if (normalized === 'destination_uf' || normalized === 'uf_destino' || normalized === 'destino_uf') return 'uf';
+    if (normalized.indexOf('uf_destino') !== -1 || normalized.indexOf('destination_uf') !== -1) return 'uf';
+    if (normalized.indexOf('estado') !== -1 && (normalized.indexOf('destino') !== -1 || normalized.indexOf('destination') !== -1)) return 'state';
+    if (normalized.indexOf('cidade') !== -1 && (normalized.indexOf('destino') !== -1 || normalized.indexOf('destination') !== -1)) return 'city';
+    if (normalized.indexOf('destino') !== -1 || normalized.indexOf('destination') !== -1) {
+      if (normalized.indexOf('estado') !== -1) return 'state';
+      if (normalized.indexOf('uf') !== -1) return 'uf';
+      return 'city';
+    }
+    return '';
+  }
+
+  function destinationUfFieldScore(key) {
+    var kind = taxDestinationFieldKind(key);
+    if (kind === 'uf') return 3;
+    if (kind === 'state') return 2;
+    if (kind === 'city') return 1;
+    return 0;
+  }
+
+  function resolveTaxLocationFindings(value, fieldKind) {
+    var text = String(value == null ? '' : value).trim();
+    if (!text) return [];
+    var findings = [];
+    var seen = {};
+
+    function append(uf, source) {
+      if (!uf || seen[uf]) return;
+      seen[uf] = true;
+      findings.push({ uf: uf, source: source, evidence: text });
+    }
+
+    if (fieldKind === 'uf') {
+      var directUf = normalizeTaxUf(text);
+      if (directUf) append(directUf, 'automatic');
+      else extractTaxUfTokens(text).forEach(function (uf) { append(uf, 'automatic'); });
+      return findings;
+    }
+
+    if (fieldKind === 'state') {
+      var stateUf = resolveTaxStateNameToUf(text);
+      if (stateUf) append(stateUf, 'inferred_state');
+      else extractTaxUfTokens(text).forEach(function (uf) { append(uf, 'automatic'); });
+      return findings;
+    }
+
+    var cityUf = resolveTaxCityNameToUf(text);
+    if (cityUf) {
+      append(cityUf, 'inferred_city');
+      return findings;
+    }
+    stateUf = resolveTaxStateNameToUf(text);
+    if (stateUf) {
+      append(stateUf, 'inferred_state');
+      return findings;
+    }
+    extractTaxUfTokens(text).forEach(function (uf) { append(uf, 'automatic'); });
+    return findings;
+  }
+
+  function collectTaxDestinationFindingsFromValue(value, findings, keyHint) {
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      value.forEach(function (item) {
+        collectTaxDestinationFindingsFromValue(item, findings, keyHint);
+      });
+      return;
+    }
+    if (typeof value === 'object') {
+      Object.keys(value).forEach(function (key) {
+        var fieldKind = taxDestinationFieldKind(key);
+        if (fieldKind) {
+          resolveTaxLocationFindings(value[key], fieldKind).forEach(function (item) {
+            findings.push(item);
+          });
+        }
+        collectTaxDestinationFindingsFromValue(value[key], findings, key);
+      });
+      return;
+    }
+    if (keyHint) {
+      var hintKind = taxDestinationFieldKind(keyHint);
+      if (hintKind) {
+        resolveTaxLocationFindings(value, hintKind).forEach(function (item) {
+          findings.push(item);
+        });
+      }
+    }
+  }
+
+  function mergeTaxDestinationEntry(byUf, uf, source, evidence, userConfirmed) {
+    var normalizedUf = normalizeTaxUf(uf);
+    if (!normalizedUf) return;
+    var evidenceText = String(evidence || '').trim();
+    if (!byUf[normalizedUf]) {
+      byUf[normalizedUf] = {
+        uf: normalizedUf,
+        source: source || 'manual',
+        evidence: evidenceText ? [evidenceText] : [],
+        user_confirmed: !!userConfirmed
+      };
+      return;
+    }
+    var entry = byUf[normalizedUf];
+    if (evidenceText && entry.evidence.indexOf(evidenceText) === -1) {
+      entry.evidence.push(evidenceText);
+    }
+    var priority = { manual: 4, automatic: 3, inferred_state: 2, inferred_city: 1 };
+    if ((priority[source] || 0) > (priority[entry.source] || 0)) {
+      entry.source = source;
+    }
+    if (userConfirmed) entry.user_confirmed = true;
+  }
+
+  function consolidateTaxDestinationUfs(tempTable, submittedDestinationUfs) {
+    var byUf = {};
+    if (!submittedDestinationUfs) {
+      var findings = [];
+      if (tempTable) {
+        ['destinations', 'routes', 'freight_routes', 'freight_tables', 'extracted_items'].forEach(function (key) {
+          collectTaxDestinationFindingsFromValue(tempTable[key], findings, '');
+        });
+      }
+      findings.forEach(function (item) {
+        mergeTaxDestinationEntry(byUf, item.uf, item.source, item.evidence, false);
+      });
+    } else {
+      (Array.isArray(submittedDestinationUfs) ? submittedDestinationUfs : []).forEach(function (item) {
+        if (!item || typeof item !== 'object') return;
+        var uf = normalizeTaxUf(item.uf);
+        if (!uf) return;
+        var evidence = Array.isArray(item.evidence) ? item.evidence : (item.evidence ? [item.evidence] : []);
+        mergeTaxDestinationEntry(byUf, uf, item.source || 'manual', evidence[0] || '', !!item.user_confirmed);
+        if (byUf[uf]) {
+          evidence.slice(1).forEach(function (extra) {
+            var text = String(extra || '').trim();
+            if (text && byUf[uf].evidence.indexOf(text) === -1) byUf[uf].evidence.push(text);
+          });
+        }
+      });
+    }
+    return Object.keys(byUf).sort().map(function (uf) { return byUf[uf]; });
+  }
+
+  function extractTaxDestinationUfs(tempTable) {
+    return consolidateTaxDestinationUfs(tempTable).map(function (item) { return item.uf; });
+  }
+
+  function taxDestinationSourceLabel(source) {
+    return TAX_DESTINATION_SOURCE_LABELS[source] || TAX_DESTINATION_SOURCE_LABELS.manual;
+  }
+
+  function syncTaxDestinationUfs(tempTable, options) {
+    options = options || {};
+    var taxConfig = ensureTaxConfigShell(tempTable);
+    if (!options.forceRefresh && Array.isArray(taxConfig.destination_ufs) && taxConfig.destination_ufs.length) {
+      return taxConfig.destination_ufs;
+    }
+    taxConfig.destination_ufs = consolidateTaxDestinationUfs(tempTable);
+    return taxConfig.destination_ufs;
+  }
+
+  function rebuildTaxIcmsRates(tempTable, originUf, previousRates) {
+    var taxConfig = ensureTaxConfigShell(tempTable);
+    var destinationUfs = syncTaxDestinationUfs(tempTable);
+    taxConfig.icms_rates = buildIcmsRatesForOrigin(tempTable, originUf, previousRates, destinationUfs);
+    return taxConfig.icms_rates;
+  }
+
+  function suggestedIcmsRate(originUf, destinationUf) {
+    if (ICMS_7_PERCENT_ORIGIN_UFS.indexOf(originUf) !== -1 && ICMS_7_PERCENT_DESTINATION_UFS.indexOf(destinationUf) !== -1) {
+      return 7.0;
+    }
+    return 12.0;
+  }
+
+  function parseTaxRateInput(value) {
+    var text = String(value === null || value === undefined ? '' : value).trim().replace('%', '').replace(',', '.');
+    if (!text) return null;
+    var parsed = Number(text);
+    return isFinite(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  function formatTaxRate(value) {
+    if (value === null || value === undefined || value === '') return '';
+    var n = Number(value);
+    if (!isFinite(n)) return '';
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+  }
+
+  function taxRatesEqual(a, b) {
+    if (a === null || a === undefined || b === null || b === undefined) return a === b;
+    return Math.abs(Number(a) - Number(b)) < 0.000001;
+  }
+
+  function buildIcmsRatesForOrigin(tempTable, originUf, previousRates, destinationUfs) {
+    var byUf = {};
+    (Array.isArray(previousRates) ? previousRates : []).forEach(function (rate) {
+      if (!rate || typeof rate !== 'object') return;
+      var uf = normalizeTaxUf(rate.destination_uf);
+      if (uf) byUf[uf] = rate;
+    });
+    var destinationEntries = Array.isArray(destinationUfs)
+      ? destinationUfs
+      : syncTaxDestinationUfs(tempTable);
+    return destinationEntries.map(function (entry) {
+      var destinationUf = typeof entry === 'string' ? entry : entry.uf;
+      var previous = byUf[destinationUf] || {};
+      var sameUf = originUf === destinationUf;
+      var suggested = sameUf ? null : suggestedIcmsRate(originUf, destinationUf);
+      var hasPreviousApplied = Object.prototype.hasOwnProperty.call(previous, 'applied_rate');
+      var applied = hasPreviousApplied ? previous.applied_rate : suggested;
+      if (applied === '') applied = null;
+      var userEdited = hasPreviousApplied && !taxRatesEqual(applied, suggested);
+      return {
+        destination_uf: destinationUf,
+        operation_type: sameUf ? 'intermunicipal' : 'interstate',
+        suggested_rate: suggested,
+        applied_rate: applied,
+        source_name: sameUf ? ICMS_INTERMUNICIPAL_SOURCE_NAME : ICMS_INTERSTATE_SOURCE_NAME,
+        source_type: sameUf ? 'manual' : 'official',
+        user_edited: userEdited,
+        is_active: applied !== null && applied !== undefined && applied !== ''
+      };
+    });
+  }
+
+  function ensureTaxConfigShell(tempTable) {
+    if (!tempTable.tax_config || typeof tempTable.tax_config !== 'object') {
+      tempTable.tax_config = {
+        include_taxes: null,
+        origin_uf: '',
+        origin_city: '',
+        iss_rate: null,
+        destination_ufs: [],
+        icms_rates: []
+      };
+    }
+    if (!Array.isArray(tempTable.tax_config.destination_ufs)) {
+      tempTable.tax_config.destination_ufs = [];
+    }
+    if (!Array.isArray(tempTable.tax_config.icms_rates)) {
+      tempTable.tax_config.icms_rates = [];
+    }
+    return tempTable.tax_config;
+  }
+
+  function setTaxOriginUf(tempTable, originUf) {
+    var taxConfig = ensureTaxConfigShell(tempTable);
+    var normalizedUf = normalizeTaxUf(originUf);
+    var previousRates = taxConfig.icms_rates || [];
+    taxConfig.origin_uf = normalizedUf;
+    syncTaxDestinationUfs(tempTable);
+    taxConfig.icms_rates = normalizedUf
+      ? buildIcmsRatesForOrigin(tempTable, normalizedUf, previousRates, taxConfig.destination_ufs)
+      : [];
+  }
+
+  function addManualTaxDestinationUf(tempTable, uf) {
+    var taxConfig = ensureTaxConfigShell(tempTable);
+    var normalizedUf = normalizeTaxUf(uf);
+    if (!normalizedUf) return false;
+    var exists = taxConfig.destination_ufs.some(function (item) {
+      return item && normalizeTaxUf(item.uf) === normalizedUf;
+    });
+    if (exists) return false;
+    taxConfig.destination_ufs.push({
+      uf: normalizedUf,
+      source: 'manual',
+      evidence: [],
+      user_confirmed: true
+    });
+    taxConfig.destination_ufs.sort(function (a, b) {
+      return String(a.uf).localeCompare(String(b.uf));
+    });
+    if (taxConfig.origin_uf) {
+      taxConfig.icms_rates = buildIcmsRatesForOrigin(
+        tempTable,
+        taxConfig.origin_uf,
+        taxConfig.icms_rates,
+        taxConfig.destination_ufs
+      );
+    }
+    return true;
+  }
+
+  function removeTaxDestinationUf(tempTable, uf) {
+    var taxConfig = ensureTaxConfigShell(tempTable);
+    var normalizedUf = normalizeTaxUf(uf);
+    if (!normalizedUf) return;
+    taxConfig.destination_ufs = taxConfig.destination_ufs.filter(function (item) {
+      return !item || normalizeTaxUf(item.uf) !== normalizedUf;
+    });
+    if (taxConfig.origin_uf) {
+      taxConfig.icms_rates = buildIcmsRatesForOrigin(
+        tempTable,
+        taxConfig.origin_uf,
+        taxConfig.icms_rates.filter(function (rate) {
+          return normalizeTaxUf(rate.destination_uf) !== normalizedUf;
+        }),
+        taxConfig.destination_ufs
+      );
+    } else {
+      taxConfig.icms_rates = [];
+    }
+  }
+
+  function renderTaxOption(container, id, label, checked, onChange) {
+    var wrap = document.createElement('label');
+    wrap.className = 'cleide-audit-tax-option';
+    var input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'cleideAuditTaxInclude';
+    input.id = id;
+    input.checked = !!checked;
+    input.addEventListener('change', onChange);
+    var span = document.createElement('span');
+    span.textContent = label;
+    wrap.appendChild(input);
+    wrap.appendChild(span);
+    container.appendChild(wrap);
+  }
+
+  function renderTaxField(container, labelText, input) {
+    var wrap = document.createElement('label');
+    wrap.className = 'cleide-audit-tax-field';
+    var label = document.createElement('span');
+    label.textContent = labelText;
+    wrap.appendChild(label);
+    wrap.appendChild(input);
+    container.appendChild(wrap);
+  }
+
+  function renderTaxConfigFields(container, tempTable, taxConfig) {
+    var fields = document.createElement('div');
+    fields.className = 'cleide-audit-tax-fields';
+
+    var ufSelect = document.createElement('select');
+    ufSelect.className = 'form-control cleide-audit-tax-input';
+    ufSelect.id = 'cleideAuditTaxOriginUf';
+    var emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = 'Selecione';
+    ufSelect.appendChild(emptyOption);
+    BRAZILIAN_UFS.forEach(function (uf) {
+      var option = document.createElement('option');
+      option.value = uf;
+      option.textContent = uf;
+      option.selected = taxConfig.origin_uf === uf;
+      ufSelect.appendChild(option);
+    });
+    ufSelect.addEventListener('change', function () {
+      setTaxOriginUf(currentTempTable, ufSelect.value);
+      renderTempTableModalContent(currentTempTable);
+      updateTempTableModalFooter();
+    });
+    renderTaxField(fields, 'UF origem', ufSelect);
+
+    var cityInput = document.createElement('input');
+    cityInput.type = 'text';
+    cityInput.className = 'form-control cleide-audit-tax-input';
+    cityInput.id = 'cleideAuditTaxOriginCity';
+    cityInput.value = taxConfig.origin_city || '';
+    cityInput.addEventListener('input', function () {
+      ensureTaxConfigShell(currentTempTable).origin_city = cityInput.value;
+    });
+    renderTaxField(fields, 'Cidade origem', cityInput);
+
+    var issInput = document.createElement('input');
+    issInput.type = 'number';
+    issInput.step = '0.0001';
+    issInput.min = '0';
+    issInput.className = 'form-control cleide-audit-tax-input';
+    issInput.id = 'cleideAuditTaxIssRate';
+    issInput.value = taxConfig.iss_rate === null || taxConfig.iss_rate === undefined ? '' : String(taxConfig.iss_rate);
+    issInput.addEventListener('input', function () {
+      ensureTaxConfigShell(currentTempTable).iss_rate = parseTaxRateInput(issInput.value);
+    });
+    renderTaxField(fields, 'ISS (%)', issInput);
+
+    var issHint = document.createElement('p');
+    issHint.className = 'cleide-audit-tax-hint';
+    issHint.textContent = 'O ISS é informado manualmente. Deixe vazio para ignorar no cálculo.';
+    fields.appendChild(issHint);
+    container.appendChild(fields);
+  }
+
+  function renderDestinationUfsSection(container, tempTable, taxConfig) {
+    syncTaxDestinationUfs(tempTable);
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-tax-destination-ufs';
+
+    var status = document.createElement('p');
+    status.className = 'cleide-audit-tax-hint';
+    status.textContent = taxConfig.destination_ufs.length
+      ? 'UFs destino identificadas automaticamente. Revise, adicione ou remova antes de continuar.'
+      : 'Nenhuma UF destino foi identificada automaticamente. Informe as UFs destino para montar a matriz de ICMS.';
+    section.appendChild(status);
+
+    var controls = document.createElement('div');
+    controls.className = 'cleide-audit-tax-destination-controls';
+
+    var ufSelect = document.createElement('select');
+    ufSelect.className = 'form-control cleide-audit-tax-input';
+    ufSelect.id = 'cleideAuditTaxManualDestinationUf';
+    var emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = 'Adicionar UF destino';
+    ufSelect.appendChild(emptyOption);
+    BRAZILIAN_UFS.forEach(function (uf) {
+      var option = document.createElement('option');
+      option.value = uf;
+      option.textContent = uf;
+      ufSelect.appendChild(option);
+    });
+    controls.appendChild(ufSelect);
+
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn btn-secondary cleide-audit-tax-add-uf-btn';
+    addBtn.textContent = 'Adicionar';
+    addBtn.addEventListener('click', function () {
+      if (!addManualTaxDestinationUf(currentTempTable, ufSelect.value)) return;
+      renderTempTableModalContent(currentTempTable);
+      updateTempTableModalFooter();
+    });
+    controls.appendChild(addBtn);
+    section.appendChild(controls);
+
+    if (!taxConfig.destination_ufs.length) {
+      var emptyAlert = document.createElement('p');
+      emptyAlert.className = 'cleide-audit-tax-hint cleide-audit-tax-empty-uf-alert';
+      emptyAlert.textContent = 'Nenhuma alíquota de ICMS será aplicada.';
+      section.appendChild(emptyAlert);
+      container.appendChild(section);
+      return;
+    }
+
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll cleide-audit-tax-table-scroll';
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-freight-table cleide-audit-tax-table cleide-audit-tax-destination-table';
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    ['UF destino', 'Origem', 'Evidências', ''].forEach(function (label) {
+      appendTableCell(headerRow, label, true, false);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    taxConfig.destination_ufs.forEach(function (entry) {
+      var tr = document.createElement('tr');
+      appendTableCell(tr, entry.uf, false, true);
+      appendTableCell(tr, taxDestinationSourceLabel(entry.source), false, true);
+      var evidenceText = Array.isArray(entry.evidence) ? entry.evidence.join(', ') : '';
+      appendTableCell(tr, evidenceText || '—', false, true);
+
+      var actionCell = document.createElement('td');
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn btn-link cleide-audit-tax-remove-uf-btn';
+      removeBtn.textContent = 'Remover';
+      removeBtn.addEventListener('click', function () {
+        removeTaxDestinationUf(currentTempTable, entry.uf);
+        renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
+      });
+      actionCell.appendChild(removeBtn);
+      tr.appendChild(actionCell);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    section.appendChild(scrollWrap);
+    container.appendChild(section);
+  }
+
+  function renderIcmsRatesTable(container, taxConfig) {
+    var notice = document.createElement('p');
+    notice.className = 'cleide-audit-tax-hint';
+    notice.textContent = 'As alíquotas sugeridas de ICMS interestadual usam a regra geral da Resolução Senado Federal nº 22/1989. Revise manualmente quando houver regra fiscal específica.';
+    container.appendChild(notice);
+
+    var emptyHint = document.createElement('p');
+    emptyHint.className = 'cleide-audit-tax-hint';
+    emptyHint.textContent = 'Alíquotas vazias serão ignoradas no cálculo.';
+    container.appendChild(emptyHint);
+
+    if (!taxConfig.origin_uf) return;
+
+    if (!taxConfig.icms_rates.length) {
+      var empty = document.createElement('p');
+      empty.className = 'cleide-audit-temp-table-modal-empty';
+      empty.textContent = 'Nenhuma alíquota de ICMS será aplicada.';
+      container.appendChild(empty);
+      return;
+    }
+
+    var scrollWrap = document.createElement('div');
+    scrollWrap.className = 'cleide-audit-temp-table-modal-freight-scroll cleide-audit-tax-table-scroll';
+    var table = document.createElement('table');
+    table.className = 'cleide-audit-temp-table-modal-freight-table cleide-audit-tax-table';
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    ['UF destino', 'Tipo de operação', 'Alíquota sugerida', 'Alíquota aplicada', 'Fonte', 'Editado pelo usuário', 'Usar no cálculo'].forEach(function (label) {
+      appendTableCell(headerRow, label, true, false);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    taxConfig.icms_rates.forEach(function (rate, index) {
+      var tr = document.createElement('tr');
+      appendTableCell(tr, rate.destination_uf, false, true);
+      appendTableCell(tr, rate.operation_type, false, true);
+      appendTableCell(tr, formatTaxRate(rate.suggested_rate), false, true);
+
+      var rateCell = document.createElement('td');
+      var input = document.createElement('input');
+      input.type = 'number';
+      input.step = '0.0001';
+      input.min = '0';
+      input.className = 'form-control cleide-audit-tax-rate-input';
+      input.value = rate.applied_rate === null || rate.applied_rate === undefined ? '' : String(rate.applied_rate);
+      input.addEventListener('input', function () {
+        var tax = ensureTaxConfigShell(currentTempTable);
+        var row = tax.icms_rates[index];
+        if (!row) return;
+        var parsed = parseTaxRateInput(input.value);
+        row.applied_rate = parsed;
+        row.is_active = parsed !== null;
+        row.user_edited = !taxRatesEqual(parsed, row.suggested_rate);
+      });
+      rateCell.appendChild(input);
+      tr.appendChild(rateCell);
+
+      appendTableCell(tr, rate.source_name, false, true);
+      appendTableCell(tr, rate.user_edited ? 'Sim' : 'Não', false, true);
+
+      var activeCell = document.createElement('td');
+      var checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!rate.is_active;
+      checkbox.addEventListener('change', function () {
+        var tax = ensureTaxConfigShell(currentTempTable);
+        var row = tax.icms_rates[index];
+        if (!row) return;
+        row.is_active = checkbox.checked;
+        if (!checkbox.checked) {
+          row.applied_rate = null;
+          row.user_edited = !taxRatesEqual(null, row.suggested_rate);
+        } else if (row.applied_rate === null || row.applied_rate === undefined || row.applied_rate === '') {
+          row.applied_rate = row.suggested_rate;
+          row.user_edited = false;
+        }
+        renderTempTableModalContent(currentTempTable);
+      });
+      activeCell.appendChild(checkbox);
+      tr.appendChild(activeCell);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    scrollWrap.appendChild(table);
+    container.appendChild(scrollWrap);
+  }
+
+  function renderTaxTabContent(container, tempTable) {
+    appendSectionTitle(container, 'Impostos no cálculo do frete');
+    var section = document.createElement('div');
+    section.className = 'cleide-audit-temp-table-modal-section cleide-audit-tax-section';
+    var taxConfig = ensureTaxConfigShell(tempTable);
+
+    var question = document.createElement('p');
+    question.className = 'cleide-audit-tax-question';
+    question.textContent = 'Deseja incluir os impostos no cálculo do frete?';
+    section.appendChild(question);
+
+    var options = document.createElement('div');
+    options.className = 'cleide-audit-tax-options';
+    renderTaxOption(options, 'cleideAuditTaxNo', 'Não incluir impostos', taxConfig.include_taxes === false, function () {
+      var tax = ensureTaxConfigShell(currentTempTable);
+      tax.include_taxes = false;
+      tax.origin_uf = '';
+      tax.origin_city = '';
+      tax.iss_rate = null;
+      tax.destination_ufs = [];
+      tax.icms_rates = [];
+      renderTempTableModalContent(currentTempTable);
+      updateTempTableModalFooter();
+    });
+    renderTaxOption(options, 'cleideAuditTaxYes', 'Incluir impostos', taxConfig.include_taxes === true, function () {
+      var tax = ensureTaxConfigShell(currentTempTable);
+      tax.include_taxes = true;
+      syncTaxDestinationUfs(currentTempTable, { forceRefresh: !tax.destination_ufs.length });
+      if (tax.origin_uf) {
+        tax.icms_rates = buildIcmsRatesForOrigin(currentTempTable, tax.origin_uf, tax.icms_rates, tax.destination_ufs);
+      }
+      renderTempTableModalContent(currentTempTable);
+      updateTempTableModalFooter();
+    });
+    section.appendChild(options);
+
+    if (taxConfig.include_taxes === true) {
+      renderTaxConfigFields(section, tempTable, taxConfig);
+      renderDestinationUfsSection(section, tempTable, taxConfig);
+      renderIcmsRatesTable(section, taxConfig);
+    }
+    container.appendChild(section);
+  }
+
+  function collectTaxConfigSavePayload() {
+    if (!currentTempTable || !currentTempTable.temp_table_id) return null;
+    var taxConfig = ensureTaxConfigShell(currentTempTable);
+    if (taxConfig.include_taxes !== true && taxConfig.include_taxes !== false) {
+      setTempTableModalError('Escolha se deseja incluir impostos no cálculo do frete.');
+      return null;
+    }
+    if (taxConfig.include_taxes === false) {
+      return {
+        temp_table_id: currentTempTable.temp_table_id,
+        edit_target: { tax_config: { include_taxes: false } },
+        review_action: 'save_draft'
+      };
+    }
+    var originUf = normalizeTaxUf(taxConfig.origin_uf);
+    if (!originUf) {
+      setTempTableModalError('UF origem é obrigatória para incluir impostos.');
+      return null;
+    }
+    var issRate = parseTaxRateInput(taxConfig.iss_rate);
+    var originCity = String(taxConfig.origin_city || '').trim();
+    if (issRate !== null && !originCity) {
+      setTempTableModalError('Cidade origem é obrigatória quando ISS estiver preenchido.');
+      return null;
+    }
+    syncTaxDestinationUfs(currentTempTable);
+    return {
+      temp_table_id: currentTempTable.temp_table_id,
+      edit_target: {
+        tax_config: {
+          include_taxes: true,
+          origin_uf: originUf,
+          origin_city: originCity || null,
+          iss_rate: issRate,
+          destination_ufs: deepCloneTempTable(taxConfig.destination_ufs) || [],
+          icms_rates: deepCloneTempTable(taxConfig.icms_rates) || []
+        }
+      },
+      review_action: 'save_draft'
+    };
+  }
+
+  function saveTaxConfigAndContinue() {
+    if (!currentTempTable || taxSaveInFlight) return;
+    var payload = collectTaxConfigSavePayload();
+    if (!payload) return;
+    taxSaveInFlight = true;
+    tempTableSaveInFlight = true;
+    setTempTableModalError('');
+    updateTempTableModalFooter();
+
+    fetch(API_TEMP_TABLE_SAVE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload)
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true) {
+          setTempTableModalError((res.data && res.data.message) || 'Não foi possível salvar a configuração fiscal.');
+          return;
+        }
+        if (res.data.temp_table) {
+          setCurrentTempTable(res.data.temp_table);
+        }
+        taxStepActive = false;
+        coverageStepActive = true;
+        tempTableModalActiveTab = 'coverage';
+        renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
+        fetchDocuments();
+      })
+      .catch(function () {
+        setTempTableModalError('Não foi possível salvar a configuração fiscal. Verifique sua conexão e tente novamente.');
+      })
+      .finally(function () {
+        taxSaveInFlight = false;
+        tempTableSaveInFlight = false;
+        updateTempTableModalFooter();
+      });
+  }
+
   function renderCoverageUploadHint(container) {
     var hint = document.createElement('p');
     hint.className = 'cleide-audit-temp-table-modal-empty';
@@ -5570,7 +6780,7 @@ function renderDocumentItem(doc) {
       return;
     }
 
-    var showTabs = shouldShowCoverageTab(tempTable) || shouldShowAuditTab(tempTable);
+    var showTabs = shouldShowTaxTab(tempTable) || shouldShowCoverageTab(tempTable) || shouldShowAuditTab(tempTable);
     if (showTabs) {
       renderTempTableModalTabs(body, tempTable);
       var panel = document.createElement('div');
@@ -5579,6 +6789,8 @@ function renderDocumentItem(doc) {
         renderAuditFileTabContent(panel, tempTable);
       } else if (tempTableModalActiveTab === 'coverage') {
         renderCoverageTabContent(panel, tempTable);
+      } else if (tempTableModalActiveTab === 'taxes') {
+        renderTaxTabContent(panel, tempTable);
       } else {
         renderFreightTabContent(panel, tempTable);
       }
@@ -5636,6 +6848,10 @@ function renderDocumentItem(doc) {
 
     if (saveBtn) {
       saveBtn.addEventListener('click', function () {
+        if (tempTableModalActiveTab === 'taxes' && shouldShowTaxTab(currentTempTable)) {
+          saveTaxConfigAndContinue();
+          return;
+        }
         if (tempTableModalActiveTab === 'coverage' && shouldShowCoverageTab(currentTempTable)) {
           saveCoverageTableEdit();
           return;
