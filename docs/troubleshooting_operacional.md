@@ -1,7 +1,7 @@
-﻿# Troubleshooting Operacional
+# Troubleshooting Operacional
 
-Data de consolidacao: `2026-07-08`
-Commit de referencia: `efd54b5`
+Data de consolidacao: `2026-07-10`
+Commit de referencia: `d02ce15`
 
 ## 1. Home publica sem responder
 
@@ -28,7 +28,7 @@ Se a Home logada regredir para discovery puro, tratar como regressao.
 Conferir:
 
 1. atividade-fim estrategica do pedido
-2. `app/copilot_capabilities.md` e `app/capability_taxonomy.py`
+2. `app/copilot_capabilities.md`
 3. payload com `destination = "julia_operational"`
 4. renderizacao das acoes em `app/static/js/chat_behavior.js`
 
@@ -49,7 +49,7 @@ Conferir:
 
 1. `app/cleiton_doc_gemini_files.py`
 2. `app/julia_doc_context.py`
-3. tests `test_julia_chat_documental.py` e `test_cleiton_doc_pdf_gemini.py`
+3. testes `test_julia_chat_documental.py` e `test_cleiton_doc_pdf_gemini.py`
 
 Regra oficial:
 
@@ -104,7 +104,7 @@ Regra oficial:
 - o chat da Cleide continua separado da extracao tecnica
 - Cleiton e o owner operacional da tabela temporaria
 - `temp_table` pode nao existir se a extracao falhar, expirar ou se os documentos fonte mudarem
-- a tabela pode voltar em `processing`, `failed` ou outro estado tecnico do ciclo documental
+- a tabela pode voltar em `processing`, `failed`, `expired`, `discarded` ou outro estado tecnico do ciclo documental
 
 ## 10. Revisao humana da tabela temporaria falhou
 
@@ -174,11 +174,11 @@ Conferir:
 Contrato atual:
 
 - Impacto Financeiro por Transportadora
-- Divergencia Financeira por UF Destino
-- Evolucao da Divergencia no Periodo
+- Impacto Financeiro por UF Destino
+- Evolucao do Impacto Financeiro no Periodo
 - Pareto do Valor Cobrado a Mais
 
-Se aparecer documentacao ou leitura operacional falando em 7 graficos, `UF origem`, `Volume por Transportadora` ou `Pareto por UF` como contrato atual desse BI da auditoria, tratar como documentacao obsoleta.
+Se aparecer documentacao falando em 7 graficos, `UF origem`, `Volume por Transportadora`, `Pareto por UF`, `Divergencia Financeira por UF Destino` ou `Evolucao da Divergencia no Periodo` como contrato atual, tratar como documentacao obsoleta.
 
 ## 15. Arquivos temporarios tecnicos apareceram no Git
 
@@ -191,5 +191,5 @@ Conferir:
 
 Regra oficial:
 
-- artefatos temporarios de teste e da temp_table nao devem ser versionados
+- artefatos temporarios de teste e da `temp_table` nao devem ser versionados
 - `app/cleiton_doc_tmp/` esta coberto pelo `.gitignore`

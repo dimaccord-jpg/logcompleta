@@ -1,7 +1,7 @@
-﻿# Onboarding Tecnico
+# Onboarding Tecnico
 
-Data de consolidacao: `2026-06-30`
-Commit de referencia: `28904e4`
+Data de consolidacao: `2026-07-10`
+Commit de referencia: `d02ce15`
 
 ## Objetivo
 
@@ -17,7 +17,7 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 6. `docs/runbook_onboarding_copilot.md`
 7. `app/README_RUN.md`
 8. `app/README_DEPLOY.md`
-9. `migrations/README`
+9. `docs/runbooks/cleide_homologacao_controlada_checklist.md`
 
 ## Modulos principais do estado atual
 
@@ -47,7 +47,7 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - a tabela temporaria da Cleide Auditoria e fluxo temporario governado, nao persistencia definitiva
 - Cleide continua responsavel pela orientacao conversacional da auditoria
 - Cleiton e o owner operacional da tabela temporaria
-- a tabela temporaria e exibida em card/modal somente leitura
+- a tabela temporaria nasce em modo governado e pode entrar em edicao humana no modal
 - a validacao da tabela temporaria e humana e governada, nao uma nova conversa de IA
 
 ## Regras que nao podem ser quebradas
@@ -74,7 +74,7 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - validar documentos da Julia com os tipos suportados
 - validar `/auditoria-frete`, upload da Cleide Auditoria e status com `temp_table`
 - validar que a tabela temporaria aparece como artefato temporario sujeito a revisao humana
-- validar o modal da tabela temporaria em modo somente leitura
+- validar o modal da tabela temporaria e a entrada em modo de edicao governada
 - validar a revisao humana da tabela temporaria via endpoint dedicado quando aplicavel
 - validar coverage complementar e lote auditado quando o fluxo exigir
 - validar admin do Cleiton

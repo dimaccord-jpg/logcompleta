@@ -1,7 +1,7 @@
-﻿# Estado Oficial Consolidado
+# Estado Oficial Consolidado
 
-Data de consolidacao: `2026-07-08`
-Commit de referencia: `homolog@efd54b5` e `producao@3d5332b`
+Data de consolidacao: `2026-07-10`
+Commit de referencia: `homolog@d02ce15` e `producao@6efa2e2`
 
 ## Escopo confirmado
 
@@ -15,10 +15,10 @@ Commit de referencia: `homolog@efd54b5` e `producao@3d5332b`
 
 ## Estado de ambiente
 
-- `homolog` contem `efd54b5`
+- `homolog` contem `d02ce15`
 - `origin/homolog` esta sincronizada com `homolog`
-- a promocao recente de producao ocorreu por cherry-pick seletivo
-- `producao` contem `3d5332b`
+- `producao` contem `6efa2e2`
+- o `render.yaml` versionado define producao em `main` com deploy manual
 - nao houve migration nova
 - nao houve schema novo
 - nao houve tabela nova
@@ -26,15 +26,15 @@ Commit de referencia: `homolog@efd54b5` e `producao@3d5332b`
 
 ## Cleide Auditoria
 
-- upload documental, `temp_table`, coverage, lote auditado e chat estao ativos
+- upload documental, `temp_table`, coverage opcional, lote auditado e chat estao ativos
 - a `temp_table` continua artefato temporario governado pelo dominio Cleiton
-- a extração tecnica permanece separada do chat
+- a extracao tecnica permanece separada do chat
 - a revisao humana pode editar e salvar a tabela antes de avancar
 - ha correcoes assistidas com preview, apply e undo
 - o BI executivo da auditoria usa 4 graficos:
 - Impacto Financeiro por Transportadora
-- Divergencia Financeira por UF Destino
-- Evolucao da Divergencia no Periodo
+- Impacto Financeiro por UF Destino
+- Evolucao do Impacto Financeiro no Periodo
 - Pareto do Valor Cobrado a Mais
 
 ## Admin
@@ -49,10 +49,7 @@ Commit de referencia: `homolog@efd54b5` e `producao@3d5332b`
 - `tt_*.json`, caches e residuos tecnicos nao entram em commit
 - `.db`, `__pycache__` e `.pytest_cache` nao fazem parte do estado oficial
 
-## Testes validados
+## Testes verificados nesta auditoria documental
 
-```powershell
-pytest tests/test_cleide_audit_correction_service.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_chat_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_context.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py -q
-```
-
-- resultado conhecido: `717 passed, 2 warnings`
+- suite especifica da auditoria Cleide: `804 tests collected`
+- suite completa do reposit�rio: `1660 tests collected`
