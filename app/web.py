@@ -255,6 +255,41 @@ def inject_template_endpoint_helpers():
     }
 
 
+@app.context_processor
+def inject_falha_mensal_vigente_context():
+    from flask import url_for
+
+    inativo = {
+        "falha_mensal_vigente": False,
+        "plano_exibicao": None,
+        "regularizacao_url": url_for("user.regularizar_pagamento"),
+    }
+    try:
+        if not getattr(current_user, "is_authenticated", False):
+            return inativo
+
+        conta_id = getattr(current_user, "conta_id", None)
+        if conta_id is None:
+            return inativo
+
+        from app.services.cleiton_monetizacao_service import (
+            resolver_falha_mensal_vigente_conta,
+        )
+
+        estado = resolver_falha_mensal_vigente_conta(int(conta_id))
+        if not estado.get("falha_mensal_vigente"):
+            return inativo
+
+        return {
+            "falha_mensal_vigente": True,
+            "plano_exibicao": estado.get("plano_exibicao"),
+            "regularizacao_url": url_for("user.regularizar_pagamento"),
+        }
+    except Exception:
+        logger.exception("Falha ao injetar contexto de falha mensal vigente no template")
+        return inativo
+
+
 @app.before_request
 def _consumo_identidade_before_request():
     """Fase 2 etapa 1: injeta g.identidade em todo request HTTP (exceto static)."""

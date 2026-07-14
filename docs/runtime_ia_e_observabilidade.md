@@ -1,7 +1,7 @@
-﻿# Runtime IA e Observabilidade
+# Runtime IA e Observabilidade
 
-Data de consolidacao: `2026-07-08`
-Commit de referencia: `homolog@efd54b5`
+Data de consolidacao: `2026-07-10`
+Commit de referencia: `homolog@d02ce15`
 
 ## Eventos oficiais
 
@@ -25,7 +25,7 @@ Representa tentativa real de chamada LLM governada, com persistencia de:
 
 ### `ProcessingEvent`
 
-Representa processamento tecnico nao-LLM e etapas auxiliares auditaveis, como eventos de processamento do Roberto e fluxos tecnicos governados pelo Cleiton.
+Representa processamento tecnico nao-LLM e etapas auxiliares auditaveis.
 
 ## Fluxos observados
 
@@ -54,11 +54,12 @@ Representa processamento tecnico nao-LLM e etapas auxiliares auditaveis, como ev
 Pontos efetivamente observaveis no codigo atual:
 
 - upload e status documental podem retornar `temp_table`
-- a extração tecnica da `temp_table` ocorre no fluxo pos-upload
+- a extracao tecnica da `temp_table` ocorre no fluxo pos-upload
 - o estado tecnico pode transitar por `processing`, `awaiting_validation`, `validated`, `needs_review`, `failed`, `expired` e `discarded`
 - a revisao humana salva via endpoint dedicado
 - coverage complementar e lote auditado compartilham a mesma trilha autenticada
 - preview/apply/undo de correcao assistida existem para diagnosticos suportados
+- o chat usa `flow_type` proprio, contexto documental isolado e idempotencia por `request_id`
 
 Ponto importante:
 

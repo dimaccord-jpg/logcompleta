@@ -164,4 +164,24 @@ def avaliar_autorizacao_operacao_por_franquia(
             "pendencias": list(leitura.pendencias),
         },
     )
-    return decisao.to_dict()
+    resultado = decisao.to_dict()
+
+    conta_id = getattr(user, "conta_id", None)
+    if conta_id is not None:
+        from app.services.cleiton_monetizacao_service import (
+            montar_mensagem_renovacao_falha_mensal,
+            resolver_falha_mensal_vigente_conta,
+        )
+
+        estado_falha = resolver_falha_mensal_vigente_conta(int(conta_id))
+        if estado_falha.get("falha_mensal_vigente"):
+            plano_exibicao = estado_falha.get("plano_exibicao")
+            mensagem_renovacao = montar_mensagem_renovacao_falha_mensal(
+                str(plano_exibicao or "")
+            )
+            if mensagem_renovacao:
+                resultado["mensagem_usuario"] = mensagem_renovacao
+                resultado["sugerir_upgrade"] = False
+                resultado["upgrade_cta"] = None
+
+    return resultado

@@ -1,7 +1,7 @@
-﻿# Arquitetura Oficial
+# Arquitetura Oficial
 
-Data de consolidacao: `2026-07-08`
-Commit de referencia: `homolog@efd54b5`
+Data de consolidacao: `2026-07-10`
+Commit de referencia: `homolog@d02ce15`
 
 ## Superficies
 
@@ -34,7 +34,7 @@ Commit de referencia: `homolog@efd54b5`
 
 - superficie separada em `/auditoria-frete`
 - pagina publica, com endpoints privados e autorizados
-- upload documental, `temp_table`, coverage, lote auditado, BI executivo da auditoria e chat contextual
+- upload documental, `temp_table`, coverage opcional, lote auditado, BI executivo da auditoria e chat contextual
 
 ### Cleiton
 
@@ -66,17 +66,17 @@ Commit de referencia: `homolog@efd54b5`
 ## Arquitetura da auditoria
 
 - o upload documental e governado pelos limites e TTL do Cleiton
-- a extração tecnica da `temp_table` ocorre apos upload e permanece separada do chat
+- a extracao tecnica da `temp_table` ocorre apos upload e permanece separada do chat
 - a `temp_table` e temporaria, descartavel e vinculada ao estado documental da sessao
 - a `temp_table` nao e auditoria final nem persistencia definitiva
 - o chat da Cleide consulta contexto documental; nao gere o ciclo de vida da `temp_table`
-- a revisao humana pode editar tabela de frete, taxas acessorias e coverage table antes de avancar
+- a revisao humana pode editar tabela de frete, taxas acessorias, coverage e configuracao fiscal antes de avancar
 
 ## Responsabilidade dos modulos centrais
 
-- `app/cleide_audit_doc_service.py`: store e ciclo de vida documental, `temp_table`, lote auditado, calculo da auditoria, payloads publicos
-- `app/run_cleide_audit_temp_table.py`: extração tecnica pos-upload, parsing JSON e fallback de modelo
-- `app/cleide_audit_prompt.py`: prompt tecnico da extração e prompt do chat
+- `app/cleide_audit_doc_service.py`: store e ciclo de vida documental, `temp_table`, coverage, lote auditado, calculo da auditoria e payloads publicos
+- `app/run_cleide_audit_temp_table.py`: extracao tecnica pos-upload, parsing JSON e fallback de modelo
+- `app/cleide_audit_prompt.py`: prompt tecnico da extracao e prompt do chat
 - `app/cleide_audit_routes.py`: API oficial da auditoria
 - `app/cleide_audit_correction_service.py`: correcoes assistidas com preview, apply e undo
 - `app/static/js/cleide_auditoria.js`: experiencia visual da auditoria, BI executivo, modal da `temp_table`, coverage e correcao
@@ -87,13 +87,15 @@ Commit de referencia: `homolog@efd54b5`
 O BI executivo dentro de `/auditoria-frete` possui 4 graficos:
 
 - Impacto Financeiro por Transportadora
-- Divergencia Financeira por UF Destino
-- Evolucao da Divergencia no Periodo
+- Impacto Financeiro por UF Destino
+- Evolucao do Impacto Financeiro no Periodo
 - Pareto do Valor Cobrado a Mais
 
 Base de calculo do BI:
 
-- quando existem `charged_freight` e `expected_freight`, o frontend trabalha com a divergencia entre cobrado e esperado
+- o dataset publico usa campos sanitizados de `audit_bi`
+- o filtro ocorre no frontend em nivel de linha
+- a visualizacao trabalha com impacto financeiro absoluto
 - o contrato atual nao deve ser documentado como o BI antigo de 7 graficos
 
 ## Admin da Cleide

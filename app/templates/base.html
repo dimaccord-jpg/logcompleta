@@ -329,6 +329,11 @@
                                 {% endif %}
                                 Plano: {{ plano_label }}
                             </small>
+                            {% if falha_mensal_vigente %}
+                                <small class="d-block text-warning mt-1">
+                                    Não conseguimos renovar o seu plano {{ plano_exibicao }} neste mês. Para continuar usando todas as ferramentas sem interrupções, <a href="{{ regularizacao_url }}" class="text-warning">confirme ou atualize sua forma de pagamento</a>.
+                                </small>
+                            {% endif %}
                             {% if current_user.franquia %}
                                 {% if current_user.franquia.limite_total is none %}
                                     <small class="d-block text-muted">Saldo: Ilimitado</small>
@@ -337,8 +342,8 @@
                                     {% set consumo_acumulado = current_user.franquia.consumo_acumulado or 0 %}
                                     {% set saldo_bruto = limite_total - consumo_acumulado %}
                                     {% set saldo_creditos = saldo_bruto if saldo_bruto > 0 else 0 %}
-                                    <small class="d-block {% if saldo_creditos <= 0 %}text-danger{% else %}text-muted{% endif %}">
-                                        Créditos: {{ "%.2f"|format(saldo_creditos|float) }} / {{ "%.2f"|format(limite_total|float) }}
+                                    <small class="d-block {% if not falha_mensal_vigente and saldo_creditos <= 0 %}text-danger{% else %}text-muted{% endif %}">
+                                        Créditos: {% if falha_mensal_vigente %}--{% else %}{{ "%.2f"|format(saldo_creditos|float) }}{% endif %} / {{ "%.2f"|format(limite_total|float) }}
                                     </small>
                                 {% endif %}
                             {% else %}

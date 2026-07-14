@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row mb-4">
+        <div class="col-lg-8">
+            <h2 class="fw-bold mb-2">Regularizar pagamento</h2>
+            {% if falha_vigente %}
+                <p class="text-muted mb-0">
+                    Plano {{ plano_exibicao }} — não conseguimos renovar sua assinatura neste mês.
+                    Confirme ou atualize sua forma de pagamento para continuar usando todas as ferramentas sem interrupções.
+                </p>
+            {% else %}
+                <p class="text-muted mb-0">
+                    Não há pagamento pendente para regularização nesta conta.
+                </p>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if retorno_portal %}
+        <div class="alert alert-secondary">
+            Se você concluiu a atualização no Stripe, a confirmação pode depender do processamento do webhook.
+            Assim que o pagamento for confirmado, o acesso voltará ao normal automaticamente.
+        </div>
+    {% endif %}
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            {% if falha_vigente %}
+                <form action="{{ url_for('user.regularizar_pagamento_stripe') }}" method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-primary">
+                        Confirmar ou atualizar forma de pagamento
+                    </button>
+                </form>
+            {% else %}
+                <p class="mb-0 text-muted">
+                    Quando houver uma falha de renovação, você poderá regularizar o pagamento por aqui.
+                </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <a href="{{ url_for('user.perfil') }}" class="text-decoration-none">
+            <i class="bi bi-arrow-left me-1"></i>Voltar ao perfil
+        </a>
+    </div>
+</div>
+{% endblock %}

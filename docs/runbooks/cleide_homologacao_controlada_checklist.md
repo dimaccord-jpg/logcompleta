@@ -1,15 +1,13 @@
-﻿# Cleide - Homologacao Operacional Controlada
+# Cleide - Homologacao Operacional Controlada
 
-Este documento e um runbook historico/de validacao controlada da entrega aprovada. Nao deve ser interpretado como descricao de um fluxo de produto paralelo nem como fonte primaria da arquitetura ativa.
-
-Objetivo: validar comportamento real ponta-a-ponta antes da promocao definitiva, sem alterar arquitetura, endpoint, governanca, billing, observabilidade ou os modulos Roberto/Julia.
+Este documento continua sendo um runbook historico/de validacao controlada da entrega aprovada. Nao e a fonte primaria da arquitetura ativa; para estado vigente, consultar `README.md`.
 
 Estado desta entrega:
 
-- homolog aprovada no commit `28904e4`
-- producao aprovada no commit `0afe528`
-- apos o push, `origin/producao` ficou em `0afe528`
-- o ambiente local voltou para `homolog`, limpo e sincronizado
+- homolog aprovada no commit `d02ce15`
+- producao aprovada no commit `6efa2e2`
+- `origin/homolog` aponta para `d02ce15`
+- `origin/producao` aponta para `6efa2e2`
 - sem migration nova
 - sem nova tabela de banco
 - sem novo campo
@@ -21,95 +19,69 @@ Estado desta entrega:
 2. Executar o roteiro manual abaixo em ambiente de homolog.
 3. Registrar `pass` ou `fail` por cenario.
 4. Encerrar com classificacao final:
-   - `A) homolog`
-   - `B) producao`
-   - `C) precisa ajuste`
+- `A) homolog`
+- `B) producao`
+- `C) precisa ajuste`
 
 ## Evidencias automatizadas atuais
 
-Validacoes registradas antes da promocao:
+Coleta validada nesta auditoria documental:
 
-- `pytest tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_routes.py`
-- resultado: `572 passed, 2 warnings` em aproximadamente `220.39s`
+- `.\.venv\Scripts\python.exe -m pytest --collect-only -q tests/test_cleide_audit_correction_service.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_chat_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_context.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
+- resultado atual de coleta: `804 tests collected`
 
-Cobertura automatizada ja existente no projeto:
+Cobertura automatizada usada como referencia:
 
-- Contexto insuficiente e fallback seguro: `tests/test_cleide_controlled_chat_phase9.py`
-- Upload valido, contexto seguro e analytics: `tests/test_cleide_upload_api.py`
-- Limites de contexto e `max_chars`: `tests/test_cleide_chat_context.py`
-- Modos `executivo` e `conservador`: `tests/test_cleide_chat_context.py`
-- Toggle de `temporal` e `transportadora`: `tests/test_cleide_chat_context.py`
-- Provider error, bloqueios semanticos e IA desligada: `tests/test_cleide_controlled_chat_phase9.py`
-- Admin 403, salvar config e reabrir config: `tests/test_cleide_admin_routes.py`
-- Observabilidade exposta no payload: `tests/test_cleide_controlled_chat_phase9.py` e `tests/test_cleide_phase2_ui.py`
-- Temp table pos-upload: `tests/test_cleide_audit_temp_table.py`
-- Rotas documentais e payload de `temp_table`: `tests/test_cleide_audit_doc_routes.py`
-- Renderizacao da pagina `/auditoria-frete`: `tests/test_cleide_auditoria_page.py`
+- contexto documental da auditoria: `tests/test_cleide_audit_doc_context.py`
+- chat da auditoria: `tests/test_cleide_audit_chat_routes.py`
+- temp table, coverage, fiscal, lote auditado e BI: `tests/test_cleide_audit_temp_table.py`
+- rotas documentais: `tests/test_cleide_audit_doc_routes.py`
+- pagina `/auditoria-frete`: `tests/test_cleide_auditoria_page.py`
+- admin da auditoria: `tests/test_cleide_admin_routes.py`
+- configuracao da auditoria: `tests/test_cleide_audit_config_service.py`
+- correcoes assistidas: `tests/test_cleide_audit_correction_service.py`
 
 ## Checklist operacional
 
 | ID | Cenario | Evidencia esperada | Tipo | Status |
 |---|---|---|---|---|
-| 1 | Sem upload. Pergunta: "Quais UFs possuem frete relacionado?" | `context_status=insufficient`, fallback coerente, sem crash, sem provider error | Auto + manual | [ ] |
-| 2 | Upload valido pequeno | Resposta IA ou deterministica correta, PT-BR correto, chat sequencial correto | Auto + manual | [ ] |
-| 3 | Upload grande | Contexto respeita `max_chars`, sem vazamento, sem travamento | Auto + manual | [ ] |
-| 4 | Modo executivo | Menos detalhe, mais sintese | Auto | [ ] |
-| 5 | Modo conservador | Mais protecao, menos blocos caros | Auto | [ ] |
-| 6 | Desligar temporal | `temporal` ausente do contexto | Auto | [ ] |
-| 7 | Desligar transportadora | `transportadora` ausente do contexto | Auto | [ ] |
-| 8 | Provider error | Fallback governado, `fallback_used=true`, `error_code=provider_error` | Auto | [ ] |
-| 9 | IA desligada | Modo controlado, sem chamada ao provider | Auto | [ ] |
-| 10 | Pergunta fora dominio | Bloqueio | Auto | [ ] |
-| 11 | Pergunta Roberto | Bloqueio | Auto | [ ] |
-| 12 | Pergunta Julia | Bloqueio | Auto | [ ] |
-| 13 | Pergunta operacional desconhecida | Gemini supervisionado quando habilitado | Auto | [ ] |
-| 14 | Prompt com numeros | PT-BR correto | Auto | [ ] |
-| 15 | Chat multiplas perguntas | Timeline preservada no front | Auto + manual | [ ] |
-| 16 | Upload documental da Cleide Auditoria | Documento registrado e retorno de `temp_table` quando disponivel | Auto + manual | [ ] |
-| 17 | Status documental da Cleide Auditoria | Endpoint devolve `documents` e `temp_table` coerentes | Auto + manual | [ ] |
-| 18 | Mudanca ou remocao de documento fonte | Temp table anterior invalidada corretamente | Auto + manual | [ ] |
-| 19 | Extracao parcial | Estado `needs_review` ou `awaiting_validation`, sempre com validacao humana obrigatoria | Auto + manual | [ ] |
-| 20 | Conversa apos extracao | Chat usa contexto, mas nao recria nem sobrescreve a tabela temporaria | Auto + manual | [ ] |
-| 21 | Revisao humana da temp table | `POST /api/cleide-auditoria/temp-table/save` salva revisao humana governada sem quebrar escopo da sessao | Auto + manual | [ ] |
+| 1 | Upload documental da Cleide Auditoria | Documento registrado e retorno de `temp_table` quando disponivel | Auto + manual | [ ] |
+| 2 | Status documental da Cleide Auditoria | Endpoint devolve `documents`, `temp_table` e flags de upload coerentes | Auto + manual | [ ] |
+| 3 | Mudanca ou remocao de documento fonte | `temp_table` anterior invalidada corretamente | Auto + manual | [ ] |
+| 4 | Extracao parcial | Estado `needs_review`, sempre com validacao humana obrigatoria | Auto + manual | [ ] |
+| 5 | Conversa apos extracao | Chat usa contexto, mas nao recria nem sobrescreve a `temp_table` | Auto + manual | [ ] |
+| 6 | Revisao humana da `temp_table` | `POST /api/cleide-auditoria/temp-table/save` salva revisao governada sem quebrar escopo da sessao | Auto + manual | [ ] |
+| 7 | Etapa fiscal | Dados fiscais podem ser salvos sem perder integridade do artefato | Auto + manual | [ ] |
+| 8 | Coverage opcional | Upload CSV/XLSX popula UF, cidade e regiao quando aplicavel | Auto + manual | [ ] |
+| 9 | Upload do lote auditado | Template oficial aceito e lote salvo no artefato atual | Auto + manual | [ ] |
+| 10 | `audit/run` | Resultado calculado sem alterar documentos de origem | Auto + manual | [ ] |
+| 11 | Correcao assistida | preview/apply/undo funcionam apenas sobre diagnosticos suportados | Auto + manual | [ ] |
+| 12 | BI executivo | Quatro graficos atuais de impacto financeiro renderizam com filtros locais | Auto + manual | [ ] |
+| 13 | Arquivos temporarios | Nenhum `tt_*.json`, `.cleanup_meta.json`, `.db` local ou residuo tecnico entrou em versionamento | Manual | [ ] |
 
 ## Observabilidade a validar
 
-Conferir em cada resposta JSON e no comportamento da UI:
+Conferir em payloads e comportamento:
 
 - `flow_type`
-- `ai_flow_type`
-- `ai_used`
-- `fallback_used`
-- `policy_blocked`
-- `context_status`
-- `view_scope`
-- `active_filters`
-- `provider_error` via `error_code=provider_error`
-
-## Admin
-
-Validar:
-
-- admin acessa `/admin/agentes/cleide`
-- nao-admin recebe `403`
-- salvar config
-- reabrir config
-- config refletir `chat_context`
+- `documents_used` quando habilitado
+- estados da `temp_table`
+- dataset sanitizado de `audit_bi`
+- bloqueios de autorizacao por franquia
 
 ## Roteiro manual minimo
 
-1. Abrir `/cleide-bi-frete` autenticado com perfil autorizado.
-2. Validar upload pequeno e conversar em sequencia com pelo menos 3 perguntas.
-3. Validar upload grande e observar que a tela continua responsiva.
-4. Alternar `executivo` e `conservador` no admin e confirmar mudanca no contexto exposto ao chat.
-5. Desabilitar `temporal` e depois `transportadora` no admin, salvar e revalidar o payload do chat.
-6. Simular indisponibilidade do provider em homolog e confirmar fallback governado.
-7. Validar bloqueios para fora de dominio, Roberto e Julia.
-8. Repetir com usuario nao-admin no admin e confirmar `403`.
-9. Remover ou trocar documento anexado e confirmar invalidacao da tabela temporaria anterior.
-10. Abrir o card da tabela temporaria e confirmar modal somente leitura.
-11. Validar revisao humana da tabela temporaria quando houver ajuste manual no fluxo.
-12. Conferir que nenhum `app/.tmp_repro_unit*`, `app/cleiton_doc_tmp/tt_*.json`, `.cleanup_meta.json`, residuo `.json` ou `.db` local entrou em versionamento.
+1. Abrir `/auditoria-frete`.
+2. Fazer upload documental valido.
+3. Confirmar surgimento do card da `temp_table`.
+4. Abrir modal, revisar frete, fiscal e coverage quando aplicavel.
+5. Salvar revisao humana.
+6. Baixar template oficial do lote auditado.
+7. Enviar lote auditado e executar `audit/run`.
+8. Validar BI executivo com 4 graficos.
+9. Testar preview/apply/undo quando houver diagnostico suportado.
+10. Remover ou trocar documento anexado e confirmar invalidacao do artefato anterior.
+11. Conferir que nenhum temporario local entrou em versionamento.
 
 ## Registro final
 
@@ -117,6 +89,6 @@ Validar:
 - Pass/fail por cenario: preencher tabela acima
 - Riscos restantes: descrever
 - Apta para:
-  - `A) homolog`
-  - `B) producao`
-  - `C) precisa ajuste`
+- `A) homolog`
+- `B) producao`
+- `C) precisa ajuste`

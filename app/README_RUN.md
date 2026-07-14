@@ -1,11 +1,11 @@
-﻿# Execucao Local
+# Execucao Local
 
-Data de consolidacao: `2026-07-08`
-Commit de referencia: `efd54b5`
+Data de consolidacao: `2026-07-10`
+Commit de referencia: `d02ce15`
 
 ## Objetivo
 
-Executar localmente e validar o estado real de Home, Julia, Roberto, Cleide BI, Cleide Auditoria e governanca documental.
+Executar localmente e validar Home, Julia, Roberto, Cleide BI, Cleide Auditoria e governanca documental sem depender de leitura documental antiga.
 
 ## Premissas
 
@@ -28,11 +28,12 @@ Executar localmente e validar o estado real de Home, Julia, Roberto, Cleide BI, 
 - upload documental
 - status documental
 - `temp_table`
-- edicao governada da tabela
-- etapa opcional de coverage
+- revisao humana governada
+- etapa fiscal quando aplicavel
+- coverage opcional quando aplicavel
 - upload do lote auditado
 - `audit/run`
-- preview/apply/undo de correcao quando houver diagnostico
+- preview/apply/undo de correcao quando houver diagnostico suportado
 10. validar `/admin/agentes/cleiton` e `/admin/agentes/cleide`
 11. validar `/admin/dashboard`
 
@@ -42,9 +43,8 @@ Executar localmente e validar o estado real de Home, Julia, Roberto, Cleide BI, 
 - a Home logada e a superficie principal da Julia
 - `/chat_julia?mode=operational` continua valido para handoff e acesso direto
 - a `temp_table` da Cleide e temporaria e governada pelo dominio Cleiton
-- a revisao humana da `temp_table` nao e conversa de IA
-- o chat da Cleide nao deve recriar nem controlar o ciclo de vida da `temp_table`
+- o chat da Cleide nao recria nem controla o ciclo de vida da `temp_table`
 - a pagina `/auditoria-frete` e publica, mas os endpoints operacionais sao privados e autorizados por franquia
-- o BI executivo da auditoria em `/auditoria-frete` tem 4 graficos; nao confundir com o BI estrutural de `/cleide-bi-frete`
+- o BI executivo da auditoria em `/auditoria-frete` tem 4 graficos de impacto financeiro; nao confundir com o BI estrutural de `/cleide-bi-frete`
 - `app/cleiton_doc_tmp/` e temporario, local e ignorado no Git
 - `.db`, caches, `__pycache__`, `.pytest_cache` e temporarios locais nao fazem parte do estado oficial

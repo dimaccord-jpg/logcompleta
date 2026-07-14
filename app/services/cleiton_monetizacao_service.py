@@ -3886,3 +3886,208 @@ def _extrair_contador_reprocessamento(snapshot: dict[str, Any]) -> int:
         if val is not None and val >= 0:
             return val
     return 0
+
+
+FALHA_MENSAL_BILLING_REASON = "subscription_cycle"
+TIPO_FATO_INVOICE_PAYMENT_FAILED = "stripe_invoice_payment_failed"
+TIPO_FATO_INVOICE_PAID = "stripe_invoice_paid"
+
+
+def _falha_mensal_vigente_inativa() -> dict[str, Any]:
+    return {
+        "falha_mensal_vigente": False,
+        "plano_codigo": None,
+        "plano_exibicao": None,
+        "invoice_id": None,
+        "subscription_id": None,
+        "customer_id": None,
+    }
+
+
+def _extrair_objeto_stripe_evento(payload: dict[str, Any]) -> dict[str, Any]:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return {}
+    obj = data.get("object")
+    if isinstance(obj, dict):
+        return obj
+    return {}
+
+
+def _extrair_billing_reason_invoice_evento(payload: dict[str, Any]) -> str | None:
+    obj = _extrair_objeto_stripe_evento(payload)
+    reason = obj.get("billing_reason")
+    if isinstance(reason, str):
+        txt = reason.strip()
+        if txt:
+            return txt
+    return None
+
+
+def _resolver_invoice_id_fato_monetizacao(fato: MonetizacaoFato) -> str | None:
+    invoice_id = _norm_text(fato.invoice_id)
+    if invoice_id:
+        return invoice_id
+    payload = _json_loads(fato.payload_bruto_sanitizado_json)
+    obj = _extrair_objeto_stripe_evento(payload)
+    return _norm_text(obj.get("id"))
+
+
+def _fato_corresponde_vinculo_stripe(
+    fato: MonetizacaoFato,
+    *,
+    conta_id: int,
+    customer_id: str,
+    subscription_id: str,
+) -> bool:
+    if fato.conta_id != int(conta_id):
+        return False
+    fato_customer = _norm_text(fato.customer_id)
+    fato_subscription = _norm_text(fato.subscription_id)
+    if fato_customer != customer_id or fato_subscription != subscription_id:
+        return False
+    payload = _json_loads(fato.payload_bruto_sanitizado_json)
+    obj = _extrair_objeto_stripe_evento(payload)
+    if obj:
+        obj_customer = _norm_text(obj.get("customer"))
+        obj_subscription = _norm_text(obj.get("subscription"))
+        if obj_customer and obj_customer != customer_id:
+            return False
+        if obj_subscription and obj_subscription != subscription_id:
+            return False
+    return True
+
+
+def montar_mensagem_renovacao_falha_mensal(plano_exibicao: str) -> str:
+    plano_txt = (plano_exibicao or "").strip()
+    if not plano_txt:
+        return ""
+    return (
+        f"Não conseguimos renovar o seu plano {plano_txt} neste mês. "
+        "Para continuar usando todas as ferramentas sem interrupções, "
+        "confirme ou atualize sua forma de pagamento."
+    )
+
+
+def resolver_falha_mensal_vigente_conta(conta_id: int | None) -> dict[str, Any]:
+    """
+    Read-only: resolve falha vigente de renovação mensal (subscription_cycle) por conta.
+    """
+    try:
+        if conta_id is None:
+            return _falha_mensal_vigente_inativa()
+
+        vinculo = _obter_vinculo_ativo_por_conta(int(conta_id))
+        if vinculo is None:
+            return _falha_mensal_vigente_inativa()
+
+        plano_codigo = _normalizar_plano_codigo(vinculo.plano_interno)
+        if plano_codigo not in ("starter", "pro"):
+            return _falha_mensal_vigente_inativa()
+
+        customer_id = _norm_text(vinculo.customer_id)
+        subscription_id = _norm_text(vinculo.subscription_id)
+        if not customer_id or not subscription_id:
+            return _falha_mensal_vigente_inativa()
+
+        fatos = (
+            MonetizacaoFato.query.filter(
+                MonetizacaoFato.conta_id == int(conta_id),
+                MonetizacaoFato.tipo_fato.in_(
+                    (TIPO_FATO_INVOICE_PAYMENT_FAILED, TIPO_FATO_INVOICE_PAID)
+                ),
+            )
+            .order_by(MonetizacaoFato.timestamp_interno.desc(), MonetizacaoFato.id.desc())
+            .all()
+        )
+
+        invoices_pagas: set[str] = set()
+        falhas_candidatas: list[tuple[MonetizacaoFato, str]] = []
+
+        for fato in fatos:
+            if not _fato_corresponde_vinculo_stripe(
+                fato,
+                conta_id=int(conta_id),
+                customer_id=customer_id,
+                subscription_id=subscription_id,
+            ):
+                continue
+
+            invoice_id = _resolver_invoice_id_fato_monetizacao(fato)
+            if not invoice_id:
+                continue
+
+            if fato.tipo_fato == TIPO_FATO_INVOICE_PAID:
+                invoices_pagas.add(invoice_id)
+                continue
+
+            if fato.tipo_fato != TIPO_FATO_INVOICE_PAYMENT_FAILED:
+                continue
+
+            payload = _json_loads(fato.payload_bruto_sanitizado_json)
+            billing_reason = _extrair_billing_reason_invoice_evento(payload)
+            if billing_reason != FALHA_MENSAL_BILLING_REASON:
+                continue
+
+            falhas_candidatas.append((fato, invoice_id))
+
+        falha_ativa: tuple[MonetizacaoFato, str] | None = None
+        for fato, invoice_id in falhas_candidatas:
+            if invoice_id in invoices_pagas:
+                continue
+            if falha_ativa is None:
+                falha_ativa = (fato, invoice_id)
+                continue
+            atual = falha_ativa[0]
+            if (fato.timestamp_interno, fato.id) > (atual.timestamp_interno, atual.id):
+                falha_ativa = (fato, invoice_id)
+
+        if falha_ativa is None:
+            return _falha_mensal_vigente_inativa()
+
+        _, invoice_id_ativo = falha_ativa
+        plano_exibicao = plano_service.obter_nome_exibivel_plano(plano_codigo)
+        return {
+            "falha_mensal_vigente": True,
+            "plano_codigo": plano_codigo,
+            "plano_exibicao": plano_exibicao,
+            "invoice_id": invoice_id_ativo,
+            "subscription_id": subscription_id,
+            "customer_id": customer_id,
+        }
+    except Exception:
+        logger.exception(
+            "Falha ao resolver falha mensal vigente (conta_id=%s)",
+            conta_id,
+        )
+        return _falha_mensal_vigente_inativa()
+
+
+def criar_sessao_portal_pagamento_stripe(
+    *,
+    customer_id: str,
+    return_url: str,
+) -> str:
+    """
+    Cria sessão do Stripe Customer Portal para regularização de pagamento.
+    """
+    customer_n = _norm_text(customer_id)
+    if not customer_n:
+        raise ValueError("customer_id_obrigatorio")
+    return_url_n = (return_url or "").strip()
+    if not return_url_n:
+        raise ValueError("return_url_obrigatoria")
+
+    idempotency_key = f"billing_portal:{customer_n}:{uuid.uuid4().hex}"
+    body = _stripe_post(
+        "/billing_portal/sessions",
+        {
+            "customer": customer_n,
+            "return_url": return_url_n,
+        },
+        idempotency_key=idempotency_key,
+    )
+    portal_url = _norm_text(body.get("url"))
+    if not portal_url:
+        raise ValueError("stripe_portal_sem_url")
+    return portal_url

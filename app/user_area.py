@@ -2,21 +2,29 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from flask import Blueprint, jsonify, render_template, redirect, url_for, request, session
+from urllib.parse import urlparse
+
+from flask import Blueprint, current_app, flash, jsonify, render_template, redirect, url_for, request, session
 from flask_login import login_required, current_user, logout_user
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from app.models import User
 from app.auth_services import encerrar_contrato
 from app.services.cleiton_monetizacao_service import (
     conciliar_checkout_session_stripe,
+    criar_sessao_portal_pagamento_stripe,
     iniciar_jornada_assinatura_stripe,
     listar_planos_contratacao_publica,
     obter_pendencia_downgrade_conta_ativa,
+    resolver_falha_mensal_vigente_conta,
 )
 from app.services.plano_service import obter_nome_exibivel_plano
 
 logger = logging.getLogger(__name__)
 HIERARQUIA_PLANOS = {"free": 0, "starter": 1, "pro": 2}
+_CSRF_REGULARIZAR_SALT = "regularizar-pagamento-csrf"
+_CSRF_REGULARIZAR_MAX_AGE = 3600
+_STRIPE_PORTAL_ALLOWED_HOSTS = frozenset({"billing.stripe.com"})
 
 # Contexto leve da jornada embedded (evita falso positivo de UX com pendencia antiga).
 _SESSION_CONTRATACAO_EMBED_PLANO = "contratacao_embed_plano_alvo"
@@ -26,6 +34,54 @@ _JANELA_SESSAO_CONTRATACAO_SEG = 2 * 3600
 
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
+
+
+def _csrf_regularizar_serializer() -> URLSafeTimedSerializer:
+    secret_key = current_app.config["SECRET_KEY"]
+    return URLSafeTimedSerializer(secret_key, salt=_CSRF_REGULARIZAR_SALT)
+
+
+def gerar_csrf_token_regularizar_pagamento(user_id: int) -> str:
+    return _csrf_regularizar_serializer().dumps(str(int(user_id)))
+
+
+def validar_csrf_token_regularizar_pagamento(token: str | None, user_id: int) -> bool:
+    if not token:
+        return False
+    try:
+        valor = _csrf_regularizar_serializer().loads(
+            token,
+            max_age=_CSRF_REGULARIZAR_MAX_AGE,
+        )
+    except (BadSignature, SignatureExpired):
+        return False
+    return valor == str(int(user_id))
+
+
+def _validar_url_portal_stripe(url: str | None) -> bool:
+    texto = (url or "").strip()
+    if not texto:
+        return False
+
+    parsed = urlparse(texto)
+    if parsed.scheme != "https":
+        return False
+    if parsed.username or parsed.password:
+        return False
+
+    hostname = parsed.hostname
+    if not hostname or hostname not in _STRIPE_PORTAL_ALLOWED_HOSTS:
+        return False
+
+    try:
+        porta = parsed.port
+    except ValueError:
+        return False
+
+    if porta is not None and porta != 443:
+        return False
+
+    return True
 
 
 def _limpar_contexto_sessao_contratacao_embed() -> None:
@@ -397,6 +453,107 @@ def iniciar_contratacao_stripe():
                 "contratacao_stripe_falha_interna",
             )
         ), 500
+
+
+@user_bp.route("/perfil/regularizar-pagamento")
+@login_required
+def regularizar_pagamento():
+    user = current_user._get_current_object()
+    conta_id = getattr(user, "conta_id", None)
+    estado = (
+        resolver_falha_mensal_vigente_conta(int(conta_id))
+        if conta_id is not None
+        else {"falha_mensal_vigente": False, "plano_exibicao": None}
+    )
+    retorno_portal = (request.args.get("retorno") or "").strip() == "1"
+    csrf_token = gerar_csrf_token_regularizar_pagamento(int(user.id))
+    return render_template(
+        "regularizar_pagamento.html",
+        falha_vigente=bool(estado.get("falha_mensal_vigente")),
+        plano_exibicao=estado.get("plano_exibicao"),
+        retorno_portal=retorno_portal,
+        csrf_token=csrf_token,
+    )
+
+
+@user_bp.route("/perfil/regularizar-pagamento/stripe", methods=["POST"])
+@login_required
+def regularizar_pagamento_stripe():
+    user = current_user._get_current_object()
+    if not isinstance(user, User):
+        flash(
+            "Não foi possível abrir a regularização de pagamento neste momento.",
+            "danger",
+        )
+        return redirect(url_for("user.regularizar_pagamento"))
+
+    conta_id = getattr(user, "conta_id", None)
+    if conta_id is None:
+        flash(
+            "Não há pagamento pendente para regularização nesta conta.",
+            "secondary",
+        )
+        return redirect(url_for("user.regularizar_pagamento"))
+
+    estado = resolver_falha_mensal_vigente_conta(int(conta_id))
+    if not estado.get("falha_mensal_vigente"):
+        flash(
+            "Não há pagamento pendente para regularização nesta conta.",
+            "secondary",
+        )
+        return redirect(url_for("user.regularizar_pagamento"))
+
+    csrf_token = (request.form.get("csrf_token") or "").strip()
+    if not validar_csrf_token_regularizar_pagamento(csrf_token, int(user.id)):
+        flash(
+            "Não foi possível validar a solicitação. Atualize a página e tente novamente.",
+            "danger",
+        )
+        return redirect(url_for("user.regularizar_pagamento"))
+
+    customer_id = estado.get("customer_id")
+    if not customer_id:
+        flash(
+            "Não foi possível abrir a regularização de pagamento neste momento.",
+            "danger",
+        )
+        return redirect(url_for("user.regularizar_pagamento"))
+
+    return_url = url_for(
+        "user.regularizar_pagamento",
+        retorno=1,
+        _external=True,
+    )
+    try:
+        portal_url = criar_sessao_portal_pagamento_stripe(
+            customer_id=str(customer_id),
+            return_url=return_url,
+        )
+    except Exception:
+        logger.exception(
+            "Falha ao criar sessao do Customer Portal (user_id=%s, conta_id=%s)",
+            getattr(user, "id", None),
+            conta_id,
+        )
+        flash(
+            "Não foi possível abrir a regularização de pagamento neste momento.",
+            "danger",
+        )
+        return redirect(url_for("user.regularizar_pagamento"))
+
+    if not _validar_url_portal_stripe(portal_url):
+        logger.error(
+            "URL do Customer Portal recusada por validacao de host (user_id=%s, conta_id=%s)",
+            getattr(user, "id", None),
+            conta_id,
+        )
+        flash(
+            "Não foi possível abrir a regularização de pagamento neste momento.",
+            "danger",
+        )
+        return redirect(url_for("user.regularizar_pagamento"))
+
+    return redirect(portal_url)
 
 
 @user_bp.route("/perfil/encerrar-contrato", methods=["POST"])
