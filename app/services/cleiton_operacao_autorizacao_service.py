@@ -11,6 +11,7 @@ from typing import Any
 from app.models import Franquia
 from app.services.cleiton_mensageria_operacao_service import (
     montar_mensagem_operacao,
+    montar_regularizacao_cta_operacao,
     montar_upgrade_cta_operacao,
     status_exibe_cta_upgrade,
 )
@@ -183,5 +184,8 @@ def avaliar_autorizacao_operacao_por_franquia(
                 resultado["mensagem_usuario"] = mensagem_renovacao
                 resultado["sugerir_upgrade"] = False
                 resultado["upgrade_cta"] = None
+                resultado["regularizacao_cta"] = montar_regularizacao_cta_operacao(
+                    str(plano_exibicao or "")
+                )
 
     return resultado

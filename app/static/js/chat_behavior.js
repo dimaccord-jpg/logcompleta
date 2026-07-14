@@ -103,10 +103,16 @@
 
   function getUpgradeLimitPayload(source) {
     if (!source || typeof source !== 'object') return null;
+    if (source.regularizacao_cta && typeof source.regularizacao_cta === 'object') {
+      return source.regularizacao_cta;
+    }
     if (source.upgrade_cta && typeof source.upgrade_cta === 'object') {
       return source.upgrade_cta;
     }
-    if (source.error_code === 'plan_limit_reached' && source.upgrade_url) {
+    if (
+      (source.error_code === 'plan_limit_reached' || source.error_code === 'payment_renewal_failed')
+      && source.upgrade_url
+    ) {
       return source;
     }
     return null;
@@ -135,7 +141,11 @@
 
   function isJuliaPlanLimitResponse(data) {
     if (!data || typeof data !== 'object') return false;
-    if (data.limit_reached === true || data.error_code === 'plan_limit_reached') return true;
+    if (
+      data.limit_reached === true
+      || data.error_code === 'plan_limit_reached'
+      || data.error_code === 'payment_renewal_failed'
+    ) return true;
     if (data.authorization && isBlockedAuthorization(data.authorization)) {
       return !!resolvePlanLimitPayload(data.authorization);
     }

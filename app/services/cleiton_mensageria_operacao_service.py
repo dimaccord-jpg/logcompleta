@@ -24,8 +24,11 @@ def status_exibe_cta_upgrade(status_franquia: str) -> bool:
     return status_franquia in _STATUS_COM_CTA
 
 ERROR_CODE_PLAN_LIMIT_REACHED = "plan_limit_reached"
+ERROR_CODE_PAYMENT_RENEWAL_FAILED = "payment_renewal_failed"
 UPGRADE_LABEL_DEFAULT = "Faça o upgrade"
 UPGRADE_PATH_DEFAULT = "/contrate-um-plano"
+REGULARIZACAO_LABEL_DEFAULT = "confirme ou atualize sua forma de pagamento"
+REGULARIZACAO_PATH_DEFAULT = "/perfil/regularizar-pagamento"
 
 
 def montar_mensagem_limite_plano_texto(nome_plano: str) -> str:
@@ -34,6 +37,23 @@ def montar_mensagem_limite_plano_texto(nome_plano: str) -> str:
         f"Você atingiu o limite de uso do plano {nome_plano}. "
         "Não pare agora! Faça o upgrade e continue criando sem interrupções."
     )
+
+
+def montar_regularizacao_cta_operacao(plano_exibicao: str) -> dict[str, Any] | None:
+    """CTA estruturado para falha vigente de renovação mensal."""
+    plano_txt = (plano_exibicao or "").strip()
+    if not plano_txt:
+        return None
+    return {
+        "error_code": ERROR_CODE_PAYMENT_RENEWAL_FAILED,
+        "message": (
+            f"Não conseguimos renovar o seu plano {plano_txt} neste mês. "
+            "Para continuar usando todas as ferramentas sem interrupções, "
+        ),
+        "message_suffix": ".",
+        "upgrade_url": _regularizacao_path_for_ui(),
+        "upgrade_label": REGULARIZACAO_LABEL_DEFAULT,
+    }
 
 
 def montar_upgrade_cta_operacao(plano_resolvido: str | None) -> dict[str, Any]:
@@ -101,6 +121,13 @@ def _obter_url_upgrade_planos() -> str:
         return url_for("user.contrate_plano", _external=True)
     except Exception:
         return default
+
+
+def _regularizacao_path_for_ui() -> str:
+    try:
+        return url_for("user.regularizar_pagamento")
+    except Exception:
+        return REGULARIZACAO_PATH_DEFAULT
 
 
 def _upgrade_path_for_ui() -> str:

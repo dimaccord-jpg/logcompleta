@@ -1328,6 +1328,9 @@ def api_chat_julia():
             upgrade_cta = authz.get("upgrade_cta")
             if isinstance(upgrade_cta, dict):
                 payload.update(upgrade_cta)
+            regularizacao_cta = authz.get("regularizacao_cta")
+            if isinstance(regularizacao_cta, dict):
+                payload.update(regularizacao_cta)
             return jsonify(payload)
         max_history = get_julia_chat_max_history()
         from app.cleiton_doc_contracts import FLOW_TYPE_JULIA_CHAT
