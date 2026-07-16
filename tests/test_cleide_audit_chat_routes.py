@@ -156,10 +156,22 @@ def test_blocked_user_receives_403(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
     web = _load_web_module()
+    upgrade_cta = {
+        "error_code": "plan_limit_reached",
+        "message": "Você atingiu o limite de uso do plano Free. Não pare agora! ",
+        "message_suffix": " e continue criando sem interrupções.",
+        "upgrade_url": "/contrate-um-plano",
+        "upgrade_label": "Faça o upgrade",
+    }
     _authorized(
         monkeypatch,
         web,
-        authz={"permitido": False, "modo_operacao": "blocked", "mensagem_usuario": "Bloqueado."},
+        authz={
+            "permitido": False,
+            "modo_operacao": "blocked",
+            "mensagem_usuario": "Bloqueado.",
+            "upgrade_cta": upgrade_cta,
+        },
     )
     client = web.app.test_client()
     resp = _chat(client, {"message": "auditar frete"})
@@ -168,6 +180,36 @@ def test_blocked_user_receives_403(app, ctx, monkeypatch, tmp_path):
     assert body["ok"] is False
     assert body["error"] == "franquia_blocked"
     assert body["message"] == "Bloqueado."
+    assert body["authorization"]["upgrade_cta"] == upgrade_cta
+
+
+def test_blocked_user_chat_403_preserves_upgrade_cta(app, ctx, monkeypatch, tmp_path):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+    web = _load_web_module()
+    upgrade_cta = {
+        "error_code": "plan_limit_reached",
+        "message": "Você atingiu o limite de uso do plano Free. Não pare agora! ",
+        "message_suffix": " e continue criando sem interrupções.",
+        "upgrade_url": "/contrate-um-plano",
+        "upgrade_label": "Faça o upgrade",
+    }
+    _authorized(
+        monkeypatch,
+        web,
+        authz={
+            "permitido": False,
+            "modo_operacao": "blocked",
+            "mensagem_usuario": "Limite atingido.",
+            "upgrade_cta": upgrade_cta,
+        },
+    )
+    client = web.app.test_client()
+    resp = _chat(client, {"message": "quanto foi a divergência?"})
+    assert resp.status_code == 403
+    body = resp.get_json()
+    assert body["authorization"]["upgrade_cta"]["upgrade_label"] == "Faça o upgrade"
+    assert body["authorization"]["upgrade_cta"]["upgrade_url"] == "/contrate-um-plano"
 
 
 def test_expired_user_receives_403(app, ctx, monkeypatch, tmp_path):

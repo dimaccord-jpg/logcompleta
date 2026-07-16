@@ -5,6 +5,8 @@
   var API_UPLOAD = '/api/cleide-auditoria/documents/upload';
   var API_CLEAR = '/api/cleide-auditoria/documents/clear';
   var API_CHAT = '/api/cleide-auditoria/chat';
+  var API_AUDIT_CHAT = '/api/cleide-auditoria/audit-chat';
+  var API_AUDIT_CHAT_UNLOCK = '/api/cleide-auditoria/audit-chat/unlock';
   var API_TEMP_TABLE_SAVE = '/api/cleide-auditoria/temp-table/save';
   var API_COVERAGE_UPLOAD = '/api/cleide-auditoria/coverage/upload';
   var API_AUDIT_TEMPLATE = '/api/cleide-auditoria/audit-template';
@@ -15,9 +17,13 @@
   var API_AUDIT_CORRECTION_UNDO = '/api/cleide-auditoria/audit/correction/undo';
   var uploadInFlight = false;
   var chatInFlight = false;
+  var chatUnlocked = false;
   var chatHistory = [];
   var MAX_CHAT_HISTORY = 10;
   var CHAT_LOADING_ID = 'cleideAuditoriaChatLoading';
+  var CHAT_BLOCKED_MESSAGE = 'Faça o upload da tabela de frete.';
+  var CHAT_LOCKED_PLACEHOLDER = 'Faça o upload da tabela de frete para liberar o chat.';
+  var CHAT_UNLOCKED_MESSAGE = 'O chat está liberado para consultas sobre a auditoria e os resultados.';
 
   var ERROR_MESSAGES = {
     cleiton_doc_file_too_large: 'Arquivo acima do limite configurado para este tipo.',
@@ -169,16 +175,24 @@
     return null;
   }
 
-  function setTempTableModalError(message) {
+  function setTempTableModalError(messageOrPayload) {
     var el = byId('cleideAuditTempTableModalError');
     if (!el) return;
-    if (!message) {
+    if (!messageOrPayload) {
       el.hidden = true;
-      el.textContent = '';
+      el.replaceChildren();
       return;
     }
     el.hidden = false;
-    el.textContent = message;
+    if (typeof messageOrPayload === 'object') {
+      if (resolvePlanLimitPayload(messageOrPayload)) {
+        fillLimitMessageElement(el, messageOrPayload);
+        return;
+      }
+      fillLimitMessageElement(el, messageOrPayload.message || friendlyError(messageOrPayload));
+      return;
+    }
+    fillLimitMessageElement(el, messageOrPayload);
   }
 
   function clearTempTableValidationErrors() {
@@ -413,10 +427,20 @@
     if (el) el.textContent = name || 'Nenhum arquivo selecionado';
   }
 
-  function setCoverageUploadStatus(message, state) {
+  function setCoverageUploadStatus(messageOrPayload, state) {
     var el = byId(activeCoverageUploadPrefix + 'UploadStatus') || byId('cleideAuditCoverageModalUploadStatus') || byId('cleideAuditCoverageUploadStatus');
     if (!el) return;
-    el.textContent = message || '';
+    if (!messageOrPayload) {
+      el.replaceChildren();
+    } else if (typeof messageOrPayload === 'object') {
+      if (resolvePlanLimitPayload(messageOrPayload)) {
+        fillLimitMessageElement(el, messageOrPayload);
+      } else {
+        fillLimitMessageElement(el, messageOrPayload.message || friendlyError(messageOrPayload));
+      }
+    } else {
+      fillLimitMessageElement(el, messageOrPayload);
+    }
     el.className = 'cleide-audit-coverage-upload-status';
     if (state === 'loading') {
       el.classList.add('is-loading');
@@ -467,7 +491,7 @@
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
           setCoverageUploadStatus(
-            (res.data && res.data.message) || 'Não foi possível carregar o arquivo. Verifique o formato.',
+            res.data || 'Não foi possível carregar o arquivo. Verifique o formato.',
             'error'
           );
           return;
@@ -545,8 +569,7 @@
       })
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
-          var errMsg = (res.data && res.data.message) || 'Não foi possível salvar a cobertura temporária.';
-          setTempTableModalError(errMsg);
+          setTempTableModalError(res.data || 'Não foi possível salvar a cobertura temporária.');
           return;
         }
         if (res.data.temp_table) {
@@ -1109,8 +1132,7 @@
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
           if (handleBackendTempTableValidationErrors(res.data)) return;
-          var errMsg = (res.data && res.data.message) || 'Não foi possível salvar a revisão da tabela temporária.';
-          setTempTableModalError(errMsg);
+          setTempTableModalError(res.data || 'Não foi possível salvar a revisão da tabela temporária.');
           return;
         }
         if (res.data.temp_table) {
@@ -1244,16 +1266,85 @@
     return 'Não foi possível concluir a operação documental.';
   }
 
-  function setError(message) {
+  var PLAN_LIMIT_UPGRADE_LABEL = 'Faça o upgrade';
+  var PLAN_LIMIT_UPGRADE_PATH = '/contrate-um-plano';
+
+  function getUpgradeLimitPayload(source) {
+    if (!source || typeof source !== 'object') return null;
+    if (source.regularizacao_cta && typeof source.regularizacao_cta === 'object') {
+      return source.regularizacao_cta;
+    }
+    if (source.upgrade_cta && typeof source.upgrade_cta === 'object') {
+      return source.upgrade_cta;
+    }
+    if (
+      (source.error_code === 'plan_limit_reached' || source.error_code === 'payment_renewal_failed')
+      && (source.upgrade_url || source.upgrade_label || source.message_suffix !== undefined)
+    ) {
+      return source;
+    }
+    return null;
+  }
+
+  function resolvePlanLimitPayload(source) {
+    var cta = getUpgradeLimitPayload(source);
+    if (cta) return cta;
+    if (source && source.authorization) {
+      cta = getUpgradeLimitPayload(source.authorization);
+      if (cta) return cta;
+    }
+    return null;
+  }
+
+  function safeUpgradeHref(url) {
+    var raw = String(url || '').trim();
+    if (raw.indexOf('/') === 0 && raw.indexOf('//') !== 0) {
+      var pathOnly = raw.split('?')[0].split('#')[0];
+      if (pathOnly) return pathOnly;
+    }
+    return PLAN_LIMIT_UPGRADE_PATH;
+  }
+
+  function fillLimitMessageElement(el, payloadOrText) {
+    if (!el) return;
+    el.replaceChildren();
+    var cta = resolvePlanLimitPayload(payloadOrText);
+    if (cta) {
+      el.appendChild(document.createTextNode(cta.message || ''));
+      var link = document.createElement('a');
+      link.href = safeUpgradeHref(cta.upgrade_url);
+      link.textContent = cta.upgrade_label || PLAN_LIMIT_UPGRADE_LABEL;
+      link.setAttribute('rel', 'noopener noreferrer');
+      el.appendChild(link);
+      el.appendChild(document.createTextNode(cta.message_suffix || ''));
+      return;
+    }
+    var fallback = typeof payloadOrText === 'string'
+      ? payloadOrText
+      : (payloadOrText && payloadOrText.message)
+        || (payloadOrText && payloadOrText.mensagem_usuario)
+        || '';
+    el.textContent = fallback;
+  }
+
+  function setError(messageOrPayload) {
     var el = byId('cleideAuditDocumentsError');
     if (!el) return;
-    if (!message) {
+    if (!messageOrPayload) {
       el.style.display = 'none';
-      el.textContent = '';
+      el.replaceChildren();
       return;
     }
     el.style.display = 'block';
-    el.textContent = message;
+    if (typeof messageOrPayload === 'object') {
+      if (resolvePlanLimitPayload(messageOrPayload)) {
+        fillLimitMessageElement(el, messageOrPayload);
+        return;
+      }
+      fillLimitMessageElement(el, messageOrPayload.message || friendlyError(messageOrPayload));
+      return;
+    }
+    fillLimitMessageElement(el, messageOrPayload);
   }
 
   function setStatus(message) {
@@ -2381,7 +2472,7 @@
         unavailableEl.hidden = false;
         unavailableEl.textContent = (auditBi && auditBi.message) || 'Gráficos indisponíveis até o envio do arquivo auditado.';
       }
-      return;
+      return false;
     }
     if (unavailableEl) unavailableEl.hidden = true;
     if (legacyContentEl) legacyContentEl.hidden = true;
@@ -2390,6 +2481,7 @@
     auditBiDashboardState.fieldPresence = auditBi.field_presence || {};
     auditBiDashboardState.rowCount = Number(auditBi.row_count) || auditBi.rows.length;
     auditBiRenderDashboard();
+    return true;
   }
 
   function refreshAuditBiDashboardFromCurrentTempTable() {
@@ -2409,10 +2501,39 @@
 
   function showAuditBiSection(auditBi) {
     var section = byId('cleideAuditBiSection');
-    if (!section) return;
-    initAuditBiDashboard((currentTempTable && currentTempTable.audit_bi) || auditBi);
+    if (!section) return false;
+
+    var resolvedAuditBi = (currentTempTable && currentTempTable.audit_bi) || auditBi;
+    var dashboardReady = initAuditBiDashboard(resolvedAuditBi);
+    if (!dashboardReady) {
+      section.hidden = true;
+      return false;
+    }
+
     section.hidden = false;
     section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    fetch(API_AUDIT_CHAT_UNLOCK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({})
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (res.status === 200 && res.data && res.data.ok === true && res.data.unlocked === true) {
+          unlockChat();
+        }
+      })
+      .catch(function () {
+        /* chat permanece bloqueado se a liberação backend falhar */
+      });
+
+    return true;
   }
 
   function renderTempTableItem(tempTable) {
@@ -2567,9 +2688,9 @@ function renderDocumentItem(doc) {
         if (res.status === 401 || res.status === 403) {
           var errData = res.data || {};
           if (errData.error_code === 'franquia_blocked') {
-            setError(errData.message || friendlyError(errData));
+            setError(errData);
           } else {
-            setError(friendlyError(errData));
+            setError(errData.message ? errData : friendlyError(errData));
           }
           setCurrentTempTable(null);
           resetCoveragePromptState();
@@ -2578,7 +2699,7 @@ function renderDocumentItem(doc) {
           return null;
         }
         if (!res.data || res.data.ok !== true) {
-          setError(friendlyError(res.data));
+          setError(res.data || friendlyError(res.data));
           return null;
         }
         setError('');
@@ -2613,7 +2734,7 @@ function renderDocumentItem(doc) {
       })
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
-          setError(friendlyError(res.data));
+          setError(res.data || friendlyError(res.data));
           return null;
         }
         setError('');
@@ -2650,7 +2771,7 @@ function renderDocumentItem(doc) {
       })
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
-          setError(friendlyError(res.data));
+          setError(res.data || friendlyError(res.data));
           return;
         }
         return fetchDocuments();
@@ -2672,7 +2793,7 @@ function renderDocumentItem(doc) {
       })
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
-          setError(friendlyError(res.data));
+          setError(res.data || friendlyError(res.data));
           return;
         }
         renderDocuments([], null);
@@ -2754,6 +2875,40 @@ function renderDocumentItem(doc) {
     return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
 
+  function runCleideTypewriter(targetEl, text, options) {
+    options = options || {};
+    if (!targetEl || !text) {
+      if (options.onComplete) options.onComplete();
+      return;
+    }
+
+    if (prefersReducedMotion()) {
+      targetEl.textContent = text;
+      if (options.onScroll) options.onScroll();
+      if (options.onComplete) options.onComplete();
+      return;
+    }
+
+    targetEl.textContent = '';
+    var index = 0;
+    var delayMs = typeof options.delayMs === 'number' ? options.delayMs : 36;
+
+    function typeNextChar() {
+      if (index >= text.length) {
+        targetEl.textContent = text;
+        if (options.onScroll) options.onScroll();
+        if (options.onComplete) options.onComplete();
+        return;
+      }
+      targetEl.textContent += text.charAt(index);
+      index += 1;
+      if (options.onScroll) options.onScroll();
+      window.setTimeout(typeNextChar, delayMs);
+    }
+
+    typeNextChar();
+  }
+
   function runWelcomeTypewriter() {
     var welcome = byId('cleideAuditoriaWelcome');
     if (!welcome) return;
@@ -2761,26 +2916,57 @@ function renderDocumentItem(doc) {
     var text = welcome.getAttribute('data-typewriter-text') || '';
     if (!text) return;
 
-    if (prefersReducedMotion()) {
-      welcome.textContent = text;
+    runCleideTypewriter(welcome, text);
+  }
+
+  function updateChatLockedUi() {
+    var input = byId('cleideAuditoriaInput');
+    var composer = byId('cleideAuditoriaComposer');
+    if (!input) return;
+
+    if (chatUnlocked) {
+      input.placeholder = 'Mensagem para a Cleide...';
+      input.removeAttribute('aria-disabled');
+      input.classList.remove('cleide-auditoria-input--locked');
+      if (composer) composer.classList.remove('cleide-auditoria-composer--chat-locked');
       return;
     }
 
-    welcome.textContent = '';
-    var index = 0;
-    var delayMs = 36;
+    input.placeholder = CHAT_LOCKED_PLACEHOLDER;
+    input.setAttribute('aria-disabled', 'true');
+    input.classList.add('cleide-auditoria-input--locked');
+    if (composer) composer.classList.add('cleide-auditoria-composer--chat-locked');
+  }
 
-    function typeNextChar() {
-      if (index >= text.length) {
-        welcome.textContent = text;
-        return;
-      }
-      welcome.textContent += text.charAt(index);
-      index += 1;
-      window.setTimeout(typeNextChar, delayMs);
+  function unlockChat() {
+    if (chatUnlocked) return;
+    chatUnlocked = true;
+    updateChatLockedUi();
+    appendChatBubble('assistant', CHAT_UNLOCKED_MESSAGE);
+    chatHistory.push({ role: 'assistant', content: CHAT_UNLOCKED_MESSAGE });
+    chatHistory = trimChatHistory(chatHistory);
+  }
+
+  function appendBlockedChatGuidance() {
+    var container = byId('cleideAuditoriaMessages');
+    if (!container) return;
+
+    var msg = document.createElement('div');
+    msg.className = 'cleide-auditoria-chat-msg cleide-auditoria-chat-msg-bot';
+    msg.setAttribute('data-chat-role', 'assistant');
+    msg.setAttribute('data-chat-blocked-guidance', 'true');
+
+    var inner = document.createElement('div');
+    inner.className = 'cleide-auditoria-chat-msg-inner';
+    msg.appendChild(inner);
+    container.appendChild(msg);
+
+    function scrollChat() {
+      container.scrollTop = container.scrollHeight;
     }
 
-    typeNextChar();
+    scrollChat();
+    runCleideTypewriter(inner, CHAT_BLOCKED_MESSAGE, { onScroll: scrollChat });
   }
 
   function generateRequestId() {
@@ -2856,11 +3042,84 @@ function renderDocumentItem(doc) {
     return htmlParts.join('<br>');
   }
 
-  function appendChatBubble(role, text) {
+  function buildCleideCopyAction() {
+    var actions = document.createElement('div');
+    actions.className = 'cleide-auditoria-chat-actions';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cleide-auditoria-chat-copy-btn';
+    btn.setAttribute('data-cleide-auditoria-copy', '1');
+    btn.setAttribute('aria-label', 'Copiar resposta da Cleide');
+    btn.textContent = 'Copiar';
+    actions.appendChild(btn);
+    return actions;
+  }
+
+  function markCleideCopied(button, label) {
+    if (!button) return;
+    var original = button.getAttribute('data-copy-label') || 'Copiar';
+    button.setAttribute('data-copy-label', original);
+    button.textContent = label;
+    if (label === 'Copiado') {
+      button.classList.add('is-copied');
+    } else {
+      button.classList.remove('is-copied');
+    }
+    window.setTimeout(function () {
+      button.textContent = original;
+      button.classList.remove('is-copied');
+    }, 1200);
+  }
+
+  function copyCleideTextToClipboard(text) {
+    var value = String(text || '').trim();
+    if (!value) return Promise.reject(new Error('empty'));
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      return navigator.clipboard.writeText(value);
+    }
+    return new Promise(function (resolve, reject) {
+      var area = document.createElement('textarea');
+      area.value = value;
+      area.setAttribute('readonly', 'readonly');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      area.style.pointerEvents = 'none';
+      area.style.left = '-9999px';
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      var ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch (_) {
+        ok = false;
+      }
+      document.body.removeChild(area);
+      if (ok) resolve();
+      else reject(new Error('copy-failed'));
+    });
+  }
+
+  function getCleideMessageTextForCopy(msgNode) {
+    if (!msgNode) return '';
+    var inner = msgNode.querySelector('.cleide-auditoria-chat-msg-inner');
+    if (!inner) return '';
+    // innerText preserva melhor quebras de lista/e-mail do que textContent puro.
+    var text = (typeof inner.innerText === 'string' ? inner.innerText : inner.textContent) || '';
+    return text.trim();
+  }
+
+  function appendChatBubble(role, textOrPayload) {
     var container = byId('cleideAuditoriaMessages');
-    if (!container || !text) return;
+    if (!container) return;
 
     var isUser = role === 'user';
+    var limitPayload = !isUser ? resolvePlanLimitPayload(textOrPayload) : null;
+    var text = typeof textOrPayload === 'string'
+      ? textOrPayload
+      : (textOrPayload && textOrPayload.message) || '';
+    if (!limitPayload && !text) return;
+
     var msg = document.createElement('div');
     msg.className = 'cleide-auditoria-chat-msg cleide-auditoria-chat-msg-' + (isUser ? 'user' : 'bot');
     msg.setAttribute('data-chat-role', isUser ? 'user' : 'assistant');
@@ -2869,10 +3128,15 @@ function renderDocumentItem(doc) {
     inner.className = 'cleide-auditoria-chat-msg-inner';
     if (isUser) {
       inner.textContent = text;
+    } else if (limitPayload) {
+      fillLimitMessageElement(inner, textOrPayload);
     } else {
       inner.innerHTML = renderCleideMarkdown(text);
     }
     msg.appendChild(inner);
+    if (!isUser) {
+      msg.appendChild(buildCleideCopyAction());
+    }
 
     container.appendChild(msg);
     container.scrollTop = container.scrollHeight;
@@ -2914,24 +3178,42 @@ function renderDocumentItem(doc) {
     var text = (input.value || '').trim();
     if (!text) return;
 
+    if (!chatUnlocked) {
+      appendBlockedChatGuidance();
+      return;
+    }
+
     input.value = '';
     appendChatBubble('user', text);
 
     var historyForApi = trimChatHistory(chatHistory.slice());
     var requestId = generateRequestId();
+    var visualFocus = null;
+    if (auditBiDashboardState && auditBiDashboardState.activeFilters) {
+      var filters = auditBiDashboardState.activeFilters;
+      visualFocus = {};
+      if (filters.carrier) visualFocus.carrier = filters.carrier;
+      if (filters.origin_uf) visualFocus.origin_uf = filters.origin_uf;
+      if (filters.destination_uf) visualFocus.destination_uf = filters.destination_uf;
+      if (filters.issue_date) visualFocus.issue_date = filters.issue_date;
+      if (!visualFocus.carrier && !visualFocus.origin_uf && !visualFocus.destination_uf && !visualFocus.issue_date) {
+        visualFocus = null;
+      }
+    }
 
     chatInFlight = true;
     setChatInputEnabled(false);
     setChatLoading(true);
 
-    fetch(API_CHAT, {
+    fetch(API_AUDIT_CHAT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       body: JSON.stringify({
         message: text,
         history: historyForApi,
-        request_id: requestId
+        request_id: requestId,
+        visual_focus: visualFocus
       })
     })
       .then(function (r) {
@@ -2942,11 +3224,19 @@ function renderDocumentItem(doc) {
       .then(function (res) {
         setChatLoading(false);
         if (res.status === 401 || res.status === 403) {
-          appendChatBubble('assistant', chatErrorMessage(res.data, res.status));
+          if (resolvePlanLimitPayload(res.data)) {
+            appendChatBubble('assistant', res.data);
+          } else {
+            appendChatBubble('assistant', chatErrorMessage(res.data, res.status));
+          }
           return;
         }
         if (!res.data || res.data.ok !== true) {
-          appendChatBubble('assistant', chatErrorMessage(res.data, res.status));
+          if (resolvePlanLimitPayload(res.data)) {
+            appendChatBubble('assistant', res.data);
+          } else {
+            appendChatBubble('assistant', chatErrorMessage(res.data, res.status));
+          }
           return;
         }
 
@@ -2972,7 +3262,10 @@ function renderDocumentItem(doc) {
     var form = byId('cleideAuditoriaForm');
     var input = byId('cleideAuditoriaInput');
     var sendBtn = byId('cleideAuditoriaSend');
+    var messages = byId('cleideAuditoriaMessages');
     if (!form || !input || !sendBtn) return;
+
+    updateChatLockedUi();
 
     function handleSend(e) {
       if (e) e.preventDefault();
@@ -2987,6 +3280,24 @@ function renderDocumentItem(doc) {
         sendChatMessage();
       }
     });
+
+    if (messages && !messages.getAttribute('data-cleide-copy-bound')) {
+      messages.setAttribute('data-cleide-copy-bound', '1');
+      messages.addEventListener('click', function (e) {
+        var target = e.target && e.target.closest
+          ? e.target.closest('.cleide-auditoria-chat-copy-btn')
+          : null;
+        if (!target) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var msgNode = target.closest('.cleide-auditoria-chat-msg-bot');
+        if (!msgNode || msgNode.id === CHAT_LOADING_ID) return;
+        var text = getCleideMessageTextForCopy(msgNode);
+        copyCleideTextToClipboard(text)
+          .then(function () { markCleideCopied(target, 'Copiado'); })
+          .catch(function () { markCleideCopied(target, 'Falha ao copiar'); });
+      });
+    }
   }
 
   function displayFieldValue(value) {
@@ -4361,10 +4672,20 @@ function renderDocumentItem(doc) {
     if (el) el.textContent = name || 'Nenhum arquivo selecionado';
   }
 
-  function setAuditUploadStatus(message, state) {
+  function setAuditUploadStatus(messageOrPayload, state) {
     var el = byId('cleideAuditAuditUploadStatus');
     if (!el) return;
-    el.textContent = message || '';
+    if (!messageOrPayload) {
+      el.replaceChildren();
+    } else if (typeof messageOrPayload === 'object') {
+      if (resolvePlanLimitPayload(messageOrPayload)) {
+        fillLimitMessageElement(el, messageOrPayload);
+      } else {
+        fillLimitMessageElement(el, messageOrPayload.message || friendlyError(messageOrPayload));
+      }
+    } else {
+      fillLimitMessageElement(el, messageOrPayload);
+    }
     el.className = 'cleide-audit-audit-file-status';
     if (state === 'loading') {
       el.classList.add('is-loading');
@@ -4375,10 +4696,20 @@ function renderDocumentItem(doc) {
     }
   }
 
-  function setAuditRunStatus(message, state) {
+  function setAuditRunStatus(messageOrPayload, state) {
     var el = byId('cleideAuditRunStatus');
     if (!el) return;
-    el.textContent = message || '';
+    if (!messageOrPayload) {
+      el.replaceChildren();
+    } else if (typeof messageOrPayload === 'object') {
+      if (resolvePlanLimitPayload(messageOrPayload)) {
+        fillLimitMessageElement(el, messageOrPayload);
+      } else {
+        fillLimitMessageElement(el, messageOrPayload.message || friendlyError(messageOrPayload));
+      }
+    } else {
+      fillLimitMessageElement(el, messageOrPayload);
+    }
     el.className = 'cleide-audit-run-status';
     if (state === 'loading') {
       el.classList.add('is-loading');
@@ -4410,7 +4741,7 @@ function renderDocumentItem(doc) {
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
           setAuditUploadStatus(
-            (res.data && res.data.message) || 'Não foi possível enviar o arquivo. Verifique o formato.',
+            res.data || 'Não foi possível enviar o arquivo. Verifique o formato.',
             'error'
           );
           return;
@@ -5802,7 +6133,7 @@ function renderDocumentItem(doc) {
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
           setAuditRunStatus(
-            (res.data && res.data.message) || 'Não foi possível processar a auditoria.',
+            res.data || 'Não foi possível processar a auditoria.',
             'error'
           );
           return;
@@ -6538,7 +6869,7 @@ function renderDocumentItem(doc) {
       })
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
-          setTempTableModalError((res.data && res.data.message) || 'Não foi possível salvar a configuração fiscal.');
+          setTempTableModalError(res.data || 'Não foi possível salvar a configuração fiscal.');
           return;
         }
         if (res.data.temp_table) {

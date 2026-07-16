@@ -470,8 +470,14 @@
         btn.setAttribute('data-handoff-login', '1');
         btn.textContent = actionItem.label || 'Continuar gratuitamente';
       } else if (actionItem.action === 'start_julia') {
-        btn.className = 'copilot-suggestion-btn';
-        btn.setAttribute('data-handoff-action', 'start_julia');
+        btn.className = actionItem.requires_login ? 'copilot-limit-btn' : 'copilot-suggestion-btn';
+        // Preferir URL já normalizada pelo backend (/login?next=... ou canônica).
+        if (actionItem.url) {
+          btn.setAttribute('data-handoff-url', actionItem.url);
+          btn.setAttribute('data-handoff-login', actionItem.requires_login ? '1' : '0');
+        } else {
+          btn.setAttribute('data-handoff-action', 'start_julia');
+        }
         btn.textContent = actionItem.label || 'Continuar com Júlia gratuitamente';
       } else if (actionItem.url) {
         btn.className = actionItem.requires_login ? 'copilot-limit-btn' : 'copilot-suggestion-btn';
@@ -784,13 +790,17 @@
           ? e.target.closest('.copilot-suggestion-btn, .copilot-limit-btn')
           : null;
         if (handoffBtn) {
+          var url = handoffBtn.getAttribute('data-handoff-url') || '';
+          if (url) {
+            navigateHandoff(url);
+            return;
+          }
+          // Compatibilidade mínima: handoff legado da Júlia sem URL no payload.
           var action = handoffBtn.getAttribute('data-handoff-action') || '';
           if (action === 'start_julia') {
             startJuliaOperationalHandoff();
             return;
           }
-          var url = handoffBtn.getAttribute('data-handoff-url') || '';
-          navigateHandoff(url);
           return;
         }
 

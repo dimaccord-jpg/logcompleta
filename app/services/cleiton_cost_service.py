@@ -67,6 +67,7 @@ def total_processing_estimated_cost_month(
     *,
     agent: str = "roberto",
     flow_type: str = "upload_bi",
+    flow_types: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Soma (processing_time_ms / 1000) * custo_por_segundo para eventos de processamento
@@ -82,11 +83,15 @@ def total_processing_estimated_cost_month(
         }
 
     start, end = _month_bounds(year, month)
+    if flow_types:
+        flow_filter = ProcessingEvent.flow_type.in_(flow_types)
+    else:
+        flow_filter = ProcessingEvent.flow_type == flow_type
     filt = and_(
         ProcessingEvent.occurred_at >= start,
         ProcessingEvent.occurred_at <= end,
         ProcessingEvent.agent == agent,
-        ProcessingEvent.flow_type == flow_type,
+        flow_filter,
     )
     events = ProcessingEvent.query.filter(filt).all()
     total = 0.0

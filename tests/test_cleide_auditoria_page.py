@@ -53,7 +53,9 @@ def test_cleide_auditoria_welcome_typewriter_contract(monkeypatch):
     assert "cleide_auditoria.js" in html
     assert 'id="cleideAuditoriaInput"' in html
     assert 'id="cleideAuditoriaSend"' in html
-    assert "disabled" not in _input_tag(html)
+    input_tag = _input_tag(html)
+    assert " disabled" not in input_tag
+    assert 'disabled="' not in input_tag.replace('aria-disabled="true"', "")
     assert "disabled" not in _send_button_tag(html)
     file_input = _file_input_tag(html)
     assert "disabled" not in file_input
@@ -247,7 +249,7 @@ def test_cleide_auditoria_pagina_mantem_contratos_visuais(monkeypatch):
     assert 'id="cleideAuditoriaComposer"' in html
     assert 'id="cleideAuditoriaAttachBtn"' in html
     assert 'id="cleideAuditoriaWelcome"' in html
-    assert 'placeholder="Mensagem para a Cleide..."' in html
+    assert 'placeholder="Faça o upload da tabela de frete para liberar o chat."' in html
     assert "Últimas da Logística" not in html
 
 
@@ -1348,7 +1350,8 @@ def test_cleide_auditoria_js_bi_generate_button_and_section():
     assert "Campo indisponível no lote auditado atual." in js
     assert "function setCurrentTempTable" in js
     assert "function refreshAuditBiDashboardFromCurrentTempTable" in js
-    assert "initAuditBiDashboard((currentTempTable && currentTempTable.audit_bi) || auditBi)" in js
+    assert "var resolvedAuditBi = (currentTempTable && currentTempTable.audit_bi) || auditBi" in js
+    assert "initAuditBiDashboard(resolvedAuditBi)" in js
     assert "auditBiDestroyAllCharts()" in js
     assert "auditBiDashboardState.activeFilters = {" in js
 
@@ -1553,3 +1556,253 @@ def test_cleide_auditoria_js_bi_grid_hidden_state_toggle():
     assert "Gerar Gráficos" in js
     assert "auditBiClearFilters" in js
     assert "openTempTableModal" in js
+
+
+def test_cleide_auditoria_js_chat_initially_locked():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "var chatUnlocked = false" in js
+    assert "CHAT_BLOCKED_MESSAGE = 'Faça o upload da tabela de frete.'" in js
+    assert "CHAT_LOCKED_PLACEHOLDER = 'Faça o upload da tabela de frete para liberar o chat.'" in js
+    assert "appendBlockedChatGuidance" in js
+    assert "updateChatLockedUi" in js
+    assert "unlockChat" in js
+    assert "runCleideTypewriter" in js
+
+
+def test_cleide_auditoria_template_chat_locked_appearance(monkeypatch):
+    web = _load_web_module()
+    html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
+    input_tag = _input_tag(html)
+    assert "cleide-auditoria-input--locked" in input_tag
+    assert 'aria-disabled="true"' in input_tag
+    assert " disabled" not in input_tag
+    assert 'disabled="' not in input_tag.replace('aria-disabled="true"', "")
+    assert 'placeholder="Faça o upload da tabela de frete para liberar o chat."' in input_tag
+    assert "cleide-auditoria-input--locked" in html
+
+
+def test_cleide_auditoria_js_send_chat_message_blocks_before_unlock():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    send_block = js[js.index("function sendChatMessage"): js.index("function initChat")]
+    assert "if (!chatUnlocked)" in send_block
+    assert "appendBlockedChatGuidance()" in send_block
+    blocked_section = send_block[: send_block.index("if (!chatUnlocked)") + len("if (!chatUnlocked)")]
+    assert "fetch(API_AUDIT_CHAT" not in blocked_section
+    assert send_block.index("if (!chatUnlocked)") < send_block.index("fetch(API_AUDIT_CHAT")
+    assert send_block.index("appendBlockedChatGuidance()") < send_block.index("fetch(API_AUDIT_CHAT")
+    blocked_guidance_block = js[js.index("function appendBlockedChatGuidance"): js.index("function generateRequestId")]
+    assert "data-chat-blocked-guidance" in blocked_guidance_block
+    assert "CHAT_BLOCKED_MESSAGE" in blocked_guidance_block
+    assert "runCleideTypewriter" in blocked_guidance_block
+    assert "chatHistory" not in blocked_guidance_block
+    assert "fetch(" not in blocked_guidance_block
+    assert "setChatLoading" not in blocked_guidance_block
+    assert "generateRequestId" not in blocked_guidance_block
+    assert "cleide-auditoria-chat-msg-bot" in blocked_guidance_block
+
+
+def test_cleide_auditoria_js_init_chat_wires_blocked_handlers_without_disabled():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    init_block = js[js.index("function initChat"): js.index("function displayFieldValue")]
+    assert "updateChatLockedUi()" in init_block
+    assert "sendChatMessage()" in init_block
+    assert "addEventListener('submit'" in init_block or 'addEventListener("submit"' in init_block
+    assert "addEventListener('click'" in init_block or 'addEventListener("click"' in init_block
+    assert "addEventListener('keydown'" in init_block or 'addEventListener("keydown"' in init_block
+    assert "input.disabled" not in init_block
+    assert "sendBtn.disabled" not in init_block
+
+
+def test_cleide_auditoria_js_unlock_message_only_after_bi_section():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "CHAT_UNLOCKED_MESSAGE = 'O chat está liberado para consultas sobre a auditoria e os resultados.'" in js
+    unlock_block = js[js.index("function unlockChat"): js.index("function appendBlockedChatGuidance")]
+    assert "if (chatUnlocked) return" in unlock_block
+    assert "chatUnlocked = true" in unlock_block
+    assert "CHAT_UNLOCKED_MESSAGE" in unlock_block
+    show_block = js[js.index("function showAuditBiSection"): js.index("function renderTempTableItem")]
+    assert "API_AUDIT_CHAT_UNLOCK" in show_block
+    assert "unlockChat()" in show_block
+    assert "dashboardReady" in show_block
+    assert show_block.index("API_AUDIT_CHAT_UNLOCK") < show_block.index("unlockChat()")
+    assert "initAuditBiDashboard" in show_block
+    assert "section.hidden = false" in show_block
+    assert "section.hidden = true" in show_block
+    locked_ui_block = js[js.index("function updateChatLockedUi"): js.index("function unlockChat")]
+    assert "CHAT_LOCKED_PLACEHOLDER" in locked_ui_block
+    assert "cleide-auditoria-input--locked" in locked_ui_block
+    assert "aria-disabled" in locked_ui_block
+
+
+def test_cleide_auditoria_js_audit_processing_does_not_unlock_chat():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    run_block = js[js.index("function runAuditProcessing"): js.index("function renderCoverageUploadHint")]
+    assert "unlockChat" not in run_block
+    assert "chatUnlocked = true" not in run_block
+
+
+def test_cleide_auditoria_js_init_audit_bi_ready_alone_does_not_unlock_chat():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    init_bi_block = js[js.index("function initAuditBiDashboard"): js.index("function refreshAuditBiDashboardFromCurrentTempTable")]
+    assert "unlockChat" not in init_bi_block
+    assert "chatUnlocked = true" not in init_bi_block
+
+
+def test_cleide_auditoria_js_generate_charts_click_unlocks_chat():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    render_block = js[js.index("function renderTempTableItem"): js.index("function renderDocumentItem")]
+    assert "showAuditBiSection(auditBi)" in render_block
+    assert "auditBi.ready === true" in render_block
+    assert "Number(auditBi.row_count) > 0" in render_block
+    init_bi_block = js[js.index("function initAuditBiDashboard"): js.index("function refreshAuditBiDashboardFromCurrentTempTable")]
+    assert "return false" in init_bi_block
+    assert "return true" in init_bi_block
+
+
+def test_cleide_auditoria_js_after_unlock_send_chat_uses_audit_insights_api():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    assert "var API_AUDIT_CHAT = '/api/cleide-auditoria/audit-chat'" in js
+    send_block = js[js.index("function sendChatMessage"): js.index("function initChat")]
+    unlocked_section = send_block[send_block.index("if (!chatUnlocked)"): ]
+    assert "fetch(API_AUDIT_CHAT" in unlocked_section
+    assert "fetch(API_CHAT" not in unlocked_section
+    assert "generateRequestId()" in unlocked_section
+    assert "setChatLoading(true)" in unlocked_section
+    assert "appendChatBubble('user', text)" in unlocked_section
+    assert "history: historyForApi" in unlocked_section
+    assert "visual_focus: visualFocus" in unlocked_section
+
+
+def test_cleide_auditoria_js_typewriter_respects_reduced_motion():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    typewriter_block = js[js.index("function runCleideTypewriter"): js.index("function runWelcomeTypewriter")]
+    assert "prefersReducedMotion()" in typewriter_block
+    assert "targetEl.textContent = text" in typewriter_block
+    assert "onScroll" in typewriter_block
+
+
+def test_cleide_auditoria_js_chat_lock_does_not_touch_other_chats():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    chat_behavior_js = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
+    assert "chatUnlocked" in js
+    assert "chatUnlocked" not in chat_behavior_js
+    assert "appendBlockedChatGuidance" in js
+    assert "appendBlockedChatGuidance" not in chat_behavior_js
+    julia_js = pathlib.Path("app/static/js/julia_documents.js").read_text(encoding="utf-8")
+    assert "chatUnlocked" not in julia_js
+    bi_js = pathlib.Path("app/static/js/cleide_auditoria_frete.js").read_text(encoding="utf-8")
+    assert "chatUnlocked" not in bi_js
+    assert "unlockChat" not in bi_js
+
+
+def test_cleide_auditoria_js_plan_limit_upgrade_cta_renderer():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    html = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+
+    assert "function fillLimitMessageElement" in js
+    assert "function resolvePlanLimitPayload" in js
+    assert "function safeUpgradeHref" in js
+    assert "createElement('a')" in js
+    assert "createTextNode(cta.message" in js
+    assert "createTextNode(cta.message_suffix" in js
+    assert "authorization.upgrade_cta" in js or "source.authorization" in js
+    assert "upgrade_cta" in js
+    assert "/contrate-um-plano" in js
+    assert "Faça o upgrade" in js
+
+    fill_chunk = js.split("function fillLimitMessageElement")[1].split("function setError")[0]
+    assert "innerHTML" not in fill_chunk
+    assert "createElement('a')" in fill_chunk
+    assert "createTextNode" in fill_chunk
+
+    set_error_chunk = js.split("function setError")[1].split("function setStatus")[0]
+    assert "fillLimitMessageElement" in set_error_chunk
+    assert "el.innerHTML = message" not in set_error_chunk
+    assert "el.innerHTML = data.message" not in set_error_chunk
+    assert "innerHTML" not in set_error_chunk
+
+    assert "setError(errData);" in js
+    assert "setError(errData.message || friendlyError(errData))" not in js
+    assert "resolvePlanLimitPayload(res.data)" in js
+    assert "fillLimitMessageElement(inner, textOrPayload)" in js
+
+    # Sem payload estruturado: não auto-linkar texto arbitrário com "Faça o upgrade"
+    resolve_chunk = js.split("function resolvePlanLimitPayload")[1].split("function safeUpgradeHref")[0]
+    assert "indexOf(PLAN_LIMIT_UPGRADE_LABEL)" not in resolve_chunk
+    assert "plain.slice" not in resolve_chunk
+
+    # URL inválida cai no fallback interno
+    safe_chunk = js.split("function safeUpgradeHref")[1].split("function fillLimitMessageElement")[0]
+    assert "PLAN_LIMIT_UPGRADE_PATH" in safe_chunk
+    assert "indexOf('//')" in safe_chunk
+    assert "https?" not in safe_chunk  # Cleide aceita só caminhos internos
+
+    assert ".cleide-audit-documents-error a" in html
+
+
+def test_cleide_auditoria_js_plan_limit_plain_message_stays_text():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    fill_chunk = js.split("function fillLimitMessageElement")[1].split("function setError")[0]
+    assert "el.textContent = fallback;" in fill_chunk
+    assert "payloadOrText.message" in fill_chunk
+    # Não interpreta HTML/script vindo de message
+    assert "innerHTML" not in fill_chunk
+    assert "<script>" not in fill_chunk
+    assert "dangerouslySetInnerHTML" not in js
+
+
+def test_cleide_auditoria_chat_copy_button_contract():
+    js = pathlib.Path("app/static/js/cleide_auditoria.js").read_text(encoding="utf-8")
+    html = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+
+    assert "function buildCleideCopyAction" in js
+    assert "function copyCleideTextToClipboard" in js
+    assert "function getCleideMessageTextForCopy" in js
+    assert "aria-label', 'Copiar resposta da Cleide'" in js or 'aria-label", "Copiar resposta da Cleide"' in js
+    assert "btn.type = 'button'" in js or 'btn.type = "button"' in js
+    assert "cleide-auditoria-chat-copy-btn" in js
+    assert "navigator.clipboard.writeText" in js
+    assert 'document.execCommand("copy")' in js or "document.execCommand('copy')" in js
+    assert "inner.innerText" in js
+    assert "innerHTML" not in js[js.index("function getCleideMessageTextForCopy"): js.index("function appendChatBubble")]
+
+    append_block = js[js.index("function appendChatBubble"): js.index("function setChatLoading")]
+    assert "buildCleideCopyAction()" in append_block
+    assert "if (!isUser)" in append_block
+    assert append_block.index("if (!isUser)") < append_block.index("buildCleideCopyAction()")
+    # Usuário não recebe botão de copiar
+    user_branch = append_block[append_block.index("if (isUser)"): append_block.index("else if (limitPayload)")]
+    assert "buildCleideCopyAction" not in user_branch
+
+    loading_block = js[js.index("function setChatLoading"): js.index("function chatErrorMessage")]
+    assert "buildCleideCopyAction" not in loading_block
+    assert "cleide-auditoria-chat-copy-btn" not in loading_block
+
+    blocked_guidance_block = js[js.index("function appendBlockedChatGuidance"): js.index("function generateRequestId")]
+    assert "buildCleideCopyAction" not in blocked_guidance_block
+    assert "cleide-auditoria-chat-copy-btn" not in blocked_guidance_block
+
+    init_block = js[js.index("function initChat"): js.index("function displayFieldValue")]
+    assert "cleideAuditoriaMessages" in init_block
+    assert "closest('.cleide-auditoria-chat-copy-btn')" in init_block
+    assert "copyCleideTextToClipboard" in init_block
+    assert "Copiado" in init_block
+    assert "Falha ao copiar" in init_block
+    assert "CHAT_LOADING_ID" in init_block
+    # Clique no copiar não dispara fetch/chatHistory
+    copy_handler = init_block[init_block.index("cleide-auditoria-chat-copy-btn"):]
+    assert "fetch(" not in copy_handler
+    assert "chatHistory" not in copy_handler
+    assert "sendChatMessage" not in copy_handler
+
+    assert ".cleide-auditoria-chat-copy-btn" in html
+    assert ".cleide-auditoria-chat-actions" in html
+
+    # Contratos da Júlia intactos
+    julia_js = pathlib.Path("app/static/js/julia_documents.js").read_text(encoding="utf-8")
+    chat_behavior_js = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
+    assert "cleide-auditoria-chat-copy-btn" not in julia_js
+    assert "buildCleideCopyAction" not in julia_js
+    assert "buildCleideCopyAction" not in chat_behavior_js
+    assert "/api/chat_julia" in chat_behavior_js
+    assert "/api/chat_julia" not in js

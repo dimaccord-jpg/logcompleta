@@ -9,9 +9,10 @@ _CAPABILITIES_PATH = pathlib.Path(__file__).resolve().parent / "copilot_capabili
 
 VALID_RECOMMENDED_AGENTS = frozenset({"roberto", "cleide", "julia", "feed"})
 
+# Cleide padrão = Auditoria de Fretes; BI Cleide anterior permanece como destino legado `cleide_audit`.
 AGENT_TO_DESTINATION: dict[str, str] = {
     "roberto": "roberto_bi",
-    "cleide": "cleide_audit",
+    "cleide": "cleide_freight_audit",
     "julia": "julia_operational",
     "feed": "feed",
 }
@@ -19,11 +20,11 @@ AGENT_TO_DESTINATION: dict[str, str] = {
 AGENT_BLURBS: dict[str, str] = {
     "roberto": (
         "Roberto olha para frente — usa histórico para prever custos, tendências "
-        "e cenários dos próximos meses."
+        "e cenários dos próximos meses, com indicadores e BI gerencial de fretes."
     ),
     "cleide": (
-        "Cleide olha para trás — investiga custos realizados, desvios, anomalias "
-        "e se você pagou certo."
+        "Cleide audita cobrança — compara valor cobrado com o esperado pela tabela "
+        "negociada, explica memória de cálculo e aponta divergências."
     ),
     "julia": (
         "Júlia é a consultoria operacional logada — estratégia, supply chain, "
@@ -34,10 +35,19 @@ AGENT_BLURBS: dict[str, str] = {
 
 ACTIVITY_AMBIGUOUS_REPLY = (
     "Consigo te ajudar, mas isso pode seguir caminhos diferentes. "
-    "Se você quer prever os próximos meses e projetar tendência de custo, Roberto é o melhor caminho. "
-    "Se quer entender desvios, cobranças ou o que aconteceu nos últimos meses, Cleide é mais indicada. "
+    "Se você quer prever os próximos meses, indicadores ou BI gerencial de fretes, "
+    "Roberto é o melhor caminho. "
+    "Se quer auditar cobrança, comparar cobrado com esperado ou validar tabela negociada, "
+    "a Auditoria de Fretes da Cleide é mais indicada. "
     "Se a ideia é decidir uma estratégia de redução ou negociação, Júlia pode ajudar. "
     "Qual é o seu objetivo principal?"
+)
+
+BI_VS_AUDIT_TRIAGE_REPLY = (
+    "Depende do objetivo: "
+    "para indicadores, gráficos, análise gerencial e previsões de frete, use o BI do Roberto (/fretes); "
+    "para conferir cobrança, comparar cobrado com esperado, validar tabela negociada ou ver "
+    "divergências e memória de cálculo, use a Auditoria de Fretes da Cleide (/auditoria-frete)."
 )
 
 SPREADSHEET_AMBIGUOUS_REPLY = ACTIVITY_AMBIGUOUS_REPLY
@@ -57,11 +67,31 @@ _ROBERTO_PREDICTIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# BI gerencial / indicadores → Roberto (/fretes), não Auditoria nem BI Cleide legado.
+_ROBERTO_BI_MANAGERIAL_RE = re.compile(
+    r"(?:indicadores?\s+(?:de\s+)?frete|gr[aá]ficos?(?:\s*/\s*|\s+e\s+|\s+)?bi|"
+    r"bi\s+gerencial|an[aá]lise\s+de\s+dados\s+de\s+frete|"
+    r"dashboard\s+de\s+fretes?|painel\s+(?:gerencial|de\s+fretes?)|"
+    r"visualiza[cç][oõ]es?\s+de\s+frete)",
+    re.IGNORECASE,
+)
+
 _CLEIDE_RETROSPECTIVE_RE = re.compile(
     r"\b(?:audit(?:ar|oria)?|paguei|pagando|pag(?:ar|uei)\s+cert|pag(?:ar|uei)\s+err|"
     r"desvio(?:s)?|anomalias?|erros?|diverg(?:[eê]ncia|ir)?|cobran[cç]a(?:s)?|suspeit|indevid|"
     r"investig(?:ar)?|concentra(?:[cç][aã]o|r)?|realizad(?:o|a|os|as)?|passad(?:o|a|os|as)?|"
     r"[uú]ltimos\s+meses|ocorrid(?:o|a|os|as)?|onde\s+errei|desviou|confer(?:ir|encia)?)\b",
+    re.IGNORECASE,
+)
+
+# Intenções explícitas da nova Auditoria de Fretes (/auditoria-frete).
+_CLEIDE_FREIGHT_AUDIT_RE = re.compile(
+    r"(?:auditar?\s+cobran[cç]|auditar?\s+(?:os\s+)?fretes?|auditoria\s+de\s+(?:frete|cobran[cç])|"
+    r"valor\s+cobrado\s+est[aá]\s+correto|cobrado\s+(?:com|versus|vs\.?|x)\s+esperado|"
+    r"comparar\s+cobrado|validar\s+tabela\s+negociada|tabela\s+negociada|"
+    r"diverg[eê]ncia(?:s)?\s+(?:de\s+)?frete|mem[oó]ria\s+de\s+c[aá]lculo|"
+    r"documentos?\s+sem\s+c[aá]lculo|cidades?\s+sem\s+(?:frete\s+)?calculad|"
+    r"sem\s+frete\s+calculad|cobran[cç]as?\s+de\s+frete)",
     re.IGNORECASE,
 )
 
@@ -97,6 +127,14 @@ _GENERIC_ANALYZE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_SCREEN_TRIAGE_RE = re.compile(
+    r"(?:qual\s+tela\s+(?:devo|eu\s+devo|usar|escolher)|"
+    r"qual\s+(?:caminho|destino|agente)\s+(?:devo|usar|escolher)|"
+    r"bi\s+ou\s+auditoria|auditoria\s+ou\s+bi|"
+    r"roberto\s+ou\s+cleide|cleide\s+ou\s+roberto)",
+    re.IGNORECASE,
+)
+
 
 def load_capabilities_document() -> str:
     return _CAPABILITIES_PATH.read_text(encoding="utf-8")
@@ -109,6 +147,27 @@ def agent_to_destination(agent: str | None) -> str | None:
     return AGENT_TO_DESTINATION.get(normalized)
 
 
+def is_freight_audit_intent(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    return bool(_CLEIDE_FREIGHT_AUDIT_RE.search(text))
+
+
+def is_roberto_bi_managerial_intent(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    return bool(_ROBERTO_BI_MANAGERIAL_RE.search(text))
+
+
+def is_screen_triage_question(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    return bool(_SCREEN_TRIAGE_RE.search(text))
+
+
 def resolve_activity_intent(message: str) -> str | None:
     """
     Classifica intenção pela atividade fim e horizonte temporal.
@@ -117,6 +176,16 @@ def resolve_activity_intent(message: str) -> str | None:
     text = (message or "").strip().lower()
     if not text:
         return None
+
+    if is_screen_triage_question(text):
+        return "screen_triage"
+
+    # Auditoria de cobrança explícita tem prioridade sobre BI gerencial genérico.
+    if is_freight_audit_intent(text):
+        return "cleide_freight_audit"
+
+    if is_roberto_bi_managerial_intent(text):
+        return "roberto_predictive"
 
     roberto = bool(_ROBERTO_PREDICTIVE_RE.search(text))
     cleide = bool(_CLEIDE_RETROSPECTIVE_RE.search(text))
@@ -147,7 +216,7 @@ def resolve_activity_intent(message: str) -> str | None:
 def should_suppress_handoff_for_unclear_activity(message: str) -> bool:
     """Guardrail: suprime handoff quando atividade fim não está clara."""
     intent = resolve_activity_intent(message)
-    return intent in ("ambiguous", "artifact_format_question")
+    return intent in ("ambiguous", "artifact_format_question", "screen_triage")
 
 
 def resolve_spreadsheet_context(message: str) -> str | None:
@@ -163,7 +232,7 @@ def resolve_spreadsheet_context(message: str) -> str | None:
     intent = resolve_activity_intent(message)
     if intent == "artifact_format_question":
         return "spreadsheet_acceptance" if "aceita" in text else "spreadsheet_upload"
-    if intent == "cleide_retrospective":
+    if intent in ("cleide_retrospective", "cleide_freight_audit"):
         return "spreadsheet_audit"
     if intent == "roberto_predictive":
         return "spreadsheet_bi"
@@ -179,7 +248,7 @@ def resolve_dashboard_context(message: str) -> str | None:
     intent = resolve_activity_intent(message)
     if intent == "julia_strategic":
         return "dashboard_strategic"
-    if intent == "cleide_retrospective":
+    if intent in ("cleide_retrospective", "cleide_freight_audit"):
         return "dashboard_audit"
     if intent == "roberto_predictive":
         return "dashboard_bi"
@@ -195,7 +264,7 @@ def resolve_cost_context(message: str) -> str | None:
     ):
         return None
     intent = resolve_activity_intent(message)
-    if intent == "cleide_retrospective":
+    if intent in ("cleide_retrospective", "cleide_freight_audit"):
         return "cost_audit"
     if intent == "roberto_predictive":
         return "cost_bi"
@@ -215,6 +284,20 @@ def should_suppress_handoff_for_dashboard_context(message: str) -> bool:
 
 def should_suppress_handoff_for_cost_context(message: str) -> bool:
     return resolve_cost_context(message) == "cost_ambiguous"
+
+
+def preferred_destination_for_message(message: str) -> str | None:
+    """Destino determinístico preferido para fallback e remapeamento de guardrail."""
+    intent = resolve_activity_intent(message)
+    if intent == "cleide_freight_audit":
+        return "cleide_freight_audit"
+    if intent == "cleide_retrospective":
+        return "cleide_freight_audit"
+    if intent == "roberto_predictive":
+        return "roberto_bi"
+    if intent == "julia_strategic":
+        return "julia_operational"
+    return None
 
 
 def _classify_local_context(message: str) -> str:
@@ -253,6 +336,16 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
     """
     ctx = _classify_local_context(user_message)
 
+    if ctx == "screen_triage":
+        return {
+            "reply": BI_VS_AUDIT_TRIAGE_REPLY,
+            "recommended_agent": None,
+            "handoff": None,
+            "handoffs": None,
+            "confidence": "high",
+            "reason": "local_screen_triage",
+        }
+
     if ctx in ("ambiguous", "artifact_format_question", "multi_mixed"):
         return {
             "reply": ACTIVITY_AMBIGUOUS_REPLY,
@@ -266,7 +359,7 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
     if ctx == "roberto_predictive":
         return {
             "reply": (
-                "Para prever, projetar ou estimar custos futuros com base no histórico, "
+                "Para indicadores, gráficos, BI gerencial ou prever/projetar custos futuros, "
                 f"Roberto é o caminho. {AGENT_BLURBS['roberto']}"
             ),
             "recommended_agent": "roberto",
@@ -276,17 +369,18 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
             "reason": "local_roberto_predictive",
         }
 
-    if ctx == "cleide_retrospective":
+    if ctx in ("cleide_freight_audit", "cleide_retrospective"):
         return {
             "reply": (
-                "Para investigar o que já ocorreu — desvios, anomalias, cobranças ou "
-                f"se pagou certo — Cleide é o caminho. {AGENT_BLURBS['cleide']}"
+                "Para auditar cobrança, comparar cobrado com esperado, validar tabela negociada "
+                f"ou investigar divergências — a Auditoria de Fretes da Cleide é o caminho. "
+                f"{AGENT_BLURBS['cleide']}"
             ),
             "recommended_agent": "cleide",
-            "handoff": {"destination": "cleide_audit"},
+            "handoff": {"destination": "cleide_freight_audit"},
             "handoffs": None,
             "confidence": "high",
-            "reason": "local_cleide_retrospective",
+            "reason": "local_cleide_freight_audit",
         }
 
     if ctx == "julia_strategic":
@@ -319,8 +413,8 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
         return {
             "reply": (
                 "Posso conversar sobre sua operação logística e, quando fizer sentido, "
-                "indicar o melhor caminho — previsão com Roberto, investigação com Cleide, "
-                "estratégia com Júlia ou notícias no Feed. O que você quer explorar?"
+                "indicar o melhor caminho — BI e previsão com Roberto, Auditoria de Fretes "
+                "com Cleide, estratégia com Júlia ou notícias no Feed. O que você quer explorar?"
             ),
             "recommended_agent": None,
             "handoff": None,
@@ -354,9 +448,9 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
 
     return {
         "reply": (
-            "Sou o Copilot do AgenteFrete. Posso ajudar com previsão de fretes, "
-            "auditoria de custos realizados, estratégia logística e tendências de mercado. "
-            "O que você precisa agora?"
+            "Sou o Copilot do AgenteFrete. Posso ajudar com BI e previsão de fretes, "
+            "Auditoria de Fretes (cobrança e divergências), estratégia logística e "
+            "tendências de mercado. O que você precisa agora?"
         ),
         "recommended_agent": None,
         "handoff": None,

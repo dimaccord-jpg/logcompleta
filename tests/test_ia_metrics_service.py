@@ -8,6 +8,7 @@ from app.models import IaConsumoEvento, ProcessingEvent, utcnow_naive
 from app.run_cleiton_processing_governance import cleiton_register_processing_event
 from app.services.ia_metrics_service import (
     FLOW_TYPE_ONBOARDING_DISCOVERY,
+    aggregate_cleide_processing_metrics_month,
     aggregate_month_metrics,
     aggregate_onboarding_discovery_metrics,
     get_ia_dashboard_payload,
@@ -483,6 +484,36 @@ def test_get_ia_dashboard_payload_separa_roberto_e_cleide(app):
         assert cleide_block["total_processing_events_month"] == 1
         assert cleide_block["total_rows_processed_month"] == 10
         assert cleide_block["avg_processing_time_ms"] == 250.0
+
+
+def test_aggregate_cleide_processing_inclui_fluxos_auditoria(app):
+    with app.app_context():
+        seed_sistema_interno()
+        from app.models import utcnow_naive
+
+        today = utcnow_naive()
+        for flow_type, rows in (
+            ("upload_fretes", 10),
+            ("cleide_audit_coverage_upload", 2),
+            ("cleide_audit_batch_upload", 3),
+            ("cleide_audit_batch_processed", 5),
+        ):
+            db.session.add(
+                ProcessingEvent(
+                    occurred_at=today,
+                    agent="cleide",
+                    flow_type=flow_type,
+                    processing_type="non_llm",
+                    rows_processed=rows,
+                    processing_time_ms=100,
+                    status="success",
+                )
+            )
+        db.session.commit()
+
+        agg = aggregate_cleide_processing_metrics_month(today.year, today.month)
+        assert agg["total_processing_events_month"] == 4
+        assert agg["total_rows_processed_month"] == 15
 
 
 def test_get_ia_dashboard_payload_exibe_total_interno_geral(app):

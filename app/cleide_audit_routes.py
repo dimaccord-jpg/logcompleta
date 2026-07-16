@@ -26,6 +26,7 @@ from app.cleide_audit_correction_service import (
 )
 from app.cleide_audit_doc_service import (
     CLEIDE_AUDIT_CHAT_FLOW_TYPE,
+    CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE,
     CLEIDE_AUDIT_TEMPLATE_FILENAME,
     CleideAuditBatchError,
     CleideAuditCoverageError,
@@ -77,6 +78,12 @@ from app.run_cleide_audit_chat import (
     get_cached_chat_response,
     normalize_chat_request_id,
     sanitize_chat_history,
+)
+from app.run_cleide_audit_insights_chat import chat_cleide_audit_insights_reply
+from app.cleide_audit_insights_context import (
+    ERROR_INSIGHTS_CHAT_LOCKED,
+    load_audit_insights_bundle,
+    mark_insights_chat_unlocked,
 )
 from app.cleiton_doc_contracts import (
     ERROR_FILE_TOO_LARGE,
@@ -170,6 +177,37 @@ def _chat_success_payload(result: dict, *, show_documents_used: bool, cached: bo
     if cached:
         payload["cached"] = True
     return payload
+
+
+def _insights_chat_success_payload(result: dict, *, cached: bool = False) -> dict:
+    payload = {
+        "ok": True,
+        "answer": result.get("answer") or "",
+        "flow_type": result.get("flow_type") or CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE,
+        "deterministic": bool(result.get("deterministic")),
+    }
+    if result.get("intent"):
+        payload["intent"] = result.get("intent")
+    if cached:
+        payload["cached"] = True
+    return payload
+
+
+def _http_status_for_insights_error(error_code: str) -> int:
+    if error_code in {
+        "cleide_audit_insights_no_temp_table",
+        "cleide_audit_insights_temp_table_expired",
+        "cleide_audit_insights_batch_not_found",
+    }:
+        return 404
+    if error_code in {
+        "cleide_audit_insights_batch_not_processed",
+        "cleide_audit_insights_batch_no_results",
+    }:
+        return 409
+    if error_code == ERROR_INSIGHTS_CHAT_LOCKED:
+        return 403
+    return 400
 
 
 def _http_status_for_error(error_code: str) -> int:
@@ -983,4 +1021,145 @@ def cleide_audit_chat():
         "flow_type": payload["flow_type"],
     }
     cache_chat_response(session, request_id, cache_payload)
+    return jsonify(payload)
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/audit-chat/unlock", methods=["POST"])
+def cleide_audit_insights_chat_unlock():
+    unauthorized = _authorize_cleide_audit_api(
+        auth_message="Autenticação necessária para liberar o chat analítico da Cleide Auditoria.",
+    )
+    if unauthorized is not None:
+        return unauthorized
+
+    loaded = load_audit_insights_bundle(session, require_unlock=False)
+    if not loaded.get("ok"):
+        error_code = loaded.get("error_code") or "insights_unavailable"
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": error_code,
+                    "error_code": error_code,
+                    "message": loaded.get("message") or "Não foi possível liberar o chat analítico.",
+                }
+            ),
+            _http_status_for_insights_error(error_code),
+        )
+
+    unlock_meta = mark_insights_chat_unlocked(session, loaded["bundle"])
+    return jsonify(
+        {
+            "ok": True,
+            "unlocked": True,
+            "temp_table_id": unlock_meta.get("temp_table_id"),
+            "audit_batch_id": unlock_meta.get("audit_batch_id"),
+            "processed_at": unlock_meta.get("processed_at"),
+        }
+    )
+
+
+@cleide_audit_bp.route("/api/cleide-auditoria/audit-chat", methods=["POST"])
+def cleide_audit_insights_chat():
+    unauthorized = _authorize_cleide_audit_api(
+        auth_message="Autenticação necessária para consultas analíticas da Cleide Auditoria.",
+    )
+    if unauthorized is not None:
+        return unauthorized
+
+    audit_cfg = get_cleide_audit_config()
+    if not audit_cfg.chat_enabled:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "chat_disabled",
+                    "error_code": "chat_disabled",
+                    "message": CHAT_DISABLED_MESSAGE,
+                }
+            ),
+            403,
+        )
+
+    data = request.get_json(silent=True) or {}
+    raw_message = data.get("message")
+    if raw_message is None:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "invalid_message",
+                    "message": "Campo 'message' é obrigatório.",
+                }
+            ),
+            400,
+        )
+    if not isinstance(raw_message, str) or not raw_message.strip():
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "invalid_message",
+                    "message": "Campo 'message' deve ser uma string não vazia.",
+                }
+            ),
+            400,
+        )
+
+    message_text = raw_message.strip()
+    if len(message_text) > audit_cfg.question_max_chars:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "invalid_message",
+                    "message": (
+                        f"Mensagem excede o limite de {audit_cfg.question_max_chars} caracteres."
+                    ),
+                }
+            ),
+            400,
+        )
+
+    history = sanitize_chat_history(
+        data.get("history"),
+        max_history=audit_cfg.chat_max_history,
+    )
+    request_id = normalize_chat_request_id(data.get("request_id"))
+    visual_focus = data.get("visual_focus") if isinstance(data.get("visual_focus"), dict) else None
+
+    result = chat_cleide_audit_insights_reply(
+        message_text,
+        history,
+        session_obj=session,
+        request_id=request_id,
+        visual_focus=visual_focus,
+        max_history=audit_cfg.chat_max_history,
+        question_max_chars=audit_cfg.question_max_chars,
+        fallback_message=audit_cfg.fallback_message,
+    )
+
+    if result.get("error"):
+        error_code = result.get("error") or "processing_failed"
+        status = 503 if error_code == "service_unavailable" else _http_status_for_insights_error(error_code)
+        if error_code == "invalid_message":
+            status = 400
+        if error_code == "processing_failed":
+            status = 500
+        error_message = result.get("message") or "Não foi possível processar a mensagem."
+        if error_code == "processing_failed" and result.get("answer"):
+            return jsonify(_insights_chat_success_payload(result))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": error_code,
+                    "error_code": error_code,
+                    "message": error_message,
+                }
+            ),
+            status,
+        )
+
+    payload = _insights_chat_success_payload(result, cached=bool(result.get("cached")))
     return jsonify(payload)

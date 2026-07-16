@@ -164,18 +164,27 @@ def _aggregate_processing_metrics_month_by_agent_flow(
     month: int,
     *,
     agent: str,
-    flow_type: str,
+    flow_type: str | None = None,
+    flow_types: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Metricas mensais de processamento analitico (nao-LLM) por agente/fluxo.
     """
     start, end = _month_datetime_bounds(year, month)
 
+    flow_filter: Any
+    if flow_types:
+        flow_filter = ProcessingEvent.flow_type.in_(flow_types)
+    elif flow_type is not None:
+        flow_filter = ProcessingEvent.flow_type == flow_type
+    else:
+        raise ValueError("flow_type ou flow_types é obrigatório")
+
     base_filter = and_(
         ProcessingEvent.occurred_at >= start,
         ProcessingEvent.occurred_at < end,
         ProcessingEvent.agent == agent,
-        ProcessingEvent.flow_type == flow_type,
+        flow_filter,
     )
 
     total_events = (
@@ -229,17 +238,40 @@ def aggregate_processing_metrics_month(year: int, month: int) -> dict[str, Any]:
     )
 
 
+CLEIDE_PROCESSING_FLOW_TYPES = (
+    "upload_fretes",
+    "cleide_audit_coverage_upload",
+    "cleide_audit_batch_upload",
+)
+
+# Reprocessamentos explícitos (cleide_audit_batch_processed) debitam franquia,
+# mas não entram no consolidado de linhas faturadas do dashboard Cleide.
+CLEIDE_PROCESSING_REPROCESS_FLOW_TYPES = ("cleide_audit_batch_processed",)
+
+
 def aggregate_cleide_processing_metrics_month(year: int, month: int) -> dict[str, Any]:
     """
     Metricas mensais de processamento analitico da Cleide.
-    Filtra isoladamente agent=cleide e flow_type=upload_fretes.
+    Agrega upload legado e fluxos operacionais da Auditoria Cleide.
+    Linhas da planilha auditada entram via cleide_audit_batch_upload; reprocessamentos
+    não somam novamente no consolidado de linhas faturadas.
     """
-    return _aggregate_processing_metrics_month_by_agent_flow(
+    metrics = _aggregate_processing_metrics_month_by_agent_flow(
         year,
         month,
         agent="cleide",
-        flow_type="upload_fretes",
+        flow_types=list(CLEIDE_PROCESSING_FLOW_TYPES),
     )
+    reprocess_events = _aggregate_processing_metrics_month_by_agent_flow(
+        year,
+        month,
+        agent="cleide",
+        flow_types=list(CLEIDE_PROCESSING_REPROCESS_FLOW_TYPES),
+    )
+    metrics["total_processing_events_month"] = int(metrics.get("total_processing_events_month") or 0) + int(
+        reprocess_events.get("total_processing_events_month") or 0
+    )
+    return metrics
 
 
 def cost_per_token(cost: Decimal | None, total_tokens: int) -> float | None:
@@ -275,7 +307,7 @@ def get_ia_dashboard_payload(year: int, month: int) -> dict[str, Any]:
         year,
         month,
         agent="cleide",
-        flow_type="upload_fretes",
+        flow_types=list(CLEIDE_PROCESSING_FLOW_TYPES),
     )
     total_internal_tokens_month = int((agg.get("total_tokens_month") or 0) + (onboarding_ia.get("total_tokens_month") or 0))
     return {

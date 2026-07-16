@@ -15,9 +15,11 @@ from app.models import AuditoriaGerencial, IaConsumoEvento
 from app.capability_taxonomy import DESTINATIONS, get_cta_by_id, rank_destinations_from_capabilities
 from app.copilot_capabilities import (
     ACTIVITY_AMBIGUOUS_REPLY,
+    BI_VS_AUDIT_TRIAGE_REPLY,
     COST_AMBIGUOUS_REPLY,
     DASHBOARD_AMBIGUOUS_REPLY,
     SPREADSHEET_AMBIGUOUS_REPLY,
+    agent_to_destination,
     build_local_conversational_reply,
     load_capabilities_document,
     resolve_activity_intent,
@@ -67,12 +69,19 @@ class TestCapabilityTaxonomyStructural:
             {"domain": "freight_bi", "score": 61},
         ]
         ranked = rank_destinations_from_capabilities(caps)
-        assert ranked[0]["destination"] == "cleide_audit"
+        assert ranked[0]["destination"] == "cleide_freight_audit"
         assert ranked[0]["agent"] == "cleide"
+        assert ranked[0]["url"] == "/auditoria-frete"
 
-    def test_handoff_destinations_do_not_require_login_at_navigation(self):
-        for dest_id in ("feed", "julia_operational", "roberto_bi", "cleide_audit"):
-            assert DESTINATIONS[dest_id].requires_login is False
+    def test_operational_destinations_require_login_in_taxonomy(self):
+        assert DESTINATIONS["feed"].requires_login is False
+        for dest_id in ("julia_operational", "roberto_bi", "cleide_freight_audit", "cleide_audit"):
+            assert DESTINATIONS[dest_id].requires_login is True
+
+    def test_cleide_freight_audit_and_legacy_urls(self):
+        assert DESTINATIONS["cleide_freight_audit"].url == "/auditoria-frete"
+        assert DESTINATIONS["cleide_audit"].url == "/cleide-bi-frete"
+        assert DESTINATIONS["roberto_bi"].url == "/fretes"
 
     def test_capabilities_document_loads(self):
         doc = load_capabilities_document()
@@ -88,6 +97,10 @@ class TestCapabilityTaxonomyStructural:
         assert "discovery anônimo" in doc.lower() or "Discovery anônimo" in doc
         assert "planilha" in doc.lower()
         assert "cotação automatizada" in doc.lower() or "Cotação" in doc
+        assert "cleide_freight_audit" in doc
+        assert "/auditoria-frete" in doc
+        assert "/cleide-bi-frete" in doc
+        assert "memória de cálculo" in doc.lower() or "memoria de calculo" in doc.lower()
 
 
 class TestCopilotParsingAndGuardrails:
@@ -242,7 +255,7 @@ class TestCleitonDiscoveryReply:
         assert FALLBACK_UNAVAILABLE_REPLY not in result["reply"]
         assert "Cleide" in result["reply"]
         assert result["handoff"] is not None
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_ola_no_menu_with_gemini(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -449,6 +462,10 @@ class TestOnboardingHomeUxContract:
         source = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
         assert "function classifyResponseActions(payload)" in source
         assert "target.closest('.copilot-suggestion-btn, .copilot-limit-btn')" in source
+        assert "function navigateHandoff(handoffUrl)" in source
+        # Preferência pela URL já normalizada no payload (não política só da Júlia).
+        assert "data-handoff-url" in source
+        assert "Preferir URL já normalizada pelo backend" in source or "navigateHandoff(url)" in source
 
 
 class TestOnboardingHandoffDoesNotWeakenApiAuth:
@@ -799,7 +816,7 @@ class TestPlanilhaKnowledge:
             "reason": "auditoria erros",
         })
         result = cleiton_discovery_reply("Tenho uma planilha de fretes e quero encontrar erros.", [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_planilha_pagando_certo_cleide(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -812,7 +829,7 @@ class TestPlanilhaKnowledge:
         result = cleiton_discovery_reply(
             "Tenho uma planilha de fretes e quero saber se estou pagando certo.", []
         )
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_planilha_prever_custos_roberto(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -877,7 +894,7 @@ class TestPlanilhaKnowledge:
         monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
         monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
         result = cleiton_discovery_reply("Quero auditar minha planilha.", [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_planilha_dashboard_sem_objetivo_pedem_contexto_local(self, monkeypatch):
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -958,7 +975,7 @@ class TestDashboardKnowledge:
             "reason": "auditoria erros",
         })
         result = cleiton_discovery_reply("Quero gerar dashboard para encontrar erros nos fretes.", [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_dashboard_anomalias_transportadora_cleide(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -969,7 +986,7 @@ class TestDashboardKnowledge:
             "reason": "anomalias",
         })
         result = cleiton_discovery_reply("Quero dashboard de anomalias por transportadora.", [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_dashboard_pagando_certo_cleide(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -980,7 +997,7 @@ class TestDashboardKnowledge:
             "reason": "conferência",
         })
         result = cleiton_discovery_reply("Quero dashboard para saber se estou pagando certo.", [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_dashboard_interpretar_estrategia_julia(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -1098,7 +1115,7 @@ class TestCostKnowledge:
             "reason": "pagando certo",
         })
         result = cleiton_discovery_reply("Quero saber se estou pagando certo no frete.", [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_custo_cobranca_errada_cleide(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -1109,7 +1126,7 @@ class TestCostKnowledge:
             "reason": "cobrança errada",
         })
         result = cleiton_discovery_reply("Quero encontrar cobrança errada no frete.", [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_custo_reducao_estrategica_pede_contexto_local(self, monkeypatch):
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -1140,7 +1157,7 @@ class TestCostKnowledge:
         monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
         monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
         result = cleiton_discovery_reply("Quero auditar custo de frete.", [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_cost_ambiguous_reply_matches_document(self):
         local = build_local_conversational_reply("Quero analisar meu custo de frete.")
@@ -1201,7 +1218,7 @@ class TestActivityFimKnowledge:
             "reason": "auditoria",
         })
         result = cleiton_discovery_reply(message, [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     @pytest.mark.parametrize("message", [
         "Quero decidir como reduzir meu custo de frete.",
@@ -1351,7 +1368,7 @@ class TestDocumentKnowledge:
         msg = "Tenho uma planilha e quero achar cobrança indevida."
         assert resolve_activity_intent(msg) == "cleide_retrospective"
         result = cleiton_discovery_reply(msg, [])
-        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
 
     def test_documento_previsao_roberto(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -1410,3 +1427,367 @@ class TestBannedPatterns:
         source = pathlib.Path("app/capability_taxonomy.py").read_text(encoding="utf-8")
         assert "EDITORIAL_CLEAR_INTENT" not in source
         assert "decide_next_action" not in source
+
+
+class TestFreightAuditVsRobertoBi:
+    """Auditoria de Fretes (/auditoria-frete) vs BI Roberto (/fretes) vs legado BI Cleide."""
+
+    @pytest.mark.parametrize("message", [
+        "Quero auditar cobranças de frete",
+        "Comparar cobrado com esperado",
+        "Validar tabela negociada",
+        "Quais cidades ficaram sem frete calculado?",
+        "Quero ver a memória de cálculo",
+        "Documentos sem cálculo na auditoria",
+    ])
+    def test_audit_messages_go_to_auditoria_frete_local(self, message, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        result = cleiton_discovery_reply(message, [])
+        assert result["handoff"] is not None
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
+        assert result["handoff"]["url"] == "/auditoria-frete"
+        assert result["handoff"]["url"] != "/cleide-bi-frete"
+        assert result["handoff"]["url"] != "/fretes"
+
+    @pytest.mark.parametrize("message", [
+        "Quero indicadores de frete",
+        "Quero gráficos/BI gerencial de fretes",
+        "Quero dashboard de fretes",
+        "Quero análise de dados de frete",
+    ])
+    def test_managerial_bi_goes_to_fretes_local(self, message, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        result = cleiton_discovery_reply(message, [])
+        assert result["handoff"] is not None
+        assert result["handoff"]["destination"] == "roberto_bi"
+        assert result["handoff"]["url"] == "/fretes"
+
+    def test_audit_does_not_use_fretes(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        result = cleiton_discovery_reply("Quero auditar cobranças de frete", [])
+        assert result["handoff"]["destination"] != "roberto_bi"
+        assert result["handoff"]["url"] != "/fretes"
+
+    def test_audit_does_not_fall_to_legacy_bi_cleide(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        result = cleiton_discovery_reply("Comparar cobrado com esperado", [])
+        assert result["handoff"]["destination"] != "cleide_audit"
+        assert result["handoff"]["url"] != "/cleide-bi-frete"
+
+    def test_screen_triage_question(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        result = cleiton_discovery_reply("Qual tela devo usar?", [])
+        assert result["handoff"] is None
+        assert result["reply"] == BI_VS_AUDIT_TRIAGE_REPLY
+        assert "/fretes" in result["reply"]
+        assert "/auditoria-frete" in result["reply"]
+        assert "Roberto" in result["reply"]
+        assert "Cleide" in result["reply"]
+
+    def test_gemini_cleide_freight_audit_normalized(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Para auditar cobrança, use a Auditoria de Fretes da Cleide.",
+            "recommended_agent": "cleide",
+            "handoff": {"destination": "cleide_freight_audit"},
+            "confidence": "high",
+            "reason": "auditoria cobrança",
+        })
+        result = cleiton_discovery_reply("Quero auditar cobranças de frete", [])
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
+        assert result["handoff"]["url"] == "/auditoria-frete"
+
+    def test_gemini_legacy_cleide_audit_remapped_on_audit_intent(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Vamos para a Cleide auditar.",
+            "recommended_agent": "cleide",
+            "handoff": {"destination": "cleide_audit"},
+            "confidence": "high",
+            "reason": "legado",
+        })
+        result = cleiton_discovery_reply("Validar tabela negociada", [])
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
+        assert result["handoff"]["url"] == "/auditoria-frete"
+
+    def test_legacy_cleide_audit_still_accepted_without_audit_intent(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Posso abrir o BI Cleide anterior.",
+            "recommended_agent": "cleide",
+            "handoff": {"destination": "cleide_audit", "label": "BI Cleide legado"},
+            "confidence": "high",
+            "reason": "legado explícito",
+        })
+        # Mensagem sem intenção de auditoria de cobrança — destino legado permanece.
+        result = _apply_guardrails(
+            {
+                "reply": "Posso abrir o BI Cleide anterior.",
+                "recommended_agent": "cleide",
+                "handoff": {"destination": "cleide_audit", "label": "BI Cleide legado"},
+                "confidence": "high",
+                "reason": "legado explícito",
+            },
+            "Quero abrir o painel antigo da Cleide.",
+        )
+        assert result["handoff"]["destination"] == "cleide_audit"
+        assert result["handoff"]["url"] == "/cleide-bi-frete"
+
+    def test_new_destination_not_converted_to_legacy(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Auditoria de Fretes.",
+            "recommended_agent": "cleide",
+            "handoff": {"destination": "cleide_freight_audit"},
+            "confidence": "high",
+            "reason": "novo destino",
+        })
+        result = cleiton_discovery_reply("Quero auditar cobranças de frete", [])
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
+        assert result["handoff"]["destination"] != "cleide_audit"
+
+    def test_agent_cleide_maps_to_freight_audit(self):
+        assert agent_to_destination("cleide") == "cleide_freight_audit"
+
+    def test_contract_accepts_cleide_freight_audit(self):
+        source = pathlib.Path("app/run_cleiton_discovery.py").read_text(encoding="utf-8")
+        assert "cleide_freight_audit" in source
+        assert '"destination": "roberto_bi" | "cleide_freight_audit"' in source or \
+            "cleide_freight_audit" in source
+
+
+class TestDiscoveryHandoffLoginNormalization:
+    """Destinos operacionais anônimos passam por /login?next=... no endpoint HTTP."""
+
+    def _load_web(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        return importlib.import_module("app.web")
+
+    def _post_discovery(self, web, monkeypatch, *, authenticated: bool, reply_payload: dict):
+        monkeypatch.setattr(
+            web,
+            "current_user",
+            SimpleNamespace(is_authenticated=authenticated),
+        )
+        monkeypatch.setattr(
+            "app.run_cleiton_discovery.cleiton_discovery_reply",
+            lambda *a, **k: reply_payload,
+        )
+        return web.app.test_client().post(
+            "/api/onboarding_discovery",
+            json={"message": "teste", "history": []},
+        )
+
+    def test_auditoria_anon_gets_login_next(self, monkeypatch):
+        web = self._load_web(monkeypatch)
+        resp = self._post_discovery(
+            web,
+            monkeypatch,
+            authenticated=False,
+            reply_payload={
+                "reply": "Auditoria de Fretes",
+                "handoff": {
+                    "destination": "cleide_freight_audit",
+                    "label": "Auditoria",
+                    "url": "/auditoria-frete",
+                    "requires_login": True,
+                },
+                "handoffs": [{
+                    "destination": "cleide_freight_audit",
+                    "label": "Auditoria",
+                    "url": "/auditoria-frete",
+                    "requires_login": True,
+                }],
+                "destination_candidates": [{
+                    "destination": "cleide_freight_audit",
+                    "url": "/auditoria-frete",
+                    "score": 90,
+                }],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = resp.get_json()
+        assert body["handoff"]["url"] == "/login?next=%2Fauditoria-frete"
+        assert body["handoff"]["requires_login"] is True
+        assert body["handoffs"][0]["url"] == "/login?next=%2Fauditoria-frete"
+        assert body["destination_candidates"][0]["url"] == "/login?next=%2Fauditoria-frete"
+        assert "/auditoria-frete" != body["handoff"]["url"]
+
+    def test_roberto_anon_gets_login_next(self, monkeypatch):
+        web = self._load_web(monkeypatch)
+        resp = self._post_discovery(
+            web,
+            monkeypatch,
+            authenticated=False,
+            reply_payload={
+                "reply": "BI Roberto",
+                "handoff": {
+                    "destination": "roberto_bi",
+                    "url": "/fretes",
+                    "requires_login": True,
+                },
+                "handoffs": [{"destination": "roberto_bi", "url": "/fretes", "requires_login": True}],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = resp.get_json()
+        assert body["handoff"]["url"] == "/login?next=%2Ffretes"
+
+    def test_julia_preserves_query_string_in_next(self, monkeypatch):
+        web = self._load_web(monkeypatch)
+        resp = self._post_discovery(
+            web,
+            monkeypatch,
+            authenticated=False,
+            reply_payload={
+                "reply": "Júlia",
+                "handoff": {
+                    "destination": "julia_operational",
+                    "url": "/chat_julia?mode=operational",
+                    "requires_login": True,
+                    "action": "start_julia",
+                },
+                "handoffs": [{
+                    "destination": "julia_operational",
+                    "url": "/chat_julia?mode=operational",
+                    "requires_login": True,
+                    "action": "start_julia",
+                }],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = resp.get_json()
+        assert body["handoff"]["url"] == "/login?next=%2Fchat_julia%3Fmode%3Doperational"
+
+    def test_legacy_cleide_bi_protected(self, monkeypatch):
+        web = self._load_web(monkeypatch)
+        resp = self._post_discovery(
+            web,
+            monkeypatch,
+            authenticated=False,
+            reply_payload={
+                "reply": "BI Cleide legado",
+                "handoff": {
+                    "destination": "cleide_audit",
+                    "url": "/cleide-bi-frete",
+                    "requires_login": True,
+                },
+                "handoffs": [{"destination": "cleide_audit", "url": "/cleide-bi-frete", "requires_login": True}],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = resp.get_json()
+        assert body["handoff"]["url"] == "/login?next=%2Fcleide-bi-frete"
+
+    def test_feed_stays_direct(self, monkeypatch):
+        web = self._load_web(monkeypatch)
+        resp = self._post_discovery(
+            web,
+            monkeypatch,
+            authenticated=False,
+            reply_payload={
+                "reply": "Feed",
+                "handoff": {"destination": "feed", "url": "/feed", "requires_login": False},
+                "handoffs": [{"destination": "feed", "url": "/feed", "requires_login": False}],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = resp.get_json()
+        assert body["handoff"]["url"] == "/feed"
+        assert body["handoff"]["requires_login"] is False
+
+    def test_authenticated_gets_canonical_url(self, monkeypatch):
+        web = self._load_web(monkeypatch)
+        resp = self._post_discovery(
+            web,
+            monkeypatch,
+            authenticated=True,
+            reply_payload={
+                "reply": "Auditoria",
+                "handoff": {
+                    "destination": "cleide_freight_audit",
+                    "url": "/auditoria-frete",
+                    "requires_login": True,
+                },
+                "handoffs": [{
+                    "destination": "cleide_freight_audit",
+                    "url": "/auditoria-frete",
+                    "requires_login": True,
+                }],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = resp.get_json()
+        assert body["handoff"]["url"] == "/auditoria-frete"
+        assert body["handoff"]["requires_login"] is True
+
+    def test_model_needs_login_false_cannot_unprotect(self, monkeypatch):
+        web = self._load_web(monkeypatch)
+        # Engine aplica taxonomia; endpoint normaliza URL.
+        from app.run_cleiton_discovery import _apply_guardrails
+        guarded = _apply_guardrails(
+            {
+                "reply": "Auditoria",
+                "recommended_agent": "cleide",
+                "handoff": {"destination": "cleide_freight_audit"},
+                "needs_login": False,
+                "confidence": "high",
+                "reason": "teste",
+            },
+            "Quero auditar cobranças de frete",
+        )
+        assert guarded["handoff"]["requires_login"] is True
+        assert guarded["handoff"]["url"] == "/auditoria-frete"
+
+        monkeypatch.setattr(
+            web,
+            "current_user",
+            SimpleNamespace(is_authenticated=False),
+        )
+        monkeypatch.setattr(
+            "app.run_cleiton_discovery.cleiton_discovery_reply",
+            lambda *a, **k: guarded,
+        )
+        body = web.app.test_client().post(
+            "/api/onboarding_discovery",
+            json={"message": "Quero auditar cobranças de frete", "history": []},
+        ).get_json()
+        assert body["handoff"]["requires_login"] is True
+        assert body["handoff"]["url"] == "/login?next=%2Fauditoria-frete"
+
+    def test_multi_handoffs_all_normalized(self, monkeypatch):
+        web = self._load_web(monkeypatch)
+        resp = self._post_discovery(
+            web,
+            monkeypatch,
+            authenticated=False,
+            reply_payload={
+                "reply": "Dois caminhos",
+                "handoff": None,
+                "handoffs": [
+                    {"destination": "cleide_freight_audit", "url": "/auditoria-frete", "requires_login": True},
+                    {"destination": "roberto_bi", "url": "/fretes", "requires_login": True},
+                ],
+                "discovery": {"next_action": "multi_handoff", "confidence": "high"},
+            },
+        )
+        body = resp.get_json()
+        urls = {h["destination"]: h["url"] for h in body["handoffs"]}
+        assert urls["cleide_freight_audit"] == "/login?next=%2Fauditoria-frete"
+        assert urls["roberto_bi"] == "/login?next=%2Ffretes"
+
+    def test_engine_exposes_requires_login_from_taxonomy(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        result = cleiton_discovery_reply("Quero auditar cobranças de frete", [])
+        assert result["handoff"]["requires_login"] is True
+        assert result["handoff"]["url"] == "/auditoria-frete"
