@@ -21,7 +21,7 @@ except ImportError as exc:
 import json
 import logging
 import uuid
-from urllib.parse import urlparse, quote
+from urllib.parse import quote, urlparse, urlsplit
 from pathlib import Path
 
 from sqlalchemy import text
@@ -334,13 +334,144 @@ def _handle_unauthorized_access():
 
 
 def _safe_next_redirect(target: str | None):
-    """Redireciona para path interno seguro após login (handoff onboarding)."""
+    """
+    Aceita apenas caminhos internos seguros para retorno pós-login.
+
+    Rejeita URLs absolutas, protocol-relative, backslash, controles, /api/* e /admin*.
+    Preserva query string segura (ex.: /chat_julia?mode=operational).
+    """
     raw = (target or "").strip()
-    if not raw or not raw.startswith("/") or raw.startswith("//"):
+    if not raw:
         return None
-    if raw.startswith("/api/") or raw.startswith("/admin"):
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
         return None
-    return raw
+    if "\\" in raw:
+        return None
+    if not raw.startswith("/") or raw.startswith("//"):
+        return None
+
+    parsed = urlsplit(raw)
+    if parsed.scheme or parsed.netloc:
+        return None
+    path = parsed.path or ""
+    if not path.startswith("/") or path.startswith("//"):
+        return None
+    if path.startswith("/api/") or path == "/api":
+        return None
+    if path.startswith("/admin"):
+        return None
+
+    if parsed.query:
+        return f"{path}?{parsed.query}"
+    return path
+
+
+def _login_url_with_next(canonical_url: str | None) -> str:
+    """Monta /login?next=<url canônica codificada> quando o next for seguro."""
+    login_path = url_for("login")
+    safe = _safe_next_redirect(canonical_url)
+    if not safe:
+        return login_path
+    return f"{login_path}?next={quote(safe, safe='')}"
+
+
+def _normalize_handoff_urls_for_client(
+    handoff: dict | None,
+    *,
+    authenticated: bool,
+) -> dict | None:
+    """
+    Política determinística de URL do Copilot:
+    - público → URL canônica
+    - protegido + autenticado → URL canônica
+    - protegido + anônimo → /login?next=<canônica>
+    """
+    if not isinstance(handoff, dict):
+        return None
+
+    from app.capability_taxonomy import DESTINATIONS
+
+    normalized = dict(handoff)
+    dest_id = str(normalized.get("destination") or "").strip()
+    spec = DESTINATIONS.get(dest_id)
+    if spec is not None:
+        normalized["requires_login"] = bool(spec.requires_login)
+        canonical = spec.url
+        if spec.handoff_action:
+            normalized["action"] = spec.handoff_action
+    else:
+        canonical = normalized.get("url")
+        # Sem destino conhecido, respeita o flag já presente (nunca força False).
+        normalized["requires_login"] = bool(normalized.get("requires_login"))
+
+    if not canonical:
+        return normalized
+
+    requires_login = bool(normalized.get("requires_login"))
+    if requires_login and not authenticated:
+        normalized["url"] = _login_url_with_next(canonical)
+        normalized["requires_login"] = True
+        normalized["canonical_url"] = canonical
+    else:
+        normalized["url"] = canonical
+    return normalized
+
+
+def _normalize_discovery_response_handoffs(result: dict, *, authenticated: bool) -> dict:
+    """Normaliza handoff, handoffs e destination_candidates antes da resposta HTTP."""
+    if not isinstance(result, dict):
+        return result
+
+    handoffs_raw = result.get("handoffs")
+    if isinstance(handoffs_raw, list) and handoffs_raw:
+        normalized_list = [
+            item
+            for item in (
+                _normalize_handoff_urls_for_client(h, authenticated=authenticated)
+                for h in handoffs_raw
+            )
+            if item is not None
+        ]
+        result["handoffs"] = normalized_list
+        result["handoff"] = normalized_list[0] if len(normalized_list) == 1 else None
+    else:
+        single = _normalize_handoff_urls_for_client(
+            result.get("handoff"),
+            authenticated=authenticated,
+        )
+        result["handoff"] = single
+        result["handoffs"] = [single] if single else []
+
+    candidates = result.get("destination_candidates")
+    if isinstance(candidates, list) and candidates:
+        by_dest = {
+            h.get("destination"): h
+            for h in (result.get("handoffs") or [])
+            if isinstance(h, dict) and h.get("destination")
+        }
+        updated = []
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            item = dict(cand)
+            dest = item.get("destination")
+            matched = by_dest.get(dest)
+            if matched:
+                item["url"] = matched.get("url")
+                item["requires_login"] = matched.get("requires_login")
+            else:
+                item = _normalize_handoff_urls_for_client(item, authenticated=authenticated) or item
+            updated.append(item)
+        result["destination_candidates"] = updated
+
+    cta_login = result.get("cta_login")
+    if isinstance(cta_login, dict):
+        result["cta_login"] = _normalize_handoff_urls_for_client(
+            cta_login,
+            authenticated=authenticated,
+        ) or cta_login
+
+    return result
 
 
 def _post_login_redirect(user):
@@ -703,13 +834,11 @@ def robots_txt():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     logging.info("=== Acessando /login (método: %s) ===", request.method)
-    if current_user.is_authenticated:
-        if user_is_admin(current_user):
-            return redirect(url_for('admin.admin_dashboard'))
-        return redirect(url_for('index'))
     nxt = _safe_next_redirect(request.args.get('next'))
     if nxt:
         session['post_login_next'] = nxt
+    if current_user.is_authenticated:
+        return _post_login_redirect(current_user)
     if request.method == 'POST':
         email_input = request.form.get('email')
         password = request.form.get('password')
@@ -901,7 +1030,7 @@ def complete_profile():
     user = current_user
     if request.method == 'GET' and (user.job_role or '').strip() and (user.usage_purpose or '').strip():
         flash('Seu perfil já está completo.', 'info')
-        return redirect(url_for('index'))
+        return _post_login_redirect(user)
     if request.method == 'POST':
         accept_terms = bool(request.form.get('accept_terms'))
         if not accept_terms:
@@ -919,9 +1048,7 @@ def complete_profile():
         if accept_terms:
             session[_SESSION_PIXEL_EVENT_LEAD] = True
         session.pop('pending_profile_completion', None)
-        if user_is_admin(user):
-            return redirect(url_for('admin.admin_dashboard'))
-        return redirect(url_for('index'))
+        return _post_login_redirect(user)
     return render_template('complete_profile.html', active_term=get_active_term())
 
 
@@ -949,11 +1076,16 @@ def register():
         return redirect(url_for('login'))
     session[_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION] = True
     flash('Conta criada com sucesso! Faça login.', 'success')
+    # Cadastro por senha exige login posterior; preserva next seguro até o login.
+    pending_next = _safe_next_redirect(session.get('post_login_next'))
+    if pending_next:
+        return redirect(url_for('login', next=pending_next))
     return redirect(url_for('login'))
 
 @app.route('/logout')
 def logout():
     logout_user()
+    session.pop('post_login_next', None)
     session.clear()
     return redirect(url_for('index'))
 
@@ -1253,6 +1385,10 @@ def api_onboarding_discovery():
             cta_id=cta_id,
         )
         _store_onboarding_julia_context(user_message, result)
+        result = _normalize_discovery_response_handoffs(
+            result,
+            authenticated=bool(getattr(current_user, "is_authenticated", False)),
+        )
         if not current_user.is_authenticated:
             next_count = _increment_onboarding_interaction_count()
             _attach_anonymous_discovery_counters(result, interaction_count=next_count)

@@ -110,15 +110,17 @@
 
                      aria-hidden="true">
 
-              <textarea class="form-control cleide-auditoria-input"
+              <textarea class="form-control cleide-auditoria-input cleide-auditoria-input--locked"
 
                         id="cleideAuditoriaInput"
 
-                        placeholder="Mensagem para a Cleide..."
+                        placeholder="Faça o upload da tabela de frete para liberar o chat."
 
                         rows="2"
 
-                        autocomplete="off"></textarea>
+                        autocomplete="off"
+
+                        aria-disabled="true"></textarea>
 
               <button type="button"
 
@@ -726,6 +728,20 @@
 
   }
 
+  .cleide-auditoria-input--locked {
+
+    opacity: 0.72;
+
+    cursor: not-allowed;
+
+  }
+
+  .cleide-auditoria-composer--chat-locked .cleide-auditoria-input--locked::placeholder {
+
+    color: var(--af-text-muted, #5A5A72);
+
+  }
+
   .cleide-auditoria-attach-btn {
 
     flex: 0 0 auto;
@@ -892,6 +908,36 @@
 
     border: 1px solid var(--af-border, rgba(255, 255, 255, 0.06));
 
+  }
+
+  .cleide-auditoria-chat-actions {
+    margin-top: 0.3rem;
+    max-width: 85%;
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  .cleide-auditoria-chat-copy-btn {
+    border: 1px solid rgba(0, 191, 255, 0.32);
+    background: rgba(0, 191, 255, 0.1);
+    color: var(--af-text-primary, #F0F0F5);
+    border-radius: 999px;
+    font-size: 0.71rem;
+    line-height: 1;
+    padding: 4px 9px;
+    min-height: 28px;
+    cursor: pointer;
+  }
+
+  .cleide-auditoria-chat-copy-btn:hover {
+    border-color: rgba(0, 191, 255, 0.5);
+    background: rgba(0, 191, 255, 0.18);
+  }
+
+  .cleide-auditoria-chat-copy-btn.is-copied {
+    border-color: rgba(0, 191, 255, 0.65);
+    background: rgba(0, 191, 255, 0.28);
+    color: #ffffff;
   }
 
   .cleide-auditoria-actions-menu {
@@ -2665,6 +2711,16 @@
     color: var(--af-danger, #FF4D6A) !important;
 
     margin-top: 0.35rem;
+
+  }
+
+  .cleide-audit-documents-error a {
+
+    color: var(--af-cyan, #00BFFF);
+
+    text-decoration: underline;
+
+    font-weight: 600;
 
   }
 

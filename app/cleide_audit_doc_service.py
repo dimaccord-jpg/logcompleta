@@ -13,13 +13,14 @@ import io
 import json
 import logging
 import re
+import time
 import unicodedata
 import zipfile
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from uuid import uuid4
 
-from flask import has_request_context, session
+from flask import has_request_context, request, session
 from werkzeug.utils import secure_filename
 
 from app.cleiton_doc_contracts import (
@@ -367,7 +368,11 @@ _COVERAGE_HEADER_ALIASES: dict[str, str] = {}
 CLEIDE_AUDIT_DOCUMENT_UPLOAD_FLOW_TYPE = "cleide_audit_document_upload"
 CLEIDE_AUDIT_DOCUMENT_PREPARE_FLOW_TYPE = "cleide_audit_document_prepare"
 CLEIDE_AUDIT_CHAT_FLOW_TYPE = "cleide_audit_chat"
+CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE = "cleide_audit_insights_chat"
 CLEIDE_AUDIT_TEMP_TABLE_EXTRACTION_FLOW_TYPE = "cleide_audit_temp_table_extraction"
+CLEIDE_AUDIT_COVERAGE_UPLOAD_FLOW_TYPE = "cleide_audit_coverage_upload"
+CLEIDE_AUDIT_BATCH_UPLOAD_FLOW_TYPE = "cleide_audit_batch_upload"
+CLEIDE_AUDIT_BATCH_PROCESSED_FLOW_TYPE = "cleide_audit_batch_processed"
 
 SOURCE_AGENT_CLEIDE_AUDIT = "cleide_audit"
 
@@ -406,10 +411,91 @@ def cleide_audit_chat_idempotency_key(request_id: str) -> str:
     return f"cleide-audit-chat:{(request_id or '').strip()}"
 
 
+def cleide_audit_insights_chat_idempotency_key(request_id: str, batch_scope: str = "") -> str:
+    scope = (batch_scope or "").strip() or "unknown"
+    return f"cleide-audit-insights-chat:{scope}:{(request_id or '').strip()}"
+
+
 def cleide_audit_temp_table_extraction_idempotency_key(source_doc_ids: list[str]) -> str:
     normalized = _normalize_source_doc_ids(source_doc_ids)
     joined = ":".join(normalized)
     return f"cleide-audit-temp-table:{TEMP_TABLE_VERSION_MARKER}:{joined}"
+
+
+def _resolve_cleide_audit_execution_id() -> str:
+    if not has_request_context():
+        return str(uuid4())
+    execution_id = (request.headers.get("X-Execution-ID") or "").strip()
+    if not execution_id:
+        execution_id = (request.form.get("execution_id") or "").strip()
+    if not execution_id:
+        execution_id = str(uuid4())
+    return execution_id[:120]
+
+
+def cleide_audit_coverage_upload_idempotency_key(session_id: str, coverage_version: str) -> str:
+    return f"cleide-audit-coverage-upload:{(session_id or '').strip()}:{(coverage_version or '').strip()}"
+
+
+def cleide_audit_batch_upload_idempotency_key(session_id: str, audit_batch_id: str) -> str:
+    return f"cleide-audit-batch-upload:{(session_id or '').strip()}:{(audit_batch_id or '').strip()}"
+
+
+def cleide_audit_batch_run_idempotency_key(session_id: str, audit_batch_id: str, run_version: str) -> str:
+    return (
+        f"cleide-audit-batch-run:{(session_id or '').strip()}:"
+        f"{(audit_batch_id or '').strip()}:{(run_version or '').strip()}"
+    )
+
+
+def _emit_cleide_audit_operational_billing(
+    *,
+    emitted: list[bool],
+    started_at: float,
+    flow_type: str,
+    idempotency_key: str,
+    rows_processed: int,
+    status: str = "success",
+    error_summary: str | None = None,
+    execution_id: str | None = None,
+) -> None:
+    if emitted[0]:
+        return
+    emitted[0] = True
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    try:
+        from app.services.cleiton_upload_billing_service import apropriar_billing_cleide_operational_flow
+
+        apropriar_billing_cleide_operational_flow(
+            flow_type=flow_type,
+            idempotency_key=idempotency_key,
+            rows_processed=max(0, int(rows_processed)),
+            processing_time_ms=max(0, elapsed_ms),
+            status=status,
+            error_summary=error_summary,
+            execution_id=execution_id,
+        )
+    except Exception:
+        logger.exception("Falha ao apropriar billing operacional da Auditoria Cleide (%s).", flow_type)
+        try:
+            from app.run_cleiton_processing_governance import cleiton_register_processing_event
+
+            cleiton_register_processing_event(
+                agent="cleide",
+                flow_type=flow_type,
+                processing_type="non_llm",
+                rows_processed=max(0, int(rows_processed)),
+                processing_time_ms=max(0, elapsed_ms),
+                status=status,
+                error_summary=error_summary,
+                execution_id=execution_id,
+                apply_operational_motor=False,
+            )
+        except Exception:
+            logger.exception(
+                "Falha no fallback de ProcessingEvent operacional da Auditoria Cleide (%s).",
+                flow_type,
+            )
 
 
 def _utcnow() -> datetime:
@@ -1578,6 +1664,9 @@ def upload_coverage_table_from_file(
 
     Não registra documento principal, não chama Gemini e não dispara extração de frete.
     """
+    started_at = time.perf_counter()
+    emitted_processing_event = [False]
+    execution_id = _resolve_cleide_audit_execution_id()
     _require_session()
     if not file_bytes:
         raise CleideAuditCoverageError(
@@ -1670,6 +1759,15 @@ def upload_coverage_table_from_file(
             ERROR_COVERAGE_NO_TEMP_TABLE,
             "Não foi possível retornar a tabela temporária atualizada.",
         )
+    _emit_cleide_audit_operational_billing(
+        emitted=emitted_processing_event,
+        started_at=started_at,
+        flow_type=CLEIDE_AUDIT_COVERAGE_UPLOAD_FLOW_TYPE,
+        idempotency_key=cleide_audit_coverage_upload_idempotency_key(active_id, execution_id),
+        rows_processed=len(rows),
+        status="success",
+        execution_id=execution_id,
+    )
     return public
 
 
@@ -4023,6 +4121,18 @@ def _audit_batch_effective_needs_reprocess(audit_batch) -> bool:
     return _audit_batch_is_pricing_rule_parser_outdated(audit_batch)
 
 
+def _audit_batch_should_bill_operational_run(audit_batch) -> bool:
+    """
+    Linhas da planilha auditada são cobradas no upload (cleide_audit_batch_upload).
+    O processamento só gera débito operacional em reprocessamento explícito.
+    """
+    if not isinstance(audit_batch, dict):
+        return False
+    if audit_batch.get("status") != AUDIT_BATCH_STATUS_PROCESSED:
+        return False
+    return _audit_batch_effective_needs_reprocess(audit_batch)
+
+
 def _mark_audit_batch_stale_if_processed(record: dict, *, reason: str, alert: str) -> dict:
     audit_batch = record.get("audit_batch")
     if not isinstance(audit_batch, dict):
@@ -4842,6 +4952,9 @@ def compute_audit_outputs(record: dict, normalized_rows: list[dict]) -> dict:
 
 
 def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict:
+    started_at = time.perf_counter()
+    emitted_processing_event = [False]
+    execution_id = _resolve_cleide_audit_execution_id()
     _require_session()
     sync_temp_table_with_session_documents()
     active_id = get_temp_table_id(session)
@@ -4886,6 +4999,8 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
             "O lote auditado não possui linhas normalizadas para processar.",
         )
 
+    should_bill_operational_run = _audit_batch_should_bill_operational_run(audit_batch)
+
     outputs = compute_audit_outputs(record, normalized_rows)
     results = outputs["results"]
     now = outputs["generated_at"]
@@ -4916,6 +5031,23 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
         raise CleideAuditBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Não foi possível retornar a tabela temporária processada.",
+        )
+    rows_evaluated = len(normalized_rows)
+    processed_rows = int((summary or {}).get("processed_rows") or 0)
+    billing_summary = None
+    if processed_rows != rows_evaluated:
+        billing_summary = f"processed_rows={processed_rows}"
+    audit_batch_id = str(audit_batch.get("audit_batch_id") or "")
+    if should_bill_operational_run:
+        _emit_cleide_audit_operational_billing(
+            emitted=emitted_processing_event,
+            started_at=started_at,
+            flow_type=CLEIDE_AUDIT_BATCH_PROCESSED_FLOW_TYPE,
+            idempotency_key=cleide_audit_batch_run_idempotency_key(active_id, audit_batch_id, execution_id),
+            rows_processed=rows_evaluated,
+            status="success",
+            error_summary=billing_summary,
+            execution_id=execution_id,
         )
     return public
 
@@ -5047,6 +5179,9 @@ def upload_audit_batch_from_file(
 
     Não registra documento principal, não chama Gemini e não executa cálculo de auditoria.
     """
+    started_at = time.perf_counter()
+    emitted_processing_event = [False]
+    execution_id = _resolve_cleide_audit_execution_id()
     _require_session()
     if not file_bytes:
         raise CleideAuditBatchError(
@@ -5164,6 +5299,15 @@ def upload_audit_batch_from_file(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Não foi possível retornar a tabela temporária atualizada.",
         )
+    _emit_cleide_audit_operational_billing(
+        emitted=emitted_processing_event,
+        started_at=started_at,
+        flow_type=CLEIDE_AUDIT_BATCH_UPLOAD_FLOW_TYPE,
+        idempotency_key=cleide_audit_batch_upload_idempotency_key(active_id, batch_id),
+        rows_processed=len(normalized_rows),
+        status="success",
+        execution_id=execution_id,
+    )
     return public
 
 

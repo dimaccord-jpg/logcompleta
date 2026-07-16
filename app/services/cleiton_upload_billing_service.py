@@ -195,8 +195,9 @@ def apropriar_billing_upload_roberto(
     ).to_dict()
 
 
-def apropriar_billing_upload_cleide(
+def apropriar_billing_cleide_operational_flow(
     *,
+    flow_type: str,
     idempotency_key: str,
     rows_processed: int,
     processing_time_ms: int,
@@ -205,11 +206,12 @@ def apropriar_billing_upload_cleide(
     execution_id: str | None = None,
 ) -> dict[str, Any]:
     """
-    Apropria billing do upload Cleide com idempotência forte por chave única.
+    Apropria billing operacional Cleide (upload legado ou fluxos da Auditoria Cleide).
 
     Contrato de retorno idêntico ao upload Roberto.
     """
     key = _normalizar_idempotency_key(idempotency_key)
+    flow = (flow_type or FLOW_TYPE_CLEIDE).strip()[:80]
     ident = resolve_identidade_para_persistencia()
 
     existente = CleitonBillingApropriacao.query.filter_by(idempotency_key=key).first()
@@ -233,7 +235,7 @@ def apropriar_billing_upload_cleide(
     marcador = CleitonBillingApropriacao(
         idempotency_key=key,
         agent=AGENT_CLEIDE,
-        flow_type=FLOW_TYPE_CLEIDE,
+        flow_type=flow,
         status=(status or "failure")[:40],
         error_summary=error_summary,
         rows_processed=max(0, int(rows_processed)),
@@ -269,7 +271,7 @@ def apropriar_billing_upload_cleide(
 
     reg = cleiton_register_processing_event(
         agent=AGENT_CLEIDE,
-        flow_type=FLOW_TYPE_CLEIDE,
+        flow_type=flow,
         processing_type=PROCESSING_TYPE,
         rows_processed=max(0, int(rows_processed)),
         processing_time_ms=max(0, int(processing_time_ms)),
@@ -307,3 +309,28 @@ def apropriar_billing_upload_cleide(
         status_franquia_novo=st,
         consumo_acumulado_atual=consumo,
     ).to_dict()
+
+
+def apropriar_billing_upload_cleide(
+    *,
+    idempotency_key: str,
+    rows_processed: int,
+    processing_time_ms: int,
+    status: str,
+    error_summary: str | None = None,
+    execution_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Apropria billing do upload Cleide com idempotência forte por chave única.
+
+    Contrato de retorno idêntico ao upload Roberto.
+    """
+    return apropriar_billing_cleide_operational_flow(
+        flow_type=FLOW_TYPE_CLEIDE,
+        idempotency_key=idempotency_key,
+        rows_processed=rows_processed,
+        processing_time_ms=processing_time_ms,
+        status=status,
+        error_summary=error_summary,
+        execution_id=execution_id,
+    )

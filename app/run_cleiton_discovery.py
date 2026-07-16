@@ -18,7 +18,10 @@ from app.copilot_capabilities import (
     VALID_RECOMMENDED_AGENTS,
     agent_to_destination,
     build_local_conversational_reply,
+    is_freight_audit_intent,
+    is_roberto_bi_managerial_intent,
     load_capabilities_document,
+    preferred_destination_for_message,
     should_suppress_handoff_for_unclear_activity,
 )
 from app.run_cleiton_gemini_governance import STATUS_SUCCESS_NO_METRICS
@@ -52,7 +55,7 @@ Responda SEMPRE com um único JSON válido (sem markdown, sem texto fora do JSON
   "reply": "resposta natural em português BR",
   "recommended_agent": "roberto" | "cleide" | "julia" | "feed" | null,
   "handoff": {
-    "destination": "roberto_bi" | "cleide_audit" | "julia_operational" | "feed",
+    "destination": "roberto_bi" | "cleide_freight_audit" | "cleide_audit" | "julia_operational" | "feed",
     "label": "rótulo curto do botão (opcional)"
   } | null,
   "handoffs": [
@@ -67,10 +70,15 @@ Regras do JSON:
 - reply: conversacional; nunca menu fixo; nunca começar com "Existem algumas formas de trabalhar esse tema".
 - recommended_agent: só quando fizer sentido; null para cumprimentos, curiosidade genérica ou falta de contexto.
 - handoff / handoffs: opcionais; omita ou null se não houver recomendação real de navegação.
+- Destinos de Cleide:
+  - cleide_freight_audit → /auditoria-frete (Auditoria de Fretes: cobrança, cobrado vs esperado, tabela negociada, divergências, memória de cálculo). Preferir este para auditoria.
+  - cleide_audit → /cleide-bi-frete (BI Cleide anterior/legado). NÃO usar para auditoria de cobrança.
+- Roberto: roberto_bi → /fretes (indicadores, gráficos, BI gerencial, previsões).
 - handoffs: use para oferecer dois caminhos (ex.: Júlia + Roberto em tema macro+frete), no máximo 2.
 - needs_login: true apenas para continuidade operacional real com Júlia; default false.
 - Não prometa cotação automatizada, BID ou funcionalidades inexistentes.
 """.strip()
+
 
 FALLBACK_UNAVAILABLE_REPLY = (
     "Estou com dificuldade para responder agora. "
@@ -270,22 +278,41 @@ def _build_handoff_payload(
     payload: dict[str, Any] = {
         "destination": dest_id,
         "label": (label or spec.label).strip(),
-        "requires_login": False,
+        "requires_login": bool(spec.requires_login),
         "requires_dataset": spec.requires_dataset,
+        "url": spec.url,
     }
     if capability_domain:
         payload["capability_domain"] = capability_domain
     if spec.handoff_action == "start_julia":
         payload["action"] = "start_julia"
-        payload["url"] = None
-    else:
-        payload["url"] = spec.url
     if spec.agent:
         payload["agent"] = spec.agent
     return payload
 
 
-def _parse_handoff_entry(raw: Any) -> dict[str, Any] | None:
+def _remap_destination_for_message(dest_id: str, user_message: str) -> str:
+    """
+    Corrige handoffs legados sem converter o novo destino de volta ao antigo.
+
+    - Intenção de auditoria de cobrança + cleide_audit legado → cleide_freight_audit.
+    - Intenção de BI gerencial + destino Cleide → roberto_bi.
+    - Nunca remapeia cleide_freight_audit para cleide_audit.
+    """
+    preferred = preferred_destination_for_message(user_message)
+    if preferred == "cleide_freight_audit" and dest_id == "cleide_audit":
+        return "cleide_freight_audit"
+    if (
+        preferred == "roberto_bi"
+        and dest_id in ("cleide_audit", "cleide_freight_audit")
+        and is_roberto_bi_managerial_intent(user_message)
+        and not is_freight_audit_intent(user_message)
+    ):
+        return "roberto_bi"
+    return dest_id
+
+
+def _parse_handoff_entry(raw: Any, *, user_message: str = "") -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     dest_id = str(raw.get("destination") or "").strip()
@@ -294,30 +321,39 @@ def _parse_handoff_entry(raw: Any) -> dict[str, Any] | None:
         dest_id = mapped or dest_id
     if dest_id not in VALID_DESTINATIONS:
         return None
+    dest_id = _remap_destination_for_message(dest_id, user_message)
+    if dest_id not in VALID_DESTINATIONS:
+        return None
     label = str(raw.get("label") or "").strip() or None
     return _build_handoff_payload(dest_id, label=label)
 
 
-def _collect_handoffs(parsed: dict[str, Any], recommended_agent: str | None) -> list[dict[str, Any]]:
+def _collect_handoffs(
+    parsed: dict[str, Any],
+    recommended_agent: str | None,
+    *,
+    user_message: str = "",
+) -> list[dict[str, Any]]:
     handoffs: list[dict[str, Any]] = []
     seen: set[str] = set()
 
     raw_multi = parsed.get("handoffs")
     if isinstance(raw_multi, list):
         for item in raw_multi[:2]:
-            payload = _parse_handoff_entry(item)
+            payload = _parse_handoff_entry(item, user_message=user_message)
             if payload and payload["destination"] not in seen:
                 seen.add(payload["destination"])
                 handoffs.append(payload)
 
     if not handoffs:
-        single = _parse_handoff_entry(parsed.get("handoff"))
+        single = _parse_handoff_entry(parsed.get("handoff"), user_message=user_message)
         if single:
             handoffs.append(single)
 
     if not handoffs and recommended_agent:
         dest_id = agent_to_destination(recommended_agent)
         if dest_id:
+            dest_id = _remap_destination_for_message(dest_id, user_message)
             payload = _build_handoff_payload(dest_id)
             if payload:
                 handoffs.append(payload)
@@ -369,17 +405,21 @@ def _apply_guardrails(
     recommended_agent = _normalize_recommended_agent(parsed.get("recommended_agent"))
     reason = str(parsed.get("reason") or "").strip()[:300]
 
-    handoffs = _collect_handoffs(parsed, recommended_agent)
+    handoffs = _collect_handoffs(parsed, recommended_agent, user_message=user_message)
     if _should_suppress_handoff(user_message, confidence):
         if handoffs:
             guardrail_notes.append("handoff_suppressed")
         handoffs = []
 
+    # needs_login do modelo NÃO desprotege destino operacional; taxonomia é a fonte.
     needs_login = parsed.get("needs_login") is True
-    if needs_login:
-        for h in handoffs:
-            if h.get("destination") == "julia_operational":
-                h["requires_login"] = True
+    for h in handoffs:
+        dest_id = str(h.get("destination") or "")
+        spec = DESTINATIONS.get(dest_id)
+        if spec is not None:
+            h["requires_login"] = bool(spec.requires_login)
+            if spec.url:
+                h["url"] = spec.url
 
     fallback_reason = None
     if not reply:
@@ -388,11 +428,18 @@ def _apply_guardrails(
         reason = reason or local.get("reason") or "guardrail_empty_reply_local"
         fallback_reason = "guardrail_empty_reply_local"
         if not handoffs and local.get("handoff"):
-            handoffs = _collect_handoffs(local, local.get("recommended_agent"))
+            handoffs = _collect_handoffs(local, local.get("recommended_agent"), user_message=user_message)
             if _should_suppress_handoff(user_message, _normalize_confidence(local.get("confidence"))):
                 handoffs = []
             else:
                 guardrail_notes.append("local_handoff_from_capabilities")
+            for h in handoffs:
+                dest_id = str(h.get("destination") or "")
+                spec = DESTINATIONS.get(dest_id)
+                if spec is not None:
+                    h["requires_login"] = bool(spec.requires_login)
+                    if spec.url:
+                        h["url"] = spec.url
 
     next_action = "converse"
     if len(handoffs) >= 2:
