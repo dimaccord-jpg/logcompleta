@@ -47,6 +47,7 @@ logs_fallback/
 tests/.tmp_roberto/
 *.xlsx
 !app/protected_files/templates/template_cleide_auditoria_frete.xlsx
+!app/protected_files/templates/template_agente_compara.xlsx
 
 # === Storage persistente operacional de documentos legais ===
 app/legal/

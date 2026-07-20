@@ -1,93 +1,30 @@
 # Runtime IA e Observabilidade
 
-Data de consolidacao: `2026-07-10`
-Commit de referencia: `homolog@d02ce15`
+Referência: `homolog@6701a53`, 2026-07-16.
 
-## Eventos oficiais
+## Trilhas separadas
 
-### `IaConsumoEvento`
+`IaConsumoEvento` registra tentativa real de LLM: horário, provider, operação, modelo, agente, `flow_type`, chave lógica, status, tokens, erro e identidade de conta/franquia/usuário quando disponível. `ProcessingEvent` registra trabalho não-LLM: agente, fluxo, tipo, linhas, duração, status, erro, `execution_id` e identidade.
 
-Representa tentativa real de chamada LLM governada, com persistencia de:
+`CleitonBillingApropriacao` liga evento operacional, chave idempotente, linhas, créditos e motivo. `CleitonCostConfig` contém parâmetros de custo por segundo e conversão de tokens/linhas/tempo. Não misture tokens com linhas: são dimensões e trilhas diferentes.
 
-- `provider`
-- `operation`
-- `model`
-- `agent`
-- `flow_type`
-- `api_key_label`
-- `status`
-- `input_tokens`
-- `output_tokens`
-- `total_tokens`
-- `conta_id`
-- `franquia_id`
-- `usuario_id`
+## Auditoria Cleide
 
-### `ProcessingEvent`
+Fluxos operacionais observáveis:
 
-Representa processamento tecnico nao-LLM e etapas auxiliares auditaveis.
+- `cleide_audit_coverage_upload`;
+- `cleide_audit_batch_upload`;
+- `cleide_audit_batch_processed`, apenas para reprocessamento faturável;
+- estados de documentos e `temp_table`;
+- quantidade de linhas, duração, sucesso/falha e `error_summary`;
+- idempotência por IDs de sessão/lote/versão e `execution_id`.
 
-## Fluxos observados
+Chamadas de extração ou chat Gemini são eventos IA com `flow_type` próprio. O chat analítico usa `request_id` e cache por `batch_scope`; fallback determinístico continua útil quando o provider falha. Falhas de billing tentam registrar `ProcessingEvent` sem aplicar o motor novamente, preservando rastreabilidade.
 
-- `onboarding_discovery`
-- fluxos operacionais de Julia, Roberto e Cleide
-- fluxos administrativos que registram evento interno ou agregado
+O dashboard administrativo agrega uploads, eventos, linhas, duração média, falhas e tokens. Métrica por clique/gráfico não existe e não deve ser inventada. `tests/test_ia_metrics_service.py` e `tests/test_cleide_audit_operational_billing.py` são contratos da separação.
 
-## Onboarding discovery
+## Operação
 
-- endpoint: `POST /api/onboarding_discovery`
-- reset: `POST /api/onboarding_discovery/reset`
-- limite anonimo: `5`
-- fallback local quando Gemini falha
-- onboarding continua consumo interno e nao abate franquia operacional
+Ao investigar incidente, correlacione: usuário/franquia, `execution_id`, `request_id`, `temp_table_id`, `audit_batch_id`, `flow_type`, chave idempotente, status, duração, linhas e erro. Repetição da mesma chave não deve criar nova apropriação.
 
-## Julia documental
-
-- autorizacao por franquia antes do upload
-- limites por sessao e por tipo
-- contexto textual governado
-- `gemini_file_parts` para PDF quando disponivel
-- degradacao segura quando o contexto documental nao puder ser montado
-
-## Cleide Auditoria
-
-Pontos efetivamente observaveis no codigo atual:
-
-- upload e status documental podem retornar `temp_table`
-- a extracao tecnica da `temp_table` ocorre no fluxo pos-upload
-- o estado tecnico pode transitar por `processing`, `awaiting_validation`, `validated`, `needs_review`, `failed`, `expired` e `discarded`
-- a revisao humana salva via endpoint dedicado
-- coverage complementar e lote auditado compartilham a mesma trilha autenticada
-- preview/apply/undo de correcao assistida existem para diagnosticos suportados
-- o chat usa `flow_type` proprio, contexto documental isolado e idempotencia por `request_id`
-
-Ponto importante:
-
-- nao documentar metrica inexistente por grafico, por clique de UI ou por detalhe de BI
-- o que existe hoje e observabilidade de consumo IA, eventos de processamento e estados documentais principais
-
-## Metricas administrativas
-
-- `operational_tokens_month`
-- `onboarding_tokens_month`
-- `total_internal_tokens_month`
-- agregacoes por `api_key_label`
-- contagem de eventos com e sem metricas
-- contagem de falhas
-
-## Configuracao documental do Cleiton
-
-O runtime documental usa `ConfigRegras` e `app/services/cleiton_doc_config_service.py`.
-
-Campos principais:
-
-- `upload_enabled`
-- `max_files_per_session`
-- `session_max_bytes`
-- `upload_ttl_hours`
-- `cleanup_enabled`
-- `prompt_context_max_chars`
-- `prompt_max_files_considered`
-- limites por tipo para `pdf`, `excel`, `docx`, `txt`, `xml`, `csv`
-
-Nao houve migration nova, tabela nova, campo novo ou `.db` versionado para esse runtime.
+Onboarding `onboarding_discovery` continua consumo interno separado e não abate franquia operacional. Esta entrega não criou migration, tabela ou coluna para observabilidade.

@@ -1,70 +1,32 @@
-# Deploy e Promocao
+# Deploy e Promoção
 
-Data de consolidacao: `2026-07-10`
-Commit homologado no workspace: `d02ce15`
-Commit promovido aprovado no reposit�rio: `6efa2e2`
+Referência: `homolog@6701a53` promovido em `producao@0c3a133` em 2026-07-16. Backup: `backup/producao-antes-cleide-insights-20260716`.
 
-## Ambientes
+## Branches
 
-- `dev`: desenvolvimento local
-- `homolog`: homologacao oficial
-- `main`: branch configurada no `render.yaml` versionado para o servico de producao
-- `producao`: branch ainda existente no reposit�rio com a promocao aprovada `6efa2e2`
+- `homolog`: desenvolvimento, push e validação de homologação;
+- `producao`: branch operacional de produção;
+- `main`: branch padrão remota; não é produção operacional nesta fotografia.
 
-## Estado promovido
+O `render.yaml` versionado ainda declara produção em `main` e `autoDeploy: false`. Trate isso como divergência a validar no painel, não como autorização para promover em `main`.
 
-- `homolog` validada em `d02ce15`
-- `producao` aponta para `6efa2e2`
-- `render.yaml` usa `main` para o servico `logcompleta-web-prod`
-- `logcompleta-web-prod` esta com `autoDeploy: false` no arquivo versionado
-- a entrega nao adicionou migration, schema, tabela, campo ou banco
+## Promoção
 
-## Checklist antes de promover
+1. Em `homolog`, confirmar worktree, revisar diff e limpar resíduos após inspeção.
+2. Verificar se mudanças de schema têm migrations; esta entrega não teve migration, tabela ou coluna.
+3. Executar a suíte completa e validação manual mínima.
+4. Fazer commit e push para `homolog` somente após aprovação do trabalho.
+5. Validar deploy/health e fluxos no Render de homologação.
+6. Trocar para `producao`, atualizar referências remotas e criar `backup/producao-antes-<entrega>-<data>`.
+7. Fazer merge de `homolog` com `--no-ff`; resolver conflitos por arquivo, sem escolher um lado em massa.
+8. Executar novamente a suíte completa após o merge.
+9. Fazer push de `producao`, validar build, migration chain, `/health`, login, agentes, billing e observabilidade.
+10. Voltar para `homolog`.
 
-1. confirmar branch correta e working tree limpo
-2. validar a branch efetivamente conectada no painel do Render
-3. validar schema do ambiente antes de deploy
-4. aplicar a cadeia de migrations preexistente do ambiente quando necessario
-5. validar `/health`
-6. validar Home publica e Home logada
-7. validar Julia documental governada
-8. validar Roberto em `/fretes`
-9. validar `/cleide-bi-frete`
-10. validar `/auditoria-frete` com:
-- upload documental
-- `temp_table`
-- revisao humana
-- coverage quando aplicavel
-- upload do lote auditado
-- `audit/run`
-- preview/apply/undo de correcao quando houver diagnostico
-11. validar autorizacao por franquia e bloqueios esperados
-12. confirmar que nenhum temporario entrou em commit
+Não execute commit, push, merge ou deploy durante uma atualização apenas documental sem autorização explícita.
 
-## Testes
+## Limpeza e schema
 
-Comandos reais verificados nesta auditoria documental:
+Não publique `.venv`, `.tmp_pytest_fixture`, `app/cleiton_doc_tmp`, `tt_*.json`, caches ou bancos locais. Inspecione qualquer JSON antes de excluir. Mudança futura de schema deve ter migration no mesmo deploy, aplicada antes do código dependente e verificada depois.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest --collect-only -q tests/test_cleide_audit_correction_service.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_chat_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_context.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py
-.\.venv\Scripts\python.exe -m pytest --collect-only -q
-```
-
-Coleta atual:
-
-- suite especifica da auditoria Cleide: `804 tests collected`
-- suite completa: `1660 tests collected`
-
-## Regras operacionais
-
-- homolog ocorre em `homolog`
-- na configuracao versionada atual, producao ocorre por deploy manual do servico configurado para `main`
-- como o reposit�rio ainda tem `producao@6efa2e2`, divergencia entre branch promovida e branch configurada no Render deve ser tratada explicitamente antes de publicar
-- nao publicar `.db`, caches, `__pycache__`, `.pytest_cache` ou temporarios locais
-- limpar e manter fora de commit os temporarios de `app/cleiton_doc_tmp/`
-
-## Ponto de atencao Render
-
-- `logcompleta-web-homolog`: `branch: homolog`, `autoDeploy: true`
-- `logcompleta-web-prod`: `branch: main`, `autoDeploy: false`
-- a confirmacao do painel do Render continua sendo a referencia operacional final antes da promocao
+Fotografia validada: 1.896 testes aprovados em `6701a53`; execute `python -m pytest -q` e registre a contagem real do commit promovido.

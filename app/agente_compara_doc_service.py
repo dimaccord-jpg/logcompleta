@@ -1,8 +1,8 @@
 """
-Wrapper documental fino do domínio Cleide Auditoria (Fase 1).
+Wrapper documental fino do domínio Agente Compara (Fase 1).
 
 Reaproveita preparação, store e configuração governados do Cleiton.
-Opera exclusivamente sobre session keys `cleide_audit_*`; não toca sessão da Júlia.
+Opera exclusivamente sobre session keys `agente_compara_*`; não toca sessão da Júlia.
 Sem rotas, chat, IA ou billing.
 """
 from __future__ import annotations
@@ -86,28 +86,28 @@ from app.cleiton_doc_store import (
     save_document_record,
 )
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
-from app.services.cleide_audit_config_service import (
+from app.services.agente_compara_config_service import (
     get_active_calculation_base_by_id,
     get_active_calculation_bases_for_runtime,
-    get_cleide_audit_config,
+    get_agente_compara_config,
     normalize_calculation_base_unit,
     resolve_audited_file_limits,
     resolve_calculation_base_status,
 )
-from app.cleide_audit_correction_service import build_audit_correction_suggestions
+from app.agente_compara_correction_service import build_audit_correction_suggestions
 
 logger = logging.getLogger(__name__)
 
-CLEIDE_AUDIT_DOMAIN = "cleide_audit"
+AGENTE_COMPARA_DOMAIN = "agente_compara"
 
-CLEIDE_AUDIT_DOC_IDS_SESSION_KEY = "cleide_audit_doc_ids"
-CLEIDE_AUDIT_DOC_CONTEXT_SESSION_KEY = "cleide_audit_doc_context"
-CLEIDE_AUDIT_CHAT_HISTORY_SESSION_KEY = "cleide_audit_chat_history"
-CLEIDE_AUDIT_UPLOAD_LOCK_SESSION_KEY = "cleide_audit_upload_lock"
-CLEIDE_AUDIT_LAST_REQUEST_ID_SESSION_KEY = "cleide_audit_last_request_id"
-CLEIDE_AUDIT_UPLOAD_IN_PROGRESS_SESSION_KEY = "cleide_audit_upload_in_progress"
-CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY = "cleide_audit_temp_table_id"
-CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY = "cleide_audit_temp_table_source_doc_ids"
+AGENTE_COMPARA_DOC_IDS_SESSION_KEY = "agente_compara_doc_ids"
+AGENTE_COMPARA_DOC_CONTEXT_SESSION_KEY = "agente_compara_doc_context"
+AGENTE_COMPARA_CHAT_HISTORY_SESSION_KEY = "agente_compara_chat_history"
+AGENTE_COMPARA_UPLOAD_LOCK_SESSION_KEY = "agente_compara_upload_lock"
+AGENTE_COMPARA_LAST_REQUEST_ID_SESSION_KEY = "agente_compara_last_request_id"
+AGENTE_COMPARA_UPLOAD_IN_PROGRESS_SESSION_KEY = "agente_compara_upload_in_progress"
+AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY = "agente_compara_temp_table_id"
+AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY = "agente_compara_temp_table_source_doc_ids"
 
 TEMP_TABLE_STATUS_PROCESSING = "processing"
 TEMP_TABLE_STATUS_AWAITING_VALIDATION = "awaiting_validation"
@@ -117,11 +117,11 @@ TEMP_TABLE_STATUS_FAILED = "failed"
 TEMP_TABLE_STATUS_EXPIRED = "expired"
 TEMP_TABLE_STATUS_DISCARDED = "discarded"
 
-TEMP_TABLE_VERSION_MARKER = "cleide_audit_temp_table_v1"
+TEMP_TABLE_VERSION_MARKER = "agente_compara_temp_table_v1"
 TEMP_TABLE_OPERATIONAL_OWNER = "cleiton"
 TEMP_TABLE_UI_DISPLAY_NAME = "Tabela temporária extraída"
-TEMP_TABLE_JSON_BEGIN = "---CLEIDE_TEMP_TABLE---"
-TEMP_TABLE_JSON_END = "---END_CLEIDE_TEMP_TABLE---"
+TEMP_TABLE_JSON_BEGIN = "---AGENTE_COMPARA_TEMP_TABLE---"
+TEMP_TABLE_JSON_END = "---END_AGENTE_COMPARA_TEMP_TABLE---"
 
 TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES = 512 * 1024
 TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE = "save_and_advance"
@@ -142,13 +142,13 @@ ERROR_ACCESSORIAL_RATE_CONFLICT_MESSAGE_TEMPLATE = (
     "mas a observação indica {described_percent}%. Corrija uma das informações ou exclua a regra antes de continuar."
 )
 
-ERROR_TEMP_TABLE_NOT_FOUND = "cleide_audit_temp_table_not_found"
-ERROR_TEMP_TABLE_ID_MISMATCH = "cleide_audit_temp_table_id_mismatch"
-ERROR_TEMP_TABLE_EXPIRED = "cleide_audit_temp_table_expired"
-ERROR_TEMP_TABLE_INVALID_PAYLOAD = "cleide_audit_temp_table_invalid_payload"
+ERROR_TEMP_TABLE_NOT_FOUND = "agente_compara_temp_table_not_found"
+ERROR_TEMP_TABLE_ID_MISMATCH = "agente_compara_temp_table_id_mismatch"
+ERROR_TEMP_TABLE_EXPIRED = "agente_compara_temp_table_expired"
+ERROR_TEMP_TABLE_INVALID_PAYLOAD = "agente_compara_temp_table_invalid_payload"
 ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES = "invalid_accessorial_fees"
-ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE = "cleide_audit_temp_table_payload_too_large"
-ERROR_TEMP_TABLE_SCOPE_MISMATCH = "cleide_audit_temp_table_scope_mismatch"
+ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE = "agente_compara_temp_table_payload_too_large"
+ERROR_TEMP_TABLE_SCOPE_MISMATCH = "agente_compara_temp_table_scope_mismatch"
 
 COVERAGE_TABLE_COLUMNS = ["UF destino", "Cidade destino", "Região de frete"]
 COVERAGE_TABLE_STATUS_NEEDS_REVIEW = "needs_review"
@@ -166,34 +166,34 @@ BRAZILIAN_UFS = UF_NORTH | UF_NORTHEAST | UF_CENTER_WEST | UF_SOUTHEAST | UF_SOU
 ICMS_7_PERCENT_ORIGIN_UFS = UF_SOUTH | UF_SOUTHEAST
 ICMS_7_PERCENT_DESTINATION_UFS = UF_NORTH | UF_NORTHEAST | UF_CENTER_WEST | {"ES"}
 
-ERROR_COVERAGE_NO_TEMP_TABLE = "cleide_audit_coverage_no_temp_table"
-ERROR_COVERAGE_INVALID_FORMAT = "cleide_audit_coverage_invalid_format"
-ERROR_COVERAGE_EMPTY_FILE = "cleide_audit_coverage_empty_file"
-ERROR_COVERAGE_PAYLOAD_TOO_LARGE = "cleide_audit_coverage_payload_too_large"
-ERROR_COVERAGE_PARSE_FAILED = "cleide_audit_coverage_parse_failed"
-ERROR_COVERAGE_INVALID_PAYLOAD = "cleide_audit_coverage_invalid_payload"
-ERROR_COVERAGE_EXPIRED = "cleide_audit_coverage_expired"
-ERROR_COVERAGE_SCOPE_MISMATCH = "cleide_audit_coverage_scope_mismatch"
+ERROR_COVERAGE_NO_TEMP_TABLE = "agente_compara_coverage_no_temp_table"
+ERROR_COVERAGE_INVALID_FORMAT = "agente_compara_coverage_invalid_format"
+ERROR_COVERAGE_EMPTY_FILE = "agente_compara_coverage_empty_file"
+ERROR_COVERAGE_PAYLOAD_TOO_LARGE = "agente_compara_coverage_payload_too_large"
+ERROR_COVERAGE_PARSE_FAILED = "agente_compara_coverage_parse_failed"
+ERROR_COVERAGE_INVALID_PAYLOAD = "agente_compara_coverage_invalid_payload"
+ERROR_COVERAGE_EXPIRED = "agente_compara_coverage_expired"
+ERROR_COVERAGE_SCOPE_MISMATCH = "agente_compara_coverage_scope_mismatch"
 
-AUDIT_BATCH_SHEET_NAME = "Modelo Cleide"
-AUDIT_INPUT_SCHEMA_VERSION = "cleide_audit_input_v1"
+AUDIT_BATCH_SHEET_NAME = "Modelo AgenteCompara"
+AUDIT_INPUT_SCHEMA_VERSION = "agente_compara_input_v1"
 AUDIT_BATCH_STATUS_UPLOADED = "uploaded"
 AUDIT_BATCH_STATUS_PROCESSED = "processed"
-CLEIDE_AUDIT_TEMPLATE_FILENAME = "template_cleide_auditoria_frete.xlsx"
+AGENTE_COMPARA_TEMPLATE_FILENAME = "template_agente_compara.xlsx"
 
-ERROR_AUDIT_NO_TEMP_TABLE = "cleide_audit_audit_no_temp_table"
-ERROR_AUDIT_INVALID_FORMAT = "cleide_audit_audit_invalid_format"
-ERROR_AUDIT_EMPTY_FILE = "cleide_audit_audit_empty_file"
-ERROR_AUDIT_PAYLOAD_TOO_LARGE = "cleide_audit_audit_payload_too_large"
-ERROR_AUDIT_PARSE_FAILED = "cleide_audit_audit_parse_failed"
-ERROR_AUDIT_MISSING_COLUMNS = "cleide_audit_audit_missing_columns"
-ERROR_AUDIT_TOO_MANY_ROWS = "cleide_audit_audit_too_many_rows"
-ERROR_AUDIT_EXPIRED = "cleide_audit_audit_expired"
-ERROR_AUDIT_SCOPE_MISMATCH = "cleide_audit_audit_scope_mismatch"
-ERROR_AUDIT_INVALID_SHEET = "cleide_audit_audit_invalid_sheet"
-ERROR_AUDIT_EMPTY_ROWS = "cleide_audit_audit_empty_rows"
-ERROR_AUDIT_BATCH_NOT_FOUND = "cleide_audit_audit_batch_not_found"
-ERROR_AUDIT_BATCH_EMPTY = "cleide_audit_audit_batch_empty"
+ERROR_AUDIT_NO_TEMP_TABLE = "agente_compara_audit_no_temp_table"
+ERROR_AUDIT_INVALID_FORMAT = "agente_compara_audit_invalid_format"
+ERROR_AUDIT_EMPTY_FILE = "agente_compara_audit_empty_file"
+ERROR_AUDIT_PAYLOAD_TOO_LARGE = "agente_compara_audit_payload_too_large"
+ERROR_AUDIT_PARSE_FAILED = "agente_compara_audit_parse_failed"
+ERROR_AUDIT_MISSING_COLUMNS = "agente_compara_audit_missing_columns"
+ERROR_AUDIT_TOO_MANY_ROWS = "agente_compara_audit_too_many_rows"
+ERROR_AUDIT_EXPIRED = "agente_compara_audit_expired"
+ERROR_AUDIT_SCOPE_MISMATCH = "agente_compara_audit_scope_mismatch"
+ERROR_AUDIT_INVALID_SHEET = "agente_compara_audit_invalid_sheet"
+ERROR_AUDIT_EMPTY_ROWS = "agente_compara_audit_empty_rows"
+ERROR_AUDIT_BATCH_NOT_FOUND = "agente_compara_audit_batch_not_found"
+ERROR_AUDIT_BATCH_EMPTY = "agente_compara_audit_batch_empty"
 
 AUDIT_STATUS_OK = "ok"
 AUDIT_STATUS_DIVERGENT = "divergent"
@@ -207,7 +207,7 @@ AUDIT_STATUS_UNSUPPORTED_PRICING = "unsupported_pricing_model"
 AUDIT_DIAGNOSTIC_PRICING_DIMENSION_MISMATCH = "pricing_dimension_mismatch"
 AUDIT_TRANSFORMATION_SELECT_PRICING_DIMENSION = "select_pricing_dimension"
 
-AUDIT_BI_DATASET_VERSION = "cleide_audit_bi_v1"
+AUDIT_BI_DATASET_VERSION = "agente_compara_bi_v1"
 AUDIT_BI_SOURCE = "audit_batch"
 AUDIT_BI_FILTER_MODE = "frontend_row_level"
 AUDIT_BI_CHARTS_SUPPORTED = (
@@ -258,10 +258,10 @@ AUDIT_BI_NOT_READY_MESSAGE = (
     "Envie o arquivo auditado para habilitar esta área."
 )
 
-TAX_CALCULATION_VERSION = "cleide_audit_tax_v2"
+TAX_CALCULATION_VERSION = "agente_compara_tax_v2"
 TAX_CALCULATION_MODE_INSIDE = "inside"
 TAX_CALCULATION_MODE_OUTSIDE = "outside"
-PRICING_RULE_PARSER_VERSION = "cleide_pricing_matrix_v2"
+PRICING_RULE_PARSER_VERSION = "agente_compara_pricing_matrix_v2"
 _WEIGHT_KG_HEADER_RE = re.compile(r"\bkg\b|\bkgs\b|\bpeso\b")
 ISS_SOURCE_NAME = "Cadastro municipal/manual"
 ISS_SOURCE_TYPE = "manual"
@@ -367,19 +367,19 @@ _COVERAGE_FIELD_HINTS = {
 _COVERAGE_REQUIRED_FIELDS = ("destination_uf", "destination_city", "freight_region")
 _COVERAGE_HEADER_ALIASES: dict[str, str] = {}
 
-CLEIDE_AUDIT_DOCUMENT_UPLOAD_FLOW_TYPE = "cleide_audit_document_upload"
-CLEIDE_AUDIT_DOCUMENT_PREPARE_FLOW_TYPE = "cleide_audit_document_prepare"
-CLEIDE_AUDIT_CHAT_FLOW_TYPE = "cleide_audit_chat"
-CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE = "cleide_audit_insights_chat"
-CLEIDE_AUDIT_TEMP_TABLE_EXTRACTION_FLOW_TYPE = "cleide_audit_temp_table_extraction"
-CLEIDE_AUDIT_COVERAGE_UPLOAD_FLOW_TYPE = "cleide_audit_coverage_upload"
-CLEIDE_AUDIT_BATCH_UPLOAD_FLOW_TYPE = "cleide_audit_batch_upload"
-CLEIDE_AUDIT_BATCH_PROCESSED_FLOW_TYPE = "cleide_audit_batch_processed"
+AGENTE_COMPARA_DOCUMENT_UPLOAD_FLOW_TYPE = "agente_compara_document_upload"
+AGENTE_COMPARA_DOCUMENT_PREPARE_FLOW_TYPE = "agente_compara_document_prepare"
+AGENTE_COMPARA_CHAT_FLOW_TYPE = "agente_compara_chat"
+AGENTE_COMPARA_INSIGHTS_CHAT_FLOW_TYPE = "agente_compara_insights_chat"
+AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE = "agente_compara_temp_table_extraction"
+AGENTE_COMPARA_COVERAGE_UPLOAD_FLOW_TYPE = "agente_compara_coverage_upload"
+AGENTE_COMPARA_BATCH_UPLOAD_FLOW_TYPE = "agente_compara_batch_upload"
+AGENTE_COMPARA_BATCH_PROCESSED_FLOW_TYPE = "agente_compara_batch_processed"
 
-SOURCE_AGENT_CLEIDE_AUDIT = "cleide_audit"
+SOURCE_AGENT_AGENTE_COMPARA = "agente_compara"
 
 
-class CleideAuditTempTableError(ValueError):
+class AgenteComparaTempTableError(ValueError):
     def __init__(self, error_code: str, message: str, *, errors: list[dict] | None = None):
         super().__init__(message)
         self.error_code = error_code
@@ -387,44 +387,44 @@ class CleideAuditTempTableError(ValueError):
         self.errors = list(errors or [])
 
 
-class CleideAuditCoverageError(ValueError):
+class AgenteComparaCoverageError(ValueError):
     def __init__(self, error_code: str, message: str):
         super().__init__(message)
         self.error_code = error_code
         self.message = message
 
 
-class CleideAuditBatchError(ValueError):
+class AgenteComparaBatchError(ValueError):
     def __init__(self, error_code: str, message: str):
         super().__init__(message)
         self.error_code = error_code
         self.message = message
 
 
-def cleide_audit_upload_idempotency_key(request_id: str) -> str:
-    return f"cleide-audit-upload:{(request_id or '').strip()}"
+def agente_compara_upload_idempotency_key(request_id: str) -> str:
+    return f"agente-compara-upload:{(request_id or '').strip()}"
 
 
-def cleide_audit_upload_doc_idempotency_key(doc_id: str) -> str:
-    return f"cleide-audit-upload-doc:{(doc_id or '').strip()}"
+def agente_compara_upload_doc_idempotency_key(doc_id: str) -> str:
+    return f"agente-compara-upload-doc:{(doc_id or '').strip()}"
 
 
-def cleide_audit_chat_idempotency_key(request_id: str) -> str:
-    return f"cleide-audit-chat:{(request_id or '').strip()}"
+def agente_compara_chat_idempotency_key(request_id: str) -> str:
+    return f"agente-compara-chat:{(request_id or '').strip()}"
 
 
-def cleide_audit_insights_chat_idempotency_key(request_id: str, batch_scope: str = "") -> str:
+def agente_compara_insights_chat_idempotency_key(request_id: str, batch_scope: str = "") -> str:
     scope = (batch_scope or "").strip() or "unknown"
-    return f"cleide-audit-insights-chat:{scope}:{(request_id or '').strip()}"
+    return f"agente-compara-insights-chat:{scope}:{(request_id or '').strip()}"
 
 
-def cleide_audit_temp_table_extraction_idempotency_key(source_doc_ids: list[str]) -> str:
+def agente_compara_temp_table_extraction_idempotency_key(source_doc_ids: list[str]) -> str:
     normalized = _normalize_source_doc_ids(source_doc_ids)
     joined = ":".join(normalized)
-    return f"cleide-audit-temp-table:{TEMP_TABLE_VERSION_MARKER}:{joined}"
+    return f"agente-compara-temp-table:{TEMP_TABLE_VERSION_MARKER}:{joined}"
 
 
-def _resolve_cleide_audit_execution_id() -> str:
+def _resolve_agente_compara_execution_id() -> str:
     if not has_request_context():
         return str(uuid4())
     execution_id = (request.headers.get("X-Execution-ID") or "").strip()
@@ -435,22 +435,22 @@ def _resolve_cleide_audit_execution_id() -> str:
     return execution_id[:120]
 
 
-def cleide_audit_coverage_upload_idempotency_key(session_id: str, coverage_version: str) -> str:
-    return f"cleide-audit-coverage-upload:{(session_id or '').strip()}:{(coverage_version or '').strip()}"
+def agente_compara_coverage_upload_idempotency_key(session_id: str, coverage_version: str) -> str:
+    return f"agente-compara-coverage-upload:{(session_id or '').strip()}:{(coverage_version or '').strip()}"
 
 
-def cleide_audit_batch_upload_idempotency_key(session_id: str, audit_batch_id: str) -> str:
-    return f"cleide-audit-batch-upload:{(session_id or '').strip()}:{(audit_batch_id or '').strip()}"
+def agente_compara_batch_upload_idempotency_key(session_id: str, audit_batch_id: str) -> str:
+    return f"agente-compara-batch-upload:{(session_id or '').strip()}:{(audit_batch_id or '').strip()}"
 
 
-def cleide_audit_batch_run_idempotency_key(session_id: str, audit_batch_id: str, run_version: str) -> str:
+def agente_compara_batch_run_idempotency_key(session_id: str, audit_batch_id: str, run_version: str) -> str:
     return (
-        f"cleide-audit-batch-run:{(session_id or '').strip()}:"
+        f"agente-compara-batch-run:{(session_id or '').strip()}:"
         f"{(audit_batch_id or '').strip()}:{(run_version or '').strip()}"
     )
 
 
-def _emit_cleide_audit_operational_billing(
+def _emit_agente_compara_operational_billing(
     *,
     emitted: list[bool],
     started_at: float,
@@ -466,9 +466,9 @@ def _emit_cleide_audit_operational_billing(
     emitted[0] = True
     elapsed_ms = int((time.perf_counter() - started_at) * 1000)
     try:
-        from app.services.cleiton_upload_billing_service import apropriar_billing_cleide_operational_flow
+        from app.services.cleiton_upload_billing_service import apropriar_billing_agente_compara_operational_flow
 
-        apropriar_billing_cleide_operational_flow(
+        apropriar_billing_agente_compara_operational_flow(
             flow_type=flow_type,
             idempotency_key=idempotency_key,
             rows_processed=max(0, int(rows_processed)),
@@ -478,12 +478,12 @@ def _emit_cleide_audit_operational_billing(
             execution_id=execution_id,
         )
     except Exception:
-        logger.exception("Falha ao apropriar billing operacional da Auditoria Cleide (%s).", flow_type)
+        logger.exception("Falha ao apropriar billing operacional da Auditoria Agente Compara (%s).", flow_type)
         try:
             from app.run_cleiton_processing_governance import cleiton_register_processing_event
 
             cleiton_register_processing_event(
-                agent="cleide",
+                agent="agente_compara",
                 flow_type=flow_type,
                 processing_type="non_llm",
                 rows_processed=max(0, int(rows_processed)),
@@ -495,7 +495,7 @@ def _emit_cleide_audit_operational_billing(
             )
         except Exception:
             logger.exception(
-                "Falha no fallback de ProcessingEvent operacional da Auditoria Cleide (%s).",
+                "Falha no fallback de ProcessingEvent operacional da Auditoria Agente Compara (%s).",
                 flow_type,
             )
 
@@ -506,15 +506,15 @@ def _utcnow() -> datetime:
 
 def _require_session() -> None:
     if not has_request_context():
-        raise RuntimeError("Sessão documental da Cleide Auditoria requer request context Flask.")
+        raise RuntimeError("Sessão documental da Agente Compara requer request context Flask.")
 
 
 def _mark_session_modified() -> None:
     session.modified = True
 
 
-def get_cleide_audit_doc_ids(session_obj) -> list[str]:
-    raw = session_obj.get(CLEIDE_AUDIT_DOC_IDS_SESSION_KEY)
+def get_agente_compara_doc_ids(session_obj) -> list[str]:
+    raw = session_obj.get(AGENTE_COMPARA_DOC_IDS_SESSION_KEY)
     if not isinstance(raw, list):
         return []
     ids: list[str] = []
@@ -526,7 +526,7 @@ def get_cleide_audit_doc_ids(session_obj) -> list[str]:
     return ids
 
 
-def set_cleide_audit_doc_ids(session_obj, doc_ids: list[str]) -> None:
+def set_agente_compara_doc_ids(session_obj, doc_ids: list[str]) -> None:
     cleaned: list[str] = []
     seen: set[str] = set()
     for item in doc_ids or []:
@@ -537,56 +537,56 @@ def set_cleide_audit_doc_ids(session_obj, doc_ids: list[str]) -> None:
             continue
         seen.add(ref)
         cleaned.append(ref)
-    session_obj[CLEIDE_AUDIT_DOC_IDS_SESSION_KEY] = cleaned
+    session_obj[AGENTE_COMPARA_DOC_IDS_SESSION_KEY] = cleaned
 
 
-def clear_cleide_audit_doc_ids(session_obj) -> None:
-    session_obj.pop(CLEIDE_AUDIT_DOC_IDS_SESSION_KEY, None)
+def clear_agente_compara_doc_ids(session_obj) -> None:
+    session_obj.pop(AGENTE_COMPARA_DOC_IDS_SESSION_KEY, None)
 
 
-def append_cleide_audit_doc_id(session_obj, doc_id: str) -> None:
+def append_agente_compara_doc_id(session_obj, doc_id: str) -> None:
     ref = (doc_id or "").strip()
     if not ref:
-        raise ValueError("doc_id inválido para sessão documental da Cleide Auditoria.")
-    ids = get_cleide_audit_doc_ids(session_obj)
+        raise ValueError("doc_id inválido para sessão documental da Agente Compara.")
+    ids = get_agente_compara_doc_ids(session_obj)
     if ref not in ids:
         ids.append(ref)
-    set_cleide_audit_doc_ids(session_obj, ids)
+    set_agente_compara_doc_ids(session_obj, ids)
 
 
-def remove_cleide_audit_doc_id(session_obj, doc_id: str) -> None:
+def remove_agente_compara_doc_id(session_obj, doc_id: str) -> None:
     ref = (doc_id or "").strip()
     if not ref:
         return
-    ids = [item for item in get_cleide_audit_doc_ids(session_obj) if item != ref]
+    ids = [item for item in get_agente_compara_doc_ids(session_obj) if item != ref]
     if ids:
-        set_cleide_audit_doc_ids(session_obj, ids)
+        set_agente_compara_doc_ids(session_obj, ids)
     else:
-        clear_cleide_audit_doc_ids(session_obj)
+        clear_agente_compara_doc_ids(session_obj)
 
 
 def _parse_size_bytes(size_bytes) -> int:
     if size_bytes is None:
         raise CleitonDocSessionError(
             ERROR_INVALID_SIZE,
-            "size_bytes ausente ou inválido para documento Cleide Auditoria.",
+            "size_bytes ausente ou inválido para documento Agente Compara.",
         )
     if isinstance(size_bytes, bool):
         raise CleitonDocSessionError(
             ERROR_INVALID_SIZE,
-            "size_bytes não numérico para documento Cleide Auditoria.",
+            "size_bytes não numérico para documento Agente Compara.",
         )
     try:
         parsed = int(size_bytes)
     except (TypeError, ValueError):
         raise CleitonDocSessionError(
             ERROR_INVALID_SIZE,
-            "size_bytes não numérico para documento Cleide Auditoria.",
+            "size_bytes não numérico para documento Agente Compara.",
         ) from None
     if parsed <= 0:
         raise CleitonDocSessionError(
             ERROR_INVALID_SIZE,
-            "size_bytes deve ser maior que zero para documento Cleide Auditoria.",
+            "size_bytes deve ser maior que zero para documento Agente Compara.",
         )
     return parsed
 
@@ -673,7 +673,7 @@ def cleanup_expired_documents_for_session() -> int:
     removed = 0
     stale_ids: list[str] = []
 
-    for doc_id in get_cleide_audit_doc_ids(session):
+    for doc_id in get_agente_compara_doc_ids(session):
         record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
         if record is None:
             stale_ids.append(doc_id)
@@ -681,7 +681,7 @@ def cleanup_expired_documents_for_session() -> int:
 
     for doc_id in stale_ids:
         remove_document_record(doc_id)
-        remove_cleide_audit_doc_id(session, doc_id)
+        remove_agente_compara_doc_id(session, doc_id)
 
     if stale_ids:
         _mark_session_modified()
@@ -694,7 +694,7 @@ def get_active_documents_for_session() -> list[dict]:
     active: list[dict] = []
     stale_ids: list[str] = []
 
-    for doc_id in get_cleide_audit_doc_ids(session):
+    for doc_id in get_agente_compara_doc_ids(session):
         record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
         if record is None:
             stale_ids.append(doc_id)
@@ -703,7 +703,7 @@ def get_active_documents_for_session() -> list[dict]:
 
     if stale_ids:
         for doc_id in stale_ids:
-            remove_cleide_audit_doc_id(session, doc_id)
+            remove_agente_compara_doc_id(session, doc_id)
         _mark_session_modified()
 
     return active
@@ -817,8 +817,8 @@ def _register_document_record(
         FIELD_NODE_COUNT: node_count,
         FIELD_MAX_DEPTH: max_depth,
         FIELD_WARNINGS: list(warnings or []),
-        FIELD_SOURCE_AGENT: SOURCE_AGENT_CLEIDE_AUDIT,
-        FIELD_SESSION_KEY: CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+        FIELD_SOURCE_AGENT: SOURCE_AGENT_AGENTE_COMPARA,
+        FIELD_SESSION_KEY: AGENTE_COMPARA_DOC_IDS_SESSION_KEY,
         FIELD_ERROR_CODE: error_code,
         FIELD_GEMINI_FILE_NAME: gemini_file_name,
         FIELD_GEMINI_FILE_URI: gemini_file_uri,
@@ -828,7 +828,7 @@ def _register_document_record(
     }
 
     save_document_record(record)
-    append_cleide_audit_doc_id(session, doc_id)
+    append_agente_compara_doc_id(session, doc_id)
     _mark_session_modified()
     return _public_record(record)
 
@@ -841,9 +841,9 @@ def prepare_and_register_document(
     extension: str | None = None,
 ) -> dict:
     """
-    Valida, prepara e registra documento na sessão Cleide Auditoria após sucesso.
+    Valida, prepara e registra documento na sessão Agente Compara após sucesso.
 
-    Delega validação/preparação ao Cleiton; persiste IDs em `cleide_audit_doc_ids`.
+    Delega validação/preparação ao Cleiton; persiste IDs em `agente_compara_doc_ids`.
     """
     prepared = prepare_document(
         display_name=display_name,
@@ -904,22 +904,22 @@ def prepare_and_register_document(
                 }
             )
             logger.warning(
-                "Cleide audit doc: upload Gemini Files API falhou para PDF (summary=%s).",
+                "Agente Compara audit doc: upload Gemini Files API falhou para PDF (summary=%s).",
                 upload_result.error_summary,
             )
 
     return _register_document_record(**register_kwargs)
 
 
-def _cleide_audit_document_owned_by_session(doc_id: str) -> bool:
+def _agente_compara_document_owned_by_session(doc_id: str) -> bool:
     ref = (doc_id or "").strip()
-    if not ref or ref not in get_cleide_audit_doc_ids(session):
+    if not ref or ref not in get_agente_compara_doc_ids(session):
         return False
     record = peek_document_record(ref)
     return document_record_matches_domain_scope(
         record,
-        expected_source_agent=SOURCE_AGENT_CLEIDE_AUDIT,
-        expected_session_key=CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+        expected_source_agent=SOURCE_AGENT_AGENTE_COMPARA,
+        expected_session_key=AGENTE_COMPARA_DOC_IDS_SESSION_KEY,
     )
 
 
@@ -935,7 +935,7 @@ def remove_document_from_session(doc_id: str) -> dict:
             "error_code": ERROR_DOC_NOT_FOUND,
         }
 
-    if not _cleide_audit_document_owned_by_session(ref):
+    if not _agente_compara_document_owned_by_session(ref):
         return {
             "ok": True,
             "doc_id": ref,
@@ -945,7 +945,7 @@ def remove_document_from_session(doc_id: str) -> dict:
         }
 
     store_result = remove_document_record(ref)
-    remove_cleide_audit_doc_id(session, ref)
+    remove_agente_compara_doc_id(session, ref)
     _mark_session_modified()
 
     invalidate_temp_table_if_source_changed(
@@ -964,19 +964,19 @@ def remove_document_from_session(doc_id: str) -> dict:
 
 def clear_documents_for_session() -> dict:
     _require_session()
-    ids = list(get_cleide_audit_doc_ids(session))
+    ids = list(get_agente_compara_doc_ids(session))
     removed_store = 0
     removed_session = 0
     for doc_id in ids:
-        if not _cleide_audit_document_owned_by_session(doc_id):
+        if not _agente_compara_document_owned_by_session(doc_id):
             continue
         result = remove_document_record(doc_id)
         if result.get("removed"):
             removed_store += 1
-        remove_cleide_audit_doc_id(session, doc_id)
+        remove_agente_compara_doc_id(session, doc_id)
         removed_session += 1
-    if not get_cleide_audit_doc_ids(session):
-        clear_cleide_audit_doc_ids(session)
+    if not get_agente_compara_doc_ids(session):
+        clear_agente_compara_doc_ids(session)
     if removed_session:
         invalidate_temp_table_for_session(reason=TEMP_TABLE_STATUS_DISCARDED)
         _mark_session_modified()
@@ -1027,7 +1027,7 @@ def _normalize_source_doc_ids(doc_ids: list[str] | None) -> list[str]:
 
 
 def get_temp_table_id(session_obj) -> str | None:
-    raw = session_obj.get(CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY)
+    raw = session_obj.get(AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY)
     if not isinstance(raw, str):
         return None
     ref = raw.strip()
@@ -1037,25 +1037,25 @@ def get_temp_table_id(session_obj) -> str | None:
 def set_temp_table_id(session_obj, temp_table_id: str | None) -> None:
     ref = (temp_table_id or "").strip()
     if ref:
-        session_obj[CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY] = ref
+        session_obj[AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY] = ref
     else:
-        session_obj.pop(CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY, None)
+        session_obj.pop(AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY, None)
 
 
 def get_temp_table_source_doc_ids(session_obj) -> list[str]:
-    raw = session_obj.get(CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY)
+    raw = session_obj.get(AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY)
     if not isinstance(raw, list):
         return []
     return _normalize_source_doc_ids(raw)
 
 
 def set_temp_table_source_doc_ids(session_obj, doc_ids: list[str]) -> None:
-    session_obj[CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY] = _normalize_source_doc_ids(doc_ids)
+    session_obj[AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY] = _normalize_source_doc_ids(doc_ids)
 
 
 def clear_temp_table_session_refs(session_obj) -> None:
-    session_obj.pop(CLEIDE_AUDIT_TEMP_TABLE_ID_SESSION_KEY, None)
-    session_obj.pop(CLEIDE_AUDIT_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY, None)
 
 
 def _normalize_coverage_header(value) -> str:
@@ -1484,7 +1484,7 @@ def _decode_coverage_csv_bytes(file_bytes: bytes) -> str:
             return (file_bytes or b"").decode(encoding)
         except UnicodeDecodeError:
             continue
-    raise CleideAuditCoverageError(
+    raise AgenteComparaCoverageError(
         ERROR_COVERAGE_PARSE_FAILED,
         "Não foi possível decodificar o arquivo CSV de cobertura.",
     )
@@ -1492,13 +1492,13 @@ def _decode_coverage_csv_bytes(file_bytes: bytes) -> str:
 
 def _parse_coverage_tabular_rows(raw_rows: list[list], *, source_file_name: str) -> tuple[list[dict], list[str]]:
     if not raw_rows:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_EMPTY_FILE,
             "O arquivo de cobertura está vazio.",
         )
     header_row = raw_rows[0]
     if not isinstance(header_row, list):
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_PARSE_FAILED,
             "Cabeçalho do arquivo de cobertura inválido.",
         )
@@ -1507,7 +1507,7 @@ def _parse_coverage_tabular_rows(raw_rows: list[list], *, source_file_name: str)
         field for field in _COVERAGE_REQUIRED_FIELDS if field not in field_indexes
     ]
     if missing_fields:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_PARSE_FAILED,
             _format_coverage_missing_columns_error(missing_fields),
         )
@@ -1522,7 +1522,7 @@ def _parse_coverage_tabular_rows(raw_rows: list[list], *, source_file_name: str)
             continue
         row_index += 1
         if row_index > COVERAGE_UPLOAD_MAX_ROWS:
-            raise CleideAuditCoverageError(
+            raise AgenteComparaCoverageError(
                 ERROR_COVERAGE_PAYLOAD_TOO_LARGE,
                 "O arquivo de cobertura excede o limite de linhas permitido.",
             )
@@ -1559,7 +1559,7 @@ def _parse_coverage_tabular_rows(raw_rows: list[list], *, source_file_name: str)
             }
         )
     if not parsed_rows and not warnings:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_EMPTY_FILE,
             "Nenhuma linha válida encontrada no arquivo de cobertura.",
         )
@@ -1569,7 +1569,7 @@ def _parse_coverage_tabular_rows(raw_rows: list[list], *, source_file_name: str)
 def _parse_coverage_csv_bytes(file_bytes: bytes, *, source_file_name: str) -> tuple[list[dict], list[str]]:
     text = _decode_coverage_csv_bytes(file_bytes)
     if not text.strip():
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_EMPTY_FILE,
             "O arquivo de cobertura está vazio.",
         )
@@ -1580,12 +1580,12 @@ def _parse_coverage_csv_bytes(file_bytes: bytes, *, source_file_name: str) -> tu
 
 def _parse_coverage_xlsx_bytes(file_bytes: bytes, *, source_file_name: str) -> tuple[list[dict], list[str]]:
     if not file_bytes:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_EMPTY_FILE,
             "O arquivo de cobertura está vazio.",
         )
     if len(file_bytes) > COVERAGE_UPLOAD_MAX_BYTES:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_PAYLOAD_TOO_LARGE,
             "O arquivo de cobertura excede o limite de tamanho permitido.",
         )
@@ -1593,17 +1593,17 @@ def _parse_coverage_xlsx_bytes(file_bytes: bytes, *, source_file_name: str) -> t
         if zipfile.is_zipfile(io.BytesIO(file_bytes)):
             with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
                 if archive.testzip() is not None:
-                    raise CleideAuditCoverageError(
+                    raise AgenteComparaCoverageError(
                         ERROR_COVERAGE_PARSE_FAILED,
                         "Arquivo XLSX de cobertura corrompido.",
                     )
         from openpyxl import load_workbook
 
         workbook = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-    except CleideAuditCoverageError:
+    except AgenteComparaCoverageError:
         raise
     except Exception as exc:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_PARSE_FAILED,
             "Não foi possível ler o arquivo XLSX de cobertura.",
         ) from exc
@@ -1620,7 +1620,7 @@ def _parse_coverage_xlsx_bytes(file_bytes: bytes, *, source_file_name: str) -> t
 
 def _validate_coverage_row_for_save(item, *, row_index: int) -> dict:
     if not isinstance(item, dict):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Cada linha de coverage_table deve ser um objeto.",
         )
@@ -1629,17 +1629,17 @@ def _validate_coverage_row_for_save(item, *, row_index: int) -> dict:
     freight_region = _sanitize_cell_string(item.get("freight_region"))
     notes = _sanitize_cell_string(item.get("notes")) or ""
     if not destination_uf:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             f"Linha {row_index}: UF destino inválida ou ausente.",
         )
     if not destination_city:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             f"Linha {row_index}: cidade destino é obrigatória.",
         )
     if not freight_region:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             f"Linha {row_index}: região de frete é obrigatória.",
         )
@@ -1659,7 +1659,7 @@ def _validate_coverage_table_for_save(raw_coverage) -> dict | None:
     if raw_coverage is None:
         return None
     if not isinstance(raw_coverage, dict):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "coverage_table deve ser um objeto.",
         )
@@ -1667,7 +1667,7 @@ def _validate_coverage_table_for_save(raw_coverage) -> dict | None:
     if raw_rows is None:
         return {"rows": []}
     if not isinstance(raw_rows, list):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "coverage_table.rows deve ser uma lista.",
         )
@@ -1692,15 +1692,15 @@ def upload_coverage_table_from_file(
     """
     started_at = time.perf_counter()
     emitted_processing_event = [False]
-    execution_id = _resolve_cleide_audit_execution_id()
+    execution_id = _resolve_agente_compara_execution_id()
     _require_session()
     if not file_bytes:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_EMPTY_FILE,
             "O arquivo de cobertura está vazio.",
         )
     if len(file_bytes) > COVERAGE_UPLOAD_MAX_BYTES:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_PAYLOAD_TOO_LARGE,
             "O arquivo de cobertura excede o limite de tamanho permitido.",
         )
@@ -1709,12 +1709,12 @@ def upload_coverage_table_from_file(
     if not ext.startswith("."):
         ext = f".{ext}" if ext else ""
     if ext == ".pdf":
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_INVALID_FORMAT,
             "Upload de cobertura aceita apenas CSV e XLSX nesta fase.",
         )
     if ext not in {".csv", ".xlsx"}:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_INVALID_FORMAT,
             "Upload de cobertura aceita apenas CSV e XLSX nesta fase.",
         )
@@ -1722,7 +1722,7 @@ def upload_coverage_table_from_file(
     sync_temp_table_with_session_documents()
     active_id = get_temp_table_id(session)
     if not active_id:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_NO_TEMP_TABLE,
             "Nenhuma tabela temporária ativa nesta sessão.",
         )
@@ -1732,18 +1732,18 @@ def upload_coverage_table_from_file(
     if record is None:
         clear_temp_table_session_refs(session)
         _mark_session_modified()
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_NO_TEMP_TABLE,
             "Tabela temporária ativa não encontrada.",
         )
     status = (record.get("status") or "").strip().lower()
     if status == TEMP_TABLE_STATUS_EXPIRED:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_EXPIRED,
             "A tabela temporária desta sessão expirou.",
         )
     if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_NO_TEMP_TABLE,
             "Tabela temporária indisponível para upload complementar.",
         )
@@ -1773,7 +1773,7 @@ def upload_coverage_table_from_file(
 
     saved = save_temp_table_record(updated)
     logger.info(
-        "Cleide coverage upload: temp_table_id=%s user_id=%s rows=%s warnings=%s",
+        "Agente Compara coverage upload: temp_table_id=%s user_id=%s rows=%s warnings=%s",
         saved.get("temp_table_id"),
         user_scope,
         len(rows),
@@ -1781,15 +1781,15 @@ def upload_coverage_table_from_file(
     )
     public = _public_temp_table(saved)
     if public is None:
-        raise CleideAuditCoverageError(
+        raise AgenteComparaCoverageError(
             ERROR_COVERAGE_NO_TEMP_TABLE,
             "Não foi possível retornar a tabela temporária atualizada.",
         )
-    _emit_cleide_audit_operational_billing(
+    _emit_agente_compara_operational_billing(
         emitted=emitted_processing_event,
         started_at=started_at,
-        flow_type=CLEIDE_AUDIT_COVERAGE_UPLOAD_FLOW_TYPE,
-        idempotency_key=cleide_audit_coverage_upload_idempotency_key(active_id, execution_id),
+        flow_type=AGENTE_COMPARA_COVERAGE_UPLOAD_FLOW_TYPE,
+        idempotency_key=agente_compara_coverage_upload_idempotency_key(active_id, execution_id),
         rows_processed=len(rows),
         status="success",
         execution_id=execution_id,
@@ -1935,7 +1935,7 @@ def _normalize_audit_row(
     )
 
     if not destination_city or not destination_uf or charged_freight is None or audited_weight is None:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_PARSE_FAILED,
             f"Linha {row_index}: dados obrigatórios inválidos ou ausentes.",
         )
@@ -1978,7 +1978,7 @@ def _parse_audit_tabular_rows(
     max_rows: int,
 ) -> tuple[list[dict], dict[str, str], str | None]:
     if not raw_rows:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_EMPTY_FILE,
             "O arquivo auditado está vazio.",
         )
@@ -1989,7 +1989,7 @@ def _parse_audit_tabular_rows(
         field for field in _AUDIT_REQUIRED_FIELDS if field not in field_indexes
     ]
     if missing_fields:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_MISSING_COLUMNS,
             _format_audit_missing_columns_error(missing_fields),
         )
@@ -2001,7 +2001,7 @@ def _parse_audit_tabular_rows(
             continue
         data_row_index += 1
         if data_row_index > max_rows:
-            raise CleideAuditBatchError(
+            raise AgenteComparaBatchError(
                 ERROR_AUDIT_TOO_MANY_ROWS,
                 f"O arquivo excede o limite de {max_rows} linhas configurado para auditoria.",
             )
@@ -2015,7 +2015,7 @@ def _parse_audit_tabular_rows(
             normalized_rows.append(normalized)
 
     if not normalized_rows:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_EMPTY_ROWS,
             "Nenhuma linha válida encontrada no arquivo auditado.",
         )
@@ -2060,12 +2060,12 @@ def _parse_audit_xlsx_bytes(
     max_rows: int,
 ) -> tuple[list[dict], dict[str, str], str]:
     if not file_bytes:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_EMPTY_FILE,
             "O arquivo auditado está vazio.",
         )
     if len(file_bytes) > int(max_bytes):
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_PAYLOAD_TOO_LARGE,
             "O arquivo auditado excede o limite de tamanho permitido.",
         )
@@ -2073,17 +2073,17 @@ def _parse_audit_xlsx_bytes(
         if zipfile.is_zipfile(io.BytesIO(file_bytes)):
             with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
                 if archive.testzip() is not None:
-                    raise CleideAuditBatchError(
+                    raise AgenteComparaBatchError(
                         ERROR_AUDIT_PARSE_FAILED,
                         "Arquivo XLSX auditado corrompido.",
                     )
         from openpyxl import load_workbook
 
         workbook = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-    except CleideAuditBatchError:
+    except AgenteComparaBatchError:
         raise
     except Exception as exc:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_PARSE_FAILED,
             "Não foi possível ler o arquivo XLSX auditado.",
         ) from exc
@@ -2093,7 +2093,7 @@ def _parse_audit_xlsx_bytes(
         if AUDIT_BATCH_SHEET_NAME in workbook.sheetnames:
             sheet = workbook[AUDIT_BATCH_SHEET_NAME]
         else:
-            raise CleideAuditBatchError(
+            raise AgenteComparaBatchError(
                 ERROR_AUDIT_INVALID_SHEET,
                 f"A aba '{AUDIT_BATCH_SHEET_NAME}' é obrigatória no arquivo XLSX auditado.",
             )
@@ -4149,7 +4149,7 @@ def _audit_batch_effective_needs_reprocess(audit_batch) -> bool:
 
 def _audit_batch_should_bill_operational_run(audit_batch) -> bool:
     """
-    Linhas da planilha auditada são cobradas no upload (cleide_audit_batch_upload).
+    Linhas da planilha auditada são cobradas no upload (agente_compara_batch_upload).
     O processamento só gera débito operacional em reprocessamento explícito.
     """
     if not isinstance(audit_batch, dict):
@@ -4980,12 +4980,12 @@ def compute_audit_outputs(record: dict, normalized_rows: list[dict]) -> dict:
 def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict:
     started_at = time.perf_counter()
     emitted_processing_event = [False]
-    execution_id = _resolve_cleide_audit_execution_id()
+    execution_id = _resolve_agente_compara_execution_id()
     _require_session()
     sync_temp_table_with_session_documents()
     active_id = get_temp_table_id(session)
     if not active_id:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Nenhuma tabela temporária ativa nesta sessão.",
         )
@@ -4995,18 +4995,18 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
     if record is None:
         clear_temp_table_session_refs(session)
         _mark_session_modified()
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Tabela temporária ativa não encontrada.",
         )
     status = (record.get("status") or "").strip().lower()
     if status == TEMP_TABLE_STATUS_EXPIRED:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_EXPIRED,
             "A tabela temporária desta sessão expirou.",
         )
     if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Tabela temporária indisponível para processamento.",
         )
@@ -5014,13 +5014,13 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
 
     audit_batch = record.get("audit_batch")
     if not isinstance(audit_batch, dict):
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_BATCH_NOT_FOUND,
             "Nenhum lote auditado foi enviado nesta sessão.",
         )
     normalized_rows = audit_batch.get("normalized_rows")
     if not isinstance(normalized_rows, list) or not normalized_rows:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_BATCH_EMPTY,
             "O lote auditado não possui linhas normalizadas para processar.",
         )
@@ -5054,7 +5054,7 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
     saved = save_temp_table_record(updated)
     public = _public_temp_table(saved)
     if public is None:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Não foi possível retornar a tabela temporária processada.",
         )
@@ -5065,11 +5065,11 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
         billing_summary = f"processed_rows={processed_rows}"
     audit_batch_id = str(audit_batch.get("audit_batch_id") or "")
     if should_bill_operational_run:
-        _emit_cleide_audit_operational_billing(
+        _emit_agente_compara_operational_billing(
             emitted=emitted_processing_event,
             started_at=started_at,
-            flow_type=CLEIDE_AUDIT_BATCH_PROCESSED_FLOW_TYPE,
-            idempotency_key=cleide_audit_batch_run_idempotency_key(active_id, audit_batch_id, execution_id),
+            flow_type=AGENTE_COMPARA_BATCH_PROCESSED_FLOW_TYPE,
+            idempotency_key=agente_compara_batch_run_idempotency_key(active_id, audit_batch_id, execution_id),
             rows_processed=rows_evaluated,
             status="success",
             error_summary=billing_summary,
@@ -5178,7 +5178,7 @@ def _public_audit_batch(audit_batch) -> dict | None:
     }
 
 
-def get_cleide_audit_template_path():
+def get_agente_compara_template_path():
     from pathlib import Path
 
     from flask import current_app
@@ -5187,7 +5187,7 @@ def get_cleide_audit_template_path():
         Path(current_app.root_path)
         / "protected_files"
         / "templates"
-        / CLEIDE_AUDIT_TEMPLATE_FILENAME
+        / AGENTE_COMPARA_TEMPLATE_FILENAME
     )
     return template_path
 
@@ -5207,19 +5207,19 @@ def upload_audit_batch_from_file(
     """
     started_at = time.perf_counter()
     emitted_processing_event = [False]
-    execution_id = _resolve_cleide_audit_execution_id()
+    execution_id = _resolve_agente_compara_execution_id()
     _require_session()
     if not file_bytes:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_EMPTY_FILE,
             "O arquivo auditado está vazio.",
         )
     cfg = get_cleiton_doc_config()
-    audit_cfg = get_cleide_audit_config()
+    audit_cfg = get_agente_compara_config()
     audit_limits = resolve_audited_file_limits(audit_cfg, global_cfg=cfg)
     max_bytes = int(audit_limits["effective_max_bytes"] or 0)
     if len(file_bytes) > max_bytes:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_PAYLOAD_TOO_LARGE,
             "O arquivo auditado excede o limite de tamanho permitido.",
         )
@@ -5228,12 +5228,12 @@ def upload_audit_batch_from_file(
     if not ext.startswith("."):
         ext = f".{ext}" if ext else ""
     if ext == ".pdf":
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_INVALID_FORMAT,
             "Upload do arquivo auditado aceita apenas CSV e XLSX nesta fase.",
         )
     if ext not in {".csv", ".xlsx"}:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_INVALID_FORMAT,
             "Upload do arquivo auditado aceita apenas CSV e XLSX nesta fase.",
         )
@@ -5241,7 +5241,7 @@ def upload_audit_batch_from_file(
     sync_temp_table_with_session_documents()
     active_id = get_temp_table_id(session)
     if not active_id:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Nenhuma tabela temporária ativa nesta sessão.",
         )
@@ -5250,18 +5250,18 @@ def upload_audit_batch_from_file(
     if record is None:
         clear_temp_table_session_refs(session)
         _mark_session_modified()
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Tabela temporária ativa não encontrada.",
         )
     status = (record.get("status") or "").strip().lower()
     if status == TEMP_TABLE_STATUS_EXPIRED:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_EXPIRED,
             "A tabela temporária desta sessão expirou.",
         )
     if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Tabela temporária indisponível para upload do arquivo auditado.",
         )
@@ -5313,7 +5313,7 @@ def upload_audit_batch_from_file(
 
     saved = save_temp_table_record(updated)
     logger.info(
-        "Cleide audit batch upload: temp_table_id=%s user_id=%s rows=%s max_rows=%s",
+        "Agente Compara audit batch upload: temp_table_id=%s user_id=%s rows=%s max_rows=%s",
         saved.get("temp_table_id"),
         user_scope,
         len(normalized_rows),
@@ -5321,15 +5321,15 @@ def upload_audit_batch_from_file(
     )
     public = _public_temp_table(saved)
     if public is None:
-        raise CleideAuditBatchError(
+        raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Não foi possível retornar a tabela temporária atualizada.",
         )
-    _emit_cleide_audit_operational_billing(
+    _emit_agente_compara_operational_billing(
         emitted=emitted_processing_event,
         started_at=started_at,
-        flow_type=CLEIDE_AUDIT_BATCH_UPLOAD_FLOW_TYPE,
-        idempotency_key=cleide_audit_batch_upload_idempotency_key(active_id, batch_id),
+        flow_type=AGENTE_COMPARA_BATCH_UPLOAD_FLOW_TYPE,
+        idempotency_key=agente_compara_batch_upload_idempotency_key(active_id, batch_id),
         rows_processed=len(normalized_rows),
         status="success",
         execution_id=execution_id,
@@ -5531,7 +5531,7 @@ def _sanitize_freight_table_context(raw_context) -> dict:
 
 def _validate_freight_table_item_for_save(item) -> dict:
     if not isinstance(item, dict):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Cada item de freight_tables deve ser um objeto.",
         )
@@ -5539,19 +5539,19 @@ def _validate_freight_table_item_for_save(item) -> dict:
     columns: list[str] = []
     if raw_columns is not None:
         if not isinstance(raw_columns, list):
-            raise CleideAuditTempTableError(
+            raise AgenteComparaTempTableError(
                 ERROR_TEMP_TABLE_INVALID_PAYLOAD,
                 "freight_tables.columns deve ser uma lista.",
             )
         for col in raw_columns:
             if not isinstance(col, str):
-                raise CleideAuditTempTableError(
+                raise AgenteComparaTempTableError(
                     ERROR_TEMP_TABLE_INVALID_PAYLOAD,
                     "Nome de coluna inválido.",
                 )
             candidate = _sanitize_cell_string(col)
             if not candidate:
-                raise CleideAuditTempTableError(
+                raise AgenteComparaTempTableError(
                     ERROR_TEMP_TABLE_INVALID_PAYLOAD,
                     "Coluna sem nome não é permitida.",
                 )
@@ -5560,13 +5560,13 @@ def _validate_freight_table_item_for_save(item) -> dict:
     rows: list[dict] = []
     if raw_rows is not None:
         if not isinstance(raw_rows, list):
-            raise CleideAuditTempTableError(
+            raise AgenteComparaTempTableError(
                 ERROR_TEMP_TABLE_INVALID_PAYLOAD,
                 "freight_tables.rows deve ser uma lista.",
             )
         for row in raw_rows:
             if not isinstance(row, dict):
-                raise CleideAuditTempTableError(
+                raise AgenteComparaTempTableError(
                     ERROR_TEMP_TABLE_INVALID_PAYLOAD,
                     "Cada linha de freight_tables deve ser um objeto.",
                 )
@@ -5589,17 +5589,17 @@ def _validate_freight_table_item_for_save(item) -> dict:
             if normalized_row:
                 rows.append(normalized_row)
     if not columns and not rows:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Tabela principal não pode ficar completamente vazia.",
         )
     if columns and not rows:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Tabela principal não pode ficar sem linhas.",
         )
     if rows and not columns:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Tabela principal não pode ficar sem colunas.",
         )
@@ -5619,7 +5619,7 @@ def _validate_freight_tables_for_save(raw_tables) -> list[dict]:
     if raw_tables is None:
         return []
     if not isinstance(raw_tables, list):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "freight_tables deve ser uma lista.",
         )
@@ -5985,7 +5985,7 @@ def _parse_optional_rate(value) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Alíquota fiscal inválida.",
         )
@@ -5996,12 +5996,12 @@ def _parse_optional_rate(value) -> float | None:
     try:
         parsed = Decimal(text)
     except (InvalidOperation, ValueError):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Alíquota fiscal inválida.",
         ) from None
     if parsed < 0:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Alíquota fiscal inválida.",
         )
@@ -6019,7 +6019,7 @@ def _normalize_tax_rate_for_compare(value) -> Decimal | None:
 
 def _validate_tax_config_for_save(raw_tax_config) -> dict:
     if not isinstance(raw_tax_config, dict):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "tax_config deve ser um objeto.",
         )
@@ -6029,28 +6029,28 @@ def _validate_tax_config_for_save(raw_tax_config) -> dict:
 
     origin_uf = _normalize_uf(raw_tax_config.get("origin_uf"))
     if not origin_uf:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "UF origem é obrigatória para incluir impostos.",
         )
     origin_city = _sanitize_cell_string(raw_tax_config.get("origin_city"))
     iss_rate = _parse_optional_rate(raw_tax_config.get("iss_rate"))
     if iss_rate is not None and not origin_city:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Cidade origem é obrigatória quando ISS estiver preenchido.",
         )
 
     raw_rates = raw_tax_config.get("icms_rates") or []
     if not isinstance(raw_rates, list):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "tax_config.icms_rates deve ser uma lista.",
         )
     incoming_rates: dict[str, float | None] = {}
     for item in raw_rates:
         if not isinstance(item, dict):
-            raise CleideAuditTempTableError(
+            raise AgenteComparaTempTableError(
                 ERROR_TEMP_TABLE_INVALID_PAYLOAD,
                 "Cada item de tax_config.icms_rates deve ser um objeto.",
             )
@@ -6063,7 +6063,7 @@ def _validate_tax_config_for_save(raw_tax_config) -> dict:
     destination_ufs: list[dict] | None = None
     if raw_destination_ufs is not None:
         if not isinstance(raw_destination_ufs, list):
-            raise CleideAuditTempTableError(
+            raise AgenteComparaTempTableError(
                 ERROR_TEMP_TABLE_INVALID_PAYLOAD,
                 "tax_config.destination_ufs deve ser uma lista.",
             )
@@ -6072,7 +6072,7 @@ def _validate_tax_config_for_save(raw_tax_config) -> dict:
         for item in raw_destination_ufs:
             normalized = _normalize_tax_destination_entry(item)
             if not normalized:
-                raise CleideAuditTempTableError(
+                raise AgenteComparaTempTableError(
                     ERROR_TEMP_TABLE_INVALID_PAYLOAD,
                     "Cada item de tax_config.destination_ufs deve conter uma UF válida.",
                 )
@@ -6148,7 +6148,7 @@ def _validate_freight_routes_for_save(raw_routes) -> list[dict]:
     if raw_routes is None:
         return []
     if not isinstance(raw_routes, list):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "freight_routes deve ser uma lista.",
         )
@@ -6156,7 +6156,7 @@ def _validate_freight_routes_for_save(raw_routes) -> list[dict]:
         return []
     normalized = _normalize_freight_routes(raw_routes)
     if not normalized:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "freight_routes inválido.",
         )
@@ -6799,7 +6799,7 @@ def _derive_accessorial_fee_fields(item: dict) -> dict:
         item.get("calculation_base_id")
     ) is not None
     try:
-        calculation_bases = get_cleide_audit_config().calculation_bases
+        calculation_bases = get_agente_compara_config().calculation_bases
         configured_base = (
             get_active_calculation_base_by_id(item.get("calculation_base_id"), calculation_bases)
             if has_explicit_base_id
@@ -6823,7 +6823,7 @@ def _derive_accessorial_fee_fields(item: dict) -> dict:
             )
         )
     except Exception:
-        logger.exception("Falha ao resolver base de cálculo configurada da Cleide Auditoria.")
+        logger.exception("Falha ao resolver base de cálculo configurada da Agente Compara.")
         configured_base_result = {"status": "not_found", "base": None}
 
     configured_base = configured_base_result.get("base")
@@ -7168,7 +7168,7 @@ def _validate_accessorial_fees_for_save(raw_fees) -> list[dict]:
     if raw_fees is None:
         return []
     if not isinstance(raw_fees, list):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "accessorial_fees deve ser uma lista.",
         )
@@ -7176,7 +7176,7 @@ def _validate_accessorial_fees_for_save(raw_fees) -> list[dict]:
         return []
     normalized = _normalize_accessorial_fees(raw_fees)
     if len(normalized) != len(raw_fees):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "accessorial_fees inválido.",
         )
@@ -7555,7 +7555,7 @@ def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
     if not isinstance(accessorial_fees, list):
         return
     active_bases = get_active_calculation_bases_for_runtime(
-        get_cleide_audit_config().calculation_bases
+        get_agente_compara_config().calculation_bases
     )
     active_bases_by_id = {
         str(base.get("id") or "").strip(): base
@@ -7582,7 +7582,7 @@ def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
         if error is not None:
             errors.append(error)
     if errors:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES,
             ERROR_ACCESSORIAL_ADVANCE_MESSAGE,
             errors=errors,
@@ -7592,7 +7592,7 @@ def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
 def _assert_temp_table_scope(record: dict, *, user_scope=None, franquia_scope=None) -> None:
     record_user = record.get("user_scope")
     if record_user is not None and user_scope is not None and record_user != user_scope:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_SCOPE_MISMATCH,
             "Escopo de usuário não autorizado para esta tabela temporária.",
         )
@@ -7602,7 +7602,7 @@ def _assert_temp_table_scope(record: dict, *, user_scope=None, franquia_scope=No
         and franquia_scope is not None
         and record_franquia != franquia_scope
     ):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_SCOPE_MISMATCH,
             "Escopo de franquia não autorizado para esta tabela temporária.",
         )
@@ -7610,36 +7610,36 @@ def _assert_temp_table_scope(record: dict, *, user_scope=None, franquia_scope=No
 
 def _validate_temp_table_save_payload(payload, *, content_length: int | None = None) -> dict:
     if content_length is not None and content_length > TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE,
             "Payload de edição excede o limite permitido.",
         )
     if not isinstance(payload, dict):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Payload deve ser um objeto JSON.",
         )
     try:
         serialized = json.dumps(payload, ensure_ascii=False)
     except (TypeError, ValueError):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Payload JSON inválido.",
         ) from None
     if len(serialized.encode("utf-8")) > TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE,
             "Payload de edição excede o limite permitido.",
         )
     temp_table_id = payload.get("temp_table_id")
     if not isinstance(temp_table_id, str) or not temp_table_id.strip():
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "temp_table_id é obrigatório.",
         )
     edit_target = payload.get("edit_target")
     if not isinstance(edit_target, dict):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "edit_target é obrigatório.",
         )
@@ -7648,7 +7648,7 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
         TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE,
         TEMP_TABLE_REVIEW_ACTION_SAVE_DRAFT,
     }:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "review_action inválida.",
         )
@@ -7700,7 +7700,7 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
         or has_coverage_table_key
         or has_tax_config_key
     ):
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "edit_target deve conter ao menos uma seção editável.",
         )
@@ -7741,12 +7741,12 @@ def save_temp_table_edit(
     sync_temp_table_with_session_documents()
     active_id = get_temp_table_id(session)
     if not active_id:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_NOT_FOUND,
             "Nenhuma tabela temporária ativa nesta sessão.",
         )
     if validated["temp_table_id"] != active_id:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_ID_MISMATCH,
             "temp_table_id não corresponde à tabela temporária ativa da sessão.",
         )
@@ -7755,18 +7755,18 @@ def save_temp_table_edit(
     if record is None:
         clear_temp_table_session_refs(session)
         _mark_session_modified()
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_NOT_FOUND,
             "Tabela temporária ativa não encontrada.",
         )
     status = (record.get("status") or "").strip().lower()
     if status == TEMP_TABLE_STATUS_EXPIRED:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_EXPIRED,
             "A tabela temporária desta sessão expirou.",
         )
     if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_NOT_FOUND,
             "Tabela temporária indisponível para revisão.",
         )
@@ -7864,7 +7864,7 @@ def save_temp_table_edit(
 
     saved = save_temp_table_record(updated)
     logger.info(
-        "Cleide temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s coverage_rows=%s taxes=%s",
+        "Agente Compara temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s coverage_rows=%s taxes=%s",
         saved.get("temp_table_id"),
         user_scope,
         updated.get("human_review_status"),
@@ -7876,7 +7876,7 @@ def save_temp_table_edit(
     )
     public = _public_temp_table(saved)
     if public is None:
-        raise CleideAuditTempTableError(
+        raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_NOT_FOUND,
             "Não foi possível retornar a tabela temporária atualizada.",
         )
@@ -8007,7 +8007,7 @@ def invalidate_temp_table_if_source_changed(
         _mark_session_modified()
         return
     source_docs = list(record.get("source_documents") or [])
-    active_ids = set(get_cleide_audit_doc_ids(session))
+    active_ids = set(get_agente_compara_doc_ids(session))
     if removed_doc_id and removed_doc_id in source_docs:
         invalidate_temp_table_for_session(reason=reason)
         return
@@ -8072,7 +8072,7 @@ def sync_temp_table_with_session_documents() -> None:
         clear_temp_table_session_refs(session)
         _mark_session_modified()
         return
-    active_ids = set(get_cleide_audit_doc_ids(session))
+    active_ids = set(get_agente_compara_doc_ids(session))
     source_docs = list(record.get("source_documents") or [])
     if source_docs and not all(doc_id in active_ids for doc_id in source_docs):
         invalidate_temp_table_for_session(reason=TEMP_TABLE_STATUS_DISCARDED)
@@ -8126,7 +8126,7 @@ def mark_temp_table_processing(source_doc_ids: list[str], *, user_scope=None, fr
         "created_at": now.isoformat(),
         "updated_at": now.isoformat(),
         "expires_at": _temp_table_expires_at(normalized),
-        "session_scope": CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+        "session_scope": AGENTE_COMPARA_DOC_IDS_SESSION_KEY,
         "franquia_scope": franquia_scope,
         "user_scope": user_scope,
         "operational_owner": TEMP_TABLE_OPERATIONAL_OWNER,
@@ -8827,7 +8827,7 @@ def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
         "created_at": created_at,
         "updated_at": now,
         "expires_at": _temp_table_expires_at(_normalize_source_doc_ids(source_doc_ids)),
-        "session_scope": CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
+        "session_scope": AGENTE_COMPARA_DOC_IDS_SESSION_KEY,
         "franquia_scope": normalized.get("franquia_scope"),
         "user_scope": normalized.get("user_scope"),
         "operational_owner": TEMP_TABLE_OPERATIONAL_OWNER,
@@ -8903,7 +8903,7 @@ def apply_temp_table_extraction_from_model_payload(
         force_overwrite=force_overwrite,
     ):
         logger.info(
-            "Cleide temp_table extraction skipped because human-reviewed artifact already exists "
+            "Agente Compara temp_table extraction skipped because human-reviewed artifact already exists "
             "(temp_table_id=%s edit_version=%s human_review_status=%s).",
             existing.get("temp_table_id") if existing else None,
             (existing or {}).get("edit_version"),
@@ -8938,24 +8938,24 @@ def split_temp_table_block_from_answer(answer_text: str) -> tuple[str, dict | No
 
 
 def build_document_status_metadata() -> dict:
-    """Metadados básicos para futuro endpoint de status da Cleide Auditoria."""
+    """Metadados básicos para futuro endpoint de status da Agente Compara."""
     _require_session()
     maybe_cleanup_expired_cleiton_docs()
     sync_temp_table_with_session_documents()
     totals = get_document_session_totals()
     temp_table = get_active_temp_table_for_session()
     return {
-        "domain": CLEIDE_AUDIT_DOMAIN,
+        "domain": AGENTE_COMPARA_DOMAIN,
         "flow_types": {
-            "upload": CLEIDE_AUDIT_DOCUMENT_UPLOAD_FLOW_TYPE,
-            "prepare": CLEIDE_AUDIT_DOCUMENT_PREPARE_FLOW_TYPE,
-            "chat": CLEIDE_AUDIT_CHAT_FLOW_TYPE,
-            "temp_table_extraction": CLEIDE_AUDIT_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
+            "upload": AGENTE_COMPARA_DOCUMENT_UPLOAD_FLOW_TYPE,
+            "prepare": AGENTE_COMPARA_DOCUMENT_PREPARE_FLOW_TYPE,
+            "chat": AGENTE_COMPARA_CHAT_FLOW_TYPE,
+            "temp_table_extraction": AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
         },
         "documents": get_active_documents_for_session(),
         "temp_table": temp_table,
         "calculation_bases": get_active_calculation_bases_for_runtime(
-            get_cleide_audit_config().calculation_bases
+            get_agente_compara_config().calculation_bases
         ),
         "allowed_formats": get_allowed_document_formats(),
         "session": {

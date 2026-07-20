@@ -328,6 +328,20 @@ O resultado da apropriacao do upload expõe:
 
 ## 10. IA, Tokens e Consumo
 
+### 10.1 Auditoria Cleide: linhas e reprocessamento
+
+O fluxo atual usa `apropriar_billing_cleide_operational_flow` com marcador único em `CleitonBillingApropriacao`.
+
+- upload de cobertura cobra as linhas persistidas em `cleide_audit_coverage_upload`;
+- upload do lote auditado cobra suas linhas em `cleide_audit_batch_upload`;
+- o primeiro `audit/run` não cobra novamente o lote já cobrado no upload;
+- novo clique sem lote obsoleto também não cobra;
+- `_audit_batch_should_bill_operational_run` só autoriza `cleide_audit_batch_processed` quando um lote antes processado está em `needs_reprocess` efetivo, inclusive por versão fiscal ou parser tarifário desatualizados;
+- falha anterior à persistência não gera apropriação;
+- repetição da chave idempotente retorna duplicado sem novo débito.
+
+Bloqueios da autorização por franquia retornam o CTA de upgrade quando configurado. Chat documental e chat de insights podem gerar `IaConsumoEvento`, mas não chamam a apropriação de linhas operacionais. Tokens de IA e linhas/tempo de processamento permanecem separados.
+
 Para eventos de IA:
 
 - o consumo tecnico vem de `IaConsumoEvento`
@@ -474,6 +488,8 @@ Estas regras devem ser preservadas em qualquer manutencao futura:
 - nao escrever consumo, limite ou status fora de `Franquia`
 - nao aplicar efeito contratual direto de Stripe sem passar pela camada central do Cleiton
 - nao debitar upload do Roberto sem idempotencia
+- nao debitar novamente o primeiro processamento da Cleide após o upload do lote
+- nao confundir consumo IA do chat com consumo operacional por linhas
 - nao tratar consumo anonimo/sistema como consumo faturavel do cliente
 - nao criar bypass de governanca para planos pagos, trial ou franquias multiuser
 - nao assumir que valor comercial do plano e o mesmo que a franquia operacional
@@ -487,6 +503,7 @@ Antes de alterar monetizacao, planos ou franquias, confirmar:
 - a leitura operacional continua baseada em `Franquia`
 - a regua de creditos esta configurada e valida
 - o upload do Roberto continua idempotente
+- uploads e reprocessamento da Cleide continuam idempotentes
 - eventos de IA e processamento continuam conciliaveis
 - Stripe continua como fonte de fatos, nao como fonte de verdade operacional
 - observabilidade e trilhas append-only continuam preservadas

@@ -179,18 +179,21 @@ def test_cleide_auditoria_menu_tem_atalhos_esperados(monkeypatch):
         home_href = web.url_for("index")
     html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
     menu_start = html.index('id="cleideAuditoriaActionsMenu"')
-    menu_chunk = html[menu_start:menu_start + 1400]
+    menu_chunk = html[menu_start:menu_start + 2200]
     assert "Enviar arquivos" in menu_chunk
     assert "Home" in menu_chunk
     assert f'href="{home_href}"' in menu_chunk
     assert "Previsibilidade Frete" in menu_chunk
     assert "BI Cleide" in menu_chunk
     assert "/cleide-bi-frete" in menu_chunk
+    assert "Compare Tabelas" in menu_chunk
+    assert "/agente-compara" in menu_chunk
     assert "Feed" in menu_chunk
     assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
     assert menu_chunk.index("Home") < menu_chunk.index("Previsibilidade Frete")
     assert menu_chunk.index("Previsibilidade Frete") < menu_chunk.index("BI Cleide")
-    assert menu_chunk.index("BI Cleide") < menu_chunk.index("Feed")
+    assert menu_chunk.index("BI Cleide") < menu_chunk.index("Compare Tabelas")
+    assert menu_chunk.index("Compare Tabelas") < menu_chunk.index("Feed")
 
 
 def test_cleide_auditoria_layout_alinhado_julia_embedded():

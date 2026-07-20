@@ -20,6 +20,8 @@ from app.cleiton_doc_contracts import (
     FIELD_CREATED_AT,
     FIELD_DOC_ID,
     FIELD_EXPIRES_AT,
+    FIELD_SESSION_KEY,
+    FIELD_SOURCE_AGENT,
     TMP_DIR_NAME,
 )
 
@@ -172,6 +174,23 @@ def save_document_record(record: dict) -> None:
     record[FIELD_DOC_ID] = doc_id
     path = _doc_json_path(doc_id)
     _write_json_atomic(path, record)
+
+
+def document_record_matches_domain_scope(
+    record: dict | None,
+    *,
+    expected_source_agent: str,
+    expected_session_key: str,
+) -> bool:
+    """Confirma ownership documental antes de mutações destrutivas."""
+    if not isinstance(record, dict):
+        return False
+    source = str(record.get(FIELD_SOURCE_AGENT) or "").strip()
+    session_key = str(record.get(FIELD_SESSION_KEY) or "").strip()
+    return (
+        source == (expected_source_agent or "").strip()
+        and session_key == (expected_session_key or "").strip()
+    )
 
 
 def peek_document_record(doc_id: str) -> dict | None:

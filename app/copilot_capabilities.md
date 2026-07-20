@@ -333,6 +333,12 @@ O sistema **não possui** e o Copilot **nunca** deve prometer:
 
 ## 12. Síntese para o modelo
 
+### Acesso aos destinos protegidos
+
+`app/capability_taxonomy.py` marca Júlia operacional, Roberto e as superfícies Cleide com `requires_login=True`; somente Feed é destino público da taxonomia. Para visitante anônimo, o backend troca a URL canônica por `/login?next=<destino>` e preserva `canonical_url`. Para autenticado, mantém a URL canônica.
+
+O `next` aceita apenas caminho interno seguro. URLs absolutas, protocol-relative, barra invertida, controles, `/api` e `/admin` são rejeitados. A página `/auditoria-frete` pode renderizar publicamente, mas seus endpoints continuam protegidos e o handoff da taxonomia exige login.
+
 1. Você é Copilot de **discovery**, não executor.
 2. **Intenção define agente**; artefato não define agente.
 3. Roberto = **frente / BI gerencial e preditivo** (`/fretes`); Cleide = **Auditoria de Fretes** (`/auditoria-frete`, `cleide_freight_audit`); BI Cleide anterior (`/cleide-bi-frete`, `cleide_audit`) é **legado**; Júlia = **consultivo-operacional** (+ documentos **logados** como contexto); Feed = **editorial**.

@@ -2,9 +2,9 @@
 
 
 
-{% block title %}Cleide, Auditora Virtual de AgenteFrete{% endblock %}
+{% block title %}Agente Compara — Compare Tabelas{% endblock %}
 
-{% block meta_description %}Auditoria assistida de frete com a Cleide: upload de tabela, conferência e apoio operacional.{% endblock %}
+{% block meta_description %}Compare Tabelas com a Agente Compara: upload de tabela, conferência e apoio operacional.{% endblock %}
 
 
 
@@ -14,37 +14,37 @@
 
 <div class="container mb-5">
 
-  <div class="cleide-auditoria-wrapper cleide-auditoria-embedded" id="cleideAuditoriaShell">
+  <div class="agente-compara-wrapper agente-compara-embedded" id="agenteComparaShell">
 
-    <div class="cleide-auditoria-container">
+    <div class="agente-compara-container">
 
-      <div class="cleide-auditoria-header">
+      <div class="agente-compara-header">
 
         <div class="d-flex align-items-center">
 
-          {% if cleide_avatar_url %}
+          {% if agente_compara_avatar_url %}
 
-          <img src="{{ cleide_avatar_url }}" alt="Cleide" class="cleide-auditoria-avatar me-2" />
+          <img src="{{ agente_compara_avatar_url }}" alt="Agente Compara" class="agente-compara-avatar me-2" />
 
           {% else %}
 
-          <span class="cleide-auditoria-avatar-placeholder me-2"><i class="bi bi-clipboard-check"></i></span>
+          <span class="agente-compara-avatar-placeholder me-2"><i class="bi bi-clipboard-check"></i></span>
 
           {% endif %}
 
           <div>
 
-            <span class="fw-bold cleide-auditoria-name">Cleide, Auditora Virtual de AgenteFrete</span>
+            <span class="fw-bold agente-compara-name">Agente Compara — Compare Tabelas</span>
 
-            <small class="d-block cleide-auditoria-role" style="font-size: 0.75rem;">Atenção: a Cleide é uma IA e pode cometer erros.</small>
+            <small class="d-block agente-compara-role" style="font-size: 0.75rem;">Atenção: a Agente Compara é uma IA e pode cometer erros.</small>
 
           </div>
 
         </div>
 
-        <p class="cleide-auditoria-prep small mb-0 mt-2">
+        <p class="agente-compara-prep small mb-0 mt-2">
 
-          Envie arquivos de apoio para a Cleide analisar nesta conversa.
+          Envie arquivos de apoio para a Agente Compara analisar nesta conversa.
 
         </p>
 
@@ -52,11 +52,11 @@
 
 
 
-      <div class="cleide-auditoria-messages" id="cleideAuditoriaMessages">
+      <div class="agente-compara-messages" id="agenteComparaMessages">
 
-        <div class="cleide-auditoria-welcome small py-3 px-2"
+        <div class="agente-compara-welcome small py-3 px-2"
 
-             id="cleideAuditoriaWelcome"
+             id="agenteComparaWelcome"
 
              data-typewriter-text="Faça o upload da tabela de frete."
 
@@ -70,37 +70,37 @@
 
 
 
-      <div class="cleide-auditoria-input-area">
+      <div class="agente-compara-input-area">
 
-        <form class="cleide-auditoria-form cleide-auditoria-form-with-attach" id="cleideAuditoriaForm" role="form" onsubmit="return false;">
+        <form class="agente-compara-form agente-compara-form-with-attach" id="agenteComparaForm" role="form" onsubmit="return false;">
 
-          <div class="cleide-auditoria-composer-wrap" id="cleideAuditoriaComposerWrap">
+          <div class="agente-compara-composer-wrap" id="agenteComparaComposerWrap">
 
-            <div class="cleide-auditoria-composer" id="cleideAuditoriaComposer">
+            <div class="agente-compara-composer" id="agenteComparaComposer">
 
               <button type="button"
 
-                      class="btn cleide-auditoria-attach-btn"
+                      class="btn agente-compara-attach-btn"
 
-                      id="cleideAuditoriaAttachBtn"
+                      id="agenteComparaAttachBtn"
 
                       aria-label="Abrir menu de ações"
 
                       aria-expanded="false"
 
-                      aria-controls="cleideAuditoriaActionsMenu"
+                      aria-controls="agenteComparaActionsMenu"
 
                       aria-haspopup="menu"
 
                       title="Abrir menu de ações">
 
-                <span class="cleide-auditoria-attach-icon" aria-hidden="true">+</span>
+                <span class="agente-compara-attach-icon" aria-hidden="true">+</span>
 
               </button>
 
               <input type="file"
 
-                     id="cleideAuditFileInput"
+                     id="agenteComparaFileInput"
 
                      class="visually-hidden"
 
@@ -110,9 +110,9 @@
 
                      aria-hidden="true">
 
-              <textarea class="form-control cleide-auditoria-input cleide-auditoria-input--locked"
+              <textarea class="form-control agente-compara-input agente-compara-input--locked"
 
-                        id="cleideAuditoriaInput"
+                        id="agenteComparaInput"
 
                         placeholder="Faça o upload da tabela de frete para liberar o chat."
 
@@ -124,9 +124,9 @@
 
               <button type="button"
 
-                      class="btn btn-primary cleide-auditoria-send"
+                      class="btn btn-primary agente-compara-send"
 
-                      id="cleideAuditoriaSend"
+                      id="agenteComparaSend"
 
                       aria-label="Enviar">
 
@@ -136,21 +136,21 @@
 
             </div>
 
-            <div class="cleide-auditoria-actions-menu"
+            <div class="agente-compara-actions-menu"
 
-                 id="cleideAuditoriaActionsMenu"
+                 id="agenteComparaActionsMenu"
 
                  role="menu"
 
-                 aria-label="Menu de ações da Cleide"
+                 aria-label="Menu de ações da Agente Compara"
 
                  hidden>
 
               <button type="button"
 
-                      class="cleide-actions-item"
+                      class="agente-compara-actions-item"
 
-                      id="cleideAuditoriaUploadItem"
+                      id="agenteComparaUploadItem"
 
                       role="menuitem">
 
@@ -160,9 +160,9 @@
 
               </button>
 
-              <div class="cleide-actions-divider" role="separator" aria-hidden="true"></div>
+              <div class="agente-compara-actions-divider" role="separator" aria-hidden="true"></div>
 
-              <a href="{{ url_for('index') }}" class="cleide-actions-item" role="menuitem">
+              <a href="{{ url_for('index') }}" class="agente-compara-actions-item" role="menuitem">
 
                 <i class="bi bi-house-door" aria-hidden="true"></i>
 
@@ -170,7 +170,7 @@
 
               </a>
 
-              <a href="{{ url_for('fretes') }}" class="cleide-actions-item" role="menuitem">
+              <a href="{{ url_for('fretes') }}" class="agente-compara-actions-item" role="menuitem">
 
                 <i class="bi bi-graph-up" aria-hidden="true"></i>
 
@@ -178,23 +178,15 @@
 
               </a>
 
-              <a href="{{ cleide_bi_href }}" class="cleide-actions-item" role="menuitem">
+              <a href="{{ cleide_bi_href }}" class="agente-compara-actions-item" role="menuitem">
 
                 <i class="bi bi-bar-chart" aria-hidden="true"></i>
 
-                <span>BI Cleide</span>
+                <span>BI Gerencial</span>
 
               </a>
 
-              <a href="{{ url_for('agente_compara.agente_compara_page') if has_endpoint('agente_compara.agente_compara_page') else '/agente-compara' }}" class="cleide-actions-item" role="menuitem">
-
-                <i class="bi bi-table" aria-hidden="true"></i>
-
-                <span>Compare Tabelas</span>
-
-              </a>
-
-              <a href="{{ cleide_feed_href }}" class="cleide-actions-item" role="menuitem">
+              <a href="{{ cleide_feed_href }}" class="agente-compara-actions-item" role="menuitem">
 
                 <i class="bi bi-rss" aria-hidden="true"></i>
 
@@ -210,15 +202,15 @@
 
       </div>
 
-      <div class="cleide-audit-documents-area cleide-audit-documents-area-empty"
+      <div class="agente-compara-documents-area agente-compara-documents-area-empty"
 
-           id="cleideAuditDocumentsPanel"
+           id="agenteComparaDocumentsPanel"
 
            aria-live="polite">
 
-        <div class="cleide-audit-documents-toolbar" id="cleideAuditDocumentsToolbar">
+        <div class="agente-compara-documents-toolbar" id="agenteComparaDocumentsToolbar">
 
-          <p class="cleide-audit-documents-hint small mb-0">
+          <p class="agente-compara-documents-hint small mb-0">
 
             Documentos anexados nesta conversa.
 
@@ -226,9 +218,9 @@
 
           <button type="button"
 
-                  class="btn btn-sm cleide-audit-documents-clear-btn"
+                  class="btn btn-sm agente-compara-documents-clear-btn"
 
-                  id="cleideAuditClearDocuments"
+                  id="agenteComparaClearDocuments"
 
                   aria-label="Limpar todos os documentos anexados"
 
@@ -240,27 +232,27 @@
 
         </div>
 
-        <ul class="cleide-audit-documents-list" id="cleideAuditDocumentsList"></ul>
+        <ul class="agente-compara-documents-list" id="agenteComparaDocumentsList"></ul>
 
-        <div class="cleide-audit-documents-status small" id="cleideAuditUploadStatus" role="status" aria-live="polite"></div>
+        <div class="agente-compara-documents-status small" id="agenteComparaUploadStatus" role="status" aria-live="polite"></div>
 
-        <div class="cleide-audit-documents-error small" id="cleideAuditDocumentsError" role="alert" style="display: none;"></div>
+        <div class="agente-compara-documents-error small" id="agenteComparaDocumentsError" role="alert" style="display: none;"></div>
 
       </div>
 
-      <section class="cleide-audit-bi-section"
+      <section class="agente-compara-bi-section"
 
-               id="cleideAuditBiSection"
+               id="agenteComparaBiSection"
 
-               aria-labelledby="cleideAuditBiTitle"
+               aria-labelledby="agenteComparaBiTitle"
 
                hidden>
 
-        <div class="cleide-audit-bi-header">
+        <div class="agente-compara-bi-header">
 
-          <h2 class="cleide-audit-bi-title" id="cleideAuditBiTitle">BI Executivo da Auditoria de Frete</h2>
+          <h2 class="agente-compara-bi-title" id="agenteComparaBiTitle">BI Executivo do Compare Tabelas</h2>
 
-          <p class="cleide-audit-bi-subtitle small mb-0">
+          <p class="agente-compara-bi-subtitle small mb-0">
 
             Visão financeira da auditoria, com confiança, impacto e concentração das divergências.
 
@@ -268,25 +260,25 @@
 
         </div>
 
-        <div class="cleide-audit-bi-unavailable small" id="cleideAuditBiUnavailable" hidden></div>
+        <div class="agente-compara-bi-unavailable small" id="agenteComparaBiUnavailable" hidden></div>
 
-        <div class="cleide-audit-bi-dashboard" id="cleideAuditBiDashboard" hidden>
+        <div class="agente-compara-bi-dashboard" id="agenteComparaBiDashboard" hidden>
 
-          <div class="cleide-audit-bi-toolbar">
+          <div class="agente-compara-bi-toolbar">
 
-            <div class="cleide-audit-bi-filter-status small" id="cleideAuditBiFilterStatus" aria-live="polite">
+            <div class="agente-compara-bi-filter-status small" id="agenteComparaBiFilterStatus" aria-live="polite">
 
               Filtros inativos. Exibindo visão geral do lote auditado.
 
             </div>
 
-            <div class="cleide-audit-bi-filter-chips-wrap">
+            <div class="agente-compara-bi-filter-chips-wrap">
 
-              <span class="cleide-audit-bi-filter-label">Filtros ativos</span>
+              <span class="agente-compara-bi-filter-label">Filtros ativos</span>
 
-              <div class="cleide-audit-bi-filter-chips" id="cleideAuditBiFilterChips"></div>
+              <div class="agente-compara-bi-filter-chips" id="agenteComparaBiFilterChips"></div>
 
-              <button type="button" class="btn btn-sm cleide-audit-bi-clear-filters-btn" id="cleideAuditBiClearFiltersBtn">
+              <button type="button" class="btn btn-sm agente-compara-bi-clear-filters-btn" id="agenteComparaBiClearFiltersBtn">
 
                 Limpar filtros
 
@@ -294,13 +286,13 @@
 
             </div>
 
-            <div class="cleide-audit-bi-hidden-charts-wrap" id="cleideAuditBiHiddenChartsWrap">
+            <div class="agente-compara-bi-hidden-charts-wrap" id="agenteComparaBiHiddenChartsWrap">
 
-              <span class="cleide-audit-bi-filter-label">Gráficos ocultos</span>
+              <span class="agente-compara-bi-filter-label">Gráficos ocultos</span>
 
-              <div class="cleide-audit-bi-hidden-charts-list" id="cleideAuditBiHiddenChartsList"></div>
+              <div class="agente-compara-bi-hidden-charts-list" id="agenteComparaBiHiddenChartsList"></div>
 
-              <button type="button" class="btn btn-sm cleide-audit-bi-show-all-btn" id="cleideAuditBiShowAllChartsBtn" disabled>
+              <button type="button" class="btn btn-sm agente-compara-bi-show-all-btn" id="agenteComparaBiShowAllChartsBtn" disabled>
 
                 Reexibir todos
 
@@ -310,99 +302,99 @@
 
           </div>
 
-          <p class="cleide-audit-bi-all-hidden-message small" id="cleideAuditBiAllHiddenMessage" hidden>
+          <p class="agente-compara-bi-all-hidden-message small" id="agenteComparaBiAllHiddenMessage" hidden>
 
             Todos os gráficos estão ocultos. Use os controles acima para restaurá-los.
 
           </p>
 
-          <div class="cleide-audit-bi-executive-summary" id="cleideAuditBiExecutiveSummary">
+          <div class="agente-compara-bi-executive-summary" id="agenteComparaBiExecutiveSummary">
 
-            <article class="cleide-audit-bi-confidence-card" id="cleideAuditBiConfidenceCard">
+            <article class="agente-compara-bi-confidence-card" id="agenteComparaBiConfidenceCard">
 
-              <span class="cleide-audit-bi-kpi-label">Confiança da auditoria</span>
+              <span class="agente-compara-bi-kpi-label">Confiança da auditoria</span>
 
-              <strong class="cleide-audit-bi-confidence-value" id="cleideAuditBiConfidenceValue">-</strong>
+              <strong class="agente-compara-bi-confidence-value" id="agenteComparaBiConfidenceValue">-</strong>
 
-              <span class="cleide-audit-bi-confidence-detail" id="cleideAuditBiConfidenceDetail">Aguardando dados financeiros.</span>
+              <span class="agente-compara-bi-confidence-detail" id="agenteComparaBiConfidenceDetail">Aguardando dados financeiros.</span>
 
             </article>
 
-            <div class="cleide-audit-bi-kpi-grid" id="cleideAuditBiKpiGrid"></div>
+            <div class="agente-compara-bi-kpi-grid" id="agenteComparaBiKpiGrid"></div>
 
           </div>
 
-          <div class="cleide-audit-bi-charts-grid" id="cleideAuditBiChartsGrid">
+          <div class="agente-compara-bi-charts-grid" id="agenteComparaBiChartsGrid">
 
-            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="transportadora">
+            <article class="agente-compara-bi-chart-card" data-audit-bi-chart-card="transportadora">
 
-              <div class="cleide-audit-bi-chart-card-header">
+              <div class="agente-compara-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Impacto Financeiro por Transportadora</h3>
+                <h3 class="agente-compara-bi-chart-title">Impacto Financeiro por Transportadora</h3>
 
-                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="transportadora">Ocultar</button>
+                <button type="button" class="btn btn-sm agente-compara-bi-hide-chart-btn" data-audit-bi-hide-chart="transportadora">Ocultar</button>
 
               </div>
 
-              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="transportadora"></div>
+              <div class="agente-compara-bi-chart-note" data-audit-bi-chart-note="transportadora"></div>
 
-              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="transportadora" hidden></div>
+              <div class="agente-compara-bi-chart-empty" data-audit-bi-chart-empty="transportadora" hidden></div>
 
-              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="transportadora"></canvas></div>
+              <div class="agente-compara-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="transportadora"></canvas></div>
 
             </article>
 
-            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="uf_destino">
+            <article class="agente-compara-bi-chart-card" data-audit-bi-chart-card="uf_destino">
 
-              <div class="cleide-audit-bi-chart-card-header">
+              <div class="agente-compara-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Impacto Financeiro por UF Destino</h3>
+                <h3 class="agente-compara-bi-chart-title">Impacto Financeiro por UF Destino</h3>
 
-                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="uf_destino">Ocultar</button>
+                <button type="button" class="btn btn-sm agente-compara-bi-hide-chart-btn" data-audit-bi-hide-chart="uf_destino">Ocultar</button>
 
               </div>
 
-              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="uf_destino"></div>
+              <div class="agente-compara-bi-chart-note" data-audit-bi-chart-note="uf_destino"></div>
 
-              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="uf_destino" hidden></div>
+              <div class="agente-compara-bi-chart-empty" data-audit-bi-chart-empty="uf_destino" hidden></div>
 
-              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="uf_destino"></canvas></div>
+              <div class="agente-compara-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="uf_destino"></canvas></div>
 
             </article>
 
-            <article class="cleide-audit-bi-chart-card cleide-audit-bi-chart-card--wide" data-audit-bi-chart-card="temporal">
+            <article class="agente-compara-bi-chart-card agente-compara-bi-chart-card--wide" data-audit-bi-chart-card="temporal">
 
-              <div class="cleide-audit-bi-chart-card-header">
+              <div class="agente-compara-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Evolução do Impacto Financeiro no Período</h3>
+                <h3 class="agente-compara-bi-chart-title">Evolução do Impacto Financeiro no Período</h3>
 
-                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="temporal">Ocultar</button>
+                <button type="button" class="btn btn-sm agente-compara-bi-hide-chart-btn" data-audit-bi-hide-chart="temporal">Ocultar</button>
 
               </div>
 
-              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="temporal"></div>
+              <div class="agente-compara-bi-chart-note" data-audit-bi-chart-note="temporal"></div>
 
-              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="temporal" hidden></div>
+              <div class="agente-compara-bi-chart-empty" data-audit-bi-chart-empty="temporal" hidden></div>
 
-              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="temporal"></canvas></div>
+              <div class="agente-compara-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="temporal"></canvas></div>
 
             </article>
 
-            <article class="cleide-audit-bi-chart-card" data-audit-bi-chart-card="pareto_transportadora">
+            <article class="agente-compara-bi-chart-card" data-audit-bi-chart-card="pareto_transportadora">
 
-              <div class="cleide-audit-bi-chart-card-header">
+              <div class="agente-compara-bi-chart-card-header">
 
-                <h3 class="cleide-audit-bi-chart-title">Pareto do Valor Cobrado a Mais</h3>
+                <h3 class="agente-compara-bi-chart-title">Pareto do Valor Cobrado a Mais</h3>
 
-                <button type="button" class="btn btn-sm cleide-audit-bi-hide-chart-btn" data-audit-bi-hide-chart="pareto_transportadora">Ocultar</button>
+                <button type="button" class="btn btn-sm agente-compara-bi-hide-chart-btn" data-audit-bi-hide-chart="pareto_transportadora">Ocultar</button>
 
               </div>
 
-              <div class="cleide-audit-bi-chart-note" data-audit-bi-chart-note="pareto_transportadora"></div>
+              <div class="agente-compara-bi-chart-note" data-audit-bi-chart-note="pareto_transportadora"></div>
 
-              <div class="cleide-audit-bi-chart-empty" data-audit-bi-chart-empty="pareto_transportadora" hidden></div>
+              <div class="agente-compara-bi-chart-empty" data-audit-bi-chart-empty="pareto_transportadora" hidden></div>
 
-              <div class="cleide-audit-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="pareto_transportadora"></canvas></div>
+              <div class="agente-compara-bi-chart-wrap"><canvas data-audit-bi-chart-canvas="pareto_transportadora"></canvas></div>
 
             </article>
 
@@ -410,7 +402,7 @@
 
         </div>
 
-        <div class="cleide-audit-bi-content" id="cleideAuditBiContent" aria-live="polite" hidden></div>
+        <div class="agente-compara-bi-content" id="agenteComparaBiContent" aria-live="polite" hidden></div>
 
       </section>
 
@@ -422,79 +414,79 @@
 
 
 
-<div class="cleide-audit-temp-table-modal"
+<div class="agente-compara-temp-table-modal"
 
-     id="cleideAuditTempTableModal"
+     id="agenteComparaTempTableModal"
 
      role="dialog"
 
      aria-modal="true"
 
-     aria-labelledby="cleideAuditTempTableModalTitle"
+     aria-labelledby="agenteComparaTempTableModalTitle"
 
      hidden>
 
-  <div class="cleide-audit-temp-table-modal-backdrop" id="cleideAuditTempTableModalBackdrop"></div>
+  <div class="agente-compara-temp-table-modal-backdrop" id="agenteComparaTempTableModalBackdrop"></div>
 
-  <div class="cleide-audit-temp-table-modal-dialog">
+  <div class="agente-compara-temp-table-modal-dialog">
 
-    <div class="cleide-audit-temp-table-modal-header">
+    <div class="agente-compara-temp-table-modal-header">
 
-      <div class="cleide-audit-temp-table-modal-header-main">
+      <div class="agente-compara-temp-table-modal-header-main">
 
-        <h2 class="cleide-audit-temp-table-modal-title" id="cleideAuditTempTableModalTitle">Tabela temporária gerada</h2>
+        <h2 class="agente-compara-temp-table-modal-title" id="agenteComparaTempTableModalTitle">Tabela temporária gerada</h2>
 
-        <p class="cleide-audit-temp-table-modal-subtitle" id="cleideAuditTempTableModalSubtitle">Revise os dados extraídos antes de continuar.</p>
+        <p class="agente-compara-temp-table-modal-subtitle" id="agenteComparaTempTableModalSubtitle">Revise os dados extraídos antes de continuar.</p>
 
       </div>
 
       <button type="button"
-              class="cleide-audit-temp-table-modal-close-btn"
-              id="cleideAuditTempTableModalClose"
+              class="agente-compara-temp-table-modal-close-btn"
+              id="agenteComparaTempTableModalClose"
               aria-label="Fechar modal">
         <span aria-hidden="true">&times;</span>
       </button>
 
     </div>
 
-    <div class="cleide-audit-temp-table-modal-body" id="cleideAuditTempTableModalBody"></div>
+    <div class="agente-compara-temp-table-modal-body" id="agenteComparaTempTableModalBody"></div>
 
-    <div class="cleide-audit-temp-table-modal-edit-banner"
-         id="cleideAuditTempTableModalEditBanner"
+    <div class="agente-compara-temp-table-modal-edit-banner"
+         id="agenteComparaTempTableModalEditBanner"
          role="status"
          hidden>
       Modo edição ativo
     </div>
 
-    <div class="cleide-audit-temp-table-modal-error small"
-         id="cleideAuditTempTableModalError"
+    <div class="agente-compara-temp-table-modal-error small"
+         id="agenteComparaTempTableModalError"
          role="alert"
          hidden></div>
 
-    <div class="cleide-audit-temp-table-modal-footer">
+    <div class="agente-compara-temp-table-modal-footer">
 
       <button type="button"
-              class="btn btn-sm cleide-audit-temp-table-modal-cancel-edit-btn"
-              id="cleideAuditTempTableModalCancelEdit"
+              class="btn btn-sm agente-compara-temp-table-modal-cancel-edit-btn"
+              id="agenteComparaTempTableModalCancelEdit"
               hidden>
         Cancelar edição
       </button>
 
       <button type="button"
-              class="btn btn-sm cleide-audit-temp-table-modal-edit-btn"
-              id="cleideAuditTempTableModalEdit">
+              class="btn btn-sm agente-compara-temp-table-modal-edit-btn"
+              id="agenteComparaTempTableModalEdit">
         Editar
       </button>
 
       <button type="button"
-              class="btn btn-sm cleide-audit-temp-table-modal-start-audit-btn"
-              id="cleideAuditTempTableModalStartAudit">
+              class="btn btn-sm agente-compara-temp-table-modal-start-audit-btn"
+              id="agenteComparaTempTableModalStartAudit">
         Iniciar Auditoria
       </button>
 
       <button type="button"
-              class="btn btn-sm cleide-audit-temp-table-modal-save-btn"
-              id="cleideAuditTempTableModalSave">
+              class="btn btn-sm agente-compara-temp-table-modal-save-btn"
+              id="agenteComparaTempTableModalSave">
         Salvar e Avançar
       </button>
 
@@ -508,7 +500,7 @@
 
 <style>
 
-  .cleide-auditoria-wrapper.cleide-auditoria-embedded {
+  .agente-compara-wrapper.agente-compara-embedded {
 
     border: none;
 
@@ -522,7 +514,7 @@
 
   }
 
-  .cleide-auditoria-container {
+  .agente-compara-container {
 
     display: flex;
 
@@ -534,7 +526,7 @@
 
   }
 
-  .cleide-auditoria-embedded .cleide-auditoria-header {
+  .agente-compara-embedded .agente-compara-header {
 
     padding: 0 0 0.85rem;
 
@@ -546,11 +538,11 @@
 
   }
 
-  .cleide-auditoria-name { color: var(--af-text-primary, #F0F0F5) !important; }
+  .agente-compara-name { color: var(--af-text-primary, #F0F0F5) !important; }
 
-  .cleide-auditoria-role { color: var(--af-text-secondary, #8A8AA3) !important; }
+  .agente-compara-role { color: var(--af-text-secondary, #8A8AA3) !important; }
 
-  .cleide-auditoria-prep {
+  .agente-compara-prep {
 
     color: var(--af-text-muted, #5A5A72);
 
@@ -558,7 +550,7 @@
 
   }
 
-  .cleide-auditoria-avatar {
+  .agente-compara-avatar {
 
     width: 36px;
 
@@ -572,7 +564,7 @@
 
   }
 
-  .cleide-auditoria-avatar-placeholder {
+  .agente-compara-avatar-placeholder {
 
     width: 36px;
 
@@ -594,7 +586,7 @@
 
   }
 
-  .cleide-auditoria-embedded .cleide-auditoria-messages {
+  .agente-compara-embedded .agente-compara-messages {
 
     background: transparent;
 
@@ -608,7 +600,7 @@
 
   }
 
-  .cleide-auditoria-welcome {
+  .agente-compara-welcome {
 
     color: var(--af-text-secondary, #8A8AA3);
 
@@ -622,7 +614,7 @@
 
   }
 
-  .cleide-auditoria-embedded .cleide-auditoria-input-area {
+  .agente-compara-embedded .agente-compara-input-area {
 
     padding: 0;
 
@@ -634,13 +626,13 @@
 
   }
 
-  .cleide-auditoria-embedded .cleide-auditoria-form {
+  .agente-compara-embedded .agente-compara-form {
 
     overflow: visible;
 
   }
 
-  .cleide-auditoria-composer-wrap {
+  .agente-compara-composer-wrap {
 
     position: relative;
 
@@ -650,7 +642,7 @@
 
   }
 
-  .cleide-auditoria-composer {
+  .agente-compara-composer {
 
     display: flex;
 
@@ -672,7 +664,7 @@
 
   }
 
-  .cleide-auditoria-composer:focus-within {
+  .agente-compara-composer:focus-within {
 
     border-color: var(--af-cyan-bright, #00D4FF);
 
@@ -680,7 +672,7 @@
 
   }
 
-  .cleide-auditoria-form-with-attach .cleide-auditoria-input {
+  .agente-compara-form-with-attach .agente-compara-input {
 
     flex: 1 1 auto;
 
@@ -714,13 +706,13 @@
 
   }
 
-  .cleide-auditoria-form-with-attach .cleide-auditoria-input::placeholder {
+  .agente-compara-form-with-attach .agente-compara-input::placeholder {
 
     color: var(--af-text-muted, #5A5A72);
 
   }
 
-  .cleide-auditoria-form-with-attach .cleide-auditoria-input:focus {
+  .agente-compara-form-with-attach .agente-compara-input:focus {
 
     box-shadow: none !important;
 
@@ -728,7 +720,7 @@
 
   }
 
-  .cleide-auditoria-input:disabled {
+  .agente-compara-input:disabled {
 
     opacity: 0.72;
 
@@ -736,7 +728,7 @@
 
   }
 
-  .cleide-auditoria-input--locked {
+  .agente-compara-input--locked {
 
     opacity: 0.72;
 
@@ -744,13 +736,13 @@
 
   }
 
-  .cleide-auditoria-composer--chat-locked .cleide-auditoria-input--locked::placeholder {
+  .agente-compara-composer--chat-locked .agente-compara-input--locked::placeholder {
 
     color: var(--af-text-muted, #5A5A72);
 
   }
 
-  .cleide-auditoria-attach-btn {
+  .agente-compara-attach-btn {
 
     flex: 0 0 auto;
 
@@ -782,7 +774,7 @@
 
   }
 
-  .cleide-auditoria-attach-icon {
+  .agente-compara-attach-icon {
 
     display: inline-flex;
 
@@ -806,15 +798,15 @@
 
   }
 
-  .cleide-auditoria-attach-btn[aria-expanded="true"] .cleide-auditoria-attach-icon {
+  .agente-compara-attach-btn[aria-expanded="true"] .agente-compara-attach-icon {
 
     transform: rotate(45deg);
 
   }
 
-  .cleide-auditoria-attach-btn:hover,
+  .agente-compara-attach-btn:hover,
 
-  .cleide-auditoria-attach-btn:focus {
+  .agente-compara-attach-btn:focus {
 
     background: rgba(0, 191, 255, 0.14) !important;
 
@@ -824,15 +816,15 @@
 
   }
 
-  .cleide-auditoria-attach-btn.is-open,
+  .agente-compara-attach-btn.is-open,
 
-  .cleide-auditoria-attach-btn[aria-expanded="true"] {
+  .agente-compara-attach-btn[aria-expanded="true"] {
 
     color: var(--af-cyan, #00BFFF) !important;
 
   }
 
-  .cleide-auditoria-form-with-attach .cleide-auditoria-send {
+  .agente-compara-form-with-attach .agente-compara-send {
 
     flex: 0 0 auto;
 
@@ -854,7 +846,7 @@
 
   }
 
-  .cleide-auditoria-form-with-attach .cleide-auditoria-send:disabled {
+  .agente-compara-form-with-attach .agente-compara-send:disabled {
 
     opacity: 0.55;
 
@@ -862,9 +854,9 @@
 
   }
 
-  .cleide-auditoria-chat-msg { margin-bottom: 0.75rem; }
+  .agente-compara-chat-msg { margin-bottom: 0.75rem; }
 
-  .cleide-auditoria-chat-msg-inner {
+  .agente-compara-chat-msg-inner {
 
     max-width: 85%;
 
@@ -878,15 +870,15 @@
 
   }
 
-  .cleide-auditoria-chat-msg-inner p { margin-bottom: 0.4rem; }
+  .agente-compara-chat-msg-inner p { margin-bottom: 0.4rem; }
 
-  .cleide-auditoria-chat-msg-inner p:last-child { margin-bottom: 0; }
+  .agente-compara-chat-msg-inner p:last-child { margin-bottom: 0; }
 
-  .cleide-auditoria-chat-msg-inner ul { margin: 0.35rem 0 0.35rem 1.1rem; padding: 0; }
+  .agente-compara-chat-msg-inner ul { margin: 0.35rem 0 0.35rem 1.1rem; padding: 0; }
 
-  .cleide-auditoria-chat-msg-inner li { margin: 0.15rem 0; }
+  .agente-compara-chat-msg-inner li { margin: 0.15rem 0; }
 
-  .cleide-auditoria-chat-msg-inner a {
+  .agente-compara-chat-msg-inner a {
 
     color: var(--af-cyan, #00BFFF);
 
@@ -896,7 +888,7 @@
 
   }
 
-  .cleide-auditoria-chat-msg-user .cleide-auditoria-chat-msg-inner {
+  .agente-compara-chat-msg-user .agente-compara-chat-msg-inner {
 
     background: rgba(0, 191, 255, 0.25);
 
@@ -908,7 +900,7 @@
 
   }
 
-  .cleide-auditoria-chat-msg-bot .cleide-auditoria-chat-msg-inner {
+  .agente-compara-chat-msg-bot .agente-compara-chat-msg-inner {
 
     background: var(--af-bg-muted, #1E1E2E);
 
@@ -918,14 +910,14 @@
 
   }
 
-  .cleide-auditoria-chat-actions {
+  .agente-compara-chat-actions {
     margin-top: 0.3rem;
     max-width: 85%;
     display: flex;
     justify-content: flex-start;
   }
 
-  .cleide-auditoria-chat-copy-btn {
+  .agente-compara-chat-copy-btn {
     border: 1px solid rgba(0, 191, 255, 0.32);
     background: rgba(0, 191, 255, 0.1);
     color: var(--af-text-primary, #F0F0F5);
@@ -937,18 +929,18 @@
     cursor: pointer;
   }
 
-  .cleide-auditoria-chat-copy-btn:hover {
+  .agente-compara-chat-copy-btn:hover {
     border-color: rgba(0, 191, 255, 0.5);
     background: rgba(0, 191, 255, 0.18);
   }
 
-  .cleide-auditoria-chat-copy-btn.is-copied {
+  .agente-compara-chat-copy-btn.is-copied {
     border-color: rgba(0, 191, 255, 0.65);
     background: rgba(0, 191, 255, 0.28);
     color: #ffffff;
   }
 
-  .cleide-auditoria-actions-menu {
+  .agente-compara-actions-menu {
 
     position: fixed;
 
@@ -972,13 +964,13 @@
 
   }
 
-  .cleide-auditoria-actions-menu[hidden] {
+  .agente-compara-actions-menu[hidden] {
 
     display: none !important;
 
   }
 
-  .cleide-actions-item {
+  .agente-compara-actions-item {
 
     display: flex;
 
@@ -1010,7 +1002,7 @@
 
   }
 
-  .cleide-actions-item:disabled {
+  .agente-compara-actions-item:disabled {
 
     opacity: 0.55;
 
@@ -1018,7 +1010,7 @@
 
   }
 
-  .cleide-actions-item i {
+  .agente-compara-actions-item i {
 
     width: 1.1rem;
 
@@ -1030,9 +1022,9 @@
 
   }
 
-  .cleide-actions-item:hover:not(:disabled),
+  .agente-compara-actions-item:hover:not(:disabled),
 
-  .cleide-actions-item:focus-visible {
+  .agente-compara-actions-item:focus-visible {
 
     background: rgba(0, 191, 255, 0.1);
 
@@ -1042,7 +1034,7 @@
 
   }
 
-  .cleide-actions-divider {
+  .agente-compara-actions-divider {
 
     height: 1px;
 
@@ -1052,7 +1044,7 @@
 
   }
 
-  .cleide-audit-documents-area {
+  .agente-compara-documents-area {
 
     padding: 0.35rem 0 0.65rem;
 
@@ -1062,7 +1054,7 @@
 
   }
 
-  .cleide-audit-documents-area-empty {
+  .agente-compara-documents-area-empty {
 
     padding-top: 0.35rem;
 
@@ -1072,7 +1064,7 @@
 
   }
 
-  .cleide-audit-documents-area:not(.cleide-audit-documents-area-empty) {
+  .agente-compara-documents-area:not(.agente-compara-documents-area-empty) {
 
     border-top-color: rgba(0, 191, 255, 0.12);
 
@@ -1082,7 +1074,7 @@
 
   }
 
-  .cleide-audit-documents-toolbar {
+  .agente-compara-documents-toolbar {
 
     display: flex;
 
@@ -1096,7 +1088,7 @@
 
   }
 
-  .cleide-audit-documents-hint {
+  .agente-compara-documents-hint {
 
     color: var(--af-text-muted, #5A5A72);
 
@@ -1104,7 +1096,7 @@
 
   }
 
-  .cleide-audit-documents-clear-btn {
+  .agente-compara-documents-clear-btn {
 
     border-radius: 999px !important;
 
@@ -1118,7 +1110,7 @@
 
   }
 
-  .cleide-audit-documents-clear-btn:hover {
+  .agente-compara-documents-clear-btn:hover {
 
     background: rgba(0, 191, 255, 0.1) !important;
 
@@ -1128,7 +1120,7 @@
 
   }
 
-  .cleide-audit-documents-list {
+  .agente-compara-documents-list {
 
     list-style: none;
 
@@ -1144,9 +1136,9 @@
 
   }
 
-  .cleide-audit-documents-list:empty { display: none; }
+  .agente-compara-documents-list:empty { display: none; }
 
-  .cleide-audit-doc-item {
+  .agente-compara-doc-item {
 
     display: flex;
 
@@ -1166,9 +1158,9 @@
 
   }
 
-  .cleide-audit-doc-item-main { min-width: 0; flex: 1; }
+  .agente-compara-doc-item-main { min-width: 0; flex: 1; }
 
-  .cleide-audit-doc-item-name {
+  .agente-compara-doc-item-name {
 
     color: var(--af-text-primary, #F0F0F5);
 
@@ -1180,7 +1172,7 @@
 
   }
 
-  .cleide-audit-doc-item-meta {
+  .agente-compara-doc-item-meta {
 
     color: var(--af-text-secondary, #8A8AA3);
 
@@ -1192,7 +1184,7 @@
 
   }
 
-  .cleide-audit-doc-item-badge {
+  .agente-compara-doc-item-badge {
 
     display: inline-block;
 
@@ -1206,7 +1198,7 @@
 
   }
 
-  .cleide-audit-doc-item-badge-ready {
+  .agente-compara-doc-item-badge-ready {
 
     border: 1px solid rgba(0, 196, 140, 0.35);
 
@@ -1216,7 +1208,7 @@
 
   }
 
-  .cleide-audit-doc-item-badge-preparing {
+  .agente-compara-doc-item-badge-preparing {
 
     border: 1px solid rgba(255, 193, 7, 0.35);
 
@@ -1226,7 +1218,7 @@
 
   }
 
-  .cleide-audit-doc-item-badge-error {
+  .agente-compara-doc-item-badge-error {
 
     border: 1px solid rgba(255, 77, 106, 0.35);
 
@@ -1236,7 +1228,7 @@
 
   }
 
-  .cleide-audit-doc-item-remove {
+  .agente-compara-doc-item-remove {
 
     border: none;
 
@@ -1254,7 +1246,7 @@
 
   }
 
-  .cleide-audit-doc-item-remove:hover {
+  .agente-compara-doc-item-remove:hover {
 
     color: var(--af-danger, #FF4D6A);
 
@@ -1262,7 +1254,7 @@
 
   }
 
-  .cleide-audit-documents-status {
+  .agente-compara-documents-status {
 
     color: var(--af-text-muted, #5A5A72);
 
@@ -1272,19 +1264,19 @@
 
   }
 
-  .cleide-audit-documents-status:not(:empty) { min-height: 1rem; }
+  .agente-compara-documents-status:not(:empty) { min-height: 1rem; }
 
-  .cleide-audit-temp-table-item {
+  .agente-compara-temp-table-item {
     border-style: dashed;
     background: rgba(111, 66, 193, 0.08);
   }
 
-  .cleide-audit-temp-table-item .cleide-audit-doc-item-name::before {
+  .agente-compara-temp-table-item .agente-compara-doc-item-name::before {
     content: "⧉ ";
     opacity: 0.75;
   }
 
-  .cleide-audit-temp-table-open-btn {
+  .agente-compara-temp-table-open-btn {
     display: block;
     width: 100%;
     min-width: 0;
@@ -1301,21 +1293,21 @@
     transition: background 0.15s ease, box-shadow 0.15s ease;
   }
 
-  .cleide-audit-temp-table-open-btn:hover {
+  .agente-compara-temp-table-open-btn:hover {
     background: rgba(111, 66, 193, 0.12);
   }
 
-  .cleide-audit-temp-table-open-btn:focus-visible {
+  .agente-compara-temp-table-open-btn:focus-visible {
     outline: 2px solid var(--af-cyan, #00BFFF);
     outline-offset: 2px;
     background: rgba(111, 66, 193, 0.12);
   }
 
-  .cleide-audit-temp-table-modal[hidden] {
+  .agente-compara-temp-table-modal[hidden] {
     display: none !important;
   }
 
-  .cleide-audit-temp-table-modal {
+  .agente-compara-temp-table-modal {
     position: fixed;
     inset: 0;
     z-index: 2100;
@@ -1325,17 +1317,17 @@
     padding: 1rem;
   }
 
-  body.cleide-audit-temp-table-modal-open {
+  body.agente-compara-temp-table-modal-open {
     overflow: hidden;
   }
 
-  .cleide-audit-temp-table-modal-backdrop {
+  .agente-compara-temp-table-modal-backdrop {
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
   }
 
-  .cleide-audit-temp-table-modal-dialog {
+  .agente-compara-temp-table-modal-dialog {
     position: relative;
     z-index: 1;
     width: min(920px, 100%);
@@ -1348,12 +1340,12 @@
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
   }
 
-  body.cleide-audit-temp-table-modal-editing .cleide-audit-temp-table-modal-dialog {
+  body.agente-compara-temp-table-modal-editing .agente-compara-temp-table-modal-dialog {
     width: min(1280px, calc(100vw - 2rem));
     max-height: min(92vh, 1100px);
   }
 
-  .cleide-audit-temp-table-modal-header {
+  .agente-compara-temp-table-modal-header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -1362,12 +1354,12 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
-  .cleide-audit-temp-table-modal-header-main {
+  .agente-compara-temp-table-modal-header-main {
     min-width: 0;
     flex: 1 1 auto;
   }
 
-  .cleide-audit-temp-table-modal-close-btn {
+  .agente-compara-temp-table-modal-close-btn {
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
@@ -1386,46 +1378,46 @@
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
 
-  .cleide-audit-temp-table-modal-close-btn span {
+  .agente-compara-temp-table-modal-close-btn span {
     display: block;
     margin-top: -0.08rem;
   }
 
-  .cleide-audit-temp-table-modal-close-btn:hover {
+  .agente-compara-temp-table-modal-close-btn:hover {
     background: rgba(255, 77, 106, 0.12);
     border-color: rgba(255, 77, 106, 0.35);
     color: #ff8a9a;
   }
 
-  .cleide-audit-temp-table-modal-close-btn:focus-visible {
+  .agente-compara-temp-table-modal-close-btn:focus-visible {
     outline: 2px solid var(--af-cyan, #00BFFF);
     outline-offset: 2px;
   }
 
-  .cleide-audit-temp-table-modal-title {
+  .agente-compara-temp-table-modal-title {
     margin: 0;
     font-size: 1.05rem;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-temp-table-modal-subtitle {
+  .agente-compara-temp-table-modal-subtitle {
     margin: 0.35rem 0 0;
     font-size: 0.82rem;
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-temp-table-modal-body {
+  .agente-compara-temp-table-modal-body {
     padding: 0.85rem 1.15rem;
     overflow-y: auto;
     flex: 1 1 auto;
     min-height: 0;
   }
 
-  body.cleide-audit-temp-table-modal-editing .cleide-audit-temp-table-modal-body {
+  body.agente-compara-temp-table-modal-editing .agente-compara-temp-table-modal-body {
     padding: 1rem 1.25rem;
   }
 
-  .cleide-audit-temp-table-modal-footer {
+  .agente-compara-temp-table-modal-footer {
     padding: 0.75rem 1.15rem 1rem;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
@@ -1435,7 +1427,7 @@
     flex-wrap: wrap;
   }
 
-  .cleide-audit-temp-table-modal-edit-banner {
+  .agente-compara-temp-table-modal-edit-banner {
     margin: 0 1.15rem;
     padding: 0.45rem 0.65rem;
     border-radius: 0.45rem;
@@ -1446,12 +1438,12 @@
     border: 1px solid rgba(255, 193, 7, 0.35);
   }
 
-  .cleide-audit-temp-table-modal-edit-banner[hidden],
-  .cleide-audit-temp-table-modal-error[hidden] {
+  .agente-compara-temp-table-modal-edit-banner[hidden],
+  .agente-compara-temp-table-modal-error[hidden] {
     display: none !important;
   }
 
-  .cleide-audit-temp-table-modal-error {
+  .agente-compara-temp-table-modal-error {
     margin: 0 1.15rem;
     padding: 0.45rem 0.65rem;
     border-radius: 0.45rem;
@@ -1460,41 +1452,41 @@
     border: 1px solid rgba(255, 77, 106, 0.25);
   }
 
-  .cleide-audit-temp-table-modal-save-btn,
-  .cleide-audit-temp-table-modal-edit-btn,
-  .cleide-audit-temp-table-modal-cancel-edit-btn,
-  .cleide-audit-temp-table-modal-start-audit-btn {
+  .agente-compara-temp-table-modal-save-btn,
+  .agente-compara-temp-table-modal-edit-btn,
+  .agente-compara-temp-table-modal-cancel-edit-btn,
+  .agente-compara-temp-table-modal-start-audit-btn {
     border-radius: 999px !important;
   }
 
-  .cleide-audit-temp-table-modal-save-btn {
+  .agente-compara-temp-table-modal-save-btn {
     border: 1px solid rgba(0, 191, 255, 0.35) !important;
     background: rgba(0, 191, 255, 0.12) !important;
     color: var(--af-text-primary, #F0F0F5) !important;
   }
 
-  .cleide-audit-temp-table-modal-save-btn:hover {
+  .agente-compara-temp-table-modal-save-btn:hover {
     background: rgba(0, 191, 255, 0.22) !important;
   }
 
-  .cleide-audit-temp-table-modal-start-audit-btn {
+  .agente-compara-temp-table-modal-start-audit-btn {
     border: 1px solid rgba(0, 191, 255, 0.45) !important;
     background: rgba(0, 191, 255, 0.2) !important;
     color: var(--af-text-primary, #F0F0F5) !important;
     font-weight: 600;
   }
 
-  .cleide-audit-temp-table-modal-start-audit-btn:hover {
+  .agente-compara-temp-table-modal-start-audit-btn:hover {
     background: rgba(0, 191, 255, 0.32) !important;
     border-color: rgba(0, 191, 255, 0.6) !important;
   }
 
-  .cleide-audit-temp-table-modal-start-audit-btn:focus-visible {
+  .agente-compara-temp-table-modal-start-audit-btn:focus-visible {
     outline: 2px solid var(--af-cyan, #00BFFF);
     outline-offset: 2px;
   }
 
-  .cleide-audit-temp-table-modal-tabs {
+  .agente-compara-temp-table-modal-tabs {
     display: flex;
     gap: 0.5rem;
     margin-bottom: 0.85rem;
@@ -1502,7 +1494,7 @@
     padding-bottom: 0.35rem;
   }
 
-  .cleide-audit-temp-table-modal-tab {
+  .agente-compara-temp-table-modal-tab {
     border: none;
     background: transparent;
     color: var(--af-text-secondary, #8A8AA3);
@@ -1512,22 +1504,22 @@
     cursor: pointer;
   }
 
-  .cleide-audit-temp-table-modal-tab.is-active {
+  .agente-compara-temp-table-modal-tab.is-active {
     color: var(--af-text-primary, #F0F0F5);
     background: rgba(0, 191, 255, 0.14);
   }
 
-  .cleide-audit-temp-table-modal-tab-panel {
+  .agente-compara-temp-table-modal-tab-panel {
     min-height: 0;
   }
 
-  .cleide-audit-coverage-prompt-panel {
+  .agente-compara-coverage-prompt-panel {
     padding: 0;
     background: transparent;
     border: none;
   }
 
-  .cleide-audit-coverage-prompt-card {
+  .agente-compara-coverage-prompt-card {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -1537,13 +1529,13 @@
     background: rgba(255, 255, 255, 0.03);
   }
 
-  .cleide-audit-coverage-prompt-title {
+  .agente-compara-coverage-prompt-title {
     font-size: 0.88rem;
     font-weight: 600;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-coverage-prompt-description {
+  .agente-compara-coverage-prompt-description {
     margin: 0;
     font-size: 0.82rem;
     font-weight: 500;
@@ -1551,21 +1543,21 @@
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-coverage-prompt-support {
+  .agente-compara-coverage-prompt-support {
     margin: 0;
     font-size: 0.76rem;
     line-height: 1.4;
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-coverage-prompt-actions {
+  .agente-compara-coverage-prompt-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 0.45rem;
     margin-top: 0.15rem;
   }
 
-  .cleide-audit-coverage-prompt-btn {
+  .agente-compara-coverage-prompt-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1578,53 +1570,53 @@
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
 
-  .cleide-audit-coverage-prompt-btn:focus-visible {
+  .agente-compara-coverage-prompt-btn:focus-visible {
     outline: 2px solid var(--af-cyan, #00BFFF);
     outline-offset: 2px;
   }
 
-  .cleide-audit-coverage-prompt-btn-primary {
+  .agente-compara-coverage-prompt-btn-primary {
     border: 1px solid rgba(0, 191, 255, 0.35);
     background: rgba(0, 191, 255, 0.12);
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-coverage-prompt-btn-primary:hover {
+  .agente-compara-coverage-prompt-btn-primary:hover {
     background: rgba(0, 191, 255, 0.22);
     border-color: rgba(0, 191, 255, 0.5);
   }
 
-  .cleide-audit-coverage-prompt-btn-secondary {
+  .agente-compara-coverage-prompt-btn-secondary {
     border: 1px solid rgba(255, 255, 255, 0.18);
     background: rgba(255, 255, 255, 0.03);
     color: var(--af-text-secondary, #C8CCE5);
   }
 
-  .cleide-audit-coverage-prompt-btn-secondary:hover {
+  .agente-compara-coverage-prompt-btn-secondary:hover {
     background: rgba(255, 255, 255, 0.08);
     border-color: rgba(255, 255, 255, 0.28);
     color: var(--af-text-primary, #F0F0F5);
   }
 
   @media (max-width: 480px) {
-    .cleide-audit-coverage-prompt-actions {
+    .agente-compara-coverage-prompt-actions {
       flex-direction: column;
       align-items: stretch;
     }
 
-    .cleide-audit-coverage-prompt-btn {
+    .agente-compara-coverage-prompt-btn {
       width: 100%;
       text-align: center;
     }
   }
 
-  .cleide-audit-coverage-upload-panel {
+  .agente-compara-coverage-upload-panel {
     padding: 0;
     background: transparent;
     border: none;
   }
 
-  .cleide-audit-coverage-upload-card {
+  .agente-compara-coverage-upload-card {
     display: flex;
     flex-direction: column;
     gap: 0.55rem;
@@ -1634,7 +1626,7 @@
     background: rgba(255, 255, 255, 0.03);
   }
 
-  .cleide-audit-coverage-upload-header {
+  .agente-compara-coverage-upload-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1642,13 +1634,13 @@
     flex-wrap: wrap;
   }
 
-  .cleide-audit-coverage-upload-title {
+  .agente-compara-coverage-upload-title {
     font-size: 0.88rem;
     font-weight: 600;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-coverage-upload-badge {
+  .agente-compara-coverage-upload-badge {
     display: inline-block;
     padding: 0.1rem 0.5rem;
     border-radius: 999px;
@@ -1660,15 +1652,15 @@
     white-space: nowrap;
   }
 
-  .cleide-audit-coverage-upload-description,
-  .cleide-audit-coverage-upload-help {
+  .agente-compara-coverage-upload-description,
+  .agente-compara-coverage-upload-help {
     margin: 0;
     font-size: 0.78rem;
     line-height: 1.4;
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-coverage-upload-actions {
+  .agente-compara-coverage-upload-actions {
     display: flex;
     align-items: center;
     gap: 0.55rem;
@@ -1676,7 +1668,7 @@
     min-width: 0;
   }
 
-  .cleide-audit-coverage-upload-button {
+  .agente-compara-coverage-upload-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1693,17 +1685,17 @@
     transition: background 0.15s ease, border-color 0.15s ease;
   }
 
-  .cleide-audit-coverage-upload-button:hover {
+  .agente-compara-coverage-upload-button:hover {
     background: rgba(0, 191, 255, 0.22);
     border-color: rgba(0, 191, 255, 0.5);
   }
 
-  .cleide-audit-coverage-upload-button:focus-visible {
+  .agente-compara-coverage-upload-button:focus-visible {
     outline: 2px solid var(--af-cyan, #00BFFF);
     outline-offset: 2px;
   }
 
-  .cleide-audit-coverage-upload-file-name {
+  .agente-compara-coverage-upload-file-name {
     flex: 1 1 8rem;
     min-width: 0;
     font-size: 0.76rem;
@@ -1713,7 +1705,7 @@
     white-space: nowrap;
   }
 
-  .cleide-audit-coverage-upload-status {
+  .agente-compara-coverage-upload-status {
     margin: 0;
     font-size: 0.76rem;
     line-height: 1.35;
@@ -1721,16 +1713,16 @@
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-coverage-upload-status:not(:empty) {
+  .agente-compara-coverage-upload-status:not(:empty) {
     min-height: 1rem;
     margin-top: 0.1rem;
   }
 
-  .cleide-audit-coverage-upload-status.is-loading {
+  .agente-compara-coverage-upload-status.is-loading {
     color: var(--af-cyan, #00BFFF);
   }
 
-  .cleide-audit-coverage-upload-status.is-success {
+  .agente-compara-coverage-upload-status.is-success {
     color: #00c48c;
     background: rgba(0, 196, 140, 0.1);
     border: 1px solid rgba(0, 196, 140, 0.25);
@@ -1738,7 +1730,7 @@
     padding: 0.35rem 0.55rem;
   }
 
-  .cleide-audit-coverage-upload-status.is-error {
+  .agente-compara-coverage-upload-status.is-error {
     color: #ff8a9a;
     background: rgba(255, 77, 106, 0.1);
     border: 1px solid rgba(255, 77, 106, 0.25);
@@ -1747,43 +1739,43 @@
   }
 
   @media (max-width: 480px) {
-    .cleide-audit-coverage-upload-actions {
+    .agente-compara-coverage-upload-actions {
       flex-direction: column;
       align-items: stretch;
     }
 
-    .cleide-audit-coverage-upload-button {
+    .agente-compara-coverage-upload-button {
       width: 100%;
       text-align: center;
     }
 
-    .cleide-audit-coverage-upload-file-name {
+    .agente-compara-coverage-upload-file-name {
       text-align: center;
       white-space: normal;
       word-break: break-word;
     }
   }
 
-  .cleide-audit-tax-section {
+  .agente-compara-tax-section {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
   }
 
-  .cleide-audit-tax-question {
+  .agente-compara-tax-question {
     margin: 0;
     font-size: 0.88rem;
     line-height: 1.45;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-tax-options {
+  .agente-compara-tax-options {
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
   }
 
-  .cleide-audit-tax-option {
+  .agente-compara-tax-option {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -1792,13 +1784,13 @@
     cursor: pointer;
   }
 
-  .cleide-audit-tax-fields {
+  .agente-compara-tax-fields {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 0.65rem;
   }
 
-  .cleide-audit-tax-field {
+  .agente-compara-tax-field {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
@@ -1806,60 +1798,60 @@
     color: var(--af-text-secondary, #A0A0B0);
   }
 
-  .cleide-audit-tax-input,
-  .cleide-audit-tax-rate-input {
+  .agente-compara-tax-input,
+  .agente-compara-tax-rate-input {
     font-size: 0.82rem;
   }
 
-  .cleide-audit-tax-hint {
+  .agente-compara-tax-hint {
     margin: 0;
     font-size: 0.76rem;
     line-height: 1.4;
     color: var(--af-text-secondary, #A0A0B0);
   }
 
-  .cleide-audit-tax-table-scroll {
+  .agente-compara-tax-table-scroll {
     margin-top: 0.35rem;
   }
 
-  .cleide-audit-tax-table th,
-  .cleide-audit-tax-table td {
+  .agente-compara-tax-table th,
+  .agente-compara-tax-table td {
     font-size: 0.76rem;
     white-space: nowrap;
   }
 
-  .cleide-audit-tax-rate-input {
+  .agente-compara-tax-rate-input {
     min-width: 5rem;
     max-width: 7rem;
   }
 
-  .cleide-audit-tax-destination-ufs {
+  .agente-compara-tax-destination-ufs {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
 
-  .cleide-audit-tax-destination-controls {
+  .agente-compara-tax-destination-controls {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
     align-items: center;
   }
 
-  .cleide-audit-tax-add-uf-btn,
-  .cleide-audit-tax-remove-uf-btn {
+  .agente-compara-tax-add-uf-btn,
+  .agente-compara-tax-remove-uf-btn {
     font-size: 0.78rem;
   }
 
-  .cleide-audit-tax-empty-uf-alert {
+  .agente-compara-tax-empty-uf-alert {
     color: var(--af-warning, #E0B050);
   }
 
-  .cleide-audit-audit-file-section {
+  .agente-compara-audit-file-section {
     padding: 0;
   }
 
-  .cleide-audit-audit-file-card {
+  .agente-compara-audit-file-card {
     display: flex;
     flex-direction: column;
     gap: 0.55rem;
@@ -1869,22 +1861,22 @@
     background: rgba(255, 255, 255, 0.03);
   }
 
-  .cleide-audit-audit-file-description {
+  .agente-compara-audit-file-description {
     margin: 0;
     font-size: 0.82rem;
     line-height: 1.45;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-audit-file-actions {
+  .agente-compara-audit-file-actions {
     display: flex;
     align-items: center;
     gap: 0.55rem;
     flex-wrap: wrap;
   }
 
-  .cleide-audit-audit-file-download-btn,
-  .cleide-audit-audit-file-upload-btn {
+  .agente-compara-audit-file-download-btn,
+  .agente-compara-audit-file-upload-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1900,20 +1892,20 @@
     white-space: nowrap;
   }
 
-  .cleide-audit-audit-file-download-btn:hover,
-  .cleide-audit-audit-file-upload-btn:hover {
+  .agente-compara-audit-file-download-btn:hover,
+  .agente-compara-audit-file-upload-btn:hover {
     background: rgba(0, 191, 255, 0.22);
     border-color: rgba(0, 191, 255, 0.5);
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-audit-file-name {
+  .agente-compara-audit-file-name {
     font-size: 0.76rem;
     color: var(--af-text-muted, #5A5A72);
     word-break: break-word;
   }
 
-  .cleide-audit-audit-file-status {
+  .agente-compara-audit-file-status {
     margin: 0;
     font-size: 0.76rem;
     line-height: 1.35;
@@ -1921,11 +1913,11 @@
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-audit-file-status.is-loading {
+  .agente-compara-audit-file-status.is-loading {
     color: var(--af-cyan, #00BFFF);
   }
 
-  .cleide-audit-audit-file-status.is-success {
+  .agente-compara-audit-file-status.is-success {
     color: #00c48c;
     background: rgba(0, 196, 140, 0.1);
     border: 1px solid rgba(0, 196, 140, 0.25);
@@ -1933,7 +1925,7 @@
     padding: 0.35rem 0.55rem;
   }
 
-  .cleide-audit-audit-file-status.is-error {
+  .agente-compara-audit-file-status.is-error {
     color: #ff8a9a;
     background: rgba(255, 77, 106, 0.1);
     border: 1px solid rgba(255, 77, 106, 0.25);
@@ -1941,27 +1933,27 @@
     padding: 0.35rem 0.55rem;
   }
 
-  .cleide-audit-audit-file-summary {
+  .agente-compara-audit-file-summary {
     margin-top: 0.35rem;
     padding-top: 0.55rem;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
   }
 
-  .cleide-audit-audit-file-summary-title {
+  .agente-compara-audit-file-summary-title {
     margin: 0 0 0.35rem;
     font-size: 0.82rem;
     font-weight: 600;
     color: #00c48c;
   }
 
-  .cleide-audit-run-actions {
+  .agente-compara-run-actions {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
   }
 
-  .cleide-audit-run-btn {
+  .agente-compara-run-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1975,62 +1967,62 @@
     cursor: pointer;
   }
 
-  .cleide-audit-run-btn:hover {
+  .agente-compara-run-btn:hover {
     background: rgba(0, 196, 140, 0.24);
   }
 
-  .cleide-audit-run-btn:disabled {
+  .agente-compara-run-btn:disabled {
     opacity: 0.58;
     cursor: not-allowed;
   }
 
-  .cleide-audit-run-status {
+  .agente-compara-run-status {
     margin: 0;
     font-size: 0.76rem;
     line-height: 1.35;
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-run-status.is-loading {
+  .agente-compara-run-status.is-loading {
     color: var(--af-cyan, #00BFFF);
   }
 
-  .cleide-audit-run-status.is-success {
+  .agente-compara-run-status.is-success {
     color: #00c48c;
   }
 
-  .cleide-audit-run-status.is-error {
+  .agente-compara-run-status.is-error {
     color: #ff8a9a;
   }
 
-  .cleide-audit-run-summary,
-  .cleide-audit-diagnostics,
-  .cleide-audit-run-results {
+  .agente-compara-run-summary,
+  .agente-compara-diagnostics,
+  .agente-compara-run-results {
     margin-top: 0.45rem;
     padding-top: 0.55rem;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
   }
 
-  .cleide-audit-run-summary-title,
-  .cleide-audit-diagnostics-title,
-  .cleide-audit-run-results-title {
+  .agente-compara-run-summary-title,
+  .agente-compara-diagnostics-title,
+  .agente-compara-run-results-title {
     margin: 0 0 0.45rem;
     font-size: 0.82rem;
     font-weight: 600;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-run-summary {
+  .agente-compara-run-summary {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
     gap: 0.45rem;
   }
 
-  .cleide-audit-run-summary-title {
+  .agente-compara-run-summary-title {
     grid-column: 1 / -1;
   }
 
-  .cleide-audit-run-summary-item {
+  .agente-compara-run-summary-item {
     display: flex;
     justify-content: space-between;
     gap: 0.5rem;
@@ -2039,25 +2031,25 @@
     background: rgba(255, 255, 255, 0.035);
   }
 
-  .cleide-audit-run-summary-label {
+  .agente-compara-run-summary-label {
     color: var(--af-text-secondary, #8A8AA3);
     font-size: 0.74rem;
   }
 
-  .cleide-audit-run-summary-value {
+  .agente-compara-run-summary-value {
     color: var(--af-text-primary, #F0F0F5);
     font-size: 0.78rem;
   }
 
-  .cleide-audit-error-global-actions {
+  .agente-compara-error-global-actions {
     margin-top: 0.5rem;
   }
 
-  .cleide-audit-error-global-btn,
-  .cleide-audit-run-row-error-btn,
-  .cleide-audit-diagnostic-fix-table-btn,
-  .cleide-audit-correction-primary-btn,
-  .cleide-audit-correction-secondary-btn {
+  .agente-compara-error-global-btn,
+  .agente-compara-run-row-error-btn,
+  .agente-compara-diagnostic-fix-table-btn,
+  .agente-compara-correction-primary-btn,
+  .agente-compara-correction-secondary-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2067,61 +2059,61 @@
     cursor: pointer;
   }
 
-  .cleide-audit-error-global-btn,
-  .cleide-audit-run-row-error-btn,
-  .cleide-audit-diagnostic-fix-table-btn {
+  .agente-compara-error-global-btn,
+  .agente-compara-run-row-error-btn,
+  .agente-compara-diagnostic-fix-table-btn {
     padding: 0.3rem 0.75rem;
     border: 1px solid rgba(255, 193, 7, 0.42);
     background: rgba(255, 193, 7, 0.1);
     color: #ffd966;
   }
 
-  .cleide-audit-error-global-btn:hover,
-  .cleide-audit-run-row-error-btn:hover,
-  .cleide-audit-diagnostic-fix-table-btn:hover {
+  .agente-compara-error-global-btn:hover,
+  .agente-compara-run-row-error-btn:hover,
+  .agente-compara-diagnostic-fix-table-btn:hover {
     background: rgba(255, 193, 7, 0.18);
     border-color: rgba(255, 193, 7, 0.58);
   }
 
-  .cleide-audit-run-row-error-btn {
+  .agente-compara-run-row-error-btn {
     min-width: 4.5rem;
     padding: 0.18rem 0.55rem;
     font-size: 0.68rem;
     white-space: nowrap;
   }
 
-  .cleide-audit-run-actions-cell {
+  .agente-compara-run-actions-cell {
     min-width: 6rem;
     width: 6rem;
     padding-right: 1rem !important;
     white-space: nowrap;
   }
 
-  .cleide-audit-diagnostics-subtitle {
+  .agente-compara-diagnostics-subtitle {
     margin: -0.15rem 0 0.55rem;
     font-size: 0.76rem;
     line-height: 1.4;
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-diagnostic-card {
+  .agente-compara-diagnostic-card {
     padding: 0.65rem 0.75rem;
     border-radius: 0.55rem;
     border: 1px solid rgba(255, 193, 7, 0.28);
     background: rgba(255, 193, 7, 0.07);
   }
 
-  .cleide-audit-diagnostics.is-highlighted {
-    animation: cleideAuditDiagnosticPulse 1.2s ease;
+  .agente-compara-diagnostics.is-highlighted {
+    animation: agenteComparaDiagnosticPulse 1.2s ease;
   }
 
-  @keyframes cleideAuditDiagnosticPulse {
+  @keyframes agenteComparaDiagnosticPulse {
     0% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.32); }
     55% { box-shadow: 0 0 0 6px rgba(255, 193, 7, 0.08); }
     100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0); }
   }
 
-  .cleide-audit-diagnostic-card-header {
+  .agente-compara-diagnostic-card-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2130,14 +2122,14 @@
     margin-bottom: 0.35rem;
   }
 
-  .cleide-audit-diagnostic-card-title {
+  .agente-compara-diagnostic-card-title {
     margin: 0;
     font-size: 0.84rem;
     font-weight: 700;
     color: #ffd966;
   }
 
-  .cleide-audit-diagnostic-confidence {
+  .agente-compara-diagnostic-confidence {
     display: inline-flex;
     align-items: center;
     padding: 0.1rem 0.5rem;
@@ -2149,32 +2141,32 @@
     font-weight: 600;
   }
 
-  .cleide-audit-diagnostic-message,
-  .cleide-audit-diagnostic-actionability {
+  .agente-compara-diagnostic-message,
+  .agente-compara-diagnostic-actionability {
     margin: 0.25rem 0 0.45rem;
     font-size: 0.78rem;
     line-height: 1.45;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-diagnostic-actionability {
+  .agente-compara-diagnostic-actionability {
     margin-bottom: 0;
     color: var(--af-text-secondary, #C8CCE5);
   }
 
-  .cleide-audit-diagnostic-actions {
+  .agente-compara-diagnostic-actions {
     margin-top: 0.55rem;
   }
 
-  .cleide-audit-diagnostic-meta {
+  .agente-compara-diagnostic-meta {
     margin: 0.35rem 0 0.45rem;
   }
 
-  .cleide-audit-diagnostic-list-wrap {
+  .agente-compara-diagnostic-list-wrap {
     margin-top: 0.45rem;
   }
 
-  .cleide-audit-diagnostic-list-label {
+  .agente-compara-diagnostic-list-label {
     display: block;
     margin-bottom: 0.25rem;
     color: var(--af-text-secondary, #8A8AA3);
@@ -2182,13 +2174,13 @@
     font-weight: 600;
   }
 
-  .cleide-audit-diagnostic-chip-list {
+  .agente-compara-diagnostic-chip-list {
     display: flex;
     flex-wrap: wrap;
     gap: 0.3rem;
   }
 
-  .cleide-audit-diagnostic-chip {
+  .agente-compara-diagnostic-chip {
     display: inline-flex;
     align-items: center;
     padding: 0.12rem 0.48rem;
@@ -2200,17 +2192,17 @@
     line-height: 1.3;
   }
 
-  .cleide-audit-diagnostic-modal {
+  .agente-compara-diagnostic-modal {
     z-index: 2220;
   }
 
-  .cleide-audit-line-error-summary,
-  .cleide-audit-correction-explanation,
-  .cleide-audit-correction-choice-panel {
+  .agente-compara-line-error-summary,
+  .agente-compara-correction-explanation,
+  .agente-compara-correction-choice-panel {
     padding: 0.1rem 0 0.25rem;
   }
 
-  .cleide-audit-correction-warning {
+  .agente-compara-correction-warning {
     margin: 0.65rem 0;
     padding: 0.45rem 0.6rem;
     border-radius: 0.45rem;
@@ -2221,8 +2213,8 @@
     font-weight: 600;
   }
 
-  .cleide-audit-correction-choices,
-  .cleide-audit-correction-choice-actions {
+  .agente-compara-correction-choices,
+  .agente-compara-correction-choice-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -2230,62 +2222,62 @@
     margin-top: 0.65rem;
   }
 
-  .cleide-audit-correction-primary-btn {
+  .agente-compara-correction-primary-btn {
     padding: 0.35rem 0.8rem;
     border: 1px solid rgba(0, 196, 140, 0.36);
     background: rgba(0, 196, 140, 0.12);
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-correction-primary-btn:disabled {
+  .agente-compara-correction-primary-btn:disabled {
     opacity: 0.48;
     cursor: not-allowed;
   }
 
-  .cleide-audit-correction-secondary-btn {
+  .agente-compara-correction-secondary-btn {
     padding: 0.35rem 0.8rem;
     border: 1px solid rgba(0, 191, 255, 0.32);
     background: rgba(0, 191, 255, 0.09);
     color: var(--af-cyan, #00BFFF);
   }
 
-  .cleide-audit-correction-secondary-btn:hover {
+  .agente-compara-correction-secondary-btn:hover {
     background: rgba(0, 191, 255, 0.16);
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-correction-help,
-  .cleide-audit-correction-choice-text {
+  .agente-compara-correction-help,
+  .agente-compara-correction-choice-text {
     margin: 0;
     font-size: 0.76rem;
     line-height: 1.4;
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-correction-choice-title {
+  .agente-compara-correction-choice-title {
     margin: 0 0 0.35rem;
     font-size: 0.86rem;
     font-weight: 700;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-run-results-table {
+  .agente-compara-run-results-table {
     min-width: 1060px;
   }
 
-  .cleide-audit-run-results-scroll {
+  .agente-compara-run-results-scroll {
     scrollbar-gutter: stable;
   }
 
-  .cleide-audit-run-results-table th:last-child,
-  .cleide-audit-run-results-table td:last-child {
+  .agente-compara-run-results-table th:last-child,
+  .agente-compara-run-results-table td:last-child {
     min-width: 6rem;
     width: 6rem;
     padding-right: 1rem;
     white-space: nowrap;
   }
 
-  .cleide-audit-run-expected-link {
+  .agente-compara-run-expected-link {
     border: none;
     background: transparent;
     color: var(--af-accent, #00BFFF);
@@ -2297,32 +2289,32 @@
     cursor: pointer;
   }
 
-  .cleide-audit-run-expected-link:hover {
+  .agente-compara-run-expected-link:hover {
     color: #66d9ff;
   }
 
-  .cleide-audit-run-expected-link:focus-visible {
+  .agente-compara-run-expected-link:focus-visible {
     outline: 2px solid rgba(0, 191, 255, 0.45);
     outline-offset: 2px;
   }
 
-  .cleide-audit-calculation-memory-modal {
+  .agente-compara-calculation-memory-modal {
     z-index: 2200;
   }
 
-  .cleide-audit-calculation-memory-modal .cleide-audit-temp-table-modal-dialog {
+  .agente-compara-calculation-memory-modal .agente-compara-temp-table-modal-dialog {
     width: min(760px, 100%);
   }
 
-  .cleide-audit-calculation-memory-summary {
+  .agente-compara-calculation-memory-summary {
     margin-bottom: 0.75rem;
   }
 
-  .cleide-audit-calculation-memory-table-scroll {
+  .agente-compara-calculation-memory-table-scroll {
     margin-top: 0.35rem;
   }
 
-  .cleide-audit-calculation-memory-total {
+  .agente-compara-calculation-memory-total {
     display: flex;
     justify-content: space-between;
     gap: 1rem;
@@ -2332,35 +2324,35 @@
     font-size: 0.82rem;
   }
 
-  .cleide-audit-calculation-memory-total-label {
+  .agente-compara-calculation-memory-total-label {
     color: var(--af-text-secondary, #C8CCE5);
   }
 
-  .cleide-audit-calculation-memory-total-value {
+  .agente-compara-calculation-memory-total-value {
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-temp-table-modal-edit-btn {
+  .agente-compara-temp-table-modal-edit-btn {
     border: 1px solid rgba(111, 66, 193, 0.45) !important;
     background: rgba(111, 66, 193, 0.14) !important;
     color: var(--af-text-primary, #F0F0F5) !important;
   }
 
-  .cleide-audit-temp-table-modal-edit-btn:hover {
+  .agente-compara-temp-table-modal-edit-btn:hover {
     background: rgba(111, 66, 193, 0.24) !important;
   }
 
-  .cleide-audit-temp-table-modal-cancel-edit-btn {
+  .agente-compara-temp-table-modal-cancel-edit-btn {
     border: 1px solid rgba(255, 255, 255, 0.18) !important;
     background: rgba(255, 255, 255, 0.04) !important;
     color: var(--af-text-secondary, #C8CCE5) !important;
   }
 
-  .cleide-audit-temp-table-modal-cancel-edit-btn:hover {
+  .agente-compara-temp-table-modal-cancel-edit-btn:hover {
     background: rgba(255, 255, 255, 0.08) !important;
   }
 
-  .cleide-audit-temp-table-modal-cell-input {
+  .agente-compara-temp-table-modal-cell-input {
     width: 100%;
     min-width: 4.5rem;
     border: 1px solid rgba(0, 191, 255, 0.28);
@@ -2371,46 +2363,46 @@
     padding: 0.2rem 0.35rem;
   }
 
-  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input {
+  .agente-compara-temp-table-modal-data-table-editable .calculation-base-cell select.agente-compara-temp-table-modal-cell-input {
     color-scheme: dark;
     background-color: rgba(8, 15, 28, 0.94);
     color: var(--af-text-primary, #F0F0F5);
     border-color: rgba(0, 191, 255, 0.34);
   }
 
-  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input:hover {
+  .agente-compara-temp-table-modal-data-table-editable .calculation-base-cell select.agente-compara-temp-table-modal-cell-input:hover {
     border-color: rgba(0, 212, 255, 0.62);
     background-color: rgba(10, 19, 36, 0.98);
   }
 
-  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input:focus-visible {
+  .agente-compara-temp-table-modal-data-table-editable .calculation-base-cell select.agente-compara-temp-table-modal-cell-input:focus-visible {
     outline: none;
     border-color: var(--af-accent, #00BFFF);
     box-shadow: 0 0 0 2px rgba(0, 191, 255, 0.22);
   }
 
-  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input option {
+  .agente-compara-temp-table-modal-data-table-editable .calculation-base-cell select.agente-compara-temp-table-modal-cell-input option {
     background-color: #0b1424;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input option:hover,
-  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input option:focus {
+  .agente-compara-temp-table-modal-data-table-editable .calculation-base-cell select.agente-compara-temp-table-modal-cell-input option:hover,
+  .agente-compara-temp-table-modal-data-table-editable .calculation-base-cell select.agente-compara-temp-table-modal-cell-input option:focus {
     background-color: rgba(0, 191, 255, 0.24);
     color: #ffffff;
   }
 
-  .cleide-audit-temp-table-modal-data-table-editable .calculation-base-cell select.cleide-audit-temp-table-modal-cell-input option:checked {
+  .agente-compara-temp-table-modal-data-table-editable .calculation-base-cell select.agente-compara-temp-table-modal-cell-input option:checked {
     background-color: #006da3;
     color: #ffffff;
   }
 
-  .cleide-audit-temp-table-modal-cell-input.field-invalid {
+  .agente-compara-temp-table-modal-cell-input.field-invalid {
     border-color: rgba(255, 77, 106, 0.82);
     box-shadow: 0 0 0 1px rgba(255, 77, 106, 0.18);
   }
 
-  .cleide-audit-temp-table-modal-cell-input.field-invalid:focus {
+  .agente-compara-temp-table-modal-cell-input.field-invalid:focus {
     outline: 2px solid rgba(255, 77, 106, 0.42);
     outline-offset: 1px;
   }
@@ -2444,8 +2436,8 @@
     line-height: 1.25;
   }
 
-  .cleide-audit-temp-table-modal-row-delete-btn,
-  .cleide-audit-temp-table-modal-col-delete-btn {
+  .agente-compara-temp-table-modal-row-delete-btn,
+  .agente-compara-temp-table-modal-col-delete-btn {
     border: none;
     background: transparent;
     color: var(--af-danger, #FF4D6A);
@@ -2455,24 +2447,24 @@
     border-radius: 0.25rem;
   }
 
-  .cleide-audit-temp-table-modal-row-delete-btn:hover,
-  .cleide-audit-temp-table-modal-col-delete-btn:hover {
+  .agente-compara-temp-table-modal-row-delete-btn:hover,
+  .agente-compara-temp-table-modal-col-delete-btn:hover {
     background: rgba(255, 77, 106, 0.12);
   }
 
-  .cleide-audit-temp-table-modal-actions-col {
+  .agente-compara-temp-table-modal-actions-col {
     width: 2.5rem;
     text-align: center;
     white-space: nowrap;
   }
 
-  .cleide-audit-temp-table-modal-toolbar {
+  .agente-compara-temp-table-modal-toolbar {
     display: flex;
     justify-content: flex-end;
     margin: 0.1rem 0 0.55rem;
   }
 
-  .cleide-audit-temp-table-modal-add-btn {
+  .agente-compara-temp-table-modal-add-btn {
     border: 1px solid rgba(0, 191, 255, 0.3);
     border-radius: 999px;
     background: rgba(0, 191, 255, 0.1);
@@ -2481,11 +2473,11 @@
     padding: 0.28rem 0.7rem;
   }
 
-  .cleide-audit-temp-table-modal-add-btn:hover {
+  .agente-compara-temp-table-modal-add-btn:hover {
     background: rgba(0, 191, 255, 0.18);
   }
 
-  .cleide-audit-temp-table-modal-meta {
+  .agente-compara-temp-table-modal-meta {
     margin-bottom: 1rem;
     padding: 0.65rem 0.75rem;
     border-radius: 0.55rem;
@@ -2493,7 +2485,7 @@
     border: 1px solid rgba(255, 255, 255, 0.06);
   }
 
-  .cleide-audit-temp-table-modal-meta-row {
+  .agente-compara-temp-table-modal-meta-row {
     display: flex;
     flex-wrap: wrap;
     gap: 0.35rem 0.5rem;
@@ -2502,38 +2494,38 @@
     margin-bottom: 0.25rem;
   }
 
-  .cleide-audit-temp-table-modal-meta-row:last-child {
+  .agente-compara-temp-table-modal-meta-row:last-child {
     margin-bottom: 0;
   }
 
-  .cleide-audit-temp-table-modal-meta-label {
+  .agente-compara-temp-table-modal-meta-label {
     color: var(--af-text-secondary, #8A8AA3);
     font-weight: 600;
   }
 
-  .cleide-audit-temp-table-modal-meta-value {
+  .agente-compara-temp-table-modal-meta-value {
     color: var(--af-text-primary, #F0F0F5);
     word-break: break-word;
   }
 
-  .cleide-audit-temp-table-modal-section-title {
+  .agente-compara-temp-table-modal-section-title {
     margin: 0.85rem 0 0.45rem;
     font-size: 0.88rem;
     color: var(--af-cyan, #00BFFF);
   }
 
-  .cleide-audit-temp-table-modal-section-title:first-child {
+  .agente-compara-temp-table-modal-section-title:first-child {
     margin-top: 0;
   }
 
-  .cleide-audit-temp-table-modal-empty,
-  .cleide-audit-temp-table-modal-processing {
+  .agente-compara-temp-table-modal-empty,
+  .agente-compara-temp-table-modal-processing {
     margin: 0.25rem 0 0.5rem;
     font-size: 0.8rem;
     color: var(--af-text-secondary, #8A8AA3);
   }
 
-  .cleide-audit-temp-table-modal-item {
+  .agente-compara-temp-table-modal-item {
     margin-bottom: 0.5rem;
     padding: 0.55rem 0.65rem;
     border-radius: 0.45rem;
@@ -2541,7 +2533,7 @@
     background: rgba(255, 255, 255, 0.02);
   }
 
-  .cleide-audit-temp-table-modal-detail-row {
+  .agente-compara-temp-table-modal-detail-row {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem 0.45rem;
@@ -2550,32 +2542,32 @@
     margin-bottom: 0.15rem;
   }
 
-  .cleide-audit-temp-table-modal-detail-label {
+  .agente-compara-temp-table-modal-detail-label {
     color: var(--af-text-secondary, #8A8AA3);
     font-weight: 600;
   }
 
-  .cleide-audit-temp-table-modal-detail-value {
+  .agente-compara-temp-table-modal-detail-value {
     color: var(--af-text-primary, #F0F0F5);
     word-break: break-word;
   }
 
-  .cleide-audit-temp-table-modal-list {
+  .agente-compara-temp-table-modal-list {
     margin: 0.25rem 0 0.5rem;
     padding-left: 1.15rem;
     font-size: 0.8rem;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-temp-table-modal-list li {
+  .agente-compara-temp-table-modal-list li {
     margin-bottom: 0.2rem;
   }
 
-  .cleide-audit-temp-table-modal-section {
+  .agente-compara-temp-table-modal-section {
     margin-bottom: 0.65rem;
   }
 
-  .cleide-audit-temp-table-modal-freight-table-card {
+  .agente-compara-temp-table-modal-freight-table-card {
     margin-bottom: 0.55rem;
     border-radius: 0.55rem;
     border: 1px solid rgba(0, 191, 255, 0.14);
@@ -2583,7 +2575,7 @@
     overflow: hidden;
   }
 
-  .cleide-audit-temp-table-modal-freight-table-summary {
+  .agente-compara-temp-table-modal-freight-table-summary {
     cursor: pointer;
     list-style: none;
     padding: 0.55rem 0.75rem;
@@ -2593,23 +2585,23 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
 
-  .cleide-audit-temp-table-modal-freight-table-summary::-webkit-details-marker {
+  .agente-compara-temp-table-modal-freight-table-summary::-webkit-details-marker {
     display: none;
   }
 
-  .cleide-audit-temp-table-modal-freight-table-body {
+  .agente-compara-temp-table-modal-freight-table-body {
     padding: 0.55rem 0.75rem 0.65rem;
   }
 
-  .cleide-audit-temp-table-modal-freight-table-context {
+  .agente-compara-temp-table-modal-freight-table-context {
     margin-bottom: 0.35rem;
   }
 
-  .cleide-audit-temp-table-modal-partial-badge-row {
+  .agente-compara-temp-table-modal-partial-badge-row {
     margin: 0.15rem 0 0.35rem;
   }
 
-  .cleide-audit-temp-table-modal-partial-badge {
+  .agente-compara-temp-table-modal-partial-badge {
     display: inline-block;
     padding: 0.12rem 0.55rem;
     border-radius: 999px;
@@ -2622,14 +2614,14 @@
     background: rgba(255, 193, 7, 0.1);
   }
 
-  .cleide-audit-temp-table-modal-partial-helper {
+  .agente-compara-temp-table-modal-partial-helper {
     margin: 0.35rem 0 0.55rem;
     font-size: 0.76rem;
     color: var(--af-text-secondary, #8A8AA3);
     line-height: 1.4;
   }
 
-  .cleide-audit-temp-table-modal-freight-scroll {
+  .agente-compara-temp-table-modal-freight-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     margin: 0.25rem 0 0.5rem;
@@ -2638,14 +2630,14 @@
     background: rgba(0, 0, 0, 0.12);
   }
 
-  .cleide-audit-temp-table-modal-freight-table {
+  .agente-compara-temp-table-modal-freight-table {
     width: 100%;
     min-width: 860px;
     border-collapse: collapse;
     font-size: 0.74rem;
   }
 
-  .cleide-audit-temp-table-modal-freight-table thead th {
+  .agente-compara-temp-table-modal-freight-table thead th {
     position: sticky;
     top: 0;
     z-index: 1;
@@ -2658,7 +2650,7 @@
     white-space: nowrap;
   }
 
-  .cleide-audit-temp-table-modal-freight-table tbody td {
+  .agente-compara-temp-table-modal-freight-table tbody td {
     color: var(--af-text-primary, #F0F0F5);
     padding: 0.4rem 0.55rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -2666,22 +2658,22 @@
     word-break: break-word;
   }
 
-  .cleide-audit-temp-table-modal-freight-table tbody tr:last-child td {
+  .agente-compara-temp-table-modal-freight-table tbody tr:last-child td {
     border-bottom: none;
   }
 
-  .cleide-audit-temp-table-modal-data-table {
+  .agente-compara-temp-table-modal-data-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.76rem;
     margin: 0.25rem 0 0.5rem;
   }
 
-  .cleide-audit-temp-table-modal-data-table-editable {
+  .agente-compara-temp-table-modal-data-table-editable {
     min-width: 1120px;
   }
 
-  .cleide-audit-temp-table-modal-data-table thead th {
+  .agente-compara-temp-table-modal-data-table thead th {
     color: var(--af-cyan, #00BFFF);
     font-weight: 600;
     text-align: left;
@@ -2689,7 +2681,7 @@
     border-bottom: 1px solid rgba(0, 191, 255, 0.18);
   }
 
-  .cleide-audit-temp-table-modal-data-table tbody td {
+  .agente-compara-temp-table-modal-data-table tbody td {
     color: var(--af-text-primary, #F0F0F5);
     padding: 0.38rem 0.55rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -2697,24 +2689,24 @@
     word-break: break-word;
   }
 
-  .cleide-audit-temp-table-modal-data-table tbody tr:last-child td {
+  .agente-compara-temp-table-modal-data-table tbody tr:last-child td {
     border-bottom: none;
   }
 
   @media (max-width: 576px) {
-    .cleide-audit-temp-table-modal {
+    .agente-compara-temp-table-modal {
       padding: 0.5rem;
     }
 
-    .cleide-audit-temp-table-modal-header,
-    .cleide-audit-temp-table-modal-body,
-    .cleide-audit-temp-table-modal-footer {
+    .agente-compara-temp-table-modal-header,
+    .agente-compara-temp-table-modal-body,
+    .agente-compara-temp-table-modal-footer {
       padding-left: 0.85rem;
       padding-right: 0.85rem;
     }
   }
 
-  .cleide-audit-documents-error {
+  .agente-compara-documents-error {
 
     color: var(--af-danger, #FF4D6A) !important;
 
@@ -2722,7 +2714,7 @@
 
   }
 
-  .cleide-audit-documents-error a {
+  .agente-compara-documents-error a {
 
     color: var(--af-cyan, #00BFFF);
 
@@ -2732,7 +2724,7 @@
 
   }
 
-  .cleide-audit-bi-section {
+  .agente-compara-bi-section {
     margin-top: 1rem;
     padding: 0.85rem 0.95rem;
     border-radius: 0.65rem;
@@ -2740,45 +2732,45 @@
     background: rgba(0, 0, 0, 0.14);
   }
 
-  .cleide-audit-bi-title {
+  .agente-compara-bi-title {
     font-size: 0.95rem;
     margin: 0 0 0.25rem;
     color: var(--af-cyan, #00BFFF);
   }
 
-  .cleide-audit-bi-subtitle {
+  .agente-compara-bi-subtitle {
     color: var(--af-text-secondary, #A0A0B8);
   }
 
-  .cleide-audit-bi-content {
+  .agente-compara-bi-content {
     margin-top: 0.75rem;
     color: var(--af-text-primary, #F0F0F5);
     font-size: 0.82rem;
   }
 
-  .cleide-audit-bi-prep-lead {
+  .agente-compara-bi-prep-lead {
     margin-bottom: 0.65rem;
   }
 
-  .cleide-audit-bi-block-title {
+  .agente-compara-bi-block-title {
     font-size: 0.78rem;
     font-weight: 600;
     color: var(--af-cyan, #00BFFF);
     margin: 0.65rem 0 0.35rem;
   }
 
-  .cleide-audit-bi-field-list,
-  .cleide-audit-bi-chart-list {
+  .agente-compara-bi-field-list,
+  .agente-compara-bi-chart-list {
     margin: 0;
     padding-left: 1.1rem;
   }
 
-  .cleide-audit-bi-field-list li,
-  .cleide-audit-bi-chart-list li {
+  .agente-compara-bi-field-list li,
+  .agente-compara-bi-chart-list li {
     margin-bottom: 0.2rem;
   }
 
-  .cleide-audit-temp-table-item-actions {
+  .agente-compara-temp-table-item-actions {
     padding: 0.35rem 0.75rem 0.55rem;
     display: flex;
     flex-wrap: wrap;
@@ -2786,44 +2778,44 @@
     align-items: center;
   }
 
-  .cleide-audit-bi-generate-btn {
+  .agente-compara-bi-generate-btn {
     border-color: rgba(0, 191, 255, 0.35);
     color: var(--af-cyan, #00BFFF);
     background: rgba(0, 191, 255, 0.08);
   }
 
-  .cleide-audit-bi-generate-btn:hover {
+  .agente-compara-bi-generate-btn:hover {
     background: rgba(0, 191, 255, 0.16);
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-bi-unavailable {
+  .agente-compara-bi-unavailable {
     color: var(--af-text-secondary, #A0A0B8);
   }
 
-  .cleide-audit-bi-dashboard {
+  .agente-compara-bi-dashboard {
     margin-top: 0.75rem;
   }
 
-  .cleide-audit-bi-toolbar {
+  .agente-compara-bi-toolbar {
     display: grid;
     gap: 0.65rem;
     margin-bottom: 0.85rem;
   }
 
-  .cleide-audit-bi-filter-status {
+  .agente-compara-bi-filter-status {
     color: var(--af-text-secondary, #A0A0B8);
   }
 
-  .cleide-audit-bi-filter-chips-wrap,
-  .cleide-audit-bi-hidden-charts-wrap {
+  .agente-compara-bi-filter-chips-wrap,
+  .agente-compara-bi-hidden-charts-wrap {
     display: flex;
     flex-wrap: wrap;
     gap: 0.45rem;
     align-items: center;
   }
 
-  .cleide-audit-bi-filter-label {
+  .agente-compara-bi-filter-label {
     font-size: 0.72rem;
     font-weight: 600;
     color: var(--af-cyan, #00BFFF);
@@ -2831,15 +2823,15 @@
     letter-spacing: 0.03em;
   }
 
-  .cleide-audit-bi-filter-chips,
-  .cleide-audit-bi-hidden-charts-list {
+  .agente-compara-bi-filter-chips,
+  .agente-compara-bi-hidden-charts-list {
     display: flex;
     flex-wrap: wrap;
     gap: 0.35rem;
     align-items: center;
   }
 
-  .cleide-audit-bi-filter-chip {
+  .agente-compara-bi-filter-chip {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
@@ -2851,7 +2843,7 @@
     font-size: 0.72rem;
   }
 
-  .cleide-audit-bi-filter-chip button {
+  .agente-compara-bi-filter-chip button {
     border: 0;
     background: transparent;
     color: inherit;
@@ -2860,81 +2852,81 @@
     cursor: pointer;
   }
 
-  .cleide-audit-bi-clear-filters-btn,
-  .cleide-audit-bi-show-all-btn,
-  .cleide-audit-bi-hidden-chart-chip {
+  .agente-compara-bi-clear-filters-btn,
+  .agente-compara-bi-show-all-btn,
+  .agente-compara-bi-hidden-chart-chip {
     border-color: rgba(0, 191, 255, 0.28);
     color: var(--af-cyan, #00BFFF);
     background: rgba(0, 191, 255, 0.06);
     font-size: 0.72rem;
   }
 
-  .cleide-audit-bi-all-hidden-message {
+  .agente-compara-bi-all-hidden-message {
     color: var(--af-text-secondary, #A0A0B8);
     margin-bottom: 0.65rem;
   }
 
-  .cleide-audit-bi-executive-summary {
+  .agente-compara-bi-executive-summary {
     display: grid;
     grid-template-columns: minmax(220px, 0.9fr) minmax(0, 2.1fr);
     gap: 0.75rem;
     margin-bottom: 0.85rem;
   }
 
-  .cleide-audit-bi-confidence-card,
-  .cleide-audit-bi-kpi-card {
+  .agente-compara-bi-confidence-card,
+  .agente-compara-bi-kpi-card {
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.55rem;
     background: rgba(0, 0, 0, 0.2);
     padding: 0.7rem 0.75rem;
   }
 
-  .cleide-audit-bi-confidence-card {
+  .agente-compara-bi-confidence-card {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
     border-color: rgba(0, 191, 255, 0.22);
   }
 
-  .cleide-audit-bi-confidence-card.is-high {
+  .agente-compara-bi-confidence-card.is-high {
     border-color: rgba(0, 196, 140, 0.38);
     background: rgba(0, 196, 140, 0.08);
   }
 
-  .cleide-audit-bi-confidence-card.is-medium {
+  .agente-compara-bi-confidence-card.is-medium {
     border-color: rgba(244, 180, 0, 0.4);
     background: rgba(244, 180, 0, 0.08);
   }
 
-  .cleide-audit-bi-confidence-card.is-low,
-  .cleide-audit-bi-confidence-card.is-unavailable {
+  .agente-compara-bi-confidence-card.is-low,
+  .agente-compara-bi-confidence-card.is-unavailable {
     border-color: rgba(255, 77, 106, 0.36);
     background: rgba(255, 77, 106, 0.07);
   }
 
-  .cleide-audit-bi-confidence-value {
+  .agente-compara-bi-confidence-value {
     color: var(--af-text-primary, #F0F0F5);
     font-size: 1.15rem;
     line-height: 1.2;
   }
 
-  .cleide-audit-bi-confidence-detail {
+  .agente-compara-bi-confidence-detail {
     color: var(--af-text-secondary, #A0A0B8);
     font-size: 0.74rem;
     line-height: 1.35;
   }
 
-  .cleide-audit-bi-kpi-grid {
+  .agente-compara-bi-kpi-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.55rem;
   }
 
-  .cleide-audit-bi-kpi-card {
+  .agente-compara-bi-kpi-card {
     min-width: 0;
   }
 
-  .cleide-audit-bi-kpi-label {
+  .agente-compara-bi-kpi-label {
     display: block;
     color: var(--af-text-secondary, #A0A0B8);
     font-size: 0.7rem;
@@ -2943,7 +2935,7 @@
     text-transform: uppercase;
   }
 
-  .cleide-audit-bi-kpi-value {
+  .agente-compara-bi-kpi-value {
     display: block;
     margin-top: 0.25rem;
     color: var(--af-text-primary, #F0F0F5);
@@ -2952,7 +2944,7 @@
     line-height: 1.2;
   }
 
-  .cleide-audit-bi-kpi-hint {
+  .agente-compara-bi-kpi-hint {
     display: block;
     margin-top: 0.22rem;
     color: var(--af-text-muted, #8A8AA3);
@@ -2960,44 +2952,44 @@
     line-height: 1.25;
   }
 
-  .cleide-audit-bi-kpi-card.is-negative .cleide-audit-bi-kpi-value {
+  .agente-compara-bi-kpi-card.is-negative .agente-compara-bi-kpi-value {
     color: #ff8a9a;
   }
 
-  .cleide-audit-bi-kpi-card.is-positive .cleide-audit-bi-kpi-value {
+  .agente-compara-bi-kpi-card.is-positive .agente-compara-bi-kpi-value {
     color: #7ee7c4;
   }
 
-  .cleide-audit-bi-kpi-card.is-warning .cleide-audit-bi-kpi-value {
+  .agente-compara-bi-kpi-card.is-warning .agente-compara-bi-kpi-value {
     color: #ffd966;
   }
 
-  .cleide-audit-bi-charts-grid {
+  .agente-compara-bi-charts-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.75rem;
   }
 
-  .cleide-audit-bi-chart-card {
+  .agente-compara-bi-chart-card {
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.55rem;
     background: rgba(0, 0, 0, 0.18);
     padding: 0.65rem 0.7rem 0.75rem;
   }
 
-  .cleide-audit-bi-chart-card.is-hidden {
+  .agente-compara-bi-chart-card.is-hidden {
     display: none;
   }
 
-  .cleide-audit-bi-chart-card--wide {
+  .agente-compara-bi-chart-card--wide {
     grid-column: 1 / -1;
   }
 
-  .cleide-audit-bi-charts-grid--has-hidden .cleide-audit-bi-chart-card--wide {
+  .agente-compara-bi-charts-grid--has-hidden .agente-compara-bi-chart-card--wide {
     grid-column: auto;
   }
 
-  .cleide-audit-bi-chart-card-header {
+  .agente-compara-bi-chart-card-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -3005,26 +2997,26 @@
     margin-bottom: 0.35rem;
   }
 
-  .cleide-audit-bi-chart-title {
+  .agente-compara-bi-chart-title {
     margin: 0;
     font-size: 0.82rem;
     color: var(--af-text-primary, #F0F0F5);
   }
 
-  .cleide-audit-bi-hide-chart-btn {
+  .agente-compara-bi-hide-chart-btn {
     border-color: rgba(255, 255, 255, 0.14);
     color: var(--af-text-secondary, #A0A0B8);
     background: transparent;
     font-size: 0.68rem;
   }
 
-  .cleide-audit-bi-chart-note {
+  .agente-compara-bi-chart-note {
     font-size: 0.72rem;
     color: var(--af-text-secondary, #A0A0B8);
     margin-bottom: 0.35rem;
   }
 
-  .cleide-audit-bi-chart-empty {
+  .agente-compara-bi-chart-empty {
     font-size: 0.74rem;
     color: var(--af-text-secondary, #A0A0B8);
     border: 1px dashed rgba(255, 255, 255, 0.12);
@@ -3033,36 +3025,36 @@
     margin-bottom: 0.35rem;
   }
 
-  .cleide-audit-bi-chart-wrap {
+  .agente-compara-bi-chart-wrap {
     position: relative;
     height: 220px;
   }
 
-  .cleide-audit-bi-chart-wrap canvas {
+  .agente-compara-bi-chart-wrap canvas {
     width: 100% !important;
     height: 100% !important;
   }
 
   @media (max-width: 992px) {
-    .cleide-audit-bi-executive-summary {
+    .agente-compara-bi-executive-summary {
       grid-template-columns: 1fr;
     }
 
-    .cleide-audit-bi-kpi-grid {
+    .agente-compara-bi-kpi-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .cleide-audit-bi-charts-grid {
+    .agente-compara-bi-charts-grid {
       grid-template-columns: 1fr;
     }
 
-    .cleide-audit-bi-chart-card--wide {
+    .agente-compara-bi-chart-card--wide {
       grid-column: auto;
     }
   }
 
   @media (max-width: 576px) {
-    .cleide-audit-bi-kpi-grid {
+    .agente-compara-bi-kpi-grid {
       grid-template-columns: 1fr;
     }
   }
@@ -3071,6 +3063,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
-<script src="{{ url_for('static', filename='js/cleide_auditoria.js') }}"></script>
+<script src="{{ url_for('static', filename='js/agente_compara.js') }}"></script>
 
 {% endblock %}

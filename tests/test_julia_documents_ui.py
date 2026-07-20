@@ -166,12 +166,14 @@ def test_authenticated_home_renders_actions_submenu(monkeypatch):
     assert "Previsibilidade Frete" in html
     assert "BI Cleide" in html
     assert "Auditoria de Frete" in html
+    assert "Compare Tabelas" in html
     assert "Controle de Estoque" in html
     assert "Feed" in html
     menu_start = html.index('id="juliaChatActionsMenu"')
-    menu_chunk = html[menu_start:menu_start + 2200]
+    menu_chunk = html[menu_start:menu_start + 2800]
     assert "/cleide-bi-frete" in menu_chunk
     assert "/auditoria-frete" in menu_chunk
+    assert "/agente-compara" in menu_chunk
     assert "Área do Usuário" not in menu_chunk
     assert ">Sair<" not in menu_chunk.replace(" ", "")
     assert "Home / Notícias" not in menu_chunk

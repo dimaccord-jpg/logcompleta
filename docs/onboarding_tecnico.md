@@ -1,7 +1,7 @@
 # Onboarding Tecnico
 
-Data de consolidacao: `2026-07-10`
-Commit de referencia: `d02ce15`
+Data de consolidacao: `2026-07-16`
+Commit de referencia: `6701a53`
 
 ## Objetivo
 
@@ -12,12 +12,13 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 1. `README.md`
 2. `docs/estado_oficial_consolidado.md`
 3. `docs/arquitetura_oficial.md`
-4. `docs/runtime_ia_e_observabilidade.md`
-5. `docs/troubleshooting_operacional.md`
-6. `docs/runbook_onboarding_copilot.md`
-7. `app/README_RUN.md`
-8. `app/README_DEPLOY.md`
-9. `docs/runbooks/cleide_homologacao_controlada_checklist.md`
+4. `docs/cleide_auditoria_operacional.md`
+5. `docs/runtime_ia_e_observabilidade.md`
+6. `docs/troubleshooting_operacional.md`
+7. `docs/runbook_onboarding_copilot.md`
+8. `app/README_RUN.md`
+9. `app/README_DEPLOY.md`
+10. `docs/runbooks/cleide_homologacao_controlada_checklist.md`
 
 ## Modulos principais do estado atual
 
@@ -30,6 +31,11 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - `app/cleide_audit_doc_service.py`: sessao documental e ciclo de vida da tabela temporaria
 - `app/run_cleide_audit_temp_table.py`: extracao tecnica pos-upload da tabela temporaria
 - `app/cleide_audit_prompt.py`: prompt tecnico e prompt conversacional da Cleide Auditoria
+- `app/cleide_audit_insights_bi.py`: métricas e agregações do BI pós-auditoria
+- `app/cleide_audit_insights_context.py`: bundle validado, desbloqueio e foco do chat
+- `app/cleide_audit_insights_query.py`: consultas determinísticas
+- `app/cleide_audit_insights_prompt.py`: contexto/prompt analítico limitado
+- `app/run_cleide_audit_insights_chat.py`: orquestração do chat pós-BI
 - `app/cleiton_doc_converters.py`: conversores dos tipos aceitos
 - `app/cleiton_doc_gemini_files.py`: governanca de PDF via Gemini Files
 - `app/cleiton_doc_store.py`: store temporario local
@@ -63,6 +69,7 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - nao documentar a tabela temporaria da Cleide como auditoria final
 - nao atribuir ownership da tabela temporaria a Cleide
 - nao misturar o chat da Cleide com o fluxo de validacao da tabela temporaria
+- nao liberar o chat analítico apenas no frontend; o backend valida o BI e o `batch_scope`
 - nao transformar a auditoria em checklist rigido dentro do chat
 - nao usar regex como solucao principal de interpretacao de frete
 
@@ -77,5 +84,6 @@ Acelerar a entrada tecnica no projeto sem criar leitura paralela da arquitetura 
 - validar o modal da tabela temporaria e a entrada em modo de edicao governada
 - validar a revisao humana da tabela temporaria via endpoint dedicado quando aplicavel
 - validar coverage complementar e lote auditado quando o fluxo exigir
+- validar BI, endpoint `audit-chat/unlock`, filtros e chat `/audit-chat`
 - validar admin do Cleiton
 - validar Roberto e Cleide

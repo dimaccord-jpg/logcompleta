@@ -69,6 +69,7 @@ from app.cleiton_doc_store import (
     cleanup_expired_document_records,
     load_document_record,
     maybe_cleanup_expired_document_records,
+    peek_document_record,
     remove_document_record,
     save_document_record,
 )
@@ -253,6 +254,34 @@ def _remove_document_record_with_cleanup(doc_id: str) -> dict:
     return remove_document_record(doc_id)
 
 
+def _record_belongs_to_julia_domain(record: dict | None) -> bool:
+    """
+    Domínio documental Júlia/Cleiton legado: source_agent cleiton e sem session_key
+    dedicada. Registros de AgenteCompara/Cleide Auditoria usam source_agent e
+    session_key explícitos e nunca passam por aqui.
+    """
+    if not isinstance(record, dict):
+        return False
+    source = str(record.get(FIELD_SOURCE_AGENT) or "").strip()
+    session_key = record.get(FIELD_SESSION_KEY)
+    session_key_str = "" if session_key is None else str(session_key).strip()
+    if session_key_str in {"agente_compara_doc_ids", "cleide_audit_doc_ids"}:
+        return False
+    if source in {"agente_compara", "cleide_audit"}:
+        return False
+    if session_key_str:
+        return False
+    return source in {"", SOURCE_AGENT_CLEITON}
+
+
+def _cleiton_document_owned_by_session(doc_id: str) -> bool:
+    ref = (doc_id or "").strip()
+    if not ref or ref not in get_cleiton_doc_ids(session):
+        return False
+    record = peek_document_record(ref)
+    return _record_belongs_to_julia_domain(record)
+
+
 def register_document_placeholder(
     *,
     display_name: str,
@@ -422,33 +451,49 @@ def remove_document_from_session(doc_id: str) -> dict:
             "error_code": ERROR_DOC_NOT_FOUND,
         }
 
+    if not _cleiton_document_owned_by_session(ref):
+        return {
+            "ok": True,
+            "doc_id": ref,
+            "removed_from_store": False,
+            "removed_from_session": False,
+            "error_code": ERROR_DOC_NOT_FOUND,
+        }
+
     store_result = _remove_document_record_with_cleanup(ref)
-    had_session_ref = ref in get_cleiton_doc_ids(session)
-    if had_session_ref:
-        remove_cleiton_doc_id(session, ref)
-        _mark_session_modified()
+    remove_cleiton_doc_id(session, ref)
+    _mark_session_modified()
 
     return {
         "ok": True,
         "doc_id": ref,
         "removed_from_store": bool(store_result.get("removed")),
-        "removed_from_session": had_session_ref,
-        "error_code": None if had_session_ref or store_result.get("removed") else ERROR_DOC_NOT_FOUND,
+        "removed_from_session": True,
+        "error_code": None,
     }
 
 
 def clear_documents_for_session() -> dict:
     _require_session()
-    ids = get_cleiton_doc_ids(session)
+    ids = list(get_cleiton_doc_ids(session))
     removed_store = 0
     removed_session = 0
+    session_changed = False
     for doc_id in ids:
+        if not _cleiton_document_owned_by_session(doc_id):
+            remove_cleiton_doc_id(session, doc_id)
+            session_changed = True
+            continue
         result = _remove_document_record_with_cleanup(doc_id)
         if result.get("removed"):
             removed_store += 1
+        remove_cleiton_doc_id(session, doc_id)
         removed_session += 1
-    clear_cleiton_doc_ids(session)
-    _mark_session_modified()
+        session_changed = True
+    if not get_cleiton_doc_ids(session):
+        clear_cleiton_doc_ids(session)
+    if session_changed:
+        _mark_session_modified()
     return {
         "ok": True,
         "requested": len(ids),

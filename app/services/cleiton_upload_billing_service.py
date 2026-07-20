@@ -27,6 +27,7 @@ PROCESSING_TYPE = "non_llm"
 STATUS_SUCCESS = "success"
 AGENT_CLEIDE = "cleide"
 FLOW_TYPE_CLEIDE = "upload_fretes"
+AGENT_AGENTE_COMPARA = "agente_compara"
 
 
 @dataclass(frozen=True)
@@ -334,3 +335,119 @@ def apropriar_billing_upload_cleide(
         error_summary=error_summary,
         execution_id=execution_id,
     )
+
+
+def apropriar_billing_agente_compara_operational_flow(
+    *,
+    flow_type: str,
+    idempotency_key: str,
+    rows_processed: int,
+    processing_time_ms: int,
+    status: str,
+    error_summary: str | None = None,
+    execution_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Apropria billing operacional do AgenteCompara (fluxos espelho da Auditoria).
+
+    Contrato de retorno idêntico ao upload Roberto / Cleide operacional.
+    """
+    key = _normalizar_idempotency_key(idempotency_key)
+    flow = (flow_type or "agente_compara_batch_upload").strip()[:80]
+    ident = resolve_identidade_para_persistencia()
+
+    existente = CleitonBillingApropriacao.query.filter_by(idempotency_key=key).first()
+    if existente is not None:
+        st, consumo = _resolver_estado_franquia(existente.franquia_id)
+        return ResultadoApropriacaoUploadRoberto(
+            duplicado=True,
+            apropriado=bool(existente.processing_event_id),
+            idempotency_key=key,
+            processing_event_id=existente.processing_event_id,
+            creditos_apropriados=(
+                None
+                if existente.creditos_apropriados is None
+                else Decimal(str(existente.creditos_apropriados))
+            ),
+            motivo=existente.motivo or "idempotencia_reutilizada",
+            status_franquia_novo=st,
+            consumo_acumulado_atual=consumo,
+        ).to_dict()
+
+    marcador = CleitonBillingApropriacao(
+        idempotency_key=key,
+        agent=AGENT_AGENTE_COMPARA,
+        flow_type=flow,
+        status=(status or "failure")[:40],
+        error_summary=error_summary,
+        rows_processed=max(0, int(rows_processed)),
+        processing_time_ms=max(0, int(processing_time_ms)),
+        processing_event_id=None,
+        creditos_apropriados=None,
+        motivo="pending",
+        conta_id=ident.get("conta_id"),
+        franquia_id=ident.get("franquia_id"),
+        usuario_id=ident.get("usuario_id"),
+    )
+    db.session.add(marcador)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        dup = CleitonBillingApropriacao.query.filter_by(idempotency_key=key).first()
+        st, consumo = _resolver_estado_franquia(getattr(dup, "franquia_id", None))
+        return ResultadoApropriacaoUploadRoberto(
+            duplicado=True,
+            apropriado=bool(getattr(dup, "processing_event_id", None)),
+            idempotency_key=key,
+            processing_event_id=getattr(dup, "processing_event_id", None),
+            creditos_apropriados=(
+                None
+                if getattr(dup, "creditos_apropriados", None) is None
+                else Decimal(str(dup.creditos_apropriados))
+            ),
+            motivo=(getattr(dup, "motivo", None) or "idempotencia_concorrente"),
+            status_franquia_novo=st,
+            consumo_acumulado_atual=consumo,
+        ).to_dict()
+
+    reg = cleiton_register_processing_event(
+        agent=AGENT_AGENTE_COMPARA,
+        flow_type=flow,
+        processing_type=PROCESSING_TYPE,
+        rows_processed=max(0, int(rows_processed)),
+        processing_time_ms=max(0, int(processing_time_ms)),
+        status=(status or "failure"),
+        error_summary=error_summary,
+        execution_id=execution_id,
+    ) or {}
+
+    event_id = reg.get("processing_event_id")
+    motor = reg.get("motor_result")
+    creditos = getattr(motor, "creditos", None)
+    apropriado = bool(getattr(motor, "abateu_franquia", False))
+    motivo = getattr(motor, "motivo_nao_abateu", None)
+    if status != STATUS_SUCCESS:
+        motivo = motivo or "evento_nao_sucesso"
+    elif not apropriado and not motivo:
+        motivo = "sem_apropriacao"
+
+    marcador = db.session.get(CleitonBillingApropriacao, marcador.id)
+    if marcador is not None:
+        marcador.processing_event_id = event_id
+        marcador.creditos_apropriados = creditos if apropriado else Decimal("0")
+        marcador.motivo = motivo if not apropriado else "apropriado"
+        db.session.add(marcador)
+        db.session.commit()
+
+    st, consumo = _resolver_estado_franquia(ident.get("franquia_id"))
+    return ResultadoApropriacaoUploadRoberto(
+        duplicado=False,
+        apropriado=apropriado,
+        idempotency_key=key,
+        processing_event_id=event_id,
+        creditos_apropriados=(Decimal(str(creditos)) if creditos is not None else None),
+        motivo=motivo,
+        status_franquia_novo=st,
+        consumo_acumulado_atual=consumo,
+    ).to_dict()
