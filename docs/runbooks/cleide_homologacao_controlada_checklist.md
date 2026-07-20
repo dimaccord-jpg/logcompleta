@@ -2,12 +2,13 @@
 
 Este documento continua sendo um runbook historico/de validacao controlada da entrega aprovada. Nao e a fonte primaria da arquitetura ativa; para estado vigente, consultar `README.md`.
 
-Estado desta entrega:
+Fotografia histórica anterior: os commits `d02ce15` e `6efa2e2` pertenciam à validação de 2026-07-10 e não representam o estado vigente.
 
-- homolog aprovada no commit `d02ce15`
-- producao aprovada no commit `6efa2e2`
-- `origin/homolog` aponta para `d02ce15`
-- `origin/producao` aponta para `6efa2e2`
+Estado vigente de referência:
+
+- homolog aprovada no commit `6701a53`
+- produção promovida no commit `0c3a133`
+- backup `backup/producao-antes-cleide-insights-20260716`
 - sem migration nova
 - sem nova tabela de banco
 - sem novo campo
@@ -25,10 +26,7 @@ Estado desta entrega:
 
 ## Evidencias automatizadas atuais
 
-Coleta validada nesta auditoria documental:
-
-- `.\.venv\Scripts\python.exe -m pytest --collect-only -q tests/test_cleide_audit_correction_service.py tests/test_cleide_admin_routes.py tests/test_cleide_audit_chat_routes.py tests/test_cleide_audit_config_service.py tests/test_cleide_audit_doc_context.py tests/test_cleide_audit_doc_routes.py tests/test_cleide_audit_temp_table.py tests/test_cleide_auditoria_page.py`
-- resultado atual de coleta: `804 tests collected`
+Validação da entrega: `1.896 passed` em `homolog@6701a53`. É fotografia do commit, não contagem permanente.
 
 Cobertura automatizada usada como referencia:
 
@@ -57,7 +55,9 @@ Cobertura automatizada usada como referencia:
 | 10 | `audit/run` | Resultado calculado sem alterar documentos de origem | Auto + manual | [ ] |
 | 11 | Correcao assistida | preview/apply/undo funcionam apenas sobre diagnosticos suportados | Auto + manual | [ ] |
 | 12 | BI executivo | Quatro graficos atuais de impacto financeiro renderizam com filtros locais | Auto + manual | [ ] |
-| 13 | Arquivos temporarios | Nenhum `tt_*.json`, `.cleanup_meta.json`, `.db` local ou residuo tecnico entrou em versionamento | Manual | [ ] |
+| 13 | Chat pós-BI | Bloqueado antes do BI; unlock backend, loading, fallback, copiar e isolamento funcionam | Auto + manual | [ ] |
+| 14 | Billing | Upload cobra linhas uma vez; primeiro processamento não; reprocessamento obsoleto cobra | Auto | [ ] |
+| 15 | Arquivos temporarios | Nenhum `tt_*.json`, `.tmp_pytest_fixture`, `.venv` ou resíduo entrou em versionamento | Manual | [ ] |
 
 ## Observabilidade a validar
 
@@ -79,9 +79,10 @@ Conferir em payloads e comportamento:
 6. Baixar template oficial do lote auditado.
 7. Enviar lote auditado e executar `audit/run`.
 8. Validar BI executivo com 4 graficos.
-9. Testar preview/apply/undo quando houver diagnostico suportado.
-10. Remover ou trocar documento anexado e confirmar invalidacao do artefato anterior.
-11. Conferir que nenhum temporario local entrou em versionamento.
+9. Confirmar unlock backend e chat em `/api/cleide-auditoria/audit-chat`.
+10. Testar preview/apply/undo quando houver diagnostico suportado.
+11. Remover ou trocar documento anexado e confirmar invalidacao do artefato anterior.
+12. Conferir que nenhum temporario local entrou em versionamento.
 
 ## Registro final
 

@@ -1,55 +1,33 @@
 # Estado Oficial Consolidado
 
-Data de consolidacao: `2026-07-10`
-Commit de referencia: `homolog@d02ce15` e `producao@6efa2e2`
+Fotografia validada em 2026-07-16: `homolog@6701a53`, promovida em `producao@0c3a133`, com backup `backup/producao-antes-cleide-insights-20260716`.
 
-## Escopo confirmado
+## Produto
 
-- Copilot de discovery na Home publica
-- Home logada consolidada como superficie operacional da Julia
-- Julia documental governada pelo Cleiton
-- Roberto com upload, BI e chat privados em `/fretes`
-- Cleide BI estrutural em `/cleide-bi-frete`
-- Cleide Auditoria em `/auditoria-frete`
-- observabilidade de IA e processamento mantida
+- Cleiton: copiloto de discovery e gestor da governança operacional.
+- Júlia: consultoria operacional autenticada e contexto documental temporário.
+- Roberto: BI e previsão quantitativa de fretes em `/fretes`.
+- Cleide: auditoria cobrado versus esperado em `/auditoria-frete`.
+- `/cleide-bi-frete`: superfície anterior da Cleide, marcada como legado.
 
-## Estado de ambiente
+## Entrega
 
-- `homolog` contem `d02ce15`
-- `origin/homolog` esta sincronizada com `homolog`
-- `producao` contem `6efa2e2`
-- o `render.yaml` versionado define producao em `main` com deploy manual
-- nao houve migration nova
-- nao houve schema novo
-- nao houve tabela nova
-- nao houve campo novo
+- auditoria com tabela negociada, cobertura, fiscal, lote, cálculo, diagnósticos e correções;
+- BI executivo com quatro gráficos e filtros locais;
+- chat analítico isolado, inicialmente bloqueado e liberado pelo backend após BI válido;
+- billing operacional idempotente por linhas no upload e no reprocessamento explícito;
+- consumo operacional separado do consumo de IA;
+- nenhuma migration, tabela ou coluna nova.
 
-## Cleide Auditoria
+## Ambientes e Git
 
-- upload documental, `temp_table`, coverage opcional, lote auditado e chat estao ativos
-- a `temp_table` continua artefato temporario governado pelo dominio Cleiton
-- a extracao tecnica permanece separada do chat
-- a revisao humana pode editar e salvar a tabela antes de avancar
-- ha correcoes assistidas com preview, apply e undo
-- o BI executivo da auditoria usa 4 graficos:
-- Impacto Financeiro por Transportadora
-- Impacto Financeiro por UF Destino
-- Evolucao do Impacto Financeiro no Periodo
-- Pareto do Valor Cobrado a Mais
+- `homolog`: desenvolvimento e validação;
+- `producao`: branch operacional de produção;
+- `main`: branch padrão remota, não operacional nesta fotografia;
+- o `render.yaml` ainda aponta produção para `main`; a divergência deve ser conferida/corrigida no processo operacional, nunca presumida.
 
-## Admin
+## Testes e temporários
 
-- `/admin/agentes/cleide` separa configuracao do BI estrutural e da auditoria documental
-- `/admin/agentes/cleiton` continua dono dos limites globais documentais, TTL, cleanup e limites por tipo
-- persistencia continua em `ConfigRegras`
+No commit `6701a53`, 1.896 testes foram aprovados. Este número é uma fotografia, não expectativa fixa para commits futuros.
 
-## Git e temporarios
-
-- `app/cleiton_doc_tmp/` permanece temporaria e ignorada
-- `tt_*.json`, caches e residuos tecnicos nao entram em commit
-- `.db`, `__pycache__` e `.pytest_cache` nao fazem parte do estado oficial
-
-## Testes verificados nesta auditoria documental
-
-- suite especifica da auditoria Cleide: `804 tests collected`
-- suite completa do reposit�rio: `1660 tests collected`
+`app/cleiton_doc_tmp/`, `tt_*.json`, `.tmp_pytest_fixture/`, `.venv/`, caches e bancos locais não fazem parte do deploy. Inspecione JSON antes de limpar para não remover arquivos operacionais fora de pasta temporária.

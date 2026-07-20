@@ -1,50 +1,22 @@
-# Execucao Local
+# Execução Local
 
-Data de consolidacao: `2026-07-10`
-Commit de referencia: `d02ce15`
+Referência: `homolog@6701a53`, 2026-07-16.
 
-## Objetivo
+Configure `APP_ENV=dev`, `DATABASE_URL`, `SECRET_KEY`, `PUBLIC_BASE_URL`, `APP_DATA_DIR` e as chaves necessárias. Use a `.venv` local sem versioná-la.
 
-Executar localmente e validar Home, Julia, Roberto, Cleide BI, Cleide Auditoria e governanca documental sem depender de leitura documental antiga.
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
 
-## Premissas
+## Validação manual mínima
 
-- `APP_ENV=dev`
-- `DATABASE_URL` apontando para PostgreSQL do ambiente de trabalho
-- `PUBLIC_BASE_URL` coerente com o host local
-- `APP_DATA_DIR` configurado
+1. `/` anônimo: discovery, handoffs e `/login?next=`.
+2. `/` logado e `/chat_julia?mode=operational`: Júlia e documentos.
+3. `/fretes`: upload, BI, previsão e chat Roberto.
+4. `/auditoria-frete`: chat inicialmente bloqueado, upload, revisão, fiscal, cobertura, lote e processamento.
+5. Gerar os quatro gráficos e confirmar que o backend libera `/api/cleide-auditoria/audit-chat`.
+6. Validar filtros, `request_id`, loading, fallback, copiar resposta e isolamento entre chats.
+7. Validar limite/CTA de plano e que upload inicial, clique repetido e reprocessamento cobram conforme o contrato.
+8. Conferir admin e métricas de IA/processamento.
 
-## Validacao manual minima
-
-1. abrir `/` deslogado e validar o Copilot de discovery
-2. confirmar limite de `5` interacoes anonimas e reset via `Nova conversa`
-3. fazer login e reabrir `/`
-4. validar que a Home logada mostra a Julia operacional
-5. validar `POST /api/chat_julia`
-6. validar upload documental da Julia e bloqueios por franquia/plano quando aplicavel
-7. validar `/fretes` com upload privado, BI e chat do Roberto
-8. validar `/cleide-bi-frete` como superficie separada da auditoria
-9. validar `/auditoria-frete` com:
-- upload documental
-- status documental
-- `temp_table`
-- revisao humana governada
-- etapa fiscal quando aplicavel
-- coverage opcional quando aplicavel
-- upload do lote auditado
-- `audit/run`
-- preview/apply/undo de correcao quando houver diagnostico suportado
-10. validar `/admin/agentes/cleiton` e `/admin/agentes/cleide`
-11. validar `/admin/dashboard`
-
-## Pontos de atencao
-
-- a Home publica continua sendo discovery, nao Julia operacional
-- a Home logada e a superficie principal da Julia
-- `/chat_julia?mode=operational` continua valido para handoff e acesso direto
-- a `temp_table` da Cleide e temporaria e governada pelo dominio Cleiton
-- o chat da Cleide nao recria nem controla o ciclo de vida da `temp_table`
-- a pagina `/auditoria-frete` e publica, mas os endpoints operacionais sao privados e autorizados por franquia
-- o BI executivo da auditoria em `/auditoria-frete` tem 4 graficos de impacto financeiro; nao confundir com o BI estrutural de `/cleide-bi-frete`
-- `app/cleiton_doc_tmp/` e temporario, local e ignorado no Git
-- `.db`, caches, `__pycache__`, `.pytest_cache` e temporarios locais nao fazem parte do estado oficial
+`app/cleiton_doc_tmp/`, `tt_*.json` e `.tmp_pytest_fixture/` são temporários. Não limpe JSON fora dessas áreas sem inspeção. Detalhes: `docs/cleide_auditoria_operacional.md`.

@@ -248,6 +248,15 @@ CLEIDE_PROCESSING_FLOW_TYPES = (
 # mas não entram no consolidado de linhas faturadas do dashboard Cleide.
 CLEIDE_PROCESSING_REPROCESS_FLOW_TYPES = ("cleide_audit_batch_processed",)
 
+AGENTE_COMPARA_PROCESSING_FLOW_TYPES = (
+    "agente_compara_coverage_upload",
+    "agente_compara_batch_upload",
+)
+
+# Reprocessamentos explícitos debitam franquia, mas não somam novamente
+# no consolidado de linhas faturadas do dashboard AgenteCompara.
+AGENTE_COMPARA_PROCESSING_REPROCESS_FLOW_TYPES = ("agente_compara_batch_processed",)
+
 
 def aggregate_cleide_processing_metrics_month(year: int, month: int) -> dict[str, Any]:
     """
@@ -267,6 +276,30 @@ def aggregate_cleide_processing_metrics_month(year: int, month: int) -> dict[str
         month,
         agent="cleide",
         flow_types=list(CLEIDE_PROCESSING_REPROCESS_FLOW_TYPES),
+    )
+    metrics["total_processing_events_month"] = int(metrics.get("total_processing_events_month") or 0) + int(
+        reprocess_events.get("total_processing_events_month") or 0
+    )
+    return metrics
+
+
+def aggregate_agente_compara_processing_metrics_month(year: int, month: int) -> dict[str, Any]:
+    """
+    Metricas mensais de processamento analitico do AgenteCompara.
+    Linhas da planilha entram via agente_compara_batch_upload; reprocessamentos
+    não somam novamente no consolidado de linhas faturadas.
+    """
+    metrics = _aggregate_processing_metrics_month_by_agent_flow(
+        year,
+        month,
+        agent="agente_compara",
+        flow_types=list(AGENTE_COMPARA_PROCESSING_FLOW_TYPES),
+    )
+    reprocess_events = _aggregate_processing_metrics_month_by_agent_flow(
+        year,
+        month,
+        agent="agente_compara",
+        flow_types=list(AGENTE_COMPARA_PROCESSING_REPROCESS_FLOW_TYPES),
     )
     metrics["total_processing_events_month"] = int(metrics.get("total_processing_events_month") or 0) + int(
         reprocess_events.get("total_processing_events_month") or 0
@@ -299,6 +332,7 @@ def get_ia_dashboard_payload(year: int, month: int) -> dict[str, Any]:
     cpt = cost_per_token(cost, total_tok) if cost is not None else None
     proc = aggregate_processing_metrics_month(year, month)
     cleide_proc = aggregate_cleide_processing_metrics_month(year, month)
+    agente_compara_proc = aggregate_agente_compara_processing_metrics_month(year, month)
     onboarding_ia = aggregate_onboarding_discovery_metrics(year, month)
     from app.services.cleiton_cost_service import total_processing_estimated_cost_month
 
@@ -308,6 +342,12 @@ def get_ia_dashboard_payload(year: int, month: int) -> dict[str, Any]:
         month,
         agent="cleide",
         flow_types=list(CLEIDE_PROCESSING_FLOW_TYPES),
+    )
+    agente_compara_proc_cost = total_processing_estimated_cost_month(
+        year,
+        month,
+        agent="agente_compara",
+        flow_types=list(AGENTE_COMPARA_PROCESSING_FLOW_TYPES),
     )
     total_internal_tokens_month = int((agg.get("total_tokens_month") or 0) + (onboarding_ia.get("total_tokens_month") or 0))
     return {
@@ -324,6 +364,10 @@ def get_ia_dashboard_payload(year: int, month: int) -> dict[str, Any]:
         "cleide_processing": {
             **cleide_proc,
             **cleide_proc_cost,
+        },
+        "agente_compara_processing": {
+            **agente_compara_proc,
+            **agente_compara_proc_cost,
         },
         "onboarding_discovery_ia": onboarding_ia,
     }

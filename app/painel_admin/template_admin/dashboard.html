@@ -325,6 +325,62 @@
     <p class="text-muted small mb-4">Nenhum processamento registrado neste mes.</p>
     {% endif %}
 
+    {% set proc_agente_compara = (ia_metrics or {}).get('agente_compara_processing') or {} %}
+    <h5 class="mt-4 mb-3">Processamento Analitico (Agente Compara)</h5>
+    <p class="text-muted small mb-3">
+        Competencia: <strong>{{ proc.get('month_competence', '-') }}</strong>
+        - Upload/cobertura e lote do Agente Compara (sem tokens de IA)
+        {% if proc_agente_compara.get('last_processing_at') %}
+        - Ultima execucao: {{ proc_agente_compara.get('last_processing_at', '')[:19]|replace('T', ' ') }} UTC
+        {% if proc_agente_compara.get('last_processing_status') %}
+        (<span class="text-muted">{{ proc_agente_compara.get('last_processing_status') }}</span>)
+        {% endif %}
+        {% endif %}
+    </p>
+    <div class="row g-3 mb-4">
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Total de Execucoes (mes)</small>
+                <h3 class="text-primary mb-0">{{ (proc_agente_compara.get('total_processing_events_month') or 0)|int }}</h3>
+            </div>
+        </div>
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Total de Linhas Processadas</small>
+                <h3 class="text-success mb-0">{{ '{:,}'.format((proc_agente_compara.get('total_rows_processed_month') or 0)|int) }}</h3>
+            </div>
+        </div>
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Tempo Medio de Processamento (ms)</small>
+                <h3 class="text-dark mb-0">
+                    {% if proc_agente_compara.get('avg_processing_time_ms') is not none %}
+                    {{ '%.1f'|format(proc_agente_compara.get('avg_processing_time_ms')) }}
+                    {% else %}
+                    <span class="text-muted fs-5">-</span>
+                    {% endif %}
+                </h3>
+            </div>
+        </div>
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow-sm p-3">
+                <small class="text-muted fw-bold">Custo Estimado (mes) <span class="fw-normal">- processamento</span></small>
+                {% if not proc_agente_compara.get('processing_cost_configured') %}
+                <p class="text-muted small mb-0 mt-2">Configuracao de custo nao definida.</p>
+                <p class="small mb-0"><a href="{{ url_for('admin.agentes_cleiton') }}">Definir em Cleiton</a></p>
+                {% else %}
+                <h3 class="text-success mb-0">
+                    R$ {{ '%.2f'|format(proc_agente_compara.get('total_processing_estimated_cost_month') or 0) }}
+                </h3>
+                <small class="text-muted">Estimativa (runtime Render), nao inclui tokens de IA.</small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% if (proc_agente_compara.get('total_processing_events_month') or 0)|int == 0 %}
+    <p class="text-muted small mb-4">Nenhum processamento registrado neste mes.</p>
+    {% endif %}
+
     {# Analise de termos do onboarding — intencao e termos buscados (AuditoriaGerencial) #}
     {% set wc_payload = onboarding_word_cloud or {} %}
     {% set word_cloud = wc_payload.get('terms') or [] %}

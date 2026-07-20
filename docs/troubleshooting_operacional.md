@@ -1,7 +1,7 @@
 # Troubleshooting Operacional
 
 Data de consolidacao: `2026-07-10`
-Commit de referencia: `d02ce15`
+Commit de referência: `6701a53`
 
 ## 1. Home publica sem responder
 
@@ -193,3 +193,20 @@ Regra oficial:
 
 - artefatos temporarios de teste e da `temp_table` nao devem ser versionados
 - `app/cleiton_doc_tmp/` esta coberto pelo `.gitignore`
+
+## 16. Chat analítico da Cleide continua bloqueado
+
+Conferir, nesta ordem:
+
+1. lote em estado `processed` e com resultado minimamente válido;
+2. `audit_bi.ready === true` e linhas disponíveis;
+3. clique em **Gerar Gráficos**;
+4. resposta de `POST /api/cleide-auditoria/audit-chat/unlock`;
+5. se o `batch_scope` ainda corresponde a `temp_table_id`, `audit_batch_id` e `processed_at`;
+6. autenticação e autorização por franquia.
+
+Não force `chatUnlocked` no JavaScript. O backend deve permanecer como autoridade do desbloqueio. Troca/reprocessamento de lote invalida o escopo anterior.
+
+## 17. Consumo de linhas parece duplicado
+
+Correlacione `CleitonBillingApropriacao`, `ProcessingEvent`, `execution_id` e a chave idempotente. O upload inicial usa `cleide_audit_batch_upload`; o primeiro processamento não emite `cleide_audit_batch_processed`. Este último só deve existir para reprocessamento explícito de lote obsoleto. Tokens do chat aparecem em `IaConsumoEvento` e não são segunda cobrança de linhas.
