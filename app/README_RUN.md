@@ -1,22 +1,43 @@
 # Execução Local
 
-Referência: `homolog@6701a53`, 2026-07-16.
+Referência auditada em 2026-07-20.
 
-Configure `APP_ENV=dev`, `DATABASE_URL`, `SECRET_KEY`, `PUBLIC_BASE_URL`, `APP_DATA_DIR` e as chaves necessárias. Use a `.venv` local sem versioná-la.
+## Pré-requisitos
+
+- estar no diretório raiz do projeto;
+- usar `.venv` local sem versioná-la;
+- definir `APP_ENV`, `DATABASE_URL`, `SECRET_KEY`, `APP_DATA_DIR`, `INDICES_FILE_PATH` e `PUBLIC_BASE_URL`.
+
+## Comandos úteis
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app.web db upgrade
+.\.venv\Scripts\python.exe -m flask --app app.web run
+```
+
 ## Validação manual mínima
 
-1. `/` anônimo: discovery, handoffs e `/login?next=`.
-2. `/` logado e `/chat_julia?mode=operational`: Júlia e documentos.
-3. `/fretes`: upload, BI, previsão e chat Roberto.
-4. `/auditoria-frete`: chat inicialmente bloqueado, upload, revisão, fiscal, cobertura, lote e processamento.
-5. Gerar os quatro gráficos e confirmar que o backend libera `/api/cleide-auditoria/audit-chat`.
-6. Validar filtros, `request_id`, loading, fallback, copiar resposta e isolamento entre chats.
-7. Validar limite/CTA de plano e que upload inicial, clique repetido e reprocessamento cobram conforme o contrato.
-8. Conferir admin e métricas de IA/processamento.
+1. `/` anônimo: discovery, limites de onboarding e handoff com `next` seguro.
+2. `/` logado e `/chat_julia?mode=operational`: Júlia operacional.
+3. `/api/julia/documents/*`: upload, listagem, remoção e limpeza com isolamento por sessão.
+4. `/fretes`: upload, BI, previsão e chat Roberto.
+5. `/auditoria-frete`: upload, `temp_table`, revisão, coverage, lote, BI e `audit-chat/unlock`.
+6. `/agente-compara`: upload, `temp_table`, revisão, coverage, lote, BI e `audit-chat/unlock`.
+7. `/admin/...`: métricas de IA/processamento, billing e configurações.
+8. `/cron/*`: somente em contexto controlado e com `X-Cron-Secret` válido.
 
-`app/cleiton_doc_tmp/`, `tt_*.json` e `.tmp_pytest_fixture/` são temporários. Não limpe JSON fora dessas áreas sem inspeção. Detalhes: `docs/cleide_auditoria_operacional.md`.
+## Temporários e artefatos
+
+- `app/cleiton_doc_tmp/` e `tt_*.json` são temporários técnicos;
+- `.db` locais não fazem parte do fluxo oficial;
+- templates `.xlsx` oficiais versionados são exceções explícitas do `.gitignore`.
+
+## Observações importantes
+
+- o boot versionado do Render aplica migrations antes do servidor;
+- `APP_ENV` é obrigatório e não tem fallback implícito;
+- o banco oficial é PostgreSQL em todos os ambientes.

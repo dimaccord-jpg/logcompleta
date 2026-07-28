@@ -255,7 +255,10 @@ AGENTE_COMPARA_PROCESSING_FLOW_TYPES = (
 
 # Reprocessamentos explícitos debitam franquia, mas não somam novamente
 # no consolidado de linhas faturadas do dashboard AgenteCompara.
-AGENTE_COMPARA_PROCESSING_REPROCESS_FLOW_TYPES = ("agente_compara_batch_processed",)
+AGENTE_COMPARA_PROCESSING_REPROCESS_FLOW_TYPES = (
+    "agente_compara_batch_processed",
+    "agente_compara_comparison_calculation",
+)
 
 
 def aggregate_cleide_processing_metrics_month(year: int, month: int) -> dict[str, Any]:

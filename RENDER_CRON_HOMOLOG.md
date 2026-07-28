@@ -1,19 +1,40 @@
 # Render + Cron em Homolog
 
-Referência: `homolog@6701a53`, 2026-07-16.
+Referência auditada em 2026-07-20.
 
 ## Premissas
 
-Configure `APP_ENV=homolog`, `DATABASE_URL`, `CRON_SECRET`, `APP_BASE_URL`, storage persistente e migrations do ambiente.
+Configurar no ambiente:
 
-Os endpoints oficiais são `POST /cron/executar-cleiton`, `POST /cron/finance` e `POST /cron/billing-snapshot`, com header `X-Cron-Secret`. Sem segredo ou com header inválido, a resposta esperada é `403`; com segredo válido, `200`. Use `curl -f` para expor falhas HTTP. `?secret=` é compatibilidade temporária.
+- `APP_ENV=homolog`
+- `DATABASE_URL`
+- `CRON_SECRET`
+- storage persistente
+- cadeia de migrations existente
 
-Jobs não dependem de `app/cleiton_doc_tmp/`, `tt_*.json` ou banco local.
+## Cron oficial
 
-## Branches
+Endpoints confirmados no código:
 
-Homologação usa `homolog`. Produção operacional usa `producao`, promovida em `0c3a133`, com backup `backup/producao-antes-cleide-insights-20260716`.
+- `POST /cron/executar-cleiton`
+- `POST /cron/finance`
+- `POST /cron/billing-snapshot`
 
-O `render.yaml` ainda declara produção em `main` e `autoDeploy: false`. É divergência a conferir no painel; não torna `main` a branch operacional.
+Autenticação:
 
-Esta entrega não criou migration, tabela ou coluna. Ver `README.md` e `app/README_DEPLOY.md`.
+- oficial: header `X-Cron-Secret`
+- compatibilidade temporária: `?secret=`
+
+Sem segredo válido, a resposta esperada é `403`. Com segredo válido, `200`.
+
+## Observações de infraestrutura
+
+- jobs não dependem de `.db` local nem de `app/cleiton_doc_tmp/`;
+- `start.sh` aplica migrations antes do Gunicorn;
+- `render.yaml` versionado declara homolog em `homolog` e produção em `main`.
+
+## Divergências vigentes
+
+- o processo operacional informado trata `producao` como branch de produção;
+- o YAML versionado ainda aponta produção para `main`;
+- o YAML usa `healthCheckPath: /health`, mas o código expõe `/health/liveness` e `/health/readiness`.

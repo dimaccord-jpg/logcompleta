@@ -144,10 +144,15 @@ def _authorized(monkeypatch, web, *, authz=None):
     )
 
 
-def _upload_ac(client, filename: str, content: bytes, mime: str = "text/csv"):
+def _upload_ac(client, filename: str, content: bytes, mime: str = "text/csv", *, carrier_name: str = "Transportadora Teste", **form_fields):
+    data = {
+        "file": (io.BytesIO(content), filename, mime),
+        "carrier_name": carrier_name,
+    }
+    data.update(form_fields)
     return client.post(
         "/api/agente-compara/documents/upload",
-        data={"file": (io.BytesIO(content), filename, mime)},
+        data=data,
         content_type="multipart/form-data",
     )
 
@@ -191,7 +196,7 @@ def test_clear_agente_compara_docs_does_not_clear_cleide_session_keys(app, monke
     app.config["SECRET_KEY"] = "test-secret-agente-compara-isolation"
     monkeypatch.setattr(
         "app.agente_compara_doc_service._agente_compara_document_owned_by_session",
-        lambda doc_id: doc_id == "ac-doc-1",
+        lambda doc_id, **_kwargs: doc_id == "ac-doc-1",
     )
     monkeypatch.setattr(
         "app.agente_compara_doc_service.remove_document_record",
@@ -381,6 +386,19 @@ def test_clear_cleide_preserves_agente_compara_documents(web_client, tmp_path):
         assert cleide_doc_id not in (sess.get(CLEIDE_AUDIT_DOC_IDS_SESSION_KEY) or [])
 
 
+EXPECTED_AGENTE_COMPARA_TEMPLATE_HEADERS = [
+    "numero_documento",
+    "cidade_origem",
+    "uf_origem",
+    "cidade_destino",
+    "uf_destino",
+    "valor_nf",
+    "peso",
+    "modal",
+    "data_emissao",
+]
+
+
 def test_agente_compara_template_xlsx_sheet_and_columns():
     template_path = pathlib.Path("app/protected_files/templates") / AGENTE_COMPARA_TEMPLATE_FILENAME
     assert template_path.is_file()
@@ -388,21 +406,31 @@ def test_agente_compara_template_xlsx_sheet_and_columns():
     try:
         assert AUDIT_BATCH_SHEET_NAME in wb.sheetnames
         assert "Modelo Cleide" not in wb.sheetnames
+        assert wb.sheetnames == [AUDIT_BATCH_SHEET_NAME]
         ws = wb[AUDIT_BATCH_SHEET_NAME]
         header = [str(cell).strip() if cell is not None else "" for cell in next(ws.iter_rows(values_only=True))]
     finally:
         wb.close()
 
+    assert header == EXPECTED_AGENTE_COMPARA_TEMPLATE_HEADERS
+    assert len(header) == 9
+    assert "" not in header
+    assert "transportadora" not in header
+    assert "data_entrega" not in header
+    assert "valor_frete" not in header
+
     cleide_path = pathlib.Path("app/protected_files/templates/template_cleide_auditoria_frete.xlsx")
     wb_c = openpyxl.load_workbook(cleide_path, read_only=True, data_only=True)
     try:
+        assert "Modelo Cleide" in wb_c.sheetnames
         ws_c = wb_c["Modelo Cleide"]
         cleide_header = [
             str(cell).strip() if cell is not None else "" for cell in next(ws_c.iter_rows(values_only=True))
         ]
     finally:
         wb_c.close()
-    assert header == cleide_header
+    assert "valor_frete" in cleide_header
+    assert header != cleide_header
 
 
 def test_html_has_no_bi_cleide_label():

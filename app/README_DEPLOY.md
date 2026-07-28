@@ -1,32 +1,69 @@
 # Deploy e Promoção
 
-Referência: `homolog@6701a53` promovido em `producao@0c3a133` em 2026-07-16. Backup: `backup/producao-antes-cleide-insights-20260716`.
+Referência operacional consolidada em 2026-07-20.
 
-## Branches
+## Premissas
 
-- `homolog`: desenvolvimento, push e validação de homologação;
-- `producao`: branch operacional de produção;
-- `main`: branch padrão remota; não é produção operacional nesta fotografia.
+- executar a partir do diretório do projeto;
+- ativar a virtualenv local quando a validação ocorrer fora do Render;
+- trabalhar primeiro em `homolog`;
+- validar `git fetch`, branch atual, sincronização e `git status --short` antes de qualquer promoção.
 
-O `render.yaml` versionado ainda declara produção em `main` e `autoDeploy: false`. Trate isso como divergência a validar no painel, não como autorização para promover em `main`.
+## Estado atual documentado
 
-## Promoção
+- homolog local auditado nesta atividade: `c2575f8`;
+- produção informada pelo processo operacional: `8edae63`;
+- backup homolog informado: `backup/homolog-antes-agente-compara-20260720`;
+- backup produção informado: `backup/producao-antes-agente-compara-20260720`;
+- sem migration, tabela, coluna ou banco novo na entrega atual.
 
-1. Em `homolog`, confirmar worktree, revisar diff e limpar resíduos após inspeção.
-2. Verificar se mudanças de schema têm migrations; esta entrega não teve migration, tabela ou coluna.
-3. Executar a suíte completa e validação manual mínima.
-4. Fazer commit e push para `homolog` somente após aprovação do trabalho.
-5. Validar deploy/health e fluxos no Render de homologação.
-6. Trocar para `producao`, atualizar referências remotas e criar `backup/producao-antes-<entrega>-<data>`.
-7. Fazer merge de `homolog` com `--no-ff`; resolver conflitos por arquivo, sem escolher um lado em massa.
-8. Executar novamente a suíte completa após o merge.
-9. Fazer push de `producao`, validar build, migration chain, `/health`, login, agentes, billing e observabilidade.
-10. Voltar para `homolog`.
+## Fluxo recomendado
 
-Não execute commit, push, merge ou deploy durante uma atualização apenas documental sem autorização explícita.
+1. `git fetch --all --prune`
+2. `git branch --show-current`
+3. `git status --short`
+4. validar se `homolog` está sincronizada com o remoto pretendido;
+5. executar testes e validações manuais mínimas;
+6. confirmar se a cadeia de migrations existente está íntegra;
+7. somente após aprovação explícita, fazer commit e push em `homolog`;
+8. validar deploy de homologação no Render;
+9. criar backup da branch de produção antes da promoção;
+10. promover `homolog` para a branch operacional de produção com `git merge --no-ff`;
+11. executar novamente as validações pós-merge;
+12. push da branch de produção;
+13. validar build, migrations, login, agentes, billing, cron e health check;
+14. voltar para `homolog`.
 
-## Limpeza e schema
+## Merge `--no-ff`
 
-Não publique `.venv`, `.tmp_pytest_fixture`, `app/cleiton_doc_tmp`, `tt_*.json`, caches ou bancos locais. Inspecione qualquer JSON antes de excluir. Mudança futura de schema deve ter migration no mesmo deploy, aplicada antes do código dependente e verificada depois.
+Um merge `--no-ff` pode deixar a branch dois commits à frente do remoto de referência:
 
-Fotografia validada: 1.896 testes aprovados em `6701a53`; execute `python -m pytest -q` e registre a contagem real do commit promovido.
+- o commit já existente da entrega promovida;
+- o novo commit de merge.
+
+Isso é esperado e não deve ser interpretado automaticamente como desvio.
+
+## Render e infraestrutura
+
+Confirmado no código versionado:
+
+- `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn;
+- `render.yaml` declara homolog em `homolog` com `autoDeploy: true`;
+- `render.yaml` declara produção em `main` com `autoDeploy: false`.
+
+Divergências a validar fora do código:
+
+- o processo operacional informado usa `producao` como branch de produção;
+- o YAML versionado ainda aponta produção para `main`;
+- o YAML usa `healthCheckPath: /health`, mas o código expõe `/health/liveness` e `/health/readiness`.
+
+## Banco e migrations
+
+- esta entrega não criou migration nova;
+- deploy deve aplicar ou validar a cadeia Alembic já existente;
+- não corrigir schema manualmente sem migration correspondente;
+- `.db` locais e JSON temporários não participam do deploy.
+
+## Rollback
+
+O rollback deve partir do backup de branch criado antes da promoção, não de ajustes manuais de banco ou troca ad hoc de arquivos.

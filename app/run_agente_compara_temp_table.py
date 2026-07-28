@@ -24,6 +24,14 @@ from app.agente_compara_doc_service import (
     split_temp_table_block_from_answer,
     TEMP_TABLE_STATUS_FAILED,
     TEMP_TABLE_VERSION_MARKER,
+    FIELD_COMPARISON_ID,
+    FIELD_TABLE_ID,
+    FIELD_SLOT_NUMBER,
+)
+from app.agente_compara_comparison_state import (
+    get_active_table,
+    get_comparison_state,
+    resolve_table_identity,
 )
 from app.agente_compara_prompt import (
     build_agente_compara_temp_table_fallback_prompt,
@@ -264,28 +272,51 @@ def _is_provider_timeout(exc: Exception) -> bool:
     return "DEADLINE_EXCEEDED" in message or "504" in message
 
 
-def _get_cached_extraction(session_obj, source_doc_ids: list[str]) -> dict | None:
+def _get_cached_extraction(
+    session_obj,
+    source_doc_ids: list[str],
+    *,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+) -> dict | None:
     if not has_request_context():
         return None
     cache = session_obj.get(TEMP_TABLE_EXTRACTION_IDEMPOTENCY_CACHE_KEY)
     if not isinstance(cache, dict):
         return None
-    key = agente_compara_temp_table_extraction_idempotency_key(source_doc_ids)
+    key = agente_compara_temp_table_extraction_idempotency_key(
+        source_doc_ids,
+        comparison_id=comparison_id,
+        table_id=table_id,
+    )
     payload = cache.get(key)
     return payload if isinstance(payload, dict) else None
 
 
-def _cache_extraction_result(session_obj, source_doc_ids: list[str], record: dict) -> None:
+def _cache_extraction_result(
+    session_obj,
+    source_doc_ids: list[str],
+    record: dict,
+    *,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+) -> None:
     if not has_request_context() or not isinstance(record, dict):
         return
     cache = session_obj.get(TEMP_TABLE_EXTRACTION_IDEMPOTENCY_CACHE_KEY)
     if not isinstance(cache, dict):
         cache = {}
-    key = agente_compara_temp_table_extraction_idempotency_key(source_doc_ids)
+    key = agente_compara_temp_table_extraction_idempotency_key(
+        source_doc_ids,
+        comparison_id=comparison_id,
+        table_id=table_id,
+    )
     cache[key] = {
         "temp_table_id": record.get("temp_table_id"),
         "status": record.get("status"),
         "version_marker": TEMP_TABLE_VERSION_MARKER,
+        "comparison_id": comparison_id,
+        "table_id": table_id,
     }
     session_obj[TEMP_TABLE_EXTRACTION_IDEMPOTENCY_CACHE_KEY] = cache
     session_obj.modified = True
@@ -297,6 +328,9 @@ def run_agente_compara_temp_table_extraction(
     session_obj=None,
     user_scope=None,
     franquia_scope=None,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+    slot_number: int | None = None,
 ) -> dict | None:
     """
     Executa extração técnica via Gemini para os documentos de origem informados.
@@ -308,15 +342,23 @@ def run_agente_compara_temp_table_extraction(
     if not normalized:
         return None
 
-    cached = _get_cached_extraction(sess, normalized)
+    cached = _get_cached_extraction(
+        sess,
+        normalized,
+        comparison_id=comparison_id,
+        table_id=table_id,
+    )
     if cached and cached.get("version_marker") == TEMP_TABLE_VERSION_MARKER:
         return cached
 
-    doc_ctx = build_agente_compara_document_context_for_chat(sess)
+    doc_ctx = build_agente_compara_document_context_for_chat(sess, table_id=table_id)
     if not doc_ctx.get("has_documents"):
         return apply_temp_table_extraction_from_model_payload(
             _failed_extraction_payload(reading_alerts=READING_ALERT_PARSER_NO_JSON),
             source_doc_ids=normalized,
+            comparison_id=comparison_id,
+            table_id=table_id,
+            slot_number=slot_number,
         )
 
     effective_timeout_ms = get_extraction_timeout_ms()
@@ -333,8 +375,17 @@ def run_agente_compara_temp_table_extraction(
         record = apply_temp_table_extraction_from_model_payload(
             _failed_extraction_payload(reading_alerts=READING_ALERT_PARSER_NO_JSON),
             source_doc_ids=normalized,
+            comparison_id=comparison_id,
+            table_id=table_id,
+            slot_number=slot_number,
         )
-        _cache_extraction_result(sess, normalized, record)
+        _cache_extraction_result(
+            sess,
+            normalized,
+            record,
+            comparison_id=comparison_id,
+            table_id=table_id,
+        )
         return record
 
     model_candidates = _get_model_candidates()
@@ -362,8 +413,17 @@ def run_agente_compara_temp_table_extraction(
                 record = apply_temp_table_extraction_from_model_payload(
                     _failed_extraction_payload(reading_alerts=READING_ALERT_PARSER_NO_JSON),
                     source_doc_ids=normalized,
+                    comparison_id=comparison_id,
+                    table_id=table_id,
+                    slot_number=slot_number,
                 )
-                _cache_extraction_result(sess, normalized, record)
+                _cache_extraction_result(
+                    sess,
+                    normalized,
+                    record,
+                    comparison_id=comparison_id,
+                    table_id=table_id,
+                )
                 return record
             if franquia_scope is not None:
                 payload["franquia_scope"] = franquia_scope
@@ -372,8 +432,17 @@ def run_agente_compara_temp_table_extraction(
             record = apply_temp_table_extraction_from_model_payload(
                 payload,
                 source_doc_ids=normalized,
+                comparison_id=comparison_id,
+                table_id=table_id,
+                slot_number=slot_number,
             )
-            _cache_extraction_result(sess, normalized, record)
+            _cache_extraction_result(
+                sess,
+                normalized,
+                record,
+                comparison_id=comparison_id,
+                table_id=table_id,
+            )
             return record
         except Exception as exc:
             last_error = exc
@@ -403,8 +472,17 @@ def run_agente_compara_temp_table_extraction(
     record = apply_temp_table_extraction_from_model_payload(
         _failed_extraction_payload(reading_alerts=failure_alerts),
         source_doc_ids=normalized,
+        comparison_id=comparison_id,
+        table_id=table_id,
+        slot_number=slot_number,
     )
-    _cache_extraction_result(sess, normalized, record)
+    _cache_extraction_result(
+        sess,
+        normalized,
+        record,
+        comparison_id=comparison_id,
+        table_id=table_id,
+    )
     return record
 
 
@@ -413,6 +491,9 @@ def trigger_temp_table_extraction_for_session(
     session_obj=None,
     user_scope=None,
     franquia_scope=None,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+    slot: int | None = None,
 ) -> dict | None:
     """
     Marca processing e dispara extração técnica para o conjunto atual de documentos.
@@ -420,17 +501,29 @@ def trigger_temp_table_extraction_for_session(
     Idempotente por conjunto de source_documents + version_marker na sessão.
     """
     sess = session_obj if session_obj is not None else session
-    source_doc_ids = get_agente_compara_doc_ids(sess)
+    cmp_state, table_entry = resolve_table_identity(
+        comparison_id=comparison_id,
+        table_id=table_id,
+        slot=slot,
+        auto_create=True,
+    )
+    resolved_table_id = table_entry["table_id"]
+    resolved_comparison_id = cmp_state.get("comparison_id")
+    resolved_slot = int(table_entry.get("slot_number") or 1)
+    source_doc_ids = get_agente_compara_doc_ids(sess, table_id=resolved_table_id)
     normalized = _normalize_source_doc_ids(source_doc_ids)
     if not normalized:
         return None
-    if not should_attempt_temp_table_extraction(sess, normalized):
+    if not should_attempt_temp_table_extraction(sess, normalized, table_id=resolved_table_id):
         return None
 
     mark_temp_table_processing(
         normalized,
         user_scope=user_scope,
         franquia_scope=franquia_scope,
+        comparison_id=resolved_comparison_id,
+        table_id=resolved_table_id,
+        slot_number=resolved_slot,
     )
 
     try:
@@ -439,6 +532,9 @@ def trigger_temp_table_extraction_for_session(
             session_obj=sess,
             user_scope=user_scope,
             franquia_scope=franquia_scope,
+            comparison_id=resolved_comparison_id,
+            table_id=resolved_table_id,
+            slot_number=resolved_slot,
         )
     except Exception:
         logger.exception(
@@ -448,6 +544,9 @@ def trigger_temp_table_extraction_for_session(
             return apply_temp_table_extraction_from_model_payload(
                 _failed_extraction_payload(reading_alerts=READING_ALERT_PARSER_NO_JSON),
                 source_doc_ids=normalized,
+                comparison_id=resolved_comparison_id,
+                table_id=resolved_table_id,
+                slot_number=resolved_slot,
             )
         except Exception:
             logger.exception(

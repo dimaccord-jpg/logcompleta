@@ -1,30 +1,71 @@
 # Runtime IA e Observabilidade
 
-Referência: `homolog@6701a53`, 2026-07-16.
+Referência auditada em 2026-07-20.
 
 ## Trilhas separadas
 
-`IaConsumoEvento` registra tentativa real de LLM: horário, provider, operação, modelo, agente, `flow_type`, chave lógica, status, tokens, erro e identidade de conta/franquia/usuário quando disponível. `ProcessingEvent` registra trabalho não-LLM: agente, fluxo, tipo, linhas, duração, status, erro, `execution_id` e identidade.
+Modelos confirmados no código:
 
-`CleitonBillingApropriacao` liga evento operacional, chave idempotente, linhas, créditos e motivo. `CleitonCostConfig` contém parâmetros de custo por segundo e conversão de tokens/linhas/tempo. Não misture tokens com linhas: são dimensões e trilhas diferentes.
+- `IaConsumoEvento`: tentativas reais de LLM, tokens, status, provider, agente, `flow_type` e identidade quando disponível;
+- `ProcessingEvent`: processamento não-LLM, linhas, duração, status, agente e `flow_type`;
+- `CleitonBillingApropriacao`: apropriação operacional idempotente;
+- `IaBillingCostSnapshot`: snapshot de custo month-to-date via BigQuery billing export;
+- `CleitonCostConfig`: régua de custo e conversão em créditos.
 
-## Auditoria Cleide
+Consumo operacional e consumo de IA permanecem separados por desenho e por testes.
 
-Fluxos operacionais observáveis:
+## Onboarding e consumo interno
+
+`onboarding_discovery` continua fora do abatimento operacional do cliente. Isso é confirmado por testes em `tests/test_ia_metrics_service.py`.
+
+## Júlia
+
+- documentos apoiam o chat operacional, mas a camada `/api/julia/documents/*` não cria billing próprio;
+- o uso de IA da Júlia entra em `IaConsumoEvento`;
+- a autorização operacional continua centralizada no Cleiton.
+
+## Cleide Auditoria
+
+Fluxos operacionais observáveis confirmados:
 
 - `cleide_audit_coverage_upload`;
 - `cleide_audit_batch_upload`;
-- `cleide_audit_batch_processed`, apenas para reprocessamento faturável;
-- estados de documentos e `temp_table`;
-- quantidade de linhas, duração, sucesso/falha e `error_summary`;
-- idempotência por IDs de sessão/lote/versão e `execution_id`.
+- `cleide_audit_batch_processed`, apenas em reprocessamento faturável;
+- eventos de `temp_table`, coverage, lote e BI;
+- IA documental e chat em `IaConsumoEvento`.
 
-Chamadas de extração ou chat Gemini são eventos IA com `flow_type` próprio. O chat analítico usa `request_id` e cache por `batch_scope`; fallback determinístico continua útil quando o provider falha. Falhas de billing tentam registrar `ProcessingEvent` sem aplicar o motor novamente, preservando rastreabilidade.
+O primeiro `audit/run` não cobra novamente o lote já apropriado no upload inicial.
 
-O dashboard administrativo agrega uploads, eventos, linhas, duração média, falhas e tokens. Métrica por clique/gráfico não existe e não deve ser inventada. `tests/test_ia_metrics_service.py` e `tests/test_cleide_audit_operational_billing.py` são contratos da separação.
+## Agente Compara
 
-## Operação
+Fluxos observáveis paralelos à Cleide, com namespace próprio:
 
-Ao investigar incidente, correlacione: usuário/franquia, `execution_id`, `request_id`, `temp_table_id`, `audit_batch_id`, `flow_type`, chave idempotente, status, duração, linhas e erro. Repetição da mesma chave não deve criar nova apropriação.
+- `agente_compara_coverage_upload`;
+- `agente_compara_batch_upload`;
+- `agente_compara_batch_processed`;
+- eventos próprios de `temp_table`, chat e BI;
+- agregação separada no dashboard administrativo.
 
-Onboarding `onboarding_discovery` continua consumo interno separado e não abate franquia operacional. Esta entrega não criou migration, tabela ou coluna para observabilidade.
+Testes confirmam que os eventos do Agente Compara não contaminam os blocos de métricas da Cleide.
+
+## Operação e correlação
+
+Ao investigar incidentes, correlacionar:
+
+- usuário, conta e franquia;
+- `execution_id`;
+- `request_id`;
+- `flow_type`;
+- chave idempotente;
+- `temp_table_id` e `audit_batch_id` quando existirem;
+- status, linhas, duração e erro.
+
+## Cron e snapshots
+
+Rotas confirmadas em código:
+
+- `/cron/executar-cleiton`
+- `/cron/finance`
+- `/cron/billing-snapshot`
+
+Autenticação por `X-Cron-Secret`, com `?secret=` mantido como compatibilidade temporária. O snapshot de billing pode ser pulado quando BigQuery não estiver configurado.

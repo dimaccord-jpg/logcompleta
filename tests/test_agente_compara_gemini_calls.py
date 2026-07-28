@@ -151,7 +151,7 @@ def test_extraction_runner_uses_agente_compara_temp_table_extraction(monkeypatch
     monkeypatch.setattr(
         temp_mod,
         "apply_temp_table_extraction_from_model_payload",
-        lambda payload, source_doc_ids=None: {
+        lambda payload, source_doc_ids=None, **_kwargs: {
             "ok": True,
             "temp_table_id": "tt-1",
             "version_marker": "agente_compara_temp_table_v1",

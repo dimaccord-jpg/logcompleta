@@ -1,33 +1,54 @@
 # Estado Oficial Consolidado
 
-Fotografia validada em 2026-07-16: `homolog@6701a53`, promovida em `producao@0c3a133`, com backup `backup/producao-antes-cleide-insights-20260716`.
+Fotografia consolidada em 2026-07-20 com base no código local e no contexto operacional informado:
+
+- homolog local: `c2575f8`;
+- produção promovida informada: `8edae63`;
+- backup homolog: `backup/homolog-antes-agente-compara-20260720`;
+- backup produção: `backup/producao-antes-agente-compara-20260720`.
 
 ## Produto
 
-- Cleiton: copiloto de discovery e gestor da governança operacional.
-- Júlia: consultoria operacional autenticada e contexto documental temporário.
-- Roberto: BI e previsão quantitativa de fretes em `/fretes`.
-- Cleide: auditoria cobrado versus esperado em `/auditoria-frete`.
-- `/cleide-bi-frete`: superfície anterior da Cleide, marcada como legado.
+- Cleiton: discovery, governança, billing, cron, admin e observabilidade.
+- Júlia: consultoria operacional autenticada com documentos temporários compartilhados.
+- Roberto: BI e chat quantitativo em `/fretes`.
+- Cleide: BI legado e auditoria documental em `/auditoria-frete`.
+- Agente Compara: novo módulo documental e analítico em `/agente-compara`.
 
-## Entrega
+## Entrega confirmada
 
-- auditoria com tabela negociada, cobertura, fiscal, lote, cálculo, diagnósticos e correções;
-- BI executivo com quatro gráficos e filtros locais;
-- chat analítico isolado, inicialmente bloqueado e liberado pelo backend após BI válido;
-- billing operacional idempotente por linhas no upload e no reprocessamento explícito;
-- consumo operacional separado do consumo de IA;
-- nenhuma migration, tabela ou coluna nova.
+- novo módulo Agente Compara, com página pública, APIs protegidas, template oficial, `temp_table`, coverage, lote auditado, correções, BI e chat analítico;
+- melhorias no fluxo documental da Júlia, ainda apoiado no store temporário compartilhado do Cleiton;
+- melhorias na Cleide Auditoria, com continuidade de billing idempotente, BI e chat pós-BI;
+- integração do Agente Compara ao painel administrativo, billing e métricas de IA/processamento;
+- nenhuma migration, tabela, coluna ou banco novo nesta entrega.
 
 ## Ambientes e Git
 
-- `homolog`: desenvolvimento e validação;
-- `producao`: branch operacional de produção;
-- `main`: branch padrão remota, não operacional nesta fotografia;
-- o `render.yaml` ainda aponta produção para `main`; a divergência deve ser conferida/corrigida no processo operacional, nunca presumida.
+- branch local auditada: `homolog`;
+- worktree local auditado: limpo no início desta atividade;
+- `render.yaml` versionado ainda aponta produção para `main`, embora o processo operacional informado trate `producao` como branch oficial de produção;
+- `start.sh` infere `APP_ENV=prod` para `main|master|producao|prod`.
 
-## Testes e temporários
+## Infraestrutura confirmada no código
 
-No commit `6701a53`, 1.896 testes foram aprovados. Este número é uma fotografia, não expectativa fixa para commits futuros.
+- migrations aplicadas no boot por `start.sh`;
+- cron protegida por `X-Cron-Secret` ou `?secret=` temporário;
+- rotas expostas para saúde: `/health/liveness` e `/health/readiness`;
+- `render.yaml` versionado ainda usa `healthCheckPath: /health`, o que deve ser tratado como divergência operacional vigente.
 
-`app/cleiton_doc_tmp/`, `tt_*.json`, `.tmp_pytest_fixture/`, `.venv/`, caches e bancos locais não fazem parte do deploy. Inspecione JSON antes de limpar para não remover arquivos operacionais fora de pasta temporária.
+## Temporários, banco e artefatos locais
+
+- `app/cleiton_doc_tmp/` e `tt_*.json` são temporários técnicos e não banco;
+- `.db`, `.sqlite`, `.sqlite3`, `.venv/`, `.tmp_pytest_fixture/` e caches são ignorados pelo Git;
+- templates oficiais versionados: `template_cleide_auditoria_frete.xlsx` e `template_agente_compara.xlsx`.
+
+## Testes
+
+O repositório possui cobertura explícita para autenticação, cron, Júlia, Cleide, Agente Compara, billing e métricas. Contagens de testes aprovados anteriores são históricas e não devem ser projetadas automaticamente para este commit sem nova execução da suíte.
+
+## Riscos residuais reais
+
+- divergência entre branch de produção informada e `render.yaml` versionado;
+- divergência entre `healthCheckPath` versionado e rotas reais de health check;
+- confirmações de Render, variáveis e branches ativas permanecem dependentes de ambiente e não são comprováveis só pelo código local.

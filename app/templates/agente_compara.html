@@ -222,11 +222,11 @@
 
                   id="agenteComparaClearDocuments"
 
-                  aria-label="Limpar todos os documentos anexados"
+                  aria-label="Reiniciar comparação"
 
                   style="display: none;">
 
-            Limpar documentos
+            Reiniciar comparação
 
           </button>
 
@@ -451,6 +451,44 @@
 
     <div class="agente-compara-temp-table-modal-body" id="agenteComparaTempTableModalBody"></div>
 
+    <div class="agente-compara-carrier-identify-panel"
+         id="agenteComparaCarrierIdentifyPanel"
+         role="dialog"
+         aria-labelledby="agenteComparaCarrierIdentifyTitle"
+         hidden>
+      <h3 class="agente-compara-carrier-identify-title" id="agenteComparaCarrierIdentifyTitle">
+        Identifique a transportadora
+      </h3>
+      <p class="agente-compara-carrier-identify-lead">Por favor, informe a transportadora.</p>
+      <label class="agente-compara-carrier-identify-label" for="agenteComparaCarrierNameInput">Transportadora</label>
+      <input type="text"
+             class="form-control form-control-sm agente-compara-carrier-identify-input"
+             id="agenteComparaCarrierNameInput"
+             maxlength="120"
+             placeholder="Digite o nome da transportadora"
+             autocomplete="organization">
+      <p class="agente-compara-carrier-identify-hint small text-muted mb-0">
+        O nome ficará vinculado a esta tabela de frete.
+      </p>
+      <div class="agente-compara-carrier-identify-error small"
+           id="agenteComparaCarrierIdentifyError"
+           role="alert"
+           hidden></div>
+      <div class="agente-compara-carrier-identify-actions">
+        <button type="button"
+                class="btn btn-sm btn-outline-secondary"
+                id="agenteComparaCarrierIdentifyCancel">
+          Cancelar
+        </button>
+        <button type="button"
+                class="btn btn-sm btn-primary"
+                id="agenteComparaCarrierIdentifyContinue"
+                disabled>
+          Continuar
+        </button>
+      </div>
+    </div>
+
     <div class="agente-compara-temp-table-modal-edit-banner"
          id="agenteComparaTempTableModalEditBanner"
          role="status"
@@ -464,6 +502,13 @@
          hidden></div>
 
     <div class="agente-compara-temp-table-modal-footer">
+
+      <button type="button"
+              class="btn btn-sm agente-compara-temp-table-modal-clear-slot-btn"
+              id="agenteComparaTempTableModalClearSlot"
+              hidden>
+        Remover arquivos desta tabela
+      </button>
 
       <button type="button"
               class="btn btn-sm agente-compara-temp-table-modal-cancel-edit-btn"
@@ -485,6 +530,13 @@
       </button>
 
       <button type="button"
+              class="btn btn-sm agente-compara-temp-table-modal-tax-save-btn"
+              id="agenteComparaTempTableModalTaxSave"
+              hidden>
+        Salvar configuração de impostos
+      </button>
+
+      <button type="button"
               class="btn btn-sm agente-compara-temp-table-modal-save-btn"
               id="agenteComparaTempTableModalSave">
         Salvar e Avançar
@@ -494,6 +546,39 @@
 
   </div>
 
+</div>
+
+
+
+<div class="agente-compara-confirm-modal"
+     id="agenteComparaResetConfirmModal"
+     hidden
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="agenteComparaResetConfirmTitle">
+  <div class="agente-compara-confirm-modal-backdrop" id="agenteComparaResetConfirmBackdrop"></div>
+  <div class="agente-compara-confirm-modal-dialog">
+    <h2 class="agente-compara-confirm-modal-title" id="agenteComparaResetConfirmTitle">Reiniciar comparação?</h2>
+    <p class="agente-compara-confirm-modal-message" id="agenteComparaResetConfirmMessage">
+      Esta ação excluirá as tabelas preparadas, a configuração de impostos, as cidades atendidas e o arquivo para comparação. Deseja iniciar uma nova comparação?
+    </p>
+    <div class="agente-compara-confirm-modal-actions">
+      <button type="button"
+              class="btn btn-sm agente-compara-confirm-modal-cancel-btn"
+              id="agenteComparaResetConfirmCancel">
+        Cancelar
+      </button>
+      <button type="button"
+              class="btn btn-sm agente-compara-confirm-modal-confirm-btn"
+              id="agenteComparaResetConfirmSubmit">
+        Reiniciar comparação
+      </button>
+    </div>
+    <div class="agente-compara-confirm-modal-error small"
+         id="agenteComparaResetConfirmError"
+         role="alert"
+         hidden></div>
+  </div>
 </div>
 
 
@@ -1044,6 +1129,49 @@
 
   }
 
+  .agente-compara-wizard-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .agente-compara-wizard-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(0, 191, 255, 0.18);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .agente-compara-wizard-summary-row {
+    font-size: 0.82rem;
+    color: var(--af-text-secondary, #C8CCE5);
+  }
+
+  .agente-compara-wizard-summary-carrier {
+    font-size: 0.72rem;
+    color: var(--af-text-muted, #5A5A72);
+    padding-left: 0.15rem;
+  }
+
+  .agente-compara-wizard-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .agente-compara-wizard-upload-btn,
+  .agente-compara-wizard-close-btn {
+    align-self: flex-start;
+  }
+
+  .agente-compara-wizard-ready-text {
+    color: var(--af-text-secondary, #C8CCE5);
+    line-height: 1.45;
+  }
+
   .agente-compara-documents-area {
 
     padding: 0.35rem 0 0.65rem;
@@ -1307,6 +1435,95 @@
     display: none !important;
   }
 
+  .agente-compara-confirm-modal[hidden] {
+    display: none !important;
+  }
+
+  .agente-compara-confirm-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1080;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  body.agente-compara-reset-confirm-open {
+    overflow: hidden;
+  }
+
+  .agente-compara-confirm-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+  }
+
+  .agente-compara-confirm-modal-dialog {
+    position: relative;
+    z-index: 1;
+    width: min(100%, 28rem);
+    background: #fff;
+    border-radius: 0.75rem;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
+    padding: 1.25rem 1.35rem 1.1rem;
+  }
+
+  .agente-compara-confirm-modal-title {
+    margin: 0 0 0.65rem;
+    font-size: 1.15rem;
+    font-weight: 650;
+    color: #1e293b;
+  }
+
+  .agente-compara-confirm-modal-message {
+    margin: 0 0 1.1rem;
+    color: #475569;
+    line-height: 1.45;
+  }
+
+  .agente-compara-confirm-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+  }
+
+  .agente-compara-confirm-modal-cancel-btn {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    color: #334155;
+  }
+
+  .agente-compara-confirm-modal-confirm-btn {
+    background: #b91c1c;
+    border-color: #b91c1c;
+    color: #fff;
+  }
+
+  .agente-compara-confirm-modal-confirm-btn:hover {
+    background: #991b1b;
+    border-color: #991b1b;
+    color: #fff;
+  }
+
+  .agente-compara-confirm-modal-confirm-btn:disabled {
+    opacity: 0.7;
+    cursor: wait;
+  }
+
+  .agente-compara-confirm-modal-error {
+    margin-top: 0.75rem;
+    color: #b91c1c;
+  }
+
+  .agente-compara-temp-table-modal-clear-slot-btn {
+    margin-right: auto;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    color: #475569;
+  }
+
   .agente-compara-temp-table-modal {
     position: fixed;
     inset: 0;
@@ -1450,6 +1667,79 @@
     color: var(--af-danger, #FF4D6A);
     background: rgba(255, 77, 106, 0.1);
     border: 1px solid rgba(255, 77, 106, 0.25);
+  }
+
+  .agente-compara-carrier-identify-panel {
+    margin: 0 1.15rem 0.75rem;
+    padding: 1rem 1.1rem;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.22);
+  }
+
+  .agente-compara-carrier-identify-panel[hidden] {
+    display: none !important;
+  }
+
+  .agente-compara-carrier-identify-title {
+    font-size: 1rem;
+    margin: 0 0 0.35rem;
+  }
+
+  .agente-compara-carrier-identify-lead {
+    margin: 0 0 0.75rem;
+    font-size: 0.88rem;
+  }
+
+  .agente-compara-carrier-identify-label {
+    display: block;
+    font-size: 0.78rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .agente-compara-carrier-identify-input {
+    margin-bottom: 0.35rem;
+  }
+
+  .agente-compara-carrier-identify-hint {
+    margin-bottom: 0.75rem !important;
+  }
+
+  .agente-compara-carrier-identify-error {
+    margin-bottom: 0.65rem;
+    color: var(--af-danger, #FF4D6A);
+  }
+
+  .agente-compara-carrier-identify-error[hidden] {
+    display: none !important;
+  }
+
+  .agente-compara-carrier-identify-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  .agente-compara-wizard-summary-carrier::before {
+    content: 'Transportadora: ';
+    opacity: 0.75;
+  }
+
+  .agente-compara-modal-carrier-line {
+    font-size: 0.85rem;
+    margin-top: 0.25rem;
+    opacity: 0.9;
+  }
+
+  .agente-compara-modal-carrier-edit-btn {
+    margin-left: 0.35rem;
+    font-size: 0.75rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
   }
 
   .agente-compara-temp-table-modal-save-btn,
@@ -1847,6 +2137,55 @@
     color: var(--af-warning, #E0B050);
   }
 
+  .agente-compara-tax-carrier-section {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .agente-compara-tax-carrier-title,
+  .agente-compara-tax-section-label {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+
+  .agente-compara-tax-carrier-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .agente-compara-tax-carrier-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    margin-bottom: 0;
+  }
+
+  .agente-compara-tax-carrier-option.is-active {
+    border-color: #0d6efd;
+    background: rgba(13, 110, 253, 0.06);
+  }
+
+  .agente-compara-tax-carrier-option-text {
+    font-size: 0.92rem;
+  }
+
+  .agente-compara-tax-carrier-active-label {
+    font-size: 0.9rem;
+    color: #495057;
+    margin: 0.75rem 0 0.35rem;
+  }
+
+  .agente-compara-temp-table-modal-tax-save-btn {
+    margin-right: 0.5rem;
+  }
+
   .agente-compara-audit-file-section {
     padding: 0;
   }
@@ -1951,6 +2290,7 @@
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
+    margin-top: 0.55rem;
   }
 
   .agente-compara-run-btn {
@@ -1974,6 +2314,60 @@
   .agente-compara-run-btn:disabled {
     opacity: 0.58;
     cursor: not-allowed;
+  }
+
+  .agente-compara-run-btn.is-loading {
+    opacity: 0.72;
+    cursor: wait;
+  }
+
+  .agente-compara-process-calculations-hint {
+    margin: 0.35rem 0 0;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--af-text-secondary, #8A8AA3);
+  }
+
+  .agente-compara-comparison-calculation-results {
+    margin-top: 0.75rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .agente-compara-comparison-calculation-scroll {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .agente-compara-comparison-calculation-table {
+    width: 100%;
+    min-width: 640px;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+
+  .agente-compara-comparison-calculation-table th,
+  .agente-compara-comparison-calculation-table td {
+    padding: 0.42rem 0.55rem;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    white-space: nowrap;
+  }
+
+  .agente-compara-comparison-calculation-table th {
+    color: var(--af-text-secondary, #8A8AA3);
+    font-weight: 600;
+  }
+
+  @media (max-width: 640px) {
+    .agente-compara-run-actions {
+      width: 100%;
+    }
+
+    .agente-compara-run-btn {
+      width: 100%;
+    }
   }
 
   .agente-compara-run-status {
@@ -2414,6 +2808,15 @@
 
   .accessorial-row--invalid td {
     border-bottom-color: rgba(255, 77, 106, 0.16) !important;
+  }
+
+  .accessorial-row--pending {
+    background: rgba(255, 193, 7, 0.08);
+    box-shadow: inset 3px 0 0 rgba(255, 193, 7, 0.75);
+  }
+
+  .accessorial-row--pending td {
+    border-bottom-color: rgba(255, 193, 7, 0.18) !important;
   }
 
   .calculation-base-cell--invalid {
