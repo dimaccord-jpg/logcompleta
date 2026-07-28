@@ -152,15 +152,15 @@ def _collect_gemini_file_parts(records: list[dict]) -> list:
     return parts
 
 
-def build_agente_compara_document_context_for_chat(session_obj) -> dict:
+def build_agente_compara_document_context_for_chat(session_obj, *, table_id: str | None = None) -> dict:
     """
     Monta bloco de contexto documental para injecao no prompt da Agente Compara.
 
-    Usa exclusivamente IDs em `agente_compara_doc_ids` da sessao informada.
+    Usa exclusivamente IDs da tabela ativa (ou table_id informado) na comparação.
     """
     cleiton_cfg = get_cleiton_doc_config()
     audit_cfg = get_agente_compara_config()
-    doc_ids = get_agente_compara_doc_ids(session_obj)
+    doc_ids = get_agente_compara_doc_ids(session_obj, table_id=table_id)
     if not doc_ids:
         return _empty_chat_context()
 

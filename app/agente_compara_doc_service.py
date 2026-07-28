@@ -94,9 +94,73 @@ from app.services.agente_compara_config_service import (
     resolve_audited_file_limits,
     resolve_calculation_base_status,
 )
+from app.agente_compara_comparison_state import (
+    AgenteComparaComparisonError,
+    COMPARISON_STATUS_TABLES_READY,
+    COMPARISON_STATUS_PREPARING,
+    STEP_PREPARE_TABLE_1,
+    STEP_PREPARE_TABLE_2,
+    STEP_PREPARE_TABLE_3,
+    STEP_TABLES_READY,
+    STEP_TAXES,
+    STEP_COVERAGE,
+    STEP_CALCULATION_FILE,
+    STEP_CONFIGURATION_READY,
+    STEP_CALCULATION_RUNNING,
+    STEP_CALCULATION_READY,
+    STEP_CALCULATION_FAILED,
+    STEP_ANALYSIS,
+    TABLE_STATUS_CONFIRMED,
+    TABLE_STATUS_DISCARDED,
+    TABLE_STATUS_EMPTY,
+    TABLE_STATUS_FAILED,
+    TABLE_STATUS_LOCKED,
+    TABLE_STATUS_NEEDS_REVIEW,
+    TABLE_STATUS_PROCESSING,
+    advance_to_taxes,
+    advance_to_coverage,
+    advance_to_calculation_file,
+    advance_to_configuration_ready,
+    comparison_blocks_audit_run,
+    confirm_table_and_advance,
+    is_comparison_common_params_step,
+    validate_confirm_table_and_advance,
+    evaluate_can_advance_to_coverage,
+    derive_tax_fiscal_status,
+    get_comparison_tax_config,
+    set_comparison_tax_config,
+    validate_selected_table_ids_for_tax,
+    normalize_selected_table_ids,
+    TAX_FISCAL_STATUS_CONFIGURED,
+    TAX_FISCAL_STATUS_NO_TAXES,
+    ERROR_TAX_SELECTED_TABLES_REQUIRED,
+    ERROR_TAX_SELECTED_TABLE_INVALID,
+    document_belongs_to_table,
+    clear_comparison_state,
+    ensure_comparison,
+    get_active_table,
+    get_comparison_if_exists,
+    get_comparison_state,
+    get_table_by_id,
+    get_table_by_slot,
+    invalidate_table_preparation,
+    persist_comparison_state,
+    public_comparison_summary,
+    resolve_table_identity,
+    AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY,
+    ERROR_COMPARISON_SCOPE_MISMATCH,
+    ERROR_COMPARISON_STEP_INVALID,
+    ERROR_CARRIER_NAME_REQUIRED,
+    ERROR_CARRIER_NAME_INVALID,
+    CARRIER_NAME_MAX_LENGTH,
+)
 from app.agente_compara_correction_service import build_audit_correction_suggestions
 
 logger = logging.getLogger(__name__)
+
+FIELD_COMPARISON_ID = "comparison_id"
+FIELD_TABLE_ID = "table_id"
+FIELD_SLOT_NUMBER = "slot_number"
 
 AGENTE_COMPARA_DOMAIN = "agente_compara"
 
@@ -126,6 +190,7 @@ TEMP_TABLE_JSON_END = "---END_AGENTE_COMPARA_TEMP_TABLE---"
 TEMP_TABLE_SAVE_MAX_PAYLOAD_BYTES = 512 * 1024
 TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE = "save_and_advance"
 TEMP_TABLE_REVIEW_ACTION_SAVE_DRAFT = "save_draft"
+TEMP_TABLE_REVIEW_ACTION_ADVANCE_TO_COVERAGE = "advance_to_coverage"
 HUMAN_REVIEW_STATUS_REVIEWED = "reviewed"
 HUMAN_REVIEW_STATUS_EDITED = "edited"
 UNMAPPED_CALCULATION_BASIS_LABEL = "não mapeado / revisar"
@@ -149,6 +214,10 @@ ERROR_TEMP_TABLE_INVALID_PAYLOAD = "agente_compara_temp_table_invalid_payload"
 ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES = "invalid_accessorial_fees"
 ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE = "agente_compara_temp_table_payload_too_large"
 ERROR_TEMP_TABLE_SCOPE_MISMATCH = "agente_compara_temp_table_scope_mismatch"
+ERROR_TAX_CONFIG_PENDING = "agente_compara_tax_config_pending"
+ERROR_TAX_CONFIG_USE_GLOBAL_ENDPOINT = "agente_compara_tax_config_use_global_endpoint"
+
+TEMP_TABLE_REVIEW_ACTION_UPDATE_CARRIER = "update_carrier_name"
 
 COVERAGE_TABLE_COLUMNS = ["UF destino", "Cidade destino", "Região de frete"]
 COVERAGE_TABLE_STATUS_NEEDS_REVIEW = "needs_review"
@@ -265,6 +334,7 @@ PRICING_RULE_PARSER_VERSION = "agente_compara_pricing_matrix_v2"
 _WEIGHT_KG_HEADER_RE = re.compile(r"\bkg\b|\bkgs\b|\bpeso\b")
 ISS_SOURCE_NAME = "Cadastro municipal/manual"
 ISS_SOURCE_TYPE = "manual"
+TEMP_TABLE_REVIEW_ACTION_SKIP_COVERAGE_AND_ADVANCE = "skip_coverage_and_advance"
 AUDIT_BATCH_STALE_TAX_CONFIG_REASON = "tax_config_changed"
 AUDIT_BATCH_STALE_TAX_CONFIG_ALERT = (
     "Configuração fiscal alterada após processamento da auditoria. "
@@ -299,35 +369,45 @@ AUDIT_REASON_CONDITIONS_PRESENT = "conditions_present"
 AUDIT_REASON_UNSUPPORTED_REASON_PRESENT = "unsupported_reason_present"
 AUDIT_REASON_CLASSIFICATION_WARNING_PRESENT = "classification_warning_present"
 
+# Contrato operacional do Arquivo para Comparação (AgenteCompara).
+# Colunas oficiais (template): numero_documento, cidade_origem, uf_origem,
+# cidade_destino, uf_destino, valor_nf, peso, modal, data_emissao.
+# transportadora / data_entrega / valor_frete são colunas legadas toleradas
+# (aliases reconhecidos), sem obrigatoriedade e sem persistência no lote novo.
+# A transportadora da comparação vem de cada tabela cadastrada (carrier_name).
 _AUDIT_REQUIRED_FIELDS = (
+    "document_number",
     "destination_city",
     "destination_uf",
-    "charged_freight",
     "audited_weight",
 )
 _AUDIT_OPTIONAL_FIELDS = (
-    "carrier",
-    "document_number",
     "origin_city",
     "origin_uf",
     "invoice_value",
     "modal",
     "issue_date",
-    "delivery_date",
+)
+_AUDIT_LEGACY_IGNORED_FIELDS = frozenset(
+    {
+        "carrier",
+        "delivery_date",
+        "charged_freight",
+    }
 )
 _AUDIT_FIELD_LABELS = {
+    "document_number": "numero_documento",
     "destination_city": "cidade_destino",
     "destination_uf": "uf_destino",
-    "charged_freight": "valor_frete",
     "audited_weight": "peso",
     "carrier": "transportadora",
-    "document_number": "numero_documento",
     "origin_city": "cidade_origem",
     "origin_uf": "uf_origem",
     "invoice_value": "valor_nf",
     "modal": "modal",
     "issue_date": "data_emissao",
     "delivery_date": "data_entrega",
+    "charged_freight": "valor_frete",
 }
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -375,6 +455,7 @@ AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE = "agente_compara_temp_table_extr
 AGENTE_COMPARA_COVERAGE_UPLOAD_FLOW_TYPE = "agente_compara_coverage_upload"
 AGENTE_COMPARA_BATCH_UPLOAD_FLOW_TYPE = "agente_compara_batch_upload"
 AGENTE_COMPARA_BATCH_PROCESSED_FLOW_TYPE = "agente_compara_batch_processed"
+AGENTE_COMPARA_COMPARISON_CALCULATION_FLOW_TYPE = "agente_compara_comparison_calculation"
 
 SOURCE_AGENT_AGENTE_COMPARA = "agente_compara"
 
@@ -418,10 +499,20 @@ def agente_compara_insights_chat_idempotency_key(request_id: str, batch_scope: s
     return f"agente-compara-insights-chat:{scope}:{(request_id or '').strip()}"
 
 
-def agente_compara_temp_table_extraction_idempotency_key(source_doc_ids: list[str]) -> str:
+def agente_compara_temp_table_extraction_idempotency_key(
+    source_doc_ids: list[str],
+    *,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+) -> str:
     normalized = _normalize_source_doc_ids(source_doc_ids)
     joined = ":".join(normalized)
-    return f"agente-compara-temp-table:{TEMP_TABLE_VERSION_MARKER}:{joined}"
+    cmp_part = (comparison_id or "").strip() or "legacy"
+    tbl_part = (table_id or "").strip() or "legacy"
+    return (
+        f"agente-compara-temp-table:{TEMP_TABLE_VERSION_MARKER}:"
+        f"{cmp_part}:{tbl_part}:{joined}"
+    )
 
 
 def _resolve_agente_compara_execution_id() -> str:
@@ -448,6 +539,303 @@ def agente_compara_batch_run_idempotency_key(session_id: str, audit_batch_id: st
         f"agente-compara-batch-run:{(session_id or '').strip()}:"
         f"{(audit_batch_id or '').strip()}:{(run_version or '').strip()}"
     )
+
+
+def agente_compara_comparison_calculation_idempotency_key(comparison_id: str, fingerprint: str) -> str:
+    return (
+        f"agente-compara-comparison-calculation:{(comparison_id or '').strip()}:"
+        f"{(fingerprint or '').strip()}"
+    )
+
+
+TEMP_TABLE_SAVE_IDEMPOTENCY_CACHE_SESSION_KEY = "agente_compara_temp_table_save_idempotency_cache"
+
+
+def agente_compara_temp_table_save_idempotency_key(
+    *,
+    comparison_id: str | None,
+    table_id: str | None,
+    temp_table_id: str,
+    edit_version: int,
+    review_action: str,
+    execution_id: str,
+) -> str:
+    cmp_part = (comparison_id or "").strip() or "legacy"
+    tbl_part = (table_id or "").strip() or "legacy"
+    tt_part = (temp_table_id or "").strip()
+    action_part = (review_action or TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE).strip()
+    exec_part = (execution_id or "").strip()
+    return (
+        f"agente-compara-temp-table-save:{cmp_part}:{tbl_part}:{tt_part}:"
+        f"{max(0, int(edit_version))}:{action_part}:{exec_part}"
+    )
+
+
+def _resolve_temp_table_save_execution_id(payload: dict) -> str:
+    execution_id = (payload.get("execution_id") or "").strip()
+    if not execution_id and has_request_context():
+        execution_id = (request.headers.get("X-Execution-ID") or "").strip()
+    if not execution_id:
+        execution_id = str(uuid4())
+    return execution_id[:120]
+
+
+def _resolve_temp_table_save_edit_version_for_key(payload: dict, record: dict) -> int:
+    raw = payload.get("edit_version")
+    if raw is not None:
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            pass
+    current = record.get("edit_version")
+    if isinstance(current, int) and current >= 0:
+        return current
+    return 0
+
+
+def get_cached_temp_table_save_response(session_obj, cache_key: str) -> dict | None:
+    cache = session_obj.get(TEMP_TABLE_SAVE_IDEMPOTENCY_CACHE_SESSION_KEY)
+    if not isinstance(cache, dict):
+        return None
+    payload = cache.get(cache_key)
+    return copy.deepcopy(payload) if isinstance(payload, dict) else None
+
+
+def find_temp_table_save_replay_by_execution_id(
+    session_obj,
+    *,
+    comparison_id: str | None,
+    table_id: str | None,
+    temp_table_id: str,
+    execution_id: str,
+) -> dict | None:
+    exec_id = (execution_id or "").strip()
+    if not exec_id:
+        return None
+    cache = session_obj.get(TEMP_TABLE_SAVE_IDEMPOTENCY_CACHE_SESSION_KEY)
+    if not isinstance(cache, dict):
+        return None
+    cmp_part = (comparison_id or "").strip() or "legacy"
+    tbl_part = (table_id or "").strip() or "legacy"
+    tt_part = (temp_table_id or "").strip()
+    prefix = f"agente-compara-temp-table-save:{cmp_part}:{tbl_part}:{tt_part}:"
+    suffix = f":{exec_id}"
+    for key, payload in cache.items():
+        if not isinstance(key, str) or not key.startswith(prefix) or not key.endswith(suffix):
+            continue
+        if isinstance(payload, dict):
+            return copy.deepcopy(payload)
+    return None
+
+
+def cache_temp_table_save_response(session_obj, cache_key: str, public: dict) -> None:
+    if not cache_key or not isinstance(public, dict):
+        return
+    cache = session_obj.get(TEMP_TABLE_SAVE_IDEMPOTENCY_CACHE_SESSION_KEY)
+    if not isinstance(cache, dict):
+        cache = {}
+    cache[cache_key] = copy.deepcopy(public)
+    session_obj[TEMP_TABLE_SAVE_IDEMPOTENCY_CACHE_SESSION_KEY] = cache
+    session_obj.modified = True
+
+
+def _will_confirm_table_on_prepare_save(
+    validated: dict,
+    cmp_state: dict | None,
+    resolved_table_id: str | None,
+    has_freight_edit: bool,
+) -> bool:
+    preparing_steps = {STEP_PREPARE_TABLE_1, STEP_PREPARE_TABLE_2, STEP_PREPARE_TABLE_3}
+    return (
+        cmp_state is not None
+        and validated["review_action"] == TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE
+        and has_freight_edit
+        and not validated["has_tax_config_key"]
+        and not validated["has_coverage_table_key"]
+        and cmp_state.get("current_step") in preparing_steps
+        and bool(resolved_table_id)
+    )
+
+
+def _assert_comparison_common_step(
+    cmp_state: dict | None,
+    expected_step: str,
+    *,
+    message: str,
+) -> None:
+    if not is_comparison_common_params_step(cmp_state):
+        return
+    if cmp_state.get("current_step") != expected_step:
+        raise AgenteComparaTempTableError(
+            ERROR_COMPARISON_STEP_INVALID,
+            message,
+        )
+
+
+def _assert_comparison_not_calculating(cmp_state: dict | None, *, message: str) -> None:
+    """Bloqueia mutações de entrada enquanto CALCULATION_RUNNING."""
+    if not isinstance(cmp_state, dict):
+        return
+    if cmp_state.get("current_step") == STEP_CALCULATION_RUNNING:
+        raise AgenteComparaTempTableError(
+            ERROR_COMPARISON_STEP_INVALID,
+            message,
+        )
+
+
+def _mark_comparison_calculation_stale_if_present(cmp_state: dict | None) -> dict | None:
+    if not isinstance(cmp_state, dict):
+        return cmp_state
+    calc = cmp_state.get("comparison_calculation")
+    if not isinstance(calc, dict) or not calc.get("status"):
+        return cmp_state
+    try:
+        from app.agente_compara_calculation_execution_service import mark_comparison_calculation_stale
+
+        return mark_comparison_calculation_stale(cmp_state)
+    except Exception:
+        logger.exception("Falha ao marcar cálculo comparativo como stale.")
+        return cmp_state
+
+
+def _build_skip_coverage_advance_public(cmp_state: dict) -> dict:
+    active_id = get_temp_table_id(session)
+    public = None
+    if active_id:
+        cfg = get_cleiton_doc_config()
+        record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
+        if record is not None:
+            public = _public_temp_table(record)
+    if public is None:
+        public = {}
+    public["comparison"] = public_comparison_summary(cmp_state)
+    return public
+
+
+def _load_tax_config_from_temp_table(temp_table_id: str) -> dict | None:
+    ref = (temp_table_id or "").strip()
+    if not ref:
+        return None
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(ref, ttl_hours=cfg.upload_ttl_hours)
+    if not isinstance(record, dict):
+        return None
+    tax_config = record.get("tax_config")
+    return tax_config if isinstance(tax_config, dict) else None
+
+
+def _build_tax_table_ufs_preview(state: dict | None) -> list[dict]:
+    if not isinstance(state, dict):
+        return []
+    from app.agente_compara_comparison_state import iter_required_confirmed_tables
+
+    preview: list[dict] = []
+    for entry in iter_required_confirmed_tables(state):
+        temp_table_id = (entry.get("temp_table_id") or "").strip()
+        ufs: list[str] = []
+        if temp_table_id:
+            cfg = get_cleiton_doc_config()
+            record = load_temp_table_record(temp_table_id, ttl_hours=cfg.upload_ttl_hours)
+            ufs = extract_tax_destination_ufs_from_temp_table(record)
+        preview.append(
+            {
+                "table_id": entry.get("table_id"),
+                "slot_number": entry.get("slot_number"),
+                "carrier_name": entry.get("carrier_name"),
+                "destination_ufs": ufs,
+                "uf_count": len(ufs),
+            }
+        )
+    return preview
+
+
+def _public_comparison_with_tax_context(state: dict | None) -> dict:
+    preview = (
+        _build_tax_table_ufs_preview(state)
+        if isinstance(state, dict) and state.get("current_step") == STEP_TAXES
+        else None
+    )
+    return public_comparison_summary(state, tax_table_ufs_preview=preview)
+
+
+def public_comparison_summary_for_response(state: dict | None) -> dict | None:
+    """Resumo público da comparação, com impostos em TAXES e revisão em CONFIGURATION_READY."""
+    if not isinstance(state, dict):
+        return None
+    return _public_comparison_with_tax_context(state)
+
+
+def _build_advance_to_coverage_public(cmp_state: dict) -> dict:
+    active_id = get_temp_table_id(session)
+    public = None
+    if active_id:
+        cfg = get_cleiton_doc_config()
+        record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
+        if record is not None:
+            public = _public_temp_table(record)
+    if public is None:
+        public = {}
+    public["comparison"] = _public_comparison_with_tax_context(cmp_state)
+    return public
+
+
+def _build_temp_table_save_public(
+    saved: dict,
+    comparison_public: dict | None,
+    *,
+    idempotent_replay: bool = False,
+) -> dict:
+    public = _public_temp_table(saved)
+    if public is None:
+        raise AgenteComparaTempTableError(
+            ERROR_TEMP_TABLE_NOT_FOUND,
+            "Não foi possível retornar a tabela temporária atualizada.",
+        )
+    if comparison_public is not None:
+        public["comparison"] = comparison_public
+        if comparison_public.get("current_step") == STEP_TAXES:
+            public["can_advance_to_coverage"] = bool(comparison_public.get("can_advance_to_coverage"))
+            if comparison_public.get("tax_config") is not None:
+                public["tax_config"] = comparison_public.get("tax_config")
+    if idempotent_replay:
+        public["idempotent_replay"] = True
+    return public
+
+
+def _try_idempotent_prepare_table_save_replay(
+    *,
+    record: dict,
+    cmp_state: dict,
+    table_entry: dict,
+    active_id: str,
+    execution_id: str,
+    comparison_id: str | None,
+    resolved_table_id: str,
+    idempotency_key: str,
+) -> dict | None:
+    if not table_entry.get("confirmed"):
+        return None
+    if str(table_entry.get("temp_table_id") or "") != active_id:
+        return None
+
+    cached = get_cached_temp_table_save_response(session, idempotency_key)
+    if cached is not None:
+        replay = copy.deepcopy(cached)
+        replay["idempotent_replay"] = True
+        return replay
+
+    replay_by_exec = find_temp_table_save_replay_by_execution_id(
+        session,
+        comparison_id=comparison_id,
+        table_id=resolved_table_id,
+        temp_table_id=active_id,
+        execution_id=execution_id,
+    )
+    if replay_by_exec is not None:
+        replay = copy.deepcopy(replay_by_exec)
+        replay["idempotent_replay"] = True
+        return replay
+    return None
 
 
 def _emit_agente_compara_operational_billing(
@@ -501,7 +889,53 @@ def _emit_agente_compara_operational_billing(
 
 
 def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+    return datetime.now(UTC)
+
+
+def normalize_carrier_name(raw) -> str:
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        raise AgenteComparaComparisonError(
+            ERROR_CARRIER_NAME_REQUIRED,
+            "Informe a transportadora antes de enviar o arquivo.",
+        )
+    if not isinstance(raw, str):
+        raise AgenteComparaComparisonError(
+            ERROR_CARRIER_NAME_INVALID,
+            "Nome da transportadora inválido.",
+        )
+    name = raw.strip()
+    if len(name) > CARRIER_NAME_MAX_LENGTH:
+        raise AgenteComparaComparisonError(
+            ERROR_CARRIER_NAME_INVALID,
+            f"O nome da transportadora deve ter no máximo {CARRIER_NAME_MAX_LENGTH} caracteres.",
+        )
+    return name
+
+
+def update_comparison_table_carrier_name(
+    *,
+    comparison_id: str | None,
+    table_id: str | None,
+    slot: int | None,
+    carrier_name: str,
+) -> dict:
+    """Atualiza carrier_name de um slot sem reprocessar documento ou Gemini."""
+    _require_session()
+    cmp_state, table_entry = resolve_table_identity(
+        comparison_id=comparison_id,
+        table_id=table_id,
+        slot=slot,
+        auto_create=False,
+    )
+    if table_entry.get("confirmed"):
+        raise AgenteComparaComparisonError(
+            ERROR_COMPARISON_STEP_INVALID,
+            "Não é possível alterar a transportadora de uma tabela confirmada.",
+        )
+    table_entry["carrier_name"] = normalize_carrier_name(carrier_name)
+    persist_comparison_state(cmp_state)
+    _mark_session_modified()
+    return public_comparison_summary(cmp_state).replace(tzinfo=None)
 
 
 def _require_session() -> None:
@@ -513,7 +947,26 @@ def _mark_session_modified() -> None:
     session.modified = True
 
 
-def get_agente_compara_doc_ids(session_obj) -> list[str]:
+def _doc_ids_for_table_entry(entry: dict | None) -> list[str]:
+    if not isinstance(entry, dict):
+        return []
+    ids: list[str] = []
+    for item in entry.get("doc_ids") or []:
+        if isinstance(item, str):
+            ref = item.strip()
+            if ref and ref not in ids:
+                ids.append(ref)
+    return ids
+
+
+def get_agente_compara_doc_ids(session_obj, *, table_id: str | None = None) -> list[str]:
+    state = get_comparison_state(session_obj)
+    if state is not None:
+        if table_id:
+            entry = get_table_by_id(state, table_id)
+        else:
+            entry = get_active_table(state)
+        return _doc_ids_for_table_entry(entry)
     raw = session_obj.get(AGENTE_COMPARA_DOC_IDS_SESSION_KEY)
     if not isinstance(raw, list):
         return []
@@ -526,7 +979,7 @@ def get_agente_compara_doc_ids(session_obj) -> list[str]:
     return ids
 
 
-def set_agente_compara_doc_ids(session_obj, doc_ids: list[str]) -> None:
+def set_agente_compara_doc_ids(session_obj, doc_ids: list[str], *, table_id: str | None = None) -> None:
     cleaned: list[str] = []
     seen: set[str] = set()
     for item in doc_ids or []:
@@ -537,32 +990,55 @@ def set_agente_compara_doc_ids(session_obj, doc_ids: list[str]) -> None:
             continue
         seen.add(ref)
         cleaned.append(ref)
+    state = get_comparison_state(session_obj)
+    if state is not None:
+        entry = get_table_by_id(state, table_id) if table_id else get_active_table(state)
+        if entry is None:
+            raise ValueError("table_id inválido para sessão documental da Agente Compara.")
+        entry["doc_ids"] = cleaned
+        persist_comparison_state(state, session_obj=session_obj)
+        _sync_legacy_doc_ids_mirror(session_obj)
+        return
     session_obj[AGENTE_COMPARA_DOC_IDS_SESSION_KEY] = cleaned
 
 
-def clear_agente_compara_doc_ids(session_obj) -> None:
+def clear_agente_compara_doc_ids(session_obj, *, table_id: str | None = None) -> None:
+    state = get_comparison_state(session_obj)
+    if state is not None:
+        entry = get_table_by_id(state, table_id) if table_id else get_active_table(state)
+        if entry is not None:
+            entry["doc_ids"] = []
+            persist_comparison_state(state, session_obj=session_obj)
+        return
     session_obj.pop(AGENTE_COMPARA_DOC_IDS_SESSION_KEY, None)
 
 
-def append_agente_compara_doc_id(session_obj, doc_id: str) -> None:
+def append_agente_compara_doc_id(session_obj, doc_id: str, *, table_id: str | None = None) -> None:
     ref = (doc_id or "").strip()
     if not ref:
         raise ValueError("doc_id inválido para sessão documental da Agente Compara.")
-    ids = get_agente_compara_doc_ids(session_obj)
+    ids = get_agente_compara_doc_ids(session_obj, table_id=table_id)
     if ref not in ids:
         ids.append(ref)
-    set_agente_compara_doc_ids(session_obj, ids)
+    set_agente_compara_doc_ids(session_obj, ids, table_id=table_id)
 
 
-def remove_agente_compara_doc_id(session_obj, doc_id: str) -> None:
+def remove_agente_compara_doc_id(session_obj, doc_id: str, *, table_id: str | None = None) -> None:
     ref = (doc_id or "").strip()
     if not ref:
         return
-    ids = [item for item in get_agente_compara_doc_ids(session_obj) if item != ref]
+    state = get_comparison_state(session_obj)
+    if state is not None and table_id is None:
+        for entry in (state.get("tables") or {}).values():
+            if isinstance(entry, dict) and ref in (entry.get("doc_ids") or []):
+                table_id = entry.get("table_id")
+                break
+    ids = [item for item in get_agente_compara_doc_ids(session_obj, table_id=table_id) if item != ref]
     if ids:
-        set_agente_compara_doc_ids(session_obj, ids)
+        set_agente_compara_doc_ids(session_obj, ids, table_id=table_id)
     else:
-        clear_agente_compara_doc_ids(session_obj)
+        clear_agente_compara_doc_ids(session_obj, table_id=table_id)
+    _sync_legacy_doc_ids_mirror(session_obj)
 
 
 def _parse_size_bytes(size_bytes) -> int:
@@ -667,13 +1143,52 @@ def get_allowed_document_formats() -> list[dict]:
     ]
 
 
+def get_active_documents_for_session(*, table_id: str | None = None) -> list[dict]:
+    _require_session()
+    cfg = get_cleiton_doc_config()
+    active: list[dict] = []
+    stale_ids: list[str] = []
+
+    for doc_id in get_agente_compara_doc_ids(session, table_id=table_id):
+        record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
+        if record is None:
+            stale_ids.append(doc_id)
+            continue
+        active.append(_public_record(record))
+
+    if stale_ids:
+        for doc_id in stale_ids:
+            remove_agente_compara_doc_id(session, doc_id, table_id=table_id)
+        _mark_session_modified()
+
+    return active
+
+
+def _all_comparison_doc_ids(session_obj) -> list[str]:
+    state = get_comparison_state(session_obj)
+    if state is None:
+        return get_agente_compara_doc_ids(session_obj)
+    ids: list[str] = []
+    seen: set[str] = set()
+    for entry in (state.get("tables") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        for doc_id in entry.get("doc_ids") or []:
+            if isinstance(doc_id, str):
+                ref = doc_id.strip()
+                if ref and ref not in seen:
+                    seen.add(ref)
+                    ids.append(ref)
+    return ids
+
+
 def cleanup_expired_documents_for_session() -> int:
     _require_session()
     cfg = get_cleiton_doc_config()
     removed = 0
     stale_ids: list[str] = []
 
-    for doc_id in get_agente_compara_doc_ids(session):
+    for doc_id in _all_comparison_doc_ids(session):
         record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
         if record is None:
             stale_ids.append(doc_id)
@@ -688,32 +1203,27 @@ def cleanup_expired_documents_for_session() -> int:
     return removed
 
 
-def get_active_documents_for_session() -> list[dict]:
-    _require_session()
-    cfg = get_cleiton_doc_config()
-    active: list[dict] = []
-    stale_ids: list[str] = []
-
-    for doc_id in get_agente_compara_doc_ids(session):
-        record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
-        if record is None:
-            stale_ids.append(doc_id)
-            continue
-        active.append(_public_record(record))
-
-    if stale_ids:
-        for doc_id in stale_ids:
-            remove_agente_compara_doc_id(session, doc_id)
-        _mark_session_modified()
-
-    return active
-
-
-def get_document_session_totals() -> dict:
+def get_document_session_totals(*, table_id: str | None = None) -> dict:
     _require_session()
     cfg = get_cleiton_doc_config()
     cleanup_expired_documents_for_session()
-    active = get_active_documents_for_session()
+    if table_id:
+        active = get_active_documents_for_session(table_id=table_id)
+    else:
+        state = get_comparison_state(session)
+        if state is not None:
+            active = []
+            seen: set[str] = set()
+            for entry in (state.get("tables") or {}).values():
+                if not isinstance(entry, dict):
+                    continue
+                for doc in get_active_documents_for_session(table_id=entry.get("table_id")):
+                    doc_id = doc.get(FIELD_DOC_ID)
+                    if doc_id and doc_id not in seen:
+                        seen.add(doc_id)
+                        active.append(doc)
+        else:
+            active = get_active_documents_for_session()
     total_bytes = sum(int(item.get(FIELD_SIZE_BYTES) or 0) for item in active)
     active_count = len(active)
     max_files = int(cfg.max_files_per_session)
@@ -780,6 +1290,9 @@ def _register_document_record(
     gemini_mime_type: str | None = None,
     gemini_file_state: str | None = None,
     gemini_uploaded_at: str | None = None,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+    slot_number: int | None = None,
 ) -> dict:
     _require_session()
     cfg = get_cleiton_doc_config()
@@ -826,11 +1339,33 @@ def _register_document_record(
         FIELD_GEMINI_FILE_STATE: gemini_file_state,
         FIELD_GEMINI_UPLOADED_AT: gemini_uploaded_at,
     }
+    if comparison_id:
+        record[FIELD_COMPARISON_ID] = comparison_id.strip()
+    if table_id:
+        record[FIELD_TABLE_ID] = table_id.strip()
+    if slot_number is not None:
+        record[FIELD_SLOT_NUMBER] = int(slot_number)
 
     save_document_record(record)
-    append_agente_compara_doc_id(session, doc_id)
+    append_agente_compara_doc_id(session, doc_id, table_id=table_id)
+    _sync_legacy_doc_ids_mirror(session)
     _mark_session_modified()
     return _public_record(record)
+
+
+def _sync_legacy_doc_ids_mirror(session_obj) -> None:
+    """Espelha documentos da tabela ativa na chave legada agente_compara_doc_ids."""
+    state = get_comparison_state(session_obj)
+    if state is None:
+        return
+    active = get_active_table(state)
+    if active is None:
+        return
+    doc_ids = _doc_ids_for_table_entry(active)
+    if doc_ids:
+        session_obj[AGENTE_COMPARA_DOC_IDS_SESSION_KEY] = list(doc_ids)
+    else:
+        session_obj.pop(AGENTE_COMPARA_DOC_IDS_SESSION_KEY, None)
 
 
 def prepare_and_register_document(
@@ -839,12 +1374,31 @@ def prepare_and_register_document(
     file_bytes: bytes,
     mime_type: str | None = None,
     extension: str | None = None,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+    slot: int | None = None,
+    carrier_name: str | None = None,
 ) -> dict:
     """
     Valida, prepara e registra documento na sessão Agente Compara após sucesso.
 
-    Delega validação/preparação ao Cleiton; persiste IDs em `agente_compara_doc_ids`.
+    Delega validação/preparação ao Cleiton; persiste IDs por table_id na comparação.
     """
+    cmp_state, table_entry = resolve_table_identity(
+        comparison_id=comparison_id,
+        table_id=table_id,
+        slot=slot,
+        auto_create=True,
+    )
+    if table_entry.get("confirmed"):
+        raise AgenteComparaComparisonError(
+            ERROR_COMPARISON_STEP_INVALID,
+            "Esta tabela já foi confirmada.",
+        )
+    resolved_comparison_id = cmp_state["comparison_id"]
+    resolved_table_id = table_entry["table_id"]
+    resolved_slot = int(table_entry.get("slot_number") or 1)
+    normalized_carrier = normalize_carrier_name(carrier_name) if carrier_name is not None else None
     prepared = prepare_document(
         display_name=display_name,
         file_bytes=file_bytes,
@@ -908,12 +1462,64 @@ def prepare_and_register_document(
                 upload_result.error_summary,
             )
 
-    return _register_document_record(**register_kwargs)
+    document = _register_document_record(
+        **register_kwargs,
+        comparison_id=resolved_comparison_id,
+        table_id=resolved_table_id,
+        slot_number=resolved_slot,
+    )
+    if normalized_carrier:
+        refreshed_state = get_comparison_state(session)
+        entry = get_table_by_id(refreshed_state, resolved_table_id) if refreshed_state else None
+        if entry is not None:
+            entry["carrier_name"] = normalized_carrier
+            persist_comparison_state(refreshed_state)
+    return document
 
 
-def _agente_compara_document_owned_by_session(doc_id: str) -> bool:
+def _agente_compara_document_owned_by_session(
+    doc_id: str,
+    *,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+) -> bool:
     ref = (doc_id or "").strip()
-    if not ref or ref not in get_agente_compara_doc_ids(session):
+    if not ref:
+        return False
+    state = get_comparison_state(session)
+    if state is not None:
+        cmp_id = (comparison_id or state.get("comparison_id") or "").strip()
+        if table_id:
+            entry = get_table_by_id(state, table_id)
+            if entry is None or ref not in (entry.get("doc_ids") or []):
+                return False
+        else:
+            owned = False
+            for entry in (state.get("tables") or {}).values():
+                if isinstance(entry, dict) and ref in (entry.get("doc_ids") or []):
+                    owned = True
+                    table_id = entry.get("table_id")
+                    break
+            if not owned:
+                return False
+        record = peek_document_record(ref)
+        if record and document_belongs_to_table(
+            record,
+            comparison_id=cmp_id,
+            table_id=str(table_id or ""),
+        ):
+            return document_record_matches_domain_scope(
+                record,
+                expected_source_agent=SOURCE_AGENT_AGENTE_COMPARA,
+                expected_session_key=AGENTE_COMPARA_DOC_IDS_SESSION_KEY,
+            )
+        record = peek_document_record(ref)
+        return document_record_matches_domain_scope(
+            record,
+            expected_source_agent=SOURCE_AGENT_AGENTE_COMPARA,
+            expected_session_key=AGENTE_COMPARA_DOC_IDS_SESSION_KEY,
+        )
+    if ref not in get_agente_compara_doc_ids(session):
         return False
     record = peek_document_record(ref)
     return document_record_matches_domain_scope(
@@ -923,7 +1529,13 @@ def _agente_compara_document_owned_by_session(doc_id: str) -> bool:
     )
 
 
-def remove_document_from_session(doc_id: str) -> dict:
+def remove_document_from_session(
+    doc_id: str,
+    *,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+    slot: int | None = None,
+) -> dict:
     _require_session()
     ref = (doc_id or "").strip()
     if not ref:
@@ -935,7 +1547,30 @@ def remove_document_from_session(doc_id: str) -> dict:
             "error_code": ERROR_DOC_NOT_FOUND,
         }
 
-    if not _agente_compara_document_owned_by_session(ref):
+    resolved_table_id = table_id
+    state = get_comparison_state(session)
+    if state is not None:
+        cmp_state, table_entry = resolve_table_identity(
+            comparison_id=comparison_id,
+            table_id=table_id,
+            slot=slot,
+            auto_create=False,
+        )
+        resolved_table_id = table_entry["table_id"]
+        if ref not in (table_entry.get("doc_ids") or []):
+            return {
+                "ok": True,
+                "doc_id": ref,
+                "removed_from_store": False,
+                "removed_from_session": False,
+                "error_code": ERROR_DOC_NOT_FOUND,
+            }
+
+    if not _agente_compara_document_owned_by_session(
+        ref,
+        comparison_id=comparison_id,
+        table_id=resolved_table_id,
+    ):
         return {
             "ok": True,
             "doc_id": ref,
@@ -945,12 +1580,13 @@ def remove_document_from_session(doc_id: str) -> dict:
         }
 
     store_result = remove_document_record(ref)
-    remove_agente_compara_doc_id(session, ref)
+    remove_agente_compara_doc_id(session, ref, table_id=resolved_table_id)
     _mark_session_modified()
 
     invalidate_temp_table_if_source_changed(
         reason=TEMP_TABLE_STATUS_DISCARDED,
         removed_doc_id=ref,
+        table_id=resolved_table_id,
     )
 
     return {
@@ -962,29 +1598,296 @@ def remove_document_from_session(doc_id: str) -> dict:
     }
 
 
-def clear_documents_for_session() -> dict:
+def clear_documents_for_session(
+    *,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+    slot: int | None = None,
+    global_clear: bool = False,
+) -> dict:
     _require_session()
-    ids = list(get_agente_compara_doc_ids(session))
+    state = get_comparison_state(session)
+    if state is not None and global_clear:
+        removed_store = 0
+        removed_session = 0
+        requested = 0
+        for entry in (state.get("tables") or {}).values():
+            if not isinstance(entry, dict):
+                continue
+            for doc_id in list(entry.get("doc_ids") or []):
+                requested += 1
+                if not _agente_compara_document_owned_by_session(
+                    doc_id,
+                    comparison_id=state.get("comparison_id"),
+                    table_id=entry.get("table_id"),
+                ):
+                    continue
+                result = remove_document_record(doc_id)
+                if result.get("removed"):
+                    removed_store += 1
+                remove_agente_compara_doc_id(session, doc_id, table_id=entry.get("table_id"))
+                removed_session += 1
+            entry["doc_ids"] = []
+            entry["temp_table_id"] = None
+            entry["confirmed"] = False
+            entry["carrier_name"] = None
+            entry["error"] = None
+            if int(entry.get("slot_number") or 0) == 1:
+                entry["status"] = TABLE_STATUS_EMPTY
+            elif int(entry.get("slot_number") or 0) == 2 and state.get("current_step") == STEP_PREPARE_TABLE_1:
+                entry["status"] = TABLE_STATUS_LOCKED
+            else:
+                entry["status"] = TABLE_STATUS_EMPTY
+        persist_comparison_state(state)
+        clear_temp_table_session_refs(session)
+        return {
+            "ok": True,
+            "requested": requested,
+            "removed_from_store": removed_store,
+            "removed_from_session": removed_session,
+        }
+
+    resolved_table_id = table_id
+    if state is not None:
+        _, table_entry = resolve_table_identity(
+            comparison_id=comparison_id,
+            table_id=table_id,
+            slot=slot,
+            auto_create=False,
+        )
+        resolved_table_id = table_entry["table_id"]
+        ids = list(table_entry.get("doc_ids") or [])
+    else:
+        ids = list(get_agente_compara_doc_ids(session))
+
     removed_store = 0
     removed_session = 0
     for doc_id in ids:
-        if not _agente_compara_document_owned_by_session(doc_id):
+        if not _agente_compara_document_owned_by_session(doc_id, table_id=resolved_table_id):
             continue
         result = remove_document_record(doc_id)
         if result.get("removed"):
             removed_store += 1
-        remove_agente_compara_doc_id(session, doc_id)
+        remove_agente_compara_doc_id(session, doc_id, table_id=resolved_table_id)
         removed_session += 1
-    if not get_agente_compara_doc_ids(session):
-        clear_agente_compara_doc_ids(session)
-    if removed_session:
+    if resolved_table_id and state is not None:
+        primary_before = (state.get("primary_temp_table_id") or "").strip() or None
+        other_temp_ids = []
+        for entry in (state.get("tables") or {}).values():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("table_id") == resolved_table_id:
+                continue
+            tt = entry.get("temp_table_id")
+            if isinstance(tt, str) and tt.strip():
+                other_temp_ids.append(tt.strip())
+        if primary_before:
+            other_temp_ids.append(primary_before)
+        invalidate_table_preparation(state, resolved_table_id)
+        cmp_id = (state.get("comparison_id") or "").strip()
+        for tt_id in dict.fromkeys(other_temp_ids):
+            _strip_coverage_and_audit_from_temp(tt_id, comparison_id=cmp_id)
+        invalidate_temp_table_for_session(reason=TEMP_TABLE_STATUS_DISCARDED, table_id=resolved_table_id)
+    elif removed_session:
         invalidate_temp_table_for_session(reason=TEMP_TABLE_STATUS_DISCARDED)
+    if removed_session:
         _mark_session_modified()
     return {
         "ok": True,
         "requested": len(ids),
         "removed_from_store": removed_store,
         "removed_from_session": removed_session,
+    }
+
+
+def _clear_agente_compara_comparison_session_keys(session_obj) -> None:
+    """Remove chaves de sessão do AgenteCompara ligadas à comparação (não toca Cleide/Júlia)."""
+    session_obj.pop(AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_DOC_IDS_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_DOC_CONTEXT_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY, None)
+    session_obj.pop(TEMP_TABLE_SAVE_IDEMPOTENCY_CACHE_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_UPLOAD_LOCK_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_UPLOAD_IN_PROGRESS_SESSION_KEY, None)
+    session_obj.pop(AGENTE_COMPARA_LAST_REQUEST_ID_SESSION_KEY, None)
+
+
+def _temp_table_belongs_to_comparison(record: dict | None, *, comparison_id: str) -> bool:
+    if not isinstance(record, dict):
+        return False
+    cmp_id = (comparison_id or "").strip()
+    if not cmp_id:
+        return False
+    rec_cmp = (record.get(FIELD_COMPARISON_ID) or "").strip()
+    if rec_cmp and rec_cmp != cmp_id:
+        return False
+    scope = record.get("session_scope")
+    if scope is not None and scope != AGENTE_COMPARA_DOC_IDS_SESSION_KEY:
+        return False
+    marker = record.get("version_marker")
+    if marker is not None and marker != TEMP_TABLE_VERSION_MARKER:
+        return False
+    return True
+
+
+def _collect_comparison_temp_table_ids(state: dict, session_obj) -> list[str]:
+    collected: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw) -> None:
+        if not isinstance(raw, str):
+            return
+        ref = raw.strip()
+        if not ref or ref in seen:
+            return
+        seen.add(ref)
+        collected.append(ref)
+
+    tables = state.get("tables") if isinstance(state.get("tables"), dict) else {}
+    for entry in tables.values():
+        if isinstance(entry, dict):
+            _add(entry.get("temp_table_id"))
+    _add(state.get("primary_temp_table_id"))
+    _add(session_obj.get(AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY))
+    return collected
+
+
+def _remove_owned_temp_table_for_reset(temp_table_id: str, *, comparison_id: str) -> bool:
+    """Remove temp table comprova ownership; idempotente se já ausente."""
+    ref = (temp_table_id or "").strip()
+    if not ref:
+        return False
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(ref, ttl_hours=cfg.upload_ttl_hours)
+    if record is not None and not _temp_table_belongs_to_comparison(record, comparison_id=comparison_id):
+        return False
+    return remove_temp_table_record(ref)
+
+
+def _strip_coverage_and_audit_from_temp(temp_table_id: str, *, comparison_id: str) -> None:
+    """Remove coverage/audit compartilhados sem apagar a freight table do slot."""
+    ref = (temp_table_id or "").strip()
+    if not ref or not (comparison_id or "").strip():
+        return
+    cfg = get_cleiton_doc_config()
+    record = load_temp_table_record(ref, ttl_hours=cfg.upload_ttl_hours)
+    if record is None or not _temp_table_belongs_to_comparison(record, comparison_id=comparison_id):
+        return
+    if "coverage_table" not in record and "audit_batch" not in record:
+        return
+    updated = dict(record)
+    updated.pop("coverage_table", None)
+    updated.pop("audit_batch", None)
+    updated["updated_at"] = _utcnow().isoformat()
+    try:
+        _write_temp_table_atomic(_temp_table_path(ref), updated)
+    except Exception:
+        logger.exception("Falha ao limpar coverage/audit da temp table no clear de slot.")
+
+
+def reset_comparison_for_session(*, comparison_id: str | None = None) -> dict:
+    """
+    Abandona integralmente a comparação atual da sessão.
+
+    Não cria nova comparação. Idempotente quando já não há estado.
+    """
+    _require_session()
+    state = get_comparison_if_exists()
+    requested = (comparison_id or "").strip() or None
+
+    if state is None:
+        # Ainda limpa chaves legadas residuais (retry idempotente).
+        _clear_agente_compara_comparison_session_keys(session)
+        _mark_session_modified()
+        return {
+            "ok": True,
+            "comparison_reset": True,
+            "previous_comparison_id": requested,
+            "comparison": None,
+            "documents": [],
+            "temp_table": None,
+            "current_step": None,
+            "has_active_comparison": False,
+        }
+
+    previous_id = (state.get("comparison_id") or "").strip() or None
+    if requested and previous_id and requested != previous_id:
+        raise AgenteComparaComparisonError(
+            ERROR_COMPARISON_SCOPE_MISMATCH,
+            "comparison_id não pertence à sessão atual.",
+        )
+
+    if state.get("current_step") == STEP_CALCULATION_RUNNING:
+        raise AgenteComparaComparisonError(
+            ERROR_COMPARISON_STEP_INVALID,
+            "Não é possível reiniciar a comparação enquanto o cálculo está em andamento.",
+        )
+
+    # 0) Remover resultado comparativo dedicado (fora da sessão).
+    try:
+        from app.agente_compara_calculation_execution_service import (
+            cleanup_comparison_calculation_storage,
+        )
+
+        cleanup_comparison_calculation_storage(state)
+    except Exception:
+        logger.debug(
+            "Falha ao limpar storage de cálculo no reset comparison_id=%s",
+            previous_id,
+            exc_info=True,
+        )
+
+    # 1) Coletar referências antes de remover o estado.
+    doc_targets: list[tuple[str, str]] = []
+    for entry in (state.get("tables") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        table_id = (entry.get("table_id") or "").strip()
+        if not table_id:
+            continue
+        for doc_id in list(entry.get("doc_ids") or []):
+            if isinstance(doc_id, str) and doc_id.strip():
+                doc_targets.append((doc_id.strip(), table_id))
+
+    temp_table_ids = _collect_comparison_temp_table_ids(state, session)
+
+    # 2) Remover documentos com ownership.
+    removed_docs = 0
+    for doc_id, table_id in doc_targets:
+        if not _agente_compara_document_owned_by_session(
+            doc_id,
+            comparison_id=previous_id,
+            table_id=table_id,
+        ):
+            continue
+        result = remove_document_record(doc_id)
+        if result.get("removed"):
+            removed_docs += 1
+        remove_agente_compara_doc_id(session, doc_id, table_id=table_id)
+
+    # 3) Remover temp tables (inclui coverage/audit no record primário).
+    removed_temp_tables = 0
+    for temp_id in temp_table_ids:
+        if _remove_owned_temp_table_for_reset(temp_id, comparison_id=previous_id or ""):
+            removed_temp_tables += 1
+
+    # 4) Limpar chaves/caches e comparison state.
+    _clear_agente_compara_comparison_session_keys(session)
+    clear_comparison_state()
+    _mark_session_modified()
+
+    return {
+        "ok": True,
+        "comparison_reset": True,
+        "previous_comparison_id": previous_id,
+        "comparison": None,
+        "documents": [],
+        "temp_table": None,
+        "current_step": None,
+        "has_active_comparison": False,
+        "removed_documents": removed_docs,
+        "removed_temp_tables": removed_temp_tables,
     }
 
 
@@ -1009,6 +1912,7 @@ def _temp_table_path(temp_table_id: str):
 def _write_temp_table_atomic(path, payload: dict) -> None:
     from app.cleiton_doc_store import _write_json_atomic
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(path, payload)
 
 
@@ -1026,7 +1930,35 @@ def _normalize_source_doc_ids(doc_ids: list[str] | None) -> list[str]:
     return cleaned
 
 
-def get_temp_table_id(session_obj) -> str | None:
+def get_temp_table_id(session_obj, *, table_id: str | None = None) -> str | None:
+    state = get_comparison_state(session_obj)
+    if state is not None:
+        common_steps = {
+            STEP_TAXES,
+            STEP_COVERAGE,
+            STEP_CALCULATION_FILE,
+            STEP_CONFIGURATION_READY,
+            STEP_ANALYSIS,
+            STEP_TABLES_READY,
+        }
+        if table_id:
+            entry = get_table_by_id(state, table_id)
+            if entry is not None:
+                temp_id = entry.get("temp_table_id")
+                if isinstance(temp_id, str) and temp_id.strip():
+                    return temp_id.strip()
+            return None
+        if state.get("current_step") in common_steps:
+            primary = (state.get("primary_temp_table_id") or "").strip()
+            if primary:
+                return primary
+            entry = get_table_by_slot(state, 1)
+        else:
+            entry = get_active_table(state)
+        if entry is not None:
+            temp_id = entry.get("temp_table_id")
+            if isinstance(temp_id, str) and temp_id.strip():
+                return temp_id.strip()
     raw = session_obj.get(AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY)
     if not isinstance(raw, str):
         return None
@@ -1034,22 +1966,44 @@ def get_temp_table_id(session_obj) -> str | None:
     return ref or None
 
 
-def set_temp_table_id(session_obj, temp_table_id: str | None) -> None:
+def set_temp_table_id(
+    session_obj,
+    temp_table_id: str | None,
+    *,
+    table_id: str | None = None,
+    comparison_id: str | None = None,
+) -> None:
     ref = (temp_table_id or "").strip()
+    state = get_comparison_state(session_obj)
+    if state is not None:
+        entry = get_table_by_id(state, table_id) if table_id else get_active_table(state)
+        if entry is not None:
+            entry["temp_table_id"] = ref or None
+            if ref:
+                if entry.get("status") in {TABLE_STATUS_EMPTY, TABLE_STATUS_LOCKED}:
+                    entry["status"] = TABLE_STATUS_PROCESSING
+            persist_comparison_state(state, session_obj=session_obj)
+        if ref and state.get("current_step") in {STEP_TAXES, STEP_COVERAGE, STEP_CALCULATION_FILE, STEP_ANALYSIS, STEP_TABLES_READY}:
+            state["primary_temp_table_id"] = ref
+            persist_comparison_state(state, session_obj=session_obj)
     if ref:
         session_obj[AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY] = ref
     else:
         session_obj.pop(AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY, None)
 
 
-def get_temp_table_source_doc_ids(session_obj) -> list[str]:
+def get_temp_table_source_doc_ids(session_obj, *, table_id: str | None = None) -> list[str]:
+    state = get_comparison_state(session_obj)
+    if state is not None:
+        entry = get_table_by_id(state, table_id) if table_id else get_active_table(state)
+        return _doc_ids_for_table_entry(entry)
     raw = session_obj.get(AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY)
     if not isinstance(raw, list):
         return []
     return _normalize_source_doc_ids(raw)
 
 
-def set_temp_table_source_doc_ids(session_obj, doc_ids: list[str]) -> None:
+def set_temp_table_source_doc_ids(session_obj, doc_ids: list[str], *, table_id: str | None = None) -> None:
     session_obj[AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY] = _normalize_source_doc_ids(doc_ids)
 
 
@@ -1720,6 +2674,27 @@ def upload_coverage_table_from_file(
         )
 
     sync_temp_table_with_session_documents()
+    cmp_state = get_comparison_state(session)
+    if isinstance(cmp_state, dict) and cmp_state.get("current_step") in {
+        STEP_CALCULATION_RUNNING,
+        STEP_CALCULATION_READY,
+        STEP_CALCULATION_FAILED,
+        STEP_CONFIGURATION_READY,
+    }:
+        if cmp_state.get("current_step") == STEP_CALCULATION_RUNNING:
+            raise AgenteComparaCoverageError(
+                ERROR_COMPARISON_STEP_INVALID,
+                "Não é possível alterar cidades atendidas enquanto o cálculo comparativo está em andamento.",
+            )
+        raise AgenteComparaCoverageError(
+            ERROR_COMPARISON_STEP_INVALID,
+            "Upload de cidades atendidas só é permitido na etapa COVERAGE.",
+        )
+    if is_comparison_common_params_step(cmp_state) and cmp_state.get("current_step") != STEP_COVERAGE:
+        raise AgenteComparaCoverageError(
+            ERROR_COMPARISON_STEP_INVALID,
+            "Upload de cidades atendidas só é permitido na etapa COVERAGE.",
+        )
     active_id = get_temp_table_id(session)
     if not active_id:
         raise AgenteComparaCoverageError(
@@ -1772,6 +2747,14 @@ def upload_coverage_table_from_file(
     updated["expires_at"] = preserved_expires_at
 
     saved = save_temp_table_record(updated)
+    if is_comparison_common_params_step(cmp_state) and cmp_state.get("current_step") == STEP_COVERAGE:
+        try:
+            cmp_state = advance_to_calculation_file(cmp_state)
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaCoverageError(
+                exc.error_code,
+                exc.message,
+            ) from exc
     logger.info(
         "Agente Compara coverage upload: temp_table_id=%s user_id=%s rows=%s warnings=%s",
         saved.get("temp_table_id"),
@@ -1785,6 +2768,8 @@ def upload_coverage_table_from_file(
             ERROR_COVERAGE_NO_TEMP_TABLE,
             "Não foi possível retornar a tabela temporária atualizada.",
         )
+    if cmp_state is not None:
+        public["comparison"] = public_comparison_summary(cmp_state)
     _emit_agente_compara_operational_billing(
         emitted=emitted_processing_event,
         started_at=started_at,
@@ -1913,6 +2898,11 @@ def _normalize_audit_row(
     if _audit_row_is_empty(raw_row, field_indexes):
         return None
 
+    document_number = _sanitize_cell_string(
+        raw_row[field_indexes["document_number"]]
+        if "document_number" in field_indexes and field_indexes["document_number"] < len(raw_row)
+        else None
+    )
     destination_city = _sanitize_cell_string(
         raw_row[field_indexes["destination_city"]]
         if field_indexes["destination_city"] < len(raw_row)
@@ -1923,18 +2913,18 @@ def _normalize_audit_row(
         if field_indexes["destination_uf"] < len(raw_row)
         else None
     )
-    charged_freight = _parse_audit_numeric(
-        raw_row[field_indexes["charged_freight"]]
-        if field_indexes["charged_freight"] < len(raw_row)
-        else None
-    )
     audited_weight = _parse_audit_numeric(
         raw_row[field_indexes["audited_weight"]]
         if field_indexes["audited_weight"] < len(raw_row)
         else None
     )
 
-    if not destination_city or not destination_uf or charged_freight is None or audited_weight is None:
+    if (
+        not document_number
+        or not destination_city
+        or not destination_uf
+        or audited_weight is None
+    ):
         raise AgenteComparaBatchError(
             ERROR_AUDIT_PARSE_FAILED,
             f"Linha {row_index}: dados obrigatórios inválidos ou ausentes.",
@@ -1942,15 +2932,17 @@ def _normalize_audit_row(
 
     normalized: dict = {
         "row_index": row_index,
+        "document_number": document_number,
         "destination_city": destination_city,
         "destination_uf": destination_uf,
-        "charged_freight": charged_freight,
         "audited_weight": audited_weight,
         "source_file_name": source_file_name,
     }
 
     for field_name in _AUDIT_OPTIONAL_FIELDS:
         if field_name not in field_indexes:
+            continue
+        if field_name in _AUDIT_LEGACY_IGNORED_FIELDS:
             continue
         index = field_indexes[field_name]
         raw_value = raw_row[index] if index < len(raw_row) else None
@@ -1980,7 +2972,7 @@ def _parse_audit_tabular_rows(
     if not raw_rows:
         raise AgenteComparaBatchError(
             ERROR_AUDIT_EMPTY_FILE,
-            "O arquivo auditado está vazio.",
+            "O arquivo para comparação está vazio.",
         )
 
     header_row = raw_rows[0]
@@ -2003,7 +2995,7 @@ def _parse_audit_tabular_rows(
         if data_row_index > max_rows:
             raise AgenteComparaBatchError(
                 ERROR_AUDIT_TOO_MANY_ROWS,
-                f"O arquivo excede o limite de {max_rows} linhas configurado para auditoria.",
+                f"O arquivo excede o limite de {max_rows} linhas configurado para comparação.",
             )
         normalized = _normalize_audit_row(
             raw_row,
@@ -2017,19 +3009,19 @@ def _parse_audit_tabular_rows(
     if not normalized_rows:
         raise AgenteComparaBatchError(
             ERROR_AUDIT_EMPTY_ROWS,
-            "Nenhuma linha válida encontrada no arquivo auditado.",
+            "Nenhuma linha válida encontrada no arquivo para comparação.",
         )
 
     public_header_map = {
         _AUDIT_FIELD_LABELS.get(field, field): field
         for field in field_indexes
-        if field in _AUDIT_FIELD_LABELS
+        if field in _AUDIT_FIELD_LABELS and field not in _AUDIT_LEGACY_IGNORED_FIELDS
     }
     public_header_map.update(
         {
             source: target
             for source, target in header_map.items()
-            if source and target
+            if source and target and target not in _AUDIT_LEGACY_IGNORED_FIELDS
         }
     )
     return normalized_rows, public_header_map, None
@@ -2062,12 +3054,12 @@ def _parse_audit_xlsx_bytes(
     if not file_bytes:
         raise AgenteComparaBatchError(
             ERROR_AUDIT_EMPTY_FILE,
-            "O arquivo auditado está vazio.",
+            "O arquivo para comparação está vazio.",
         )
     if len(file_bytes) > int(max_bytes):
         raise AgenteComparaBatchError(
             ERROR_AUDIT_PAYLOAD_TOO_LARGE,
-            "O arquivo auditado excede o limite de tamanho permitido.",
+            "O arquivo para comparação excede o limite de tamanho permitido.",
         )
     try:
         if zipfile.is_zipfile(io.BytesIO(file_bytes)):
@@ -2075,7 +3067,7 @@ def _parse_audit_xlsx_bytes(
                 if archive.testzip() is not None:
                     raise AgenteComparaBatchError(
                         ERROR_AUDIT_PARSE_FAILED,
-                        "Arquivo XLSX auditado corrompido.",
+                        "Arquivo XLSX para comparação corrompido.",
                     )
         from openpyxl import load_workbook
 
@@ -2085,7 +3077,7 @@ def _parse_audit_xlsx_bytes(
     except Exception as exc:
         raise AgenteComparaBatchError(
             ERROR_AUDIT_PARSE_FAILED,
-            "Não foi possível ler o arquivo XLSX auditado.",
+            "Não foi possível ler o arquivo XLSX para comparação.",
         ) from exc
 
     sheet = None
@@ -2095,7 +3087,7 @@ def _parse_audit_xlsx_bytes(
         else:
             raise AgenteComparaBatchError(
                 ERROR_AUDIT_INVALID_SHEET,
-                f"A aba '{AUDIT_BATCH_SHEET_NAME}' é obrigatória no arquivo XLSX auditado.",
+                f"A aba '{AUDIT_BATCH_SHEET_NAME}' é obrigatória no arquivo XLSX para comparação.",
             )
         raw_rows: list[list] = []
         for row in sheet.iter_rows(values_only=True):
@@ -4504,7 +5496,7 @@ def _status_result(
     return result
 
 
-def _audit_single_row(
+def _calculate_expected_freight_row(
     row: dict,
     *,
     coverage_index: dict,
@@ -4513,6 +5505,12 @@ def _audit_single_row(
     accessorial_fees=None,
     tax_config=None,
 ) -> dict:
+    """Calcula o frete esperado de uma linha sem exigir frete cobrado.
+
+    Núcleo determinístico reutilizável pelo AgenteCompara (cálculo unitário)
+    e pelo motor legado de auditoria. Não compara cobrado x esperado.
+    Em sucesso, ``status`` permanece ``None``; o chamador decide a semântica.
+    """
     weight = _parse_weight_number(row.get("audited_weight"))
     if weight is None:
         return _status_result(
@@ -4522,17 +5520,6 @@ def _audit_single_row(
                 row,
                 failure_stage="input_validation",
                 message="Peso inválido ou ausente no arquivo auditado.",
-            ),
-        )
-    charged = _parse_brazilian_money(row.get("charged_freight"))
-    if charged is None:
-        return _status_result(
-            row,
-            AUDIT_STATUS_INVALID_CHARGED_FREIGHT,
-            diagnostic=_audit_failure_diagnostic(
-                row,
-                failure_stage="input_validation",
-                message="Frete cobrado inválido ou ausente no arquivo auditado.",
             ),
         )
 
@@ -4657,25 +5644,71 @@ def _audit_single_row(
 
     calculated = _apply_row_tax_components(calculated, row, tax_config)
 
-    comparison = compare_charged_vs_expected(charged, calculated["expected_freight"])
     result = _base_audit_result(row)
-    result.update(comparison)
     result["freight_region"] = freight_region
     result["audited_weight"] = weight
+    result["expected_freight"] = calculated.get("expected_freight")
     result["weight_freight"] = calculated.get("weight_freight")
     result["freight_value_amount"] = calculated.get("freight_value_amount")
     result["route_toll_amount"] = calculated.get("route_toll_amount")
     result["accessorial_fees_amount"] = calculated.get("accessorial_fees_amount")
     result["accessorial_percent_fees_amount"] = calculated.get("accessorial_percent_fees_amount")
-    result["reason_code"] = None if comparison["status"] == AUDIT_STATUS_OK else AUDIT_STATUS_DIVERGENT
-    result["calculation_basis"] = calculated["calculation_basis"]
-    result["calculation_details"] = calculated["calculation_details"]
+    result["status"] = None
+    result["reason_code"] = None
+    result["calculation_basis"] = calculated.get("calculation_basis")
+    result["calculation_details"] = calculated.get("calculation_details")
     result["calculation_components"] = calculated.get("calculation_components") or {}
+    result["pricing_lookup_kind"] = lookup_kind
+    result["pricing_lookup_key"] = lookup_key
+    result["pricing_type"] = rule.get("pricing_type")
     if lookup_kind != "freight_region":
         result["calculation_details"] = (
             f"{result['calculation_details']} | regra localizada por cidade/destino: {lookup_key}"
         )
     return result
+
+
+def _audit_single_row(
+    row: dict,
+    *,
+    coverage_index: dict,
+    pricing_index: dict,
+    has_coverage: bool,
+    accessorial_fees=None,
+    tax_config=None,
+) -> dict:
+    charged = _parse_brazilian_money(row.get("charged_freight"))
+    if charged is None:
+        return _status_result(
+            row,
+            AUDIT_STATUS_INVALID_CHARGED_FREIGHT,
+            diagnostic=_audit_failure_diagnostic(
+                row,
+                failure_stage="input_validation",
+                message="Frete cobrado inválido ou ausente no arquivo auditado.",
+            ),
+        )
+
+    expected_result = _calculate_expected_freight_row(
+        row,
+        coverage_index=coverage_index,
+        pricing_index=pricing_index,
+        has_coverage=has_coverage,
+        accessorial_fees=accessorial_fees,
+        tax_config=tax_config,
+    )
+    if expected_result.get("status") is not None or expected_result.get("expected_freight") is None:
+        return expected_result
+
+    comparison = compare_charged_vs_expected(charged, expected_result["expected_freight"])
+    expected_result.update(comparison)
+    expected_result["reason_code"] = (
+        None if comparison["status"] == AUDIT_STATUS_OK else AUDIT_STATUS_DIVERGENT
+    )
+    expected_result.pop("pricing_lookup_kind", None)
+    expected_result.pop("pricing_lookup_key", None)
+    expected_result.pop("pricing_type", None)
+    return expected_result
 
 
 def _build_audit_summary(results: list[dict], total_rows: int) -> dict:
@@ -4982,6 +6015,12 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
     emitted_processing_event = [False]
     execution_id = _resolve_agente_compara_execution_id()
     _require_session()
+    cmp_state = get_comparison_state(session)
+    if comparison_blocks_audit_run(cmp_state):
+        raise AgenteComparaBatchError(
+            "agente_compara_comparison_not_ready",
+            "O cálculo comparativo ainda não foi iniciado.",
+        )
     sync_temp_table_with_session_documents()
     active_id = get_temp_table_id(session)
     if not active_id:
@@ -5201,9 +6240,9 @@ def upload_audit_batch_from_file(
     franquia_scope=None,
 ) -> dict:
     """
-    Upload determinístico do arquivo auditado no tt_*.json ativo.
+    Upload determinístico do arquivo operacional para comparação no tt_*.json ativo.
 
-    Não registra documento principal, não chama Gemini e não executa cálculo de auditoria.
+    Não registra documento principal, não chama Gemini e não executa cálculo comparativo.
     """
     started_at = time.perf_counter()
     emitted_processing_event = [False]
@@ -5212,7 +6251,7 @@ def upload_audit_batch_from_file(
     if not file_bytes:
         raise AgenteComparaBatchError(
             ERROR_AUDIT_EMPTY_FILE,
-            "O arquivo auditado está vazio.",
+            "O arquivo para comparação está vazio.",
         )
     cfg = get_cleiton_doc_config()
     audit_cfg = get_agente_compara_config()
@@ -5221,7 +6260,7 @@ def upload_audit_batch_from_file(
     if len(file_bytes) > max_bytes:
         raise AgenteComparaBatchError(
             ERROR_AUDIT_PAYLOAD_TOO_LARGE,
-            "O arquivo auditado excede o limite de tamanho permitido.",
+            "O arquivo para comparação excede o limite de tamanho permitido.",
         )
 
     ext = (extension or "").strip().lower()
@@ -5230,15 +6269,36 @@ def upload_audit_batch_from_file(
     if ext == ".pdf":
         raise AgenteComparaBatchError(
             ERROR_AUDIT_INVALID_FORMAT,
-            "Upload do arquivo auditado aceita apenas CSV e XLSX nesta fase.",
+            "Upload do arquivo para comparação aceita apenas CSV e XLSX nesta fase.",
         )
     if ext not in {".csv", ".xlsx"}:
         raise AgenteComparaBatchError(
             ERROR_AUDIT_INVALID_FORMAT,
-            "Upload do arquivo auditado aceita apenas CSV e XLSX nesta fase.",
+            "Upload do arquivo para comparação aceita apenas CSV e XLSX nesta fase.",
         )
 
     sync_temp_table_with_session_documents()
+    cmp_state = get_comparison_state(session)
+    if isinstance(cmp_state, dict) and cmp_state.get("current_step") in {
+        STEP_CALCULATION_RUNNING,
+        STEP_CALCULATION_READY,
+        STEP_CALCULATION_FAILED,
+        STEP_CONFIGURATION_READY,
+    }:
+        if cmp_state.get("current_step") == STEP_CALCULATION_RUNNING:
+            raise AgenteComparaBatchError(
+                ERROR_COMPARISON_STEP_INVALID,
+                "Não é possível substituir o arquivo operacional enquanto o cálculo comparativo está em andamento.",
+            )
+        raise AgenteComparaBatchError(
+            ERROR_COMPARISON_STEP_INVALID,
+            "Upload do arquivo operacional só é permitido na etapa CALCULATION_FILE.",
+        )
+    if is_comparison_common_params_step(cmp_state) and cmp_state.get("current_step") != STEP_CALCULATION_FILE:
+        raise AgenteComparaBatchError(
+            ERROR_COMPARISON_STEP_INVALID,
+            "Upload do arquivo operacional só é permitido na etapa CALCULATION_FILE.",
+        )
     active_id = get_temp_table_id(session)
     if not active_id:
         raise AgenteComparaBatchError(
@@ -5263,7 +6323,7 @@ def upload_audit_batch_from_file(
     if status in {TEMP_TABLE_STATUS_DISCARDED, TEMP_TABLE_STATUS_PROCESSING}:
         raise AgenteComparaBatchError(
             ERROR_AUDIT_NO_TEMP_TABLE,
-            "Tabela temporária indisponível para upload do arquivo auditado.",
+            "Tabela temporária indisponível para upload do arquivo para comparação.",
         )
     _assert_temp_table_scope(record, user_scope=user_scope, franquia_scope=franquia_scope)
 
@@ -5312,6 +6372,14 @@ def upload_audit_batch_from_file(
     updated["expires_at"] = preserved_expires_at
 
     saved = save_temp_table_record(updated)
+    if is_comparison_common_params_step(cmp_state) and cmp_state.get("current_step") == STEP_CALCULATION_FILE:
+        try:
+            cmp_state = advance_to_configuration_ready(cmp_state)
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaBatchError(
+                exc.error_code,
+                exc.message,
+            ) from exc
     logger.info(
         "Agente Compara audit batch upload: temp_table_id=%s user_id=%s rows=%s max_rows=%s",
         saved.get("temp_table_id"),
@@ -5325,6 +6393,8 @@ def upload_audit_batch_from_file(
             ERROR_AUDIT_NO_TEMP_TABLE,
             "Não foi possível retornar a tabela temporária atualizada.",
         )
+    if cmp_state is not None:
+        public["comparison"] = public_comparison_summary(cmp_state)
     _emit_agente_compara_operational_billing(
         emitted=emitted_processing_event,
         started_at=started_at,
@@ -5886,10 +6956,146 @@ def _collect_tax_destination_findings_from_value(
             findings.extend(_resolve_tax_location_findings(value, field_kind))
 
 
+def _freight_table_route_type(table: dict) -> str:
+    for key in ("table_type", "type"):
+        value = table.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower().replace("-", "_")
+    return ""
+
+
+def _normalized_freight_table_column_key(column) -> str:
+    return _normalize_audit_lookup_text(column).lower().replace(" ", "_")
+
+
+def _freight_table_columns_from_table(table: dict) -> list[str]:
+    for key in ("columns", "headers", "column_names", "fields"):
+        raw = table.get(key)
+        if isinstance(raw, list):
+            columns = [
+                str(col).strip()
+                for col in raw
+                if isinstance(col, str) and str(col).strip()
+            ]
+            if columns:
+                return columns
+    rows = table.get("rows")
+    if isinstance(rows, list) and rows:
+        first = rows[0]
+        if isinstance(first, dict):
+            return [
+                str(key).strip()
+                for key in first.keys()
+                if isinstance(key, str) and str(key).strip()
+            ]
+    return []
+
+
+def _is_route_matrix_column_indicator(column_key: str) -> bool:
+    if column_key in {
+        "regiao",
+        "regiao_de_frete",
+        "region",
+        "destino",
+        "matriz",
+        "rota",
+        "praca",
+    }:
+        return True
+    if "excedente" in column_key or "excesso" in column_key:
+        return True
+    column_text = column_key.replace("_", " ")
+    if _WEIGHT_KG_HEADER_RE.search(column_text):
+        return True
+    if re.search(r"\bate\b", column_key) and "kg" in column_key:
+        return True
+    return False
+
+
+def _is_route_matrix_tax_destination_context(table: dict) -> bool:
+    if not isinstance(table, dict):
+        return False
+    table_type = _freight_table_route_type(table)
+    if table_type not in {"route_matrix", "route_matrix_synthesized"}:
+        return False
+    columns = _freight_table_columns_from_table(table)
+    if not columns:
+        return False
+    normalized_columns = [_normalized_freight_table_column_key(col) for col in columns]
+    has_uf_column = any(
+        col == "uf"
+        or col in {"destination_uf", "uf_destino", "destino_uf"}
+        or "uf_destino" in col
+        or "destination_uf" in col
+        for col in normalized_columns
+    )
+    if not has_uf_column:
+        return False
+    indicators = sum(
+        1 for col in normalized_columns if _is_route_matrix_column_indicator(col)
+    )
+    return indicators >= 1
+
+
+def _resolve_freight_table_uf_column(columns: list[str]) -> str | None:
+    for col in columns:
+        key = _normalized_freight_table_column_key(col)
+        if key == "uf":
+            return col
+        if key in {"destination_uf", "uf_destino", "destino_uf"}:
+            return col
+        if "uf_destino" in key or "destination_uf" in key:
+            return col
+    return None
+
+
+def _extract_tax_destination_findings_from_freight_table(
+    table: dict,
+) -> list[tuple[str, str, str]]:
+    if not _is_route_matrix_tax_destination_context(table):
+        return []
+    columns = _freight_table_columns_from_table(table)
+    uf_column = _resolve_freight_table_uf_column(columns)
+    if not uf_column:
+        return []
+    try:
+        uf_index = columns.index(uf_column)
+    except ValueError:
+        uf_index = None
+    findings: list[tuple[str, str, str]] = []
+    raw_rows = table.get("rows")
+    if not isinstance(raw_rows, list):
+        return findings
+    for row in raw_rows:
+        if isinstance(row, dict):
+            value = row.get(uf_column)
+        elif isinstance(row, list) and uf_index is not None:
+            value = row[uf_index] if uf_index < len(row) else None
+        else:
+            continue
+        findings.extend(_resolve_tax_location_findings(value, "uf"))
+    return findings
+
+
+def _extract_tax_destination_findings_from_freight_tables(
+    freight_tables,
+) -> list[tuple[str, str, str]]:
+    if not isinstance(freight_tables, list):
+        return []
+    findings: list[tuple[str, str, str]] = []
+    for table in freight_tables:
+        if isinstance(table, dict):
+            findings.extend(_extract_tax_destination_findings_from_freight_table(table))
+    return findings
+
+
 def _extract_tax_destination_findings_from_record(record: dict | None) -> list[tuple[str, str, str]]:
     if not isinstance(record, dict):
         return []
     findings: list[tuple[str, str, str]] = []
+    findings.extend(
+        _extract_tax_destination_findings_from_freight_tables(record.get("freight_tables"))
+    )
     for key in _TAX_DESTINATION_RECORD_SOURCES:
         _collect_tax_destination_findings_from_value(record.get(key), findings)
     return findings
@@ -6025,7 +7231,20 @@ def _validate_tax_config_for_save(raw_tax_config) -> dict:
         )
     include_taxes = raw_tax_config.get("include_taxes")
     if include_taxes is not True:
-        return {"include_taxes": False}
+        origin_uf = _normalize_uf(raw_tax_config.get("origin_uf"))
+        origin_city = _sanitize_cell_string(raw_tax_config.get("origin_city"))
+        iss_rate = _parse_optional_rate(raw_tax_config.get("iss_rate"))
+        if iss_rate is not None and not origin_city:
+            raise AgenteComparaTempTableError(
+                ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                "Cidade origem é obrigatória quando ISS estiver preenchido.",
+            )
+        result: dict = {"include_taxes": False}
+        if origin_uf:
+            result["origin_uf"] = origin_uf
+            result["origin_city"] = origin_city or None
+            result["iss_rate"] = iss_rate
+        return result
 
     origin_uf = _normalize_uf(raw_tax_config.get("origin_uf"))
     if not origin_uf:
@@ -6093,7 +7312,12 @@ def _validate_tax_config_for_save(raw_tax_config) -> dict:
 
 def build_tax_config_for_temp_table(record: dict, validated_tax_config: dict) -> dict:
     if not validated_tax_config.get("include_taxes"):
-        return {"include_taxes": False}
+        result: dict = {"include_taxes": False}
+        if validated_tax_config.get("origin_uf"):
+            result["origin_uf"] = validated_tax_config["origin_uf"]
+            result["origin_city"] = validated_tax_config.get("origin_city")
+            result["iss_rate"] = validated_tax_config.get("iss_rate")
+        return result
 
     origin_uf = validated_tax_config["origin_uf"]
     incoming_rates = validated_tax_config.get("_incoming_icms_rates") or {}
@@ -6141,6 +7365,278 @@ def build_tax_config_for_temp_table(record: dict, validated_tax_config: dict) ->
         "iss_rate": validated_tax_config.get("iss_rate"),
         "destination_ufs": destination_ufs,
         "icms_rates": icms_rates,
+    }
+
+
+def consolidate_selected_tables_tax_ufs(
+    state: dict,
+    selected_table_ids: list[str],
+    *,
+    load_record_for_temp_table_id,
+) -> list[dict]:
+    """Consolida UFs de destino das tabelas selecionadas, com deduplicação determinística."""
+    by_uf: dict[str, dict] = {}
+    table_ids_by_uf: dict[str, set[str]] = {}
+    carrier_names_by_uf: dict[str, set[str]] = {}
+
+    for table_id in selected_table_ids:
+        entry = get_table_by_id(state, table_id)
+        if not isinstance(entry, dict):
+            continue
+        temp_table_id = (entry.get("temp_table_id") or "").strip()
+        if not temp_table_id:
+            continue
+        record = load_record_for_temp_table_id(temp_table_id)
+        carrier_name = (entry.get("carrier_name") or "").strip()
+        for dest_entry in consolidate_tax_destination_ufs(record):
+            uf = dest_entry["uf"]
+            evidence_text = dest_entry["evidence"][0] if dest_entry.get("evidence") else None
+            _merge_tax_destination_entry(
+                by_uf,
+                uf=uf,
+                source=dest_entry.get("source") or "automatic",
+                evidence=evidence_text,
+                user_confirmed=bool(dest_entry.get("user_confirmed")),
+            )
+            merged = by_uf[uf]
+            for extra in dest_entry.get("evidence", [])[1:]:
+                if extra and extra not in merged["evidence"]:
+                    merged["evidence"].append(extra)
+            table_ids_by_uf.setdefault(uf, set()).add(table_id)
+            if carrier_name:
+                carrier_names_by_uf.setdefault(uf, set()).add(carrier_name)
+
+    result: list[dict] = []
+    for uf in sorted(by_uf):
+        entry = dict(by_uf[uf])
+        entry["table_ids"] = sorted(table_ids_by_uf.get(uf, set()))
+        entry["carrier_names"] = sorted(carrier_names_by_uf.get(uf, set()))
+        result.append(entry)
+    return result
+
+
+def _normalize_manual_uf_list(raw_values) -> list[str]:
+    if not isinstance(raw_values, list):
+        return []
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in raw_values:
+        uf = _normalize_uf(item)
+        if uf and uf not in seen:
+            seen.add(uf)
+            normalized.append(uf)
+    return normalized
+
+
+def build_tax_config_for_comparison(
+    state: dict,
+    validated_tax_config: dict,
+    *,
+    selected_table_ids: list[str],
+    manual_added_ufs: list[str] | None = None,
+    manual_removed_ufs: list[str] | None = None,
+) -> dict:
+    """Monta tax_config global do cenário a partir das tabelas selecionadas."""
+    cfg = get_cleiton_doc_config()
+
+    def _load_record(temp_table_id: str) -> dict | None:
+        return load_temp_table_record(temp_table_id, ttl_hours=cfg.upload_ttl_hours)
+
+    if not validated_tax_config.get("include_taxes"):
+        result: dict = {
+            "include_taxes": False,
+            "selected_table_ids": [],
+            "destination_ufs": [],
+            "icms_rates": [],
+            "manual_added_ufs": [],
+            "manual_removed_ufs": [],
+        }
+        if validated_tax_config.get("origin_uf"):
+            result["origin_uf"] = validated_tax_config["origin_uf"]
+            result["origin_city"] = validated_tax_config.get("origin_city")
+            result["iss_rate"] = validated_tax_config.get("iss_rate")
+        return result
+
+    auto_destinations = consolidate_selected_tables_tax_ufs(
+        state,
+        selected_table_ids,
+        load_record_for_temp_table_id=_load_record,
+    )
+    manual_added = _normalize_manual_uf_list(manual_added_ufs)
+    manual_removed = set(_normalize_manual_uf_list(manual_removed_ufs))
+    submitted_destination_ufs = validated_tax_config.get("_destination_ufs")
+
+    if submitted_destination_ufs is not None:
+        destination_ufs = consolidate_tax_destination_ufs(
+            None,
+            submitted_destination_ufs=submitted_destination_ufs,
+        )
+    else:
+        by_uf: dict[str, dict] = {}
+        for entry in auto_destinations:
+            _merge_tax_destination_entry(
+                by_uf,
+                uf=entry["uf"],
+                source=entry.get("source") or "automatic",
+                evidence=entry["evidence"][0] if entry.get("evidence") else None,
+                user_confirmed=bool(entry.get("user_confirmed")),
+            )
+            merged = by_uf[entry["uf"]]
+            for extra in entry.get("evidence", [])[1:]:
+                if extra and extra not in merged["evidence"]:
+                    merged["evidence"].append(extra)
+        for uf in manual_added:
+            if uf in manual_removed:
+                continue
+            _merge_tax_destination_entry(by_uf, uf=uf, source="manual", evidence=None, user_confirmed=True)
+        destination_ufs = [by_uf[uf] for uf in sorted(by_uf) if uf not in manual_removed]
+
+    destination_ufs = [entry for entry in destination_ufs if entry.get("uf") not in manual_removed]
+
+    origin_uf = validated_tax_config["origin_uf"]
+    incoming_rates = validated_tax_config.get("_incoming_icms_rates") or {}
+    icms_rates: list[dict] = []
+    for destination_entry in destination_ufs:
+        destination_uf = destination_entry["uf"]
+        if destination_uf == origin_uf:
+            operation_type = "intermunicipal"
+            suggested_rate = None
+            source_name = ICMS_INTERMUNICIPAL_SOURCE_NAME
+            source_type = "manual"
+        else:
+            operation_type = "interstate"
+            suggested_rate = suggested_icms_interstate_rate(origin_uf, destination_uf)
+            source_name = ICMS_INTERSTATE_SOURCE_NAME
+            source_type = "official"
+
+        has_incoming_rate = destination_uf in incoming_rates
+        applied_rate = incoming_rates[destination_uf] if has_incoming_rate else suggested_rate
+        suggested_cmp = _normalize_tax_rate_for_compare(suggested_rate)
+        applied_cmp = _normalize_tax_rate_for_compare(applied_rate)
+        user_edited = bool(has_incoming_rate and applied_cmp != suggested_cmp)
+        icms_rates.append(
+            {
+                "destination_uf": destination_uf,
+                "operation_type": operation_type,
+                "suggested_rate": suggested_rate,
+                "applied_rate": applied_rate,
+                "source_name": source_name,
+                "source_type": source_type,
+                "user_edited": user_edited,
+                "is_active": applied_rate is not None,
+            }
+        )
+
+    user_edited_rates = {
+        row["destination_uf"]: row["applied_rate"]
+        for row in icms_rates
+        if isinstance(row, dict) and row.get("user_edited")
+    }
+
+    return {
+        "include_taxes": True,
+        "origin_uf": origin_uf,
+        "origin_city": validated_tax_config.get("origin_city"),
+        "iss_rate": validated_tax_config.get("iss_rate"),
+        "selected_table_ids": list(selected_table_ids),
+        "destination_ufs": destination_ufs,
+        "icms_rates": icms_rates,
+        "manual_added_ufs": manual_added,
+        "manual_removed_ufs": sorted(manual_removed),
+        "user_edited_rates": user_edited_rates,
+    }
+
+
+def save_comparison_tax_config(
+    payload: dict,
+    *,
+    user_scope=None,
+    franquia_scope=None,
+) -> dict:
+    """Persiste configuração fiscal global do cenário no comparison state."""
+    _require_session()
+    payload_obj = payload if isinstance(payload, dict) else {}
+    comparison_id = (payload_obj.get("comparison_id") or "").strip() or None
+    raw_tax_config = payload_obj.get("tax_config")
+
+    cmp_state = get_comparison_state(session)
+    if cmp_state is None:
+        raise AgenteComparaTempTableError(
+            ERROR_COMPARISON_STEP_INVALID,
+            "Nenhuma comparação ativa para salvar impostos.",
+        )
+    if comparison_id and comparison_id != cmp_state.get("comparison_id"):
+        raise AgenteComparaTempTableError(
+            ERROR_TEMP_TABLE_SCOPE_MISMATCH,
+            "comparison_id não pertence à sessão atual.",
+        )
+    _assert_comparison_common_step(
+        cmp_state,
+        STEP_TAXES,
+        message="Impostos só podem ser salvos na etapa TAXES.",
+    )
+    if not isinstance(raw_tax_config, dict):
+        raise AgenteComparaTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "tax_config deve ser um objeto.",
+        )
+
+    include_taxes = raw_tax_config.get("include_taxes")
+    selected_table_ids: list[str] = []
+    if include_taxes is True:
+        try:
+            selected_table_ids = validate_selected_table_ids_for_tax(
+                cmp_state,
+                raw_tax_config.get("selected_table_ids"),
+            )
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaTempTableError(exc.error_code, exc.message) from exc
+        if not selected_table_ids:
+            raise AgenteComparaTempTableError(
+                ERROR_TAX_SELECTED_TABLES_REQUIRED,
+                "Selecione ao menos uma transportadora.",
+            )
+
+    validated = _validate_tax_config_for_save(raw_tax_config)
+    manual_added_ufs = _normalize_manual_uf_list(raw_tax_config.get("manual_added_ufs"))
+    manual_removed_ufs = _normalize_manual_uf_list(raw_tax_config.get("manual_removed_ufs"))
+
+    built = build_tax_config_for_comparison(
+        cmp_state,
+        validated,
+        selected_table_ids=selected_table_ids,
+        manual_added_ufs=manual_added_ufs,
+        manual_removed_ufs=manual_removed_ufs,
+    )
+    if built.get("include_taxes") is True and not built.get("destination_ufs"):
+        raise AgenteComparaTempTableError(
+            ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+            "Informe ao menos uma UF de destino ou selecione transportadoras com UFs identificadas.",
+        )
+
+    now = _utcnow().isoformat()
+    built["confirmed"] = True
+    built["updated_at"] = now
+    if user_scope is not None:
+        built["updated_by_user_id"] = user_scope
+
+    set_comparison_tax_config(cmp_state, built)
+    cmp_state = persist_comparison_state(cmp_state)
+
+    comparison_public = _public_comparison_with_tax_context(cmp_state)
+    logger.info(
+        "Agente Compara comparison tax_config save: comparison_id=%s include_taxes=%s "
+        "selected_tables=%s destination_ufs=%s step=%s",
+        cmp_state.get("comparison_id"),
+        bool(built.get("include_taxes")),
+        len(built.get("selected_table_ids") or []),
+        len(built.get("destination_ufs") or []),
+        STEP_TAXES,
+    )
+    return {
+        "comparison": comparison_public,
+        "tax_config": built,
+        "can_advance_to_coverage": evaluate_can_advance_to_coverage(cmp_state),
     }
 
 
@@ -7031,6 +8527,23 @@ def _normalize_accessorial_component_ref(value) -> str | None:
     return normalized or None
 
 
+def _preserve_manual_accessorial_commitment(source_item: dict, classified: dict) -> dict:
+    explicit_source = _optional_normalized_str(source_item.get("classification_source"))
+    if not explicit_source or not explicit_source.startswith("manual_"):
+        return classified
+    preserved = dict(classified)
+    preserved["classification_source"] = explicit_source
+    explicit_operation = _optional_normalized_str(source_item.get("operation"))
+    if explicit_operation:
+        preserved["operation"] = explicit_operation
+    if "calculation_base_id" in source_item and not _optional_normalized_str(source_item.get("calculation_base_id")):
+        preserved["calculation_base_id"] = None
+    explicit_type = _optional_normalized_str(source_item.get("calculation_type"))
+    if explicit_type:
+        preserved["calculation_type"] = explicit_type
+    return preserved
+
+
 def _normalize_accessorial_fee_item(item) -> dict | None:
     if isinstance(item, str):
         text = _optional_normalized_str(item)
@@ -7094,7 +8607,8 @@ def _normalize_accessorial_fee_item(item) -> dict | None:
             normalized[field] = value
     if "calculation_base_id" in item:
         normalized["_has_explicit_calculation_base_id"] = True
-    return _apply_accessorial_fee_classification(normalized)
+    classified = _apply_accessorial_fee_classification(normalized)
+    return _preserve_manual_accessorial_commitment(item, classified)
 
 
 def _link_accessorial_fee_modifiers(fees: list[dict]) -> list[dict]:
@@ -7260,6 +8774,45 @@ def _accessorial_fee_uses_new_base_contract(fee: dict) -> bool:
     basis = str(fee.get("calculation_basis") or "").strip().lower()
     source = str(fee.get("classification_source") or "").strip()
     return bool(base_id) or basis == UNMAPPED_CALCULATION_BASIS_LABEL.lower() or source.startswith("manual_")
+
+
+def _accessorial_fee_is_user_committed(fee: dict) -> bool:
+    source = str(fee.get("classification_source") or "").strip()
+    return source.startswith("manual_")
+
+
+def _accessorial_fee_is_extraction_hypothesis(fee: dict) -> bool:
+    """Generalidade incompleta da extração que não deve bloquear o avanço."""
+    if _accessorial_fee_is_user_committed(fee):
+        return False
+    source = str(fee.get("classification_source") or "").strip()
+    status = str(fee.get("status") or "").strip()
+    basis = str(fee.get("calculation_basis") or "").strip().lower()
+    base_id = str(fee.get("calculation_base_id") or "").strip()
+    if not base_id and basis == UNMAPPED_CALCULATION_BASIS_LABEL.lower():
+        return True
+    if source in {"legacy_classifier", "unmapped_calculation_base"} and status in {
+        "needs_review",
+        "unknown",
+        "unsupported",
+        "",
+    }:
+        return not _accessorial_fee_has_required_value_for_operation(fee)
+    if source == "configured_calculation_base" and status in {"needs_review", "unknown", "unsupported"}:
+        return not _accessorial_fee_has_required_value_for_operation(fee)
+    return False
+
+
+def _accessorial_fee_should_block_advance(fee: dict) -> bool:
+    if not isinstance(fee, dict) or not _is_general_accessorial_fee_for_base_validation(fee):
+        return False
+    if _accessorial_fee_is_extraction_hypothesis(fee):
+        return False
+    if _accessorial_fee_is_minimum_modifier(fee):
+        return True
+    if not _accessorial_fee_uses_new_base_contract(fee):
+        return False
+    return True
 
 
 def _accessorial_fee_is_minimum_modifier(fee: dict) -> bool:
@@ -7564,7 +9117,7 @@ def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
     }
     errors: list[dict] = []
     for index, fee in enumerate(accessorial_fees):
-        if not isinstance(fee, dict) or not _is_general_accessorial_fee_for_base_validation(fee):
+        if not _accessorial_fee_should_block_advance(fee):
             continue
         if _accessorial_fee_is_minimum_modifier(fee):
             error = _validate_linked_minimum_amount_for_advance(
@@ -7575,8 +9128,6 @@ def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
             )
             if error is not None:
                 errors.append(error)
-            continue
-        if not _accessorial_fee_uses_new_base_contract(fee):
             continue
         error = _validate_accessorial_fee_for_advance(fee, index, active_bases_by_id)
         if error is not None:
@@ -7647,6 +9198,7 @@ def _validate_temp_table_save_payload(payload, *, content_length: int | None = N
     if review_action is not None and review_action not in {
         TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE,
         TEMP_TABLE_REVIEW_ACTION_SAVE_DRAFT,
+        TEMP_TABLE_REVIEW_ACTION_ADVANCE_TO_COVERAGE,
     }:
         raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
@@ -7737,9 +9289,138 @@ def save_temp_table_edit(
     Não cria novo artefato, não chama Gemini e não grava em banco relacional.
     """
     _require_session()
+    payload_obj = payload if isinstance(payload, dict) else {}
+    review_action = (payload_obj.get("review_action") or "").strip()
+    if review_action == TEMP_TABLE_REVIEW_ACTION_UPDATE_CARRIER:
+        try:
+            comparison_public = update_comparison_table_carrier_name(
+                comparison_id=(payload_obj.get("comparison_id") or "").strip() or None,
+                table_id=(payload_obj.get("table_id") or "").strip() or None,
+                slot=payload_obj.get("slot"),
+                carrier_name=payload_obj.get("carrier_name"),
+            )
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaTempTableError(
+                exc.error_code,
+                exc.message,
+            ) from exc
+        active_id = (payload_obj.get("temp_table_id") or "").strip() or None
+        if not active_id:
+            resolved_table_id = (payload_obj.get("table_id") or "").strip() or None
+            if resolved_table_id:
+                active_id = get_temp_table_id(session, table_id=resolved_table_id)
+        public = None
+        if active_id:
+            cfg = get_cleiton_doc_config()
+            record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
+            if record is not None:
+                public = _public_temp_table(record)
+        if public is None:
+            public = {"comparison": comparison_public}
+        else:
+            public["comparison"] = comparison_public
+        return public
+
+    payload_obj = payload if isinstance(payload, dict) else {}
+    review_action_raw = (payload_obj.get("review_action") or "").strip()
+    if review_action_raw == TEMP_TABLE_REVIEW_ACTION_ADVANCE_TO_COVERAGE:
+        cmp_state = get_comparison_state(session)
+        if cmp_state is None:
+            raise AgenteComparaTempTableError(
+                ERROR_COMPARISON_STEP_INVALID,
+                "Nenhuma comparação ativa para avançar a etapa.",
+            )
+        if cmp_state.get("current_step") != STEP_TAXES:
+            raise AgenteComparaTempTableError(
+                ERROR_COMPARISON_STEP_INVALID,
+                "Cidades atendidas só ficam disponíveis após informar os impostos.",
+            )
+        if not evaluate_can_advance_to_coverage(cmp_state):
+            raise AgenteComparaTempTableError(
+                ERROR_TAX_CONFIG_PENDING,
+                "Salve a configuração de impostos do cenário antes de continuar.",
+            )
+        try:
+            cmp_state = advance_to_coverage(cmp_state)
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaTempTableError(
+                exc.error_code,
+                exc.message,
+            ) from exc
+        return _build_advance_to_coverage_public(cmp_state)
+
+    if review_action_raw == TEMP_TABLE_REVIEW_ACTION_SKIP_COVERAGE_AND_ADVANCE:
+        cmp_state = get_comparison_state(session)
+        if cmp_state is None:
+            raise AgenteComparaTempTableError(
+                ERROR_COMPARISON_STEP_INVALID,
+                "Nenhuma comparação ativa para avançar a etapa.",
+            )
+        try:
+            cmp_state = advance_to_calculation_file(cmp_state)
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaTempTableError(
+                exc.error_code,
+                exc.message,
+            ) from exc
+        return _build_skip_coverage_advance_public(cmp_state)
+
     validated = _validate_temp_table_save_payload(payload, content_length=content_length)
-    sync_temp_table_with_session_documents()
-    active_id = get_temp_table_id(session)
+    requested_table_id = (payload_obj.get("table_id") or "").strip() or None
+    requested_comparison_id = (payload_obj.get("comparison_id") or "").strip() or None
+    cmp_state = get_comparison_state(session)
+    if (
+        validated["has_tax_config_key"]
+        and cmp_state is not None
+        and cmp_state.get("current_step") == STEP_TAXES
+    ):
+        raise AgenteComparaTempTableError(
+            ERROR_TAX_CONFIG_USE_GLOBAL_ENDPOINT,
+            "Use a configuração fiscal global do cenário para salvar impostos.",
+        )
+    resolved_table_id = requested_table_id
+    if cmp_state is not None:
+        try:
+            _, table_entry = resolve_table_identity(
+                comparison_id=requested_comparison_id,
+                table_id=requested_table_id,
+                slot=payload_obj.get("slot"),
+                auto_create=False,
+            )
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaTempTableError(
+                exc.error_code,
+                exc.message,
+            ) from exc
+        resolved_table_id = table_entry["table_id"]
+    table_entry_for_tax: dict | None = None
+    if cmp_state is not None and resolved_table_id:
+        table_entry_for_tax = get_table_by_id(cmp_state, resolved_table_id)
+
+    sync_temp_table_with_session_documents(table_id=resolved_table_id)
+    active_id: str | None = None
+    if validated["has_tax_config_key"] and table_entry_for_tax is not None:
+        if not table_entry_for_tax.get("confirmed"):
+            raise AgenteComparaTempTableError(
+                ERROR_COMPARISON_STEP_INVALID,
+                "Impostos só podem ser salvos para tabelas confirmadas.",
+            )
+        entry_temp_id = (table_entry_for_tax.get("temp_table_id") or "").strip()
+        if not entry_temp_id:
+            raise AgenteComparaTempTableError(
+                ERROR_TEMP_TABLE_NOT_FOUND,
+                "Tabela temporária indisponível para configuração fiscal.",
+            )
+        if validated["temp_table_id"] != entry_temp_id:
+            raise AgenteComparaTempTableError(
+                ERROR_TEMP_TABLE_ID_MISMATCH,
+                "temp_table_id não corresponde ao table_id informado.",
+            )
+        active_id = entry_temp_id
+    elif cmp_state is not None and is_comparison_common_params_step(cmp_state):
+        active_id = get_temp_table_id(session)
+    else:
+        active_id = get_temp_table_id(session, table_id=resolved_table_id)
     if not active_id:
         raise AgenteComparaTempTableError(
             ERROR_TEMP_TABLE_NOT_FOUND,
@@ -7771,6 +9452,60 @@ def save_temp_table_edit(
             "Tabela temporária indisponível para revisão.",
         )
     _assert_temp_table_scope(record, user_scope=user_scope, franquia_scope=franquia_scope)
+    if resolved_table_id and record.get(FIELD_TABLE_ID) and record.get(FIELD_TABLE_ID) != resolved_table_id:
+        raise AgenteComparaTempTableError(
+            ERROR_TEMP_TABLE_SCOPE_MISMATCH,
+            "temp_table_id não pertence ao table_id informado.",
+        )
+
+    if validated["has_tax_config_key"]:
+        _assert_comparison_common_step(
+            cmp_state,
+            STEP_TAXES,
+            message="Impostos só podem ser salvos na etapa TAXES.",
+        )
+    if validated["has_coverage_table_key"]:
+        _assert_comparison_common_step(
+            cmp_state,
+            STEP_COVERAGE,
+            message="Cidades atendidas só podem ser salvas na etapa COVERAGE.",
+        )
+
+    execution_id = _resolve_temp_table_save_execution_id(payload_obj)
+    edit_version_for_key = _resolve_temp_table_save_edit_version_for_key(payload_obj, record)
+    comparison_id_for_key = (
+        (record.get(FIELD_COMPARISON_ID) or requested_comparison_id or "").strip() or None
+    )
+    idempotency_key = agente_compara_temp_table_save_idempotency_key(
+        comparison_id=comparison_id_for_key,
+        table_id=resolved_table_id,
+        temp_table_id=active_id,
+        edit_version=edit_version_for_key,
+        review_action=validated["review_action"],
+        execution_id=execution_id,
+    )
+
+    cached_response = get_cached_temp_table_save_response(session, idempotency_key)
+    if cached_response is not None:
+        replay = copy.deepcopy(cached_response)
+        replay["idempotent_replay"] = True
+        return replay
+
+    table_entry = get_table_by_id(cmp_state, resolved_table_id) if cmp_state and resolved_table_id else None
+    if cmp_state is not None and table_entry is not None:
+        replay = _try_idempotent_prepare_table_save_replay(
+            record=record,
+            cmp_state=cmp_state,
+            table_entry=table_entry,
+            active_id=active_id,
+            execution_id=execution_id,
+            comparison_id=comparison_id_for_key,
+            resolved_table_id=resolved_table_id,
+            idempotency_key=idempotency_key,
+        )
+        if replay is not None:
+            cache_temp_table_save_response(session, idempotency_key, replay)
+            return replay
 
     now = _utcnow().isoformat()
     preserved_expires_at = record.get("expires_at")
@@ -7790,6 +9525,21 @@ def save_temp_table_edit(
         or validated["has_freight_routes_key"]
         or validated["has_accessorial_fees_key"]
     )
+    will_confirm_on_prepare = _will_confirm_table_on_prepare_save(
+        validated,
+        cmp_state,
+        resolved_table_id,
+        has_freight_edit,
+    )
+    if will_confirm_on_prepare and cmp_state is not None and resolved_table_id:
+        try:
+            validate_confirm_table_and_advance(cmp_state, resolved_table_id)
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaTempTableError(
+                exc.error_code,
+                exc.message,
+            ) from exc
+
     if has_freight_edit:
         updated["human_review_status"] = (
             HUMAN_REVIEW_STATUS_EDITED
@@ -7847,8 +9597,13 @@ def save_temp_table_edit(
             coverage["uploaded_at"] = now
         updated["coverage_table"] = coverage
 
+    advance_fees = (
+        validated["accessorial_fees"]
+        if validated["has_accessorial_fees_key"] and validated["accessorial_fees"] is not None
+        else updated.get("accessorial_fees")
+    )
     if validated["review_action"] == TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE:
-        _validate_accessorial_fees_ready_to_advance(updated.get("accessorial_fees"))
+        _validate_accessorial_fees_ready_to_advance(advance_fees)
 
     if validated["has_tax_config_key"]:
         new_tax_fingerprint = _tax_config_fingerprint(updated.get("tax_config"))
@@ -7862,7 +9617,25 @@ def save_temp_table_edit(
     updated["updated_at"] = now
     updated["expires_at"] = preserved_expires_at
 
-    saved = save_temp_table_record(updated)
+    saved = save_temp_table_record(updated, table_id=resolved_table_id)
+    comparison_public = None
+    if will_confirm_on_prepare and cmp_state is not None and resolved_table_id:
+        cmp_state = confirm_table_and_advance(cmp_state, resolved_table_id)
+        comparison_public = public_comparison_summary(cmp_state)
+    elif (
+        cmp_state is not None
+        and validated["has_coverage_table_key"]
+        and cmp_state.get("current_step") == STEP_COVERAGE
+        and validated["review_action"] == TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE
+    ):
+        try:
+            cmp_state = advance_to_calculation_file(cmp_state)
+            comparison_public = public_comparison_summary(cmp_state)
+        except AgenteComparaComparisonError as exc:
+            raise AgenteComparaTempTableError(
+                exc.error_code,
+                exc.message,
+            ) from exc
     logger.info(
         "Agente Compara temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s coverage_rows=%s taxes=%s",
         saved.get("temp_table_id"),
@@ -7874,12 +9647,11 @@ def save_temp_table_edit(
         len((saved.get("coverage_table") or {}).get("rows") or []),
         bool((saved.get("tax_config") or {}).get("include_taxes")),
     )
-    public = _public_temp_table(saved)
-    if public is None:
-        raise AgenteComparaTempTableError(
-            ERROR_TEMP_TABLE_NOT_FOUND,
-            "Não foi possível retornar a tabela temporária atualizada.",
-        )
+    public = _build_temp_table_save_public(
+        saved,
+        comparison_public,
+    )
+    cache_temp_table_save_response(session, idempotency_key, public)
     return public
 
 
@@ -7910,7 +9682,7 @@ def load_temp_table_record(temp_table_id: str, *, ttl_hours: int) -> dict | None
             remove_temp_table_record(ref)
             return None
         expires_at = created_at + timedelta(hours=max(1, int(ttl_hours)))
-    if _utcnow() >= expires_at:
+    if _utcnow().replace(tzinfo=None) >= expires_at:
         payload["status"] = TEMP_TABLE_STATUS_EXPIRED
         payload["updated_at"] = _utcnow().isoformat()
         try:
@@ -7952,7 +9724,7 @@ def _sync_outdated_pricing_rule_stale(record: dict) -> dict:
     )
 
 
-def save_temp_table_record(record: dict) -> dict:
+def save_temp_table_record(record: dict, *, table_id: str | None = None) -> dict:
     _require_session()
     temp_table_id = (record.get("temp_table_id") or uuid4().hex).strip()
     record = _sync_outdated_fiscal_stale(dict(record))
@@ -7960,8 +9732,28 @@ def save_temp_table_record(record: dict) -> dict:
     record["temp_table_id"] = temp_table_id
     path = _temp_table_path(temp_table_id)
     _write_temp_table_atomic(path, record)
-    set_temp_table_id(session, temp_table_id)
-    set_temp_table_source_doc_ids(session, list(record.get("source_documents") or []))
+    set_temp_table_id(session, temp_table_id, table_id=table_id or record.get(FIELD_TABLE_ID))
+    set_temp_table_source_doc_ids(session, list(record.get("source_documents") or []), table_id=table_id)
+    state = get_comparison_state(session)
+    if state is not None:
+        resolved_table_id = (table_id or record.get(FIELD_TABLE_ID) or "").strip()
+        entry = get_table_by_id(state, resolved_table_id) if resolved_table_id else get_active_table(state)
+        if entry is not None:
+            entry["temp_table_id"] = temp_table_id
+            existing_carrier = entry.get("carrier_name")
+            if not (isinstance(existing_carrier, str) and existing_carrier.strip()):
+                carrier = record.get("detected_carrier")
+                if isinstance(carrier, str) and carrier.strip():
+                    entry["carrier_name"] = carrier.strip()
+            status = (record.get("status") or "").strip().lower()
+            if status == TEMP_TABLE_STATUS_FAILED:
+                entry["status"] = TABLE_STATUS_FAILED
+                entry["error"] = (record.get("reading_alerts") or ["Extração falhou"])[0]
+            elif status in {TEMP_TABLE_STATUS_NEEDS_REVIEW, TEMP_TABLE_STATUS_AWAITING_VALIDATION, TEMP_TABLE_STATUS_VALIDATED}:
+                entry["status"] = TABLE_STATUS_NEEDS_REVIEW
+            elif status == TEMP_TABLE_STATUS_PROCESSING:
+                entry["status"] = TABLE_STATUS_PROCESSING
+            persist_comparison_state(state)
     _mark_session_modified()
     return record
 
@@ -7982,9 +9774,31 @@ def remove_temp_table_record(temp_table_id: str) -> bool:
     return True
 
 
-def invalidate_temp_table_for_session(*, reason: str = TEMP_TABLE_STATUS_DISCARDED) -> None:
+def invalidate_temp_table_for_session(*, reason: str = TEMP_TABLE_STATUS_DISCARDED, table_id: str | None = None) -> None:
     _require_session()
-    temp_table_id = get_temp_table_id(session)
+    temp_table_id = get_temp_table_id(session, table_id=table_id)
+    state = get_comparison_state(session)
+    if state is not None and table_id:
+        entry = get_table_by_id(state, table_id)
+        if entry is not None:
+            entry["temp_table_id"] = None
+            entry["confirmed"] = False
+            entry["carrier_name"] = None
+            entry["error"] = None
+            if int(entry.get("slot_number") or 0) == 2 and state.get("current_step") == STEP_PREPARE_TABLE_1:
+                entry["status"] = TABLE_STATUS_LOCKED
+            else:
+                entry["status"] = TABLE_STATUS_EMPTY
+            if state.get("current_step") == STEP_TABLES_READY:
+                state["status"] = COMPARISON_STATUS_PREPARING
+                state["primary_temp_table_id"] = None
+                slot_num = int(entry.get("slot_number") or 1)
+                state["current_step"] = {
+                    1: STEP_PREPARE_TABLE_1,
+                    2: STEP_PREPARE_TABLE_2,
+                    3: STEP_PREPARE_TABLE_3,
+                }.get(slot_num, STEP_PREPARE_TABLE_1)
+            persist_comparison_state(state)
     clear_temp_table_session_refs(session)
     if temp_table_id:
         remove_temp_table_record(temp_table_id)
@@ -7995,9 +9809,10 @@ def invalidate_temp_table_if_source_changed(
     *,
     reason: str = TEMP_TABLE_STATUS_DISCARDED,
     removed_doc_id: str | None = None,
+    table_id: str | None = None,
 ) -> None:
     _require_session()
-    temp_table_id = get_temp_table_id(session)
+    temp_table_id = get_temp_table_id(session, table_id=table_id)
     if not temp_table_id:
         return
     cfg = get_cleiton_doc_config()
@@ -8007,12 +9822,12 @@ def invalidate_temp_table_if_source_changed(
         _mark_session_modified()
         return
     source_docs = list(record.get("source_documents") or [])
-    active_ids = set(get_agente_compara_doc_ids(session))
+    active_ids = set(get_agente_compara_doc_ids(session, table_id=table_id))
     if removed_doc_id and removed_doc_id in source_docs:
-        invalidate_temp_table_for_session(reason=reason)
+        invalidate_temp_table_for_session(reason=reason, table_id=table_id)
         return
     if source_docs and not all(doc_id in active_ids for doc_id in source_docs):
-        invalidate_temp_table_for_session(reason=reason)
+        invalidate_temp_table_for_session(reason=reason, table_id=table_id)
 
 
 def _parse_iso(raw: str | None) -> datetime | None:
@@ -8043,10 +9858,10 @@ def _temp_table_expires_at(source_doc_ids: list[str]) -> str:
     return latest.isoformat()
 
 
-def get_active_temp_table_for_session() -> dict | None:
+def get_active_temp_table_for_session(*, table_id: str | None = None) -> dict | None:
     _require_session()
-    sync_temp_table_with_session_documents()
-    temp_table_id = get_temp_table_id(session)
+    sync_temp_table_with_session_documents(table_id=table_id)
+    temp_table_id = get_temp_table_id(session, table_id=table_id)
     if not temp_table_id:
         return None
     cfg = get_cleiton_doc_config()
@@ -8061,9 +9876,15 @@ def get_active_temp_table_for_session() -> dict | None:
     return _public_temp_table(record)
 
 
-def sync_temp_table_with_session_documents() -> None:
+def sync_temp_table_with_session_documents(*, table_id: str | None = None) -> None:
     _require_session()
-    temp_table_id = get_temp_table_id(session)
+    state = get_comparison_state(session)
+    if state is not None and table_id is None:
+        for entry in (state.get("tables") or {}).values():
+            if isinstance(entry, dict) and entry.get("table_id"):
+                sync_temp_table_with_session_documents(table_id=entry.get("table_id"))
+        return
+    temp_table_id = get_temp_table_id(session, table_id=table_id)
     if not temp_table_id:
         return
     cfg = get_cleiton_doc_config()
@@ -8072,18 +9893,28 @@ def sync_temp_table_with_session_documents() -> None:
         clear_temp_table_session_refs(session)
         _mark_session_modified()
         return
-    active_ids = set(get_agente_compara_doc_ids(session))
+    active_ids = set(get_agente_compara_doc_ids(session, table_id=table_id))
     source_docs = list(record.get("source_documents") or [])
     if source_docs and not all(doc_id in active_ids for doc_id in source_docs):
-        invalidate_temp_table_for_session(reason=TEMP_TABLE_STATUS_DISCARDED)
+        invalidate_temp_table_for_session(reason=TEMP_TABLE_STATUS_DISCARDED, table_id=table_id)
 
 
-def should_attempt_temp_table_extraction(session_obj, source_doc_ids: list[str]) -> bool:
+def should_attempt_temp_table_extraction(
+    session_obj,
+    source_doc_ids: list[str],
+    *,
+    table_id: str | None = None,
+) -> bool:
     normalized = _normalize_source_doc_ids(source_doc_ids)
     if not normalized:
         return False
-    sync_temp_table_with_session_documents()
-    temp_table_id = get_temp_table_id(session_obj)
+    sync_temp_table_with_session_documents(table_id=table_id)
+    state = get_comparison_state(session_obj)
+    if state is not None:
+        entry = get_table_by_id(state, table_id) if table_id else get_active_table(state)
+        if entry and entry.get("confirmed"):
+            return False
+    temp_table_id = get_temp_table_id(session_obj, table_id=table_id)
     if not temp_table_id:
         return True
     cfg = get_cleiton_doc_config()
@@ -8100,15 +9931,41 @@ def should_attempt_temp_table_extraction(session_obj, source_doc_ids: list[str])
     return False
 
 
-def mark_temp_table_processing(source_doc_ids: list[str], *, user_scope=None, franquia_scope=None) -> dict:
+def mark_temp_table_processing(
+    source_doc_ids: list[str],
+    *,
+    user_scope=None,
+    franquia_scope=None,
+    comparison_id: str | None = None,
+    table_id: str | None = None,
+    slot_number: int | None = None,
+) -> dict:
     _require_session()
     normalized = _normalize_source_doc_ids(source_doc_ids)
     now = _utcnow()
-    temp_table_id = get_temp_table_id(session) or uuid4().hex
+    state = get_comparison_state(session)
+    resolved_table_id = table_id
+    resolved_slot = slot_number
+    resolved_comparison_id = comparison_id
+    if state is not None:
+        cmp_state, entry = resolve_table_identity(
+            comparison_id=comparison_id,
+            table_id=table_id,
+            slot=slot_number,
+            auto_create=True,
+        )
+        state = cmp_state
+        resolved_table_id = entry["table_id"]
+        resolved_slot = int(entry.get("slot_number") or 1)
+        resolved_comparison_id = state.get("comparison_id")
+    temp_table_id = get_temp_table_id(session, table_id=resolved_table_id) or uuid4().hex
     record = {
         "temp_table_id": temp_table_id,
         "status": TEMP_TABLE_STATUS_PROCESSING,
         "source_documents": normalized,
+        FIELD_COMPARISON_ID: resolved_comparison_id,
+        FIELD_TABLE_ID: resolved_table_id,
+        FIELD_SLOT_NUMBER: resolved_slot,
         "detected_carrier": None,
         "origins": [],
         "destinations": [],
@@ -8136,7 +9993,7 @@ def mark_temp_table_processing(source_doc_ids: list[str], *, user_scope=None, fr
         },
         "version_marker": TEMP_TABLE_VERSION_MARKER,
     }
-    return save_temp_table_record(record)
+    return save_temp_table_record(record, table_id=resolved_table_id)
 
 
 def temp_table_status_message(status: str) -> str:
@@ -8566,7 +10423,49 @@ def _normalize_freight_table_context(raw_context) -> dict:
     }
 
 
+def _first_non_empty_str(*values) -> str | None:
+    for value in values:
+        normalized = _optional_normalized_str(value)
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def _normalize_freight_table_columns(item: dict) -> list[str]:
+    candidates = (
+        item.get("columns"),
+        item.get("headers"),
+        item.get("column_names"),
+        item.get("fields"),
+    )
+    columns: list[str] = []
+    for raw_columns in candidates:
+        if not isinstance(raw_columns, list):
+            continue
+        for col in raw_columns:
+            if isinstance(col, str):
+                candidate = col.strip()
+                if candidate:
+                    columns.append(candidate)
+        if columns:
+            break
+    return columns
+
+
 def _normalize_freight_table_row(item, columns: list[str]) -> dict:
+    if isinstance(item, list):
+        if not columns:
+            return {}
+        normalized_list_row: dict = {}
+        for index, col in enumerate(columns):
+            val = item[index] if index < len(item) else None
+            if val is None:
+                normalized_list_row[col] = None
+            elif isinstance(val, str):
+                normalized_list_row[col] = val
+            else:
+                normalized_list_row[col] = str(val)
+        return normalized_list_row
     if not isinstance(item, dict):
         return {}
     normalized: dict = {}
@@ -8593,14 +10492,7 @@ def _normalize_freight_table_row(item, columns: list[str]) -> dict:
 def _normalize_freight_table_item(item) -> dict | None:
     if not isinstance(item, dict):
         return None
-    raw_columns = item.get("columns")
-    columns: list[str] = []
-    if isinstance(raw_columns, list):
-        for col in raw_columns:
-            if isinstance(col, str):
-                candidate = col.strip()
-                if candidate:
-                    columns.append(candidate)
+    columns = _normalize_freight_table_columns(item)
     raw_rows = item.get("rows")
     rows: list[dict] = []
     if isinstance(raw_rows, list):
@@ -8608,11 +10500,37 @@ def _normalize_freight_table_item(item) -> dict | None:
             normalized_row = _normalize_freight_table_row(row, columns)
             if normalized_row:
                 rows.append(normalized_row)
+    if not columns and rows:
+        first_row = next((row for row in rows if isinstance(row, dict) and row), None)
+        if first_row:
+            columns = [str(key).strip() for key in first_row.keys() if isinstance(key, str) and str(key).strip()]
+            if columns:
+                remapped_rows: list[dict] = []
+                for row in rows:
+                    remapped_rows.append(_normalize_freight_table_row(row, columns))
+                rows = [row for row in remapped_rows if row]
     column_meta = _normalize_freight_table_column_meta(item.get("column_meta"), columns)
+    context = _normalize_freight_table_context(item.get("context"))
+    supplier = _first_non_empty_str(
+        context.get("supplier"),
+        item.get("supplier"),
+        item.get("provider"),
+        item.get("carrier"),
+        item.get("carrier_name"),
+    )
+    if supplier is not None:
+        context["supplier"] = supplier
     table = {
-        "table_title": _optional_normalized_str(item.get("table_title")),
-        "table_type": _optional_normalized_str(item.get("table_type")),
-        "context": _normalize_freight_table_context(item.get("context")),
+        "table_title": _first_non_empty_str(
+            item.get("table_title"),
+            item.get("title"),
+            item.get("name"),
+        ),
+        "table_type": _first_non_empty_str(
+            item.get("table_type"),
+            item.get("type"),
+        ),
+        "context": context,
         "columns": columns,
         "rows": rows,
         "notes": _optional_normalized_str(item.get("notes")) or "",
@@ -8760,7 +10678,12 @@ def normalize_partial_first_extraction_to_temp_table(raw: dict) -> dict:
     return expanded
 
 
-def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
+def _coerce_temp_table_payload(
+    raw: dict,
+    *,
+    source_doc_ids: list[str],
+    table_id: str | None = None,
+) -> dict:
     now = _utcnow().isoformat()
     normalized = normalize_partial_first_extraction_to_temp_table(raw)
     status = _resolve_extraction_status(raw, normalized)
@@ -8797,7 +10720,7 @@ def _coerce_temp_table_payload(raw: dict, *, source_doc_ids: list[str]) -> dict:
             "Não foi possível estruturar a tabela temporária a partir dos anexos enviados."
         ]
 
-    temp_table_id = get_temp_table_id(session) or uuid4().hex
+    temp_table_id = get_temp_table_id(session, table_id=table_id) or uuid4().hex
     existing = load_temp_table_record(temp_table_id, ttl_hours=get_cleiton_doc_config().upload_ttl_hours)
     created_at = (existing or {}).get("created_at") or now
     preserved_coverage = None
@@ -8885,6 +10808,9 @@ def apply_temp_table_extraction_from_model_payload(
     *,
     source_doc_ids: list[str],
     force_overwrite: bool = False,
+    table_id: str | None = None,
+    comparison_id: str | None = None,
+    slot_number: int | None = None,
 ) -> dict | None:
     _require_session()
     normalized = _normalize_source_doc_ids(source_doc_ids)
@@ -8892,7 +10818,7 @@ def apply_temp_table_extraction_from_model_payload(
         return None
 
     cfg = get_cleiton_doc_config()
-    temp_table_id = get_temp_table_id(session)
+    temp_table_id = get_temp_table_id(session, table_id=table_id)
     existing = None
     if temp_table_id:
         existing = load_temp_table_record(temp_table_id, ttl_hours=cfg.upload_ttl_hours)
@@ -8912,10 +10838,100 @@ def apply_temp_table_extraction_from_model_payload(
         return existing
 
     if not isinstance(payload, dict):
-        record = _coerce_temp_table_payload({"status": TEMP_TABLE_STATUS_FAILED}, source_doc_ids=normalized)
-        return save_temp_table_record(record)
-    record = _coerce_temp_table_payload(payload, source_doc_ids=normalized)
-    return save_temp_table_record(record)
+        record = _coerce_temp_table_payload({"status": TEMP_TABLE_STATUS_FAILED}, source_doc_ids=normalized, table_id=table_id)
+        if comparison_id:
+            record[FIELD_COMPARISON_ID] = comparison_id
+        if table_id:
+            record[FIELD_TABLE_ID] = table_id
+        if slot_number is not None:
+            record[FIELD_SLOT_NUMBER] = slot_number
+        return save_temp_table_record(record, table_id=table_id)
+    record = _coerce_temp_table_payload(payload, source_doc_ids=normalized, table_id=table_id)
+    if comparison_id:
+        record[FIELD_COMPARISON_ID] = comparison_id
+    if table_id:
+        record[FIELD_TABLE_ID] = table_id
+    if slot_number is not None:
+        record[FIELD_SLOT_NUMBER] = slot_number
+    return save_temp_table_record(record, table_id=table_id)
+
+
+def build_document_status_metadata(
+    *,
+    table_id: str | None = None,
+    comparison_id: str | None = None,
+    slot: int | None = None,
+) -> dict:
+    """Metadados básicos para endpoint de status da Agente Compara."""
+    _require_session()
+    maybe_cleanup_expired_cleiton_docs()
+    # Status é leitura passiva: não cria comparação após reset.
+    cmp_state = get_comparison_if_exists()
+    if cmp_state is None:
+        totals = get_document_session_totals(table_id=None)
+        return {
+            "domain": AGENTE_COMPARA_DOMAIN,
+            "flow_types": {
+                "upload": AGENTE_COMPARA_DOCUMENT_UPLOAD_FLOW_TYPE,
+                "prepare": AGENTE_COMPARA_DOCUMENT_PREPARE_FLOW_TYPE,
+                "chat": AGENTE_COMPARA_CHAT_FLOW_TYPE,
+                "temp_table_extraction": AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
+            },
+            "documents": [],
+            "temp_table": None,
+            "comparison": None,
+            "has_active_comparison": False,
+            "calculation_bases": get_active_calculation_bases_for_runtime(
+                get_agente_compara_config().calculation_bases
+            ),
+            "allowed_formats": get_allowed_document_formats(),
+            "session": {
+                "count": totals["active_count"],
+                "max_files": totals["max_files_per_session"],
+                "total_bytes": totals["total_bytes"],
+                "session_max_bytes": totals["session_max_bytes"],
+            },
+        }
+
+    if comparison_id or table_id or slot is not None:
+        cmp_state, table_entry = resolve_table_identity(
+            comparison_id=comparison_id,
+            table_id=table_id,
+            slot=slot,
+            auto_create=False,
+        )
+        resolved_table_id = table_entry["table_id"]
+    else:
+        active = get_active_table(cmp_state)
+        resolved_table_id = active.get("table_id") if active else None
+    if resolved_table_id:
+        sync_temp_table_with_session_documents(table_id=resolved_table_id)
+    totals = get_document_session_totals(table_id=resolved_table_id)
+    temp_table = get_active_temp_table_for_session(table_id=resolved_table_id)
+    comparison = public_comparison_summary_for_response(cmp_state)
+    return {
+        "domain": AGENTE_COMPARA_DOMAIN,
+        "flow_types": {
+            "upload": AGENTE_COMPARA_DOCUMENT_UPLOAD_FLOW_TYPE,
+            "prepare": AGENTE_COMPARA_DOCUMENT_PREPARE_FLOW_TYPE,
+            "chat": AGENTE_COMPARA_CHAT_FLOW_TYPE,
+            "temp_table_extraction": AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
+        },
+        "documents": get_active_documents_for_session(table_id=resolved_table_id),
+        "temp_table": temp_table,
+        "comparison": comparison,
+        "has_active_comparison": True,
+        "calculation_bases": get_active_calculation_bases_for_runtime(
+            get_agente_compara_config().calculation_bases
+        ),
+        "allowed_formats": get_allowed_document_formats(),
+        "session": {
+            "count": totals["active_count"],
+            "max_files": totals["max_files_per_session"],
+            "total_bytes": totals["total_bytes"],
+            "session_max_bytes": totals["session_max_bytes"],
+        },
+    }
 
 
 def split_temp_table_block_from_answer(answer_text: str) -> tuple[str, dict | None]:
@@ -8935,33 +10951,3 @@ def split_temp_table_block_from_answer(answer_text: str) -> tuple[str, dict | No
     except (TypeError, ValueError, json.JSONDecodeError):
         return visible, None
     return visible, parsed if isinstance(parsed, dict) else None
-
-
-def build_document_status_metadata() -> dict:
-    """Metadados básicos para futuro endpoint de status da Agente Compara."""
-    _require_session()
-    maybe_cleanup_expired_cleiton_docs()
-    sync_temp_table_with_session_documents()
-    totals = get_document_session_totals()
-    temp_table = get_active_temp_table_for_session()
-    return {
-        "domain": AGENTE_COMPARA_DOMAIN,
-        "flow_types": {
-            "upload": AGENTE_COMPARA_DOCUMENT_UPLOAD_FLOW_TYPE,
-            "prepare": AGENTE_COMPARA_DOCUMENT_PREPARE_FLOW_TYPE,
-            "chat": AGENTE_COMPARA_CHAT_FLOW_TYPE,
-            "temp_table_extraction": AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
-        },
-        "documents": get_active_documents_for_session(),
-        "temp_table": temp_table,
-        "calculation_bases": get_active_calculation_bases_for_runtime(
-            get_agente_compara_config().calculation_bases
-        ),
-        "allowed_formats": get_allowed_document_formats(),
-        "session": {
-            "count": totals["active_count"],
-            "max_files": totals["max_files_per_session"],
-            "total_bytes": totals["total_bytes"],
-            "session_max_bytes": totals["session_max_bytes"],
-        },
-    }

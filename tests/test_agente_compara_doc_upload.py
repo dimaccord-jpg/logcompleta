@@ -78,10 +78,18 @@ def _authorized(monkeypatch, web, *, authz=None):
     )
 
 
-def _upload(client, filename: str, content: bytes, mime: str = "text/csv"):
+DEFAULT_CARRIER_NAME = "Transportadora Teste"
+
+
+def _upload(client, filename: str, content: bytes, mime: str = "text/csv", *, carrier_name: str = DEFAULT_CARRIER_NAME, **form_fields):
+    data = {
+        "file": (io.BytesIO(content), filename, mime),
+        "carrier_name": carrier_name,
+    }
+    data.update(form_fields)
     return client.post(
         "/api/agente-compara/documents/upload",
-        data={"file": (io.BytesIO(content), filename, mime)},
+        data=data,
         content_type="multipart/form-data",
     )
 
@@ -113,3 +121,224 @@ def test_csv_upload_lands_in_agente_compara_session_key(web_client, app):
         assert CLEIDE_AUDIT_DOC_IDS_SESSION_KEY in sess
         assert sess[CLEIDE_AUDIT_DOC_IDS_SESSION_KEY] == ["cleide-keep"]
         assert doc_id not in (sess.get(CLEIDE_AUDIT_DOC_IDS_SESSION_KEY) or [])
+
+
+def test_upload_without_carrier_name_returns_400(web_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session",
+        lambda **_k: (_ for _ in ()).throw(AssertionError("Gemini não deve ser chamado")),
+    )
+    content = make_csv([["col_a", "col_b"], ["1", "2"]])
+    resp = web_client.post(
+        "/api/agente-compara/documents/upload",
+        data={"file": (io.BytesIO(content), "dados.csv", "text/csv")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "agente_compara_carrier_name_required"
+
+
+def test_upload_with_empty_carrier_name_returns_400(web_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+    content = make_csv([["col_a", "col_b"], ["1", "2"]])
+    resp = _upload(web_client, "dados.csv", content, carrier_name="   ")
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "agente_compara_carrier_name_required"
+
+
+def test_upload_stores_carrier_name_on_slot(web_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+    monkeypatch.setattr(
+        "app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+    content = make_csv([["col_a", "col_b"], ["1", "2"]])
+    resp = _upload(web_client, "dados.csv", content, carrier_name="Intercargo Transportes", slot="1")
+    assert resp.status_code == 200
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_comparison_state import get_comparison_state
+
+        state = get_comparison_state(sess)
+        table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        assert table_1["carrier_name"] == "Intercargo Transportes"
+
+
+def test_upload_same_carrier_name_on_two_slots_allowed(web_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+    monkeypatch.setattr(
+        "app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+    content = make_csv([["a"], ["1"]])
+    r1 = _upload(web_client, "t1.csv", content, carrier_name="Mesma Transportadora", slot="1")
+    assert r1.status_code == 200
+    table2_id = r1.get_json()["comparison"]["tables"][1]["table_id"]
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_comparison_state import AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY, get_comparison_state
+
+        state = get_comparison_state(sess)
+        t1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        t1["confirmed"] = True
+        t1["status"] = "confirmed"
+        t2 = next(t for t in state["tables"].values() if t["slot_number"] == 2)
+        t2["status"] = "empty"
+        state["current_step"] = "PREPARE_TABLE_2"
+        state["active_table_id"] = table2_id
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+
+    r2 = _upload(
+        web_client,
+        "t2.csv",
+        content,
+        carrier_name="Mesma Transportadora",
+        slot="2",
+        table_id=table2_id,
+    )
+    assert r2.status_code == 200
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_comparison_state import get_comparison_state
+
+        state = get_comparison_state(sess)
+        names = {
+            t["slot_number"]: t.get("carrier_name")
+            for t in state["tables"].values()
+            if t["slot_number"] in (1, 2)
+        }
+    assert names[1] == "Mesma Transportadora"
+    assert names[2] == "Mesma Transportadora"
+
+
+def test_detected_carrier_does_not_overwrite_manual_name(app, tmp_path, monkeypatch):
+    from flask import session
+
+    from app.agente_compara_comparison_state import (
+        create_comparison,
+        get_comparison_state,
+        get_table_by_slot,
+        persist_comparison_state,
+    )
+    from app.agente_compara_doc_service import save_temp_table_record
+
+    app.config["SECRET_KEY"] = "test-secret"
+    with app.test_request_context():
+        patch_cleiton_doc_store(tmp_path, monkeypatch)
+        cfg = patch_cleiton_doc_cfg(monkeypatch)
+        monkeypatch.setattr("app.agente_compara_doc_service.get_cleiton_doc_config", lambda: cfg)
+        state = create_comparison()
+        table_1 = get_table_by_slot(state, 1)
+        table_1["carrier_name"] = "Intercargo"
+        persist_comparison_state(state)
+        record = {
+            "temp_table_id": "tt-manual-carrier",
+            "detected_carrier": "Intercargo Transportes Ltda.",
+            "status": "needs_review",
+            "source_documents": [],
+            "freight_tables": [],
+            "freight_routes": [],
+            "accessorial_fees": [],
+        }
+        save_temp_table_record(record, table_id=table_1["table_id"])
+        refreshed = get_table_by_slot(get_comparison_state(session), 1)
+        assert refreshed["carrier_name"] == "Intercargo"
+
+
+def test_get_temp_table_id_scoped_ignores_legacy_session_key(app):
+    from flask import session
+
+    from app.agente_compara_comparison_state import (
+        AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY,
+        create_comparison,
+        get_table_by_slot,
+    )
+    from app.agente_compara_doc_service import (
+        AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY,
+        get_temp_table_id,
+    )
+
+    app.config["SECRET_KEY"] = "test-secret"
+    with app.test_request_context():
+        state = create_comparison()
+        t1 = get_table_by_slot(state, 1)
+        t2 = get_table_by_slot(state, 2)
+        t1["temp_table_id"] = "tt-slot-1"
+        session[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+        session[AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY] = "tt-slot-1"
+        assert get_temp_table_id(session, table_id=t2["table_id"]) is None
+        assert get_temp_table_id(session, table_id=t1["table_id"]) == "tt-slot-1"
+
+
+def test_carrier_integration_two_tables_independent_names(web_client, monkeypatch):
+    import json
+
+    import app.run_agente_compara_temp_table as temp_mod
+    from app.agente_compara_doc_service import apply_temp_table_extraction_from_model_payload
+
+    calls: dict = {}
+
+    def _fake_run(source_doc_ids, **kwargs):
+        calls["count"] = calls.get("count", 0) + 1
+        return apply_temp_table_extraction_from_model_payload(
+            json.loads(
+                '{"freight_tables":[{"name":"T1","columns":["c"],"rows":[["1"]]}],'
+                '"freight_routes":[],"accessorial_fees":[],"detected_carrier":"Extraída Gemini",'
+                '"reading_alerts":[],"evidence_refs":[]}'
+            ),
+            source_doc_ids=source_doc_ids,
+            table_id=kwargs.get("table_id"),
+            comparison_id=kwargs.get("comparison_id"),
+            slot_number=kwargs.get("slot_number"),
+        )
+
+    monkeypatch.setattr(temp_mod, "run_agente_compara_temp_table_extraction", _fake_run)
+    monkeypatch.setattr(
+        temp_mod,
+        "build_agente_compara_document_context_for_chat",
+        lambda *_a, **_k: {"has_documents": True, "context_block": "ctx", "gemini_file_parts": None},
+    )
+
+    content = make_csv([["a"], ["1"]])
+    r1 = _upload(web_client, "t1.csv", content, carrier_name="Transportadora A", slot="1")
+    assert r1.status_code == 200
+
+    from app.agente_compara_comparison_state import (
+        AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY,
+        STEP_PREPARE_TABLE_2,
+        get_comparison_state,
+    )
+
+    with web_client.session_transaction() as sess:
+        state = get_comparison_state(sess)
+        t1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        t1["confirmed"] = True
+        t1["status"] = "confirmed"
+        t2 = next(t for t in state["tables"].values() if t["slot_number"] == 2)
+        t2["status"] = "empty"
+        state["current_step"] = STEP_PREPARE_TABLE_2
+        table2_id = t2["table_id"]
+        state["active_table_id"] = table2_id
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+
+    r2 = _upload(
+        web_client,
+        "t2.csv",
+        content,
+        carrier_name="Transportadora B",
+        slot="2",
+        table_id=table2_id,
+    )
+    assert r2.status_code == 200
+    with web_client.session_transaction() as sess:
+        state = get_comparison_state(sess)
+        names = {t["slot_number"]: t.get("carrier_name") for t in state["tables"].values()}
+    assert names[1] == "Transportadora A"
+    assert names[2] == "Transportadora B"
+    assert calls.get("count") == 2

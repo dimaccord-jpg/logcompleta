@@ -24,6 +24,23 @@ from app.agente_compara_correction_service import (
     preview_audit_correction_for_session,
     undo_last_audit_correction_for_session,
 )
+from app.agente_compara_comparison_state import (
+    AgenteComparaComparisonError,
+    ERROR_CARRIER_NAME_REQUIRED,
+    ERROR_CARRIER_NAME_INVALID,
+    add_third_table,
+    advance_to_taxes,
+    ensure_comparison,
+    get_comparison_state,
+    get_comparison_if_exists,
+    get_active_table,
+    proceed_with_two_tables,
+    persist_comparison_state,
+    public_comparison_summary,
+    remove_third_table_slot,
+    resolve_table_identity,
+    start_comparison_for_session,
+)
 from app.agente_compara_doc_service import (
     AGENTE_COMPARA_CHAT_FLOW_TYPE,
     AGENTE_COMPARA_INSIGHTS_CHAT_FLOW_TYPE,
@@ -55,18 +72,25 @@ from app.agente_compara_doc_service import (
     ERROR_TEMP_TABLE_NOT_FOUND,
     ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE,
     ERROR_TEMP_TABLE_SCOPE_MISMATCH,
+    ERROR_TAX_CONFIG_PENDING,
+    ERROR_TAX_CONFIG_USE_GLOBAL_ENDPOINT,
+    ERROR_TAX_SELECTED_TABLES_REQUIRED,
     AgenteComparaTempTableError,
     build_document_status_metadata,
     clear_documents_for_session,
+    reset_comparison_for_session,
     get_allowed_document_formats,
     get_agente_compara_doc_ids,
     get_document_session_totals,
     get_active_temp_table_for_session,
     maybe_cleanup_expired_cleiton_docs,
     prepare_and_register_document,
+    normalize_carrier_name,
+    public_comparison_summary_for_response,
     remove_document_from_session,
     run_audit_batch_for_session,
     save_temp_table_edit,
+    save_comparison_tax_config,
     upload_audit_batch_from_file,
     upload_coverage_table_from_file,
     get_agente_compara_template_path,
@@ -116,6 +140,49 @@ def _session_payload() -> dict:
         "total_bytes": totals["total_bytes"],
         "session_max_bytes": totals["session_max_bytes"],
     }
+
+
+def _parse_table_identity_from_request(*, json_body: dict | None = None) -> dict:
+    body = json_body if isinstance(json_body, dict) else {}
+    comparison_id = (request.args.get("comparison_id") or body.get("comparison_id") or request.form.get("comparison_id") or "").strip() or None
+    table_id = (request.args.get("table_id") or body.get("table_id") or request.form.get("table_id") or "").strip() or None
+    slot_raw = request.args.get("slot") or body.get("slot") or request.form.get("slot")
+    slot = None
+    if slot_raw is not None and str(slot_raw).strip() != "":
+        try:
+            slot = int(slot_raw)
+        except (TypeError, ValueError):
+            slot = None
+    return {
+        "comparison_id": comparison_id,
+        "table_id": table_id,
+        "slot": slot,
+    }
+
+
+def _http_status_for_comparison_error(error_code: str) -> int:
+    if error_code in {
+        "agente_compara_comparison_not_found",
+        "agente_compara_table_not_found",
+    }:
+        return 404
+    if error_code in {
+        "agente_compara_comparison_scope_mismatch",
+        "agente_compara_table_scope_mismatch",
+        "agente_compara_table_slot_mismatch",
+        "agente_compara_comparison_step_invalid",
+    }:
+        return 409
+    if error_code == "agente_compara_table_locked":
+        return 403
+    if error_code == "agente_compara_table_max_slots":
+        return 400
+    if error_code in {
+        ERROR_CARRIER_NAME_REQUIRED,
+        ERROR_CARRIER_NAME_INVALID,
+    }:
+        return 400
+    return 400
 
 
 def _authorize_agente_compara_api(*, auth_message: str):
@@ -318,6 +385,15 @@ def agente_compara_documents_upload():
             400,
         )
 
+    identity = _parse_table_identity_from_request()
+    try:
+        carrier_name = normalize_carrier_name(request.form.get("carrier_name"))
+    except AgenteComparaComparisonError as exc:
+        return (
+            jsonify({"ok": False, "error_code": exc.error_code, "message": exc.message}),
+            _http_status_for_comparison_error(exc.error_code),
+        )
+
     display_name = (upload.filename or "documento").strip()
     file_bytes = upload.read() or b""
     mime_type = (upload.mimetype or "").strip() or None
@@ -329,6 +405,10 @@ def agente_compara_documents_upload():
             file_bytes=file_bytes,
             mime_type=mime_type,
             extension=extension,
+            comparison_id=identity["comparison_id"],
+            table_id=identity["table_id"],
+            slot=identity["slot"],
+            carrier_name=carrier_name,
         )
     except CleitonDocSecurityError as exc:
         return (
@@ -340,6 +420,17 @@ def agente_compara_documents_upload():
                 }
             ),
             _http_status_for_error(exc.error_code),
+        )
+    except AgenteComparaComparisonError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_comparison_error(exc.error_code),
         )
     except CleitonDocSessionError as exc:
         return (
@@ -365,12 +456,24 @@ def agente_compara_documents_upload():
             500,
         )
 
+    logger.info(
+        "Agente Compara upload: doc_id=%s comparison_id=%s table_id=%s slot=%s carrier_name=%s",
+        document.get("doc_id"),
+        identity.get("comparison_id"),
+        identity.get("table_id"),
+        identity.get("slot"),
+        carrier_name,
+    )
+
     user_scope = getattr(current_user, "id", None)
     franquia_scope = getattr(current_user, "franquia_id", None)
     try:
         trigger_temp_table_extraction_for_session(
             user_scope=user_scope,
             franquia_scope=franquia_scope,
+            comparison_id=identity["comparison_id"],
+            table_id=identity["table_id"],
+            slot=identity["slot"],
         )
     except Exception:
         logger.exception(
@@ -378,8 +481,17 @@ def agente_compara_documents_upload():
         )
 
     temp_table = None
+    comparison = None
     try:
-        temp_table = get_active_temp_table_for_session()
+        cmp_state = ensure_comparison()
+        _, table_entry = resolve_table_identity(
+            comparison_id=identity["comparison_id"],
+            table_id=identity["table_id"],
+            slot=identity["slot"],
+            auto_create=True,
+        )
+        temp_table = get_active_temp_table_for_session(table_id=table_entry["table_id"])
+        comparison = public_comparison_summary(cmp_state)
     except Exception:
         logger.exception("Agente Compara temp_table: falha ao ler temp_table após upload.")
 
@@ -393,6 +505,7 @@ def agente_compara_documents_upload():
                 audit_cfg.calculation_bases
             ),
             "temp_table": temp_table,
+            "comparison": comparison,
         }
     )
 
@@ -403,7 +516,18 @@ def agente_compara_documents_status():
     if unauthorized is not None:
         return unauthorized
 
-    metadata = build_document_status_metadata()
+    identity = _parse_table_identity_from_request()
+    try:
+        metadata = build_document_status_metadata(
+            comparison_id=identity["comparison_id"],
+            table_id=identity["table_id"],
+            slot=identity["slot"],
+        )
+    except AgenteComparaComparisonError as exc:
+        return (
+            jsonify({"ok": False, "error_code": exc.error_code, "message": exc.message}),
+            _http_status_for_comparison_error(exc.error_code),
+        )
     cleiton_cfg = get_cleiton_doc_config()
     audit_cfg = get_agente_compara_config()
     cleiton_upload_enabled = bool(cleiton_cfg.upload_enabled)
@@ -413,6 +537,11 @@ def agente_compara_documents_status():
             "ok": True,
             "documents": metadata["documents"],
             "temp_table": metadata.get("temp_table"),
+            "comparison": metadata.get("comparison"),
+            "has_active_comparison": bool(metadata.get("has_active_comparison")),
+            "current_step": (metadata.get("comparison") or {}).get("current_step")
+            if isinstance(metadata.get("comparison"), dict)
+            else None,
             "calculation_bases": metadata.get("calculation_bases") or [],
             "session": metadata["session"],
             "allowed_formats": metadata["allowed_formats"],
@@ -431,7 +560,19 @@ def agente_compara_documents_delete(doc_id: str):
     if unauthorized is not None:
         return unauthorized
 
-    result = remove_document_from_session(doc_id)
+    identity = _parse_table_identity_from_request()
+    try:
+        result = remove_document_from_session(
+            doc_id,
+            comparison_id=identity["comparison_id"],
+            table_id=identity["table_id"],
+            slot=identity["slot"],
+        )
+    except AgenteComparaComparisonError as exc:
+        return (
+            jsonify({"ok": False, "error_code": exc.error_code, "message": exc.message}),
+            _http_status_for_comparison_error(exc.error_code),
+        )
     payload = {
         "ok": True,
         "doc_id": (doc_id or "").strip(),
@@ -450,7 +591,20 @@ def agente_compara_documents_clear():
     if unauthorized is not None:
         return unauthorized
 
-    result = clear_documents_for_session()
+    identity = _parse_table_identity_from_request(json_body=request.get_json(silent=True))
+    global_clear = bool((request.get_json(silent=True) or {}).get("global_clear"))
+    try:
+        result = clear_documents_for_session(
+            comparison_id=identity["comparison_id"],
+            table_id=identity["table_id"],
+            slot=identity["slot"],
+            global_clear=global_clear,
+        )
+    except AgenteComparaComparisonError as exc:
+        return (
+            jsonify({"ok": False, "error_code": exc.error_code, "message": exc.message}),
+            _http_status_for_comparison_error(exc.error_code),
+        )
     payload = {
         "ok": True,
         "session": _session_payload(),
@@ -460,6 +614,359 @@ def agente_compara_documents_clear():
     if "removed_from_session" in result:
         payload["removed_from_session"] = result["removed_from_session"]
     return jsonify(payload)
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/start", methods=["POST"])
+def agente_compara_comparison_start():
+    """
+    Único criador oficial SEM_COMPARACAO → PREPARE_TABLE_1.
+
+    Não consome IA, não gera billing, não aceita identidade externa.
+    Idempotente por sessão.
+    """
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    # Body opcional/ignorado: start opera apenas sobre a sessão autenticada.
+    _ = request.get_json(silent=True)
+
+    result = start_comparison_for_session()
+    state = result["state"]
+    summary = public_comparison_summary(state)
+    comparison_started = bool(result.get("comparison_started"))
+    idempotent_replay = bool(result.get("idempotent_replay"))
+
+    if comparison_started:
+        logger.info(
+            "Agente Compara comparison_started: comparison_id=%s current_step=%s action=comparison_started source_agent=agente_compara",
+            state.get("comparison_id"),
+            state.get("current_step"),
+        )
+
+    return jsonify(
+        {
+            "ok": True,
+            "comparison_started": comparison_started,
+            "idempotent_replay": idempotent_replay,
+            "comparison": summary,
+            "current_step": summary.get("current_step"),
+            "has_active_comparison": True,
+            "documents": [],
+            "temp_table": None,
+            "session": _session_payload(),
+        }
+    )
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/reset", methods=["POST"])
+def agente_compara_comparison_reset():
+    """Reinicia a comparação: remove documentos, temp tables, tax/coverage/arquivo e o estado."""
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    data = request.get_json(silent=True) or {}
+    identity = _parse_table_identity_from_request(json_body=data)
+    try:
+        result = reset_comparison_for_session(comparison_id=identity.get("comparison_id"))
+    except AgenteComparaComparisonError as exc:
+        return (
+            jsonify({"ok": False, "error_code": exc.error_code, "message": exc.message}),
+            _http_status_for_comparison_error(exc.error_code),
+        )
+    return jsonify(
+        {
+            "ok": True,
+            "comparison_reset": True,
+            "previous_comparison_id": result.get("previous_comparison_id"),
+            "comparison": None,
+            "documents": [],
+            "temp_table": None,
+            "current_step": None,
+            "has_active_comparison": False,
+            "session": _session_payload(),
+        }
+    )
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/proceed-two-tables", methods=["POST"])
+def agente_compara_comparison_proceed_two_tables():
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+    data = request.get_json(silent=True) or {}
+    identity = _parse_table_identity_from_request(json_body=data)
+    try:
+        state = get_comparison_state(session)
+        if state is None:
+            raise AgenteComparaComparisonError("agente_compara_comparison_not_found", "Comparação não encontrada.")
+        if identity["comparison_id"] and identity["comparison_id"] != state.get("comparison_id"):
+            raise AgenteComparaComparisonError(
+                "agente_compara_comparison_scope_mismatch",
+                "comparison_id não pertence à sessão.",
+            )
+        state = proceed_with_two_tables(state)
+    except AgenteComparaComparisonError as exc:
+        return jsonify({"ok": False, "error_code": exc.error_code, "message": exc.message}), _http_status_for_comparison_error(exc.error_code)
+    summary = public_comparison_summary(state)
+    return jsonify(
+        {
+            "ok": True,
+            "comparison": summary,
+            "next_step": summary.get("current_step"),
+        }
+    )
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/add-third-table", methods=["POST"])
+def agente_compara_comparison_add_third_table():
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+    data = request.get_json(silent=True) or {}
+    identity = _parse_table_identity_from_request(json_body=data)
+    try:
+        state = get_comparison_state(session)
+        if state is None:
+            raise AgenteComparaComparisonError("agente_compara_comparison_not_found", "Comparação não encontrada.")
+        if identity["comparison_id"] and identity["comparison_id"] != state.get("comparison_id"):
+            raise AgenteComparaComparisonError(
+                "agente_compara_comparison_scope_mismatch",
+                "comparison_id não pertence à sessão.",
+            )
+        state = add_third_table(state)
+    except AgenteComparaComparisonError as exc:
+        return jsonify({"ok": False, "error_code": exc.error_code, "message": exc.message}), _http_status_for_comparison_error(exc.error_code)
+    return jsonify({"ok": True, "comparison": public_comparison_summary(state)})
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/set-active-table", methods=["POST"])
+def agente_compara_comparison_set_active_table():
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+    data = request.get_json(silent=True) or {}
+    identity = _parse_table_identity_from_request(json_body=data)
+    try:
+        state, table_entry = resolve_table_identity(
+            comparison_id=identity["comparison_id"],
+            table_id=identity["table_id"],
+            slot=identity["slot"],
+            auto_create=False,
+        )
+        state["active_table_id"] = table_entry["table_id"]
+        state = persist_comparison_state(state)
+    except AgenteComparaComparisonError as exc:
+        return jsonify({"ok": False, "error_code": exc.error_code, "message": exc.message}), _http_status_for_comparison_error(exc.error_code)
+    temp_table = get_active_temp_table_for_session(table_id=table_entry["table_id"])
+    return jsonify(
+        {
+            "ok": True,
+            "comparison": public_comparison_summary_for_response(state),
+            "temp_table": temp_table,
+            "documents": build_document_status_metadata(
+                comparison_id=state.get("comparison_id"),
+                table_id=table_entry["table_id"],
+            ).get("documents"),
+        }
+    )
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/taxes", methods=["POST"])
+def agente_compara_comparison_taxes_save():
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                    "message": "Payload deve ser um objeto JSON.",
+                }
+            ),
+            400,
+        )
+
+    user_scope = getattr(current_user, "id", None)
+    franquia_scope = getattr(current_user, "franquia_id", None)
+    try:
+        result = save_comparison_tax_config(
+            data,
+            user_scope=user_scope,
+            franquia_scope=franquia_scope,
+        )
+    except AgenteComparaTempTableError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            _http_status_for_temp_table_error(exc.error_code),
+        )
+    except Exception:
+        logger.exception("Falha inesperada ao salvar impostos globais da Agente Compara.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "comparison_tax_config_save_failed",
+                    "message": "Não foi possível salvar a configuração fiscal do cenário.",
+                }
+            ),
+            500,
+        )
+
+    return jsonify(
+        {
+            "ok": True,
+            "comparison": result.get("comparison"),
+            "tax_config": result.get("tax_config"),
+            "can_advance_to_coverage": bool(result.get("can_advance_to_coverage")),
+        }
+    )
+
+
+def _http_status_for_calculation_error(error_code: str) -> int:
+    if error_code in {
+        "agente_compara_comparison_not_found",
+    }:
+        return 404
+    if error_code in {
+        "agente_compara_comparison_scope_mismatch",
+        "agente_compara_comparison_step_invalid",
+        "agente_compara_calculation_execution_conflict",
+        "agente_compara_calculation_execution_in_progress",
+        "calculation_input_changed",
+        "agente_compara_calculation_not_ready",
+    }:
+        return 409
+    if error_code in {
+        "agente_compara_calculation_execution_id_required",
+        "agente_compara_calculation_execution_id_invalid",
+    }:
+        return 400
+    return 400
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/calculate", methods=["POST"])
+def agente_compara_comparison_calculate():
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": ERROR_TEMP_TABLE_INVALID_PAYLOAD,
+                    "message": "Payload deve ser um objeto JSON.",
+                }
+            ),
+            400,
+        )
+
+    comparison_id = (data.get("comparison_id") or "").strip() or None
+    execution_id = (data.get("execution_id") or "").strip() or None
+    if not execution_id:
+        execution_id = (request.headers.get("X-Execution-ID") or "").strip() or None
+    schema_version = data.get("schema_version")
+
+    from app.agente_compara_calculation_execution_service import (
+        AgenteComparaCalculationExecutionError,
+        execute_comparison_calculation,
+    )
+
+    try:
+        result = execute_comparison_calculation(
+            comparison_id=comparison_id,
+            execution_id=execution_id,
+            schema_version=schema_version,
+        )
+    except AgenteComparaCalculationExecutionError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                    "status": None,
+                    "result": None,
+                }
+            ),
+            int(exc.http_status or _http_status_for_calculation_error(exc.error_code)),
+        )
+    except Exception:
+        logger.exception("Falha inesperada no cálculo comparativo da Agente Compara.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "agente_compara_calculation_failed",
+                    "message": "Não foi possível concluir o cálculo comparativo.",
+                    "status": "CALCULATION_FAILED",
+                    "result": None,
+                }
+            ),
+            500,
+        )
+
+    if not result.get("ok", True) and result.get("status") == "CALCULATION_FAILED":
+        status_code = _http_status_for_calculation_error(str(result.get("error_code") or ""))
+        if str(result.get("error_code") or "").endswith("failed") or str(result.get("error_code") or "") == "agente_compara_calculation_failed":
+            status_code = 500
+        return jsonify(result), status_code
+    return jsonify(result)
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/calculation", methods=["GET"])
+def agente_compara_comparison_calculation_get():
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    comparison_id = (request.args.get("comparison_id") or "").strip() or None
+
+    from app.agente_compara_calculation_execution_service import (
+        AgenteComparaCalculationExecutionError,
+        get_comparison_calculation_status,
+    )
+
+    try:
+        result = get_comparison_calculation_status(comparison_id=comparison_id)
+    except AgenteComparaCalculationExecutionError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                }
+            ),
+            int(exc.http_status or _http_status_for_calculation_error(exc.error_code)),
+        )
+    except Exception:
+        logger.exception("Falha inesperada ao ler cálculo comparativo da Agente Compara.")
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error_code": "agente_compara_calculation_read_failed",
+                    "message": "Não foi possível recuperar o estado do cálculo comparativo.",
+                }
+            ),
+            500,
+        )
+    return jsonify(result)
 
 
 @agente_compara_api_bp.route("/api/agente-compara/temp-table/save", methods=["POST"])
@@ -498,6 +1005,8 @@ def agente_compara_temp_table_save():
         }
         if exc.errors:
             payload["errors"] = exc.errors
+        if exc.error_code == ERROR_TAX_CONFIG_PENDING and exc.errors:
+            payload["pending_tax_tables"] = exc.errors
         return (
             jsonify(payload),
             _http_status_for_temp_table_error(exc.error_code),
@@ -515,7 +1024,16 @@ def agente_compara_temp_table_save():
             500,
         )
 
-    return jsonify({"ok": True, "temp_table": temp_table})
+    return jsonify(
+        {
+            "ok": True,
+            "temp_table": temp_table,
+            "comparison": temp_table.get("comparison") if isinstance(temp_table, dict) else None,
+            "idempotent_replay": bool(
+                isinstance(temp_table, dict) and temp_table.get("idempotent_replay")
+            ),
+        }
+    )
 
 
 @agente_compara_api_bp.route("/api/agente-compara/coverage/upload", methods=["POST"])
@@ -662,13 +1180,13 @@ def agente_compara_batch_upload():
             _http_status_for_audit_batch_error(exc.error_code),
         )
     except Exception:
-        logger.exception("Falha inesperada no upload do arquivo auditado da Agente Compara.")
+        logger.exception("Falha inesperada no upload do arquivo para comparação da Agente Compara.")
         return (
             jsonify(
                 {
                     "ok": False,
                     "error_code": ERROR_UPLOAD_FAILED,
-                    "message": "Não foi possível processar o arquivo auditado.",
+                    "message": "Não foi possível processar o arquivo para comparação.",
                 }
             ),
             500,
@@ -951,7 +1469,10 @@ def agente_compara_chat():
         )
 
     try:
-        doc_ctx = build_agente_compara_document_context_for_chat(session)
+        cmp_state = get_comparison_if_exists()
+        active_table = get_active_table(cmp_state) if cmp_state else None
+        active_table_id = active_table.get("table_id") if active_table else None
+        doc_ctx = build_agente_compara_document_context_for_chat(session, table_id=active_table_id)
     except Exception:
         logger.exception(
             "Falha ao montar contexto documental da Agente Compara; continuando sem anexos."
@@ -984,7 +1505,7 @@ def agente_compara_chat():
         document_file_parts=doc_ctx.get("gemini_file_parts") or None,
         has_documents=bool(doc_ctx.get("has_documents")),
         documents_meta=(doc_ctx.get("meta") or {}).get("documents"),
-        source_doc_ids=get_agente_compara_doc_ids(session),
+        source_doc_ids=get_agente_compara_doc_ids(session, table_id=active_table_id),
         session_obj=session,
         max_history=audit_cfg.chat_max_history,
         question_max_chars=audit_cfg.question_max_chars,

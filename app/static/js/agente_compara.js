@@ -15,7 +15,1210 @@
   var API_AUDIT_CORRECTION_PREVIEW = '/api/agente-compara/audit/correction/preview';
   var API_AUDIT_CORRECTION_APPLY = '/api/agente-compara/audit/correction/apply';
   var API_AUDIT_CORRECTION_UNDO = '/api/agente-compara/audit/correction/undo';
+  var API_COMPARISON_PROCEED_TWO = '/api/agente-compara/comparison/proceed-two-tables';
+  var API_COMPARISON_ADD_THIRD = '/api/agente-compara/comparison/add-third-table';
+  var API_COMPARISON_SET_ACTIVE = '/api/agente-compara/comparison/set-active-table';
+  var API_COMPARISON_TAXES = '/api/agente-compara/comparison/taxes';
+  var API_COMPARISON_RESET = '/api/agente-compara/comparison/reset';
+  var API_COMPARISON_START = '/api/agente-compara/comparison/start';
+  var API_COMPARISON_CALCULATE = '/api/agente-compara/comparison/calculate';
+  var API_COMPARISON_CALCULATION = '/api/agente-compara/comparison/calculation';
+  var comparisonRequestGeneration = 0;
+  var comparisonResetInFlight = false;
+  var comparisonStartPromise = null;
+  var comparisonCalculationInFlight = false;
+  var comparisonCalculationState = {
+    status: 'not_started',
+    executionId: null,
+    fingerprintShort: null,
+    stale: false,
+    result: null,
+    error: null,
+    billingStatus: null
+  };
+  var comparisonState = {
+    comparisonId: null,
+    currentStep: null,
+    activeTableId: null,
+    desiredTableCount: 2,
+    primaryTempTableId: null,
+    tables: []
+  };
+  // Estado visual local da revisão final (CONFIGURATION_READY). Não altera o workflow.
+  var configurationReviewTab = null;
+  var reviewTempTablesById = {};
+  var reviewSharedTempTable = null;
+  var reviewComparisonId = null;
+  var reviewLoadToken = 0;
+  var reviewLoadInFlightTableId = null;
+
+  function invalidateComparisonDerivedState() {
+    stopTempTablePolling();
+    clearPendingFreightTableUpload();
+    setCurrentTempTable(null);
+    resetConfigurationReviewState();
+    resetTaxStepState();
+    resetCoveragePromptState();
+    resetAuditFileStepState();
+    lastAnnouncedTempTableStatus = null;
+  }
+
+  function syncComparisonStateFromPayload(comparison) {
+    // A. comparison válido → sincronizar campos relevantes
+    // B. comparison === null → limpar estado local
+    // C. campo ausente/ inválido → não limpar automaticamente
+    if (comparison === null) {
+      if (comparisonState.comparisonId) {
+        bumpComparisonRequestGeneration();
+        invalidateComparisonDerivedState();
+      }
+      clearLocalComparisonState();
+      reviewComparisonId = null;
+      return;
+    }
+    if (!comparison || typeof comparison !== 'object') return;
+
+    var nextComparisonId = comparison.comparison_id || null;
+    var previousComparisonId = comparisonState.comparisonId || null;
+    if (nextComparisonId && previousComparisonId && nextComparisonId !== previousComparisonId) {
+      bumpComparisonRequestGeneration();
+      invalidateComparisonDerivedState();
+    } else if (nextComparisonId && !previousComparisonId) {
+      bumpComparisonRequestGeneration();
+    } else if (nextComparisonId && reviewComparisonId && nextComparisonId !== reviewComparisonId) {
+      resetConfigurationReviewState();
+    }
+
+    if (nextComparisonId) reviewComparisonId = nextComparisonId;
+    comparisonState.comparisonId = nextComparisonId;
+    comparisonState.currentStep = comparison.current_step || null;
+    comparisonState.activeTableId = comparison.active_table_id || null;
+    comparisonState.desiredTableCount = comparison.desired_table_count || 2;
+    comparisonState.tables = Array.isArray(comparison.tables) ? comparison.tables : [];
+    if (Object.prototype.hasOwnProperty.call(comparison, 'primary_temp_table_id')) {
+      comparisonState.primaryTempTableId =
+        typeof comparison.primary_temp_table_id === 'string'
+          ? comparison.primary_temp_table_id
+          : null;
+    }
+    comparisonState.canAdvanceToCoverage = comparison.can_advance_to_coverage === true;
+    if (comparison.tax_config && typeof comparison.tax_config === 'object') {
+      restoreGlobalTaxConfig(comparison.tax_config);
+    }
+    if (Array.isArray(comparison.tax_table_ufs_preview)) {
+      taxTableUfsPreview = {};
+      comparison.tax_table_ufs_preview.forEach(function (item) {
+        if (item && item.table_id) taxTableUfsPreview[item.table_id] = item;
+      });
+    }
+  }
+
+  function ensureComparisonStarted() {
+    if (comparisonState.comparisonId && activeComparisonTable()) {
+      return Promise.resolve({
+        ok: true,
+        comparison: comparisonState,
+        alreadyStarted: true,
+        comparisonStarted: false,
+        idempotentReplay: true
+      });
+    }
+    if (comparisonStartPromise) {
+      return comparisonStartPromise;
+    }
+    var startGeneration = comparisonRequestGeneration;
+    comparisonStartPromise = fetch(API_COMPARISON_START, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({})
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        }).catch(function () {
+          return {
+            status: r.status,
+            data: {
+              ok: false,
+              message: 'Não foi possível iniciar uma nova comparação. Tente novamente.'
+            }
+          };
+        });
+      })
+      .then(function (res) {
+        if (startGeneration !== comparisonRequestGeneration) {
+          return { ok: false, aborted: true, message: 'Comparação reiniciada. Tente novamente.' };
+        }
+        if (!res.data || res.data.ok !== true || !res.data.comparison) {
+          return {
+            ok: false,
+            message: (res.data && res.data.message) ||
+              'Não foi possível iniciar uma nova comparação. Tente novamente.',
+            status: res.status
+          };
+        }
+        syncComparisonStateFromPayload(res.data.comparison);
+        if (!comparisonState.comparisonId || !activeComparisonTable()) {
+          return {
+            ok: false,
+            message: 'Não foi possível iniciar uma nova comparação. Tente novamente.'
+          };
+        }
+        return {
+          ok: true,
+          comparison: comparisonState,
+          alreadyStarted: false,
+          comparisonStarted: res.data.comparison_started === true,
+          idempotentReplay: res.data.idempotent_replay === true
+        };
+      })
+      .catch(function () {
+        return {
+          ok: false,
+          message: 'Não foi possível iniciar uma nova comparação. Tente novamente.'
+        };
+      })
+      .finally(function () {
+        comparisonStartPromise = null;
+      });
+    return comparisonStartPromise;
+  }
+
+  function activeComparisonTable() {
+    if (!comparisonState.tables || !comparisonState.tables.length) return null;
+    var activeId = comparisonState.activeTableId;
+    if (activeId) {
+      var found = comparisonState.tables.find(function (t) { return t && t.table_id === activeId; });
+      if (found) return found;
+    }
+    return comparisonState.tables[0] || null;
+  }
+
+  function comparisonIdentityQuery() {
+    var active = activeComparisonTable();
+    var params = [];
+    if (comparisonState.comparisonId) params.push('comparison_id=' + encodeURIComponent(comparisonState.comparisonId));
+    if (comparisonState.activeTableId) params.push('table_id=' + encodeURIComponent(comparisonState.activeTableId));
+    else if (active && active.table_id) params.push('table_id=' + encodeURIComponent(active.table_id));
+    if (active && active.slot_number) params.push('slot=' + encodeURIComponent(String(active.slot_number)));
+    return params.length ? ('?' + params.join('&')) : '';
+  }
+
+  function tableCarrierDisplay(tableMeta) {
+    if (!tableMeta || !tableMeta.carrier_name) return '';
+    var name = String(tableMeta.carrier_name).trim();
+    return name || '';
+  }
+
+  var pendingFreightTableUpload = null;
+  var freightUploadPreparationInFlight = false;
+  var carrierIdentifyInFlight = false;
+  var carrierEditOnlyMode = false;
+  var CARRIER_NAME_MAX_LENGTH = 120;
+
+  function trimCarrierNameInput(value) {
+    return String(value || '').trim();
+  }
+
+  function validateCarrierNameInput(value) {
+    var name = trimCarrierNameInput(value);
+    if (!name) {
+      return { ok: false, message: 'Informe a transportadora.' };
+    }
+    if (name.length > CARRIER_NAME_MAX_LENGTH) {
+      return {
+        ok: false,
+        message: 'O nome da transportadora deve ter no máximo ' + CARRIER_NAME_MAX_LENGTH + ' caracteres.'
+      };
+    }
+    return { ok: true, name: name };
+  }
+
+  function isCarrierIdentificationOpen() {
+    var panel = byId('agenteComparaCarrierIdentifyPanel');
+    return !!(panel && !panel.hidden);
+  }
+
+  function setCarrierIdentifyError(message) {
+    var errorEl = byId('agenteComparaCarrierIdentifyError');
+    if (!errorEl) return;
+    if (message) {
+      errorEl.textContent = String(message);
+      errorEl.hidden = false;
+    } else {
+      errorEl.textContent = '';
+      errorEl.hidden = true;
+    }
+  }
+
+  function updateCarrierIdentifyContinueButton() {
+    var input = byId('agenteComparaCarrierNameInput');
+    var continueBtn = byId('agenteComparaCarrierIdentifyContinue');
+    if (!continueBtn) return;
+    var validation = validateCarrierNameInput(input ? input.value : '');
+    continueBtn.disabled = !validation.ok || carrierIdentifyInFlight;
+  }
+
+  function clearPendingFreightTableUpload() {
+    pendingFreightTableUpload = null;
+    carrierEditOnlyMode = false;
+  }
+
+  function setUploadPreparationLoading(on) {
+    var attachBtn = byId('agenteComparaAttachBtn');
+    if (attachBtn) {
+      attachBtn.setAttribute('aria-busy', on ? 'true' : 'false');
+    }
+    setStatus(on ? 'Preparando envio...' : '');
+  }
+
+  function resetFreightFileInput() {
+    var fileInput = byId('agenteComparaFileInput');
+    if (fileInput) fileInput.value = '';
+  }
+
+  function closeCarrierIdentificationPanel() {
+    var panel = byId('agenteComparaCarrierIdentifyPanel');
+    var body = byId('agenteComparaTempTableModalBody');
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    if (panel) panel.hidden = true;
+    if (body) body.hidden = false;
+    if (footer) footer.hidden = false;
+    setCarrierIdentifyError('');
+    carrierIdentifyInFlight = false;
+    updateCarrierIdentifyContinueButton();
+    if (!uploadInFlight && !isTempTableModalOpen()) {
+      var modal = byId('agenteComparaTempTableModal');
+      if (modal && !currentTempTable) {
+        modal.hidden = true;
+        document.body.classList.remove('agente-compara-temp-table-modal-open');
+      }
+    }
+  }
+
+  function openCarrierIdentificationPanel(options) {
+    options = options || {};
+    var panel = byId('agenteComparaCarrierIdentifyPanel');
+    var input = byId('agenteComparaCarrierNameInput');
+    var body = byId('agenteComparaTempTableModalBody');
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    if (!panel || !input) return;
+    carrierEditOnlyMode = !!options.editOnly;
+    var preset = options.presetName || '';
+    if (!preset && pendingFreightTableUpload && pendingFreightTableUpload.carrierName) {
+      preset = pendingFreightTableUpload.carrierName;
+    }
+    input.value = preset;
+    setCarrierIdentifyError('');
+    if (!isTempTableModalOpen()) {
+      var modal = byId('agenteComparaTempTableModal');
+      if (modal) {
+        modal.hidden = false;
+        document.body.classList.add('agente-compara-temp-table-modal-open');
+      }
+    }
+    if (body) body.hidden = true;
+    if (footer) footer.hidden = true;
+    panel.hidden = false;
+    updateCarrierIdentifyContinueButton();
+    window.setTimeout(function () {
+      input.focus();
+      if (typeof input.select === 'function') input.select();
+    }, 0);
+  }
+
+  function pendingUploadContextStillValid(pending) {
+    if (!pending) return false;
+    if (pending.comparisonId !== comparisonState.comparisonId) return false;
+    if (pending.tableId !== comparisonState.activeTableId) return false;
+    if (pending.currentStep !== comparisonState.currentStep) return false;
+    return true;
+  }
+
+  function beginPendingFreightTableUpload(file) {
+    if (
+      !file ||
+      pendingFreightTableUpload ||
+      freightUploadPreparationInFlight ||
+      uploadInFlight ||
+      carrierIdentifyInFlight
+    ) {
+      return;
+    }
+    if (comparisonStartPromise) return;
+
+    freightUploadPreparationInFlight = true;
+    setError('');
+    setUploadPreparationLoading(true);
+
+    ensureComparisonStarted()
+      .then(function (result) {
+        if (!result || result.ok !== true) {
+          setError(
+            (result && result.message) ||
+              'Não foi possível iniciar uma nova comparação. Tente novamente.'
+          );
+          resetFreightFileInput();
+          return;
+        }
+        var active = activeComparisonTable();
+        if (!active || !active.table_id || !comparisonState.comparisonId) {
+          setError('Não foi possível identificar a tabela ativa para upload.');
+          resetFreightFileInput();
+          return;
+        }
+        if (pendingFreightTableUpload || uploadInFlight || carrierIdentifyInFlight) {
+          return;
+        }
+        pendingFreightTableUpload = {
+          file: file,
+          comparisonId: comparisonState.comparisonId,
+          tableId: active.table_id,
+          slot: active.slot_number,
+          currentStep: comparisonState.currentStep,
+          carrierName: tableCarrierDisplay(active)
+        };
+        carrierEditOnlyMode = false;
+        openCarrierIdentificationPanel({ presetName: pendingFreightTableUpload.carrierName });
+      })
+      .catch(function () {
+        setError('Não foi possível preparar o envio da tabela. Tente novamente.');
+        resetFreightFileInput();
+      })
+      .finally(function () {
+        freightUploadPreparationInFlight = false;
+        setUploadPreparationLoading(false);
+      });
+  }
+
+  function cancelCarrierIdentification() {
+    closeCarrierIdentificationPanel();
+    clearPendingFreightTableUpload();
+    freightUploadPreparationInFlight = false;
+    setUploadPreparationLoading(false);
+    resetFreightFileInput();
+  }
+
+  function openCarrierNameEdit() {
+    var active = activeComparisonTable();
+    if (!active || active.confirmed) {
+      setTempTableModalError('Não é possível alterar a transportadora desta tabela.');
+      return;
+    }
+    carrierEditOnlyMode = true;
+    openCarrierIdentificationPanel({ editOnly: true, presetName: tableCarrierDisplay(active) });
+  }
+
+  function renderModalCarrierEditLink(subtitleEl, tableMeta) {
+    if (!subtitleEl || !tableMeta || tableMeta.confirmed) return;
+    var existing = byId('agenteComparaModalCarrierEditBtn');
+    if (existing) existing.remove();
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'agente-compara-modal-carrier-edit-btn';
+    btn.id = 'agenteComparaModalCarrierEditBtn';
+    btn.textContent = 'Editar transportadora';
+    btn.addEventListener('click', function (event) {
+      event.preventDefault();
+      openCarrierNameEdit();
+    });
+    subtitleEl.appendChild(document.createElement('br'));
+    subtitleEl.appendChild(btn);
+  }
+
+  function updateCarrierNameOnly(name) {
+    var active = activeComparisonTable();
+    if (!active || !currentTempTable || !currentTempTable.temp_table_id) {
+      return Promise.resolve(null);
+    }
+    return fetch(API_TEMP_TABLE_SAVE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        temp_table_id: currentTempTable.temp_table_id,
+        comparison_id: comparisonState.comparisonId,
+        table_id: active.table_id,
+        slot: active.slot_number,
+        carrier_name: name,
+        review_action: 'update_carrier_name',
+        edit_target: {}
+      })
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true) {
+          setCarrierIdentifyError((res.data && res.data.message) || 'Não foi possível atualizar a transportadora.');
+          return null;
+        }
+        if (res.data.comparison) syncComparisonStateFromPayload(res.data.comparison);
+        else if (res.data.temp_table && res.data.temp_table.comparison) {
+          syncComparisonStateFromPayload(res.data.temp_table.comparison);
+        }
+        if (isComparisonWizardFlowActive()) {
+          renderComparisonWizardModal();
+        } else {
+          renderTempTableModalContent(currentTempTable);
+          updateTempTableModalFooter();
+        }
+        return res.data;
+      })
+      .catch(function () {
+        setCarrierIdentifyError('Não foi possível atualizar a transportadora. Tente novamente.');
+        return null;
+      });
+  }
+
+  function confirmCarrierIdentification() {
+    if (carrierIdentifyInFlight) return;
+    var input = byId('agenteComparaCarrierNameInput');
+    var validation = validateCarrierNameInput(input ? input.value : '');
+    if (!validation.ok) {
+      setCarrierIdentifyError(validation.message);
+      updateCarrierIdentifyContinueButton();
+      return;
+    }
+    setCarrierIdentifyError('');
+    carrierIdentifyInFlight = true;
+    updateCarrierIdentifyContinueButton();
+
+    if (carrierEditOnlyMode) {
+      updateCarrierNameOnly(validation.name)
+        .finally(function () {
+          carrierIdentifyInFlight = false;
+          closeCarrierIdentificationPanel();
+          carrierEditOnlyMode = false;
+          updateCarrierIdentifyContinueButton();
+        });
+      return;
+    }
+
+    if (!pendingFreightTableUpload || !pendingFreightTableUpload.file) {
+      carrierIdentifyInFlight = false;
+      updateCarrierIdentifyContinueButton();
+      cancelCarrierIdentification();
+      return;
+    }
+    if (!pendingUploadContextStillValid(pendingFreightTableUpload)) {
+      carrierIdentifyInFlight = false;
+      updateCarrierIdentifyContinueButton();
+      cancelCarrierIdentification();
+      setError('A etapa da comparação foi alterada. Selecione o arquivo novamente.');
+      return;
+    }
+
+    var pending = pendingFreightTableUpload;
+    pending.carrierName = validation.name;
+    var file = pending.file;
+    clearPendingFreightTableUpload();
+    closeCarrierIdentificationPanel();
+
+    uploadDocument(file, validation.name, {
+      comparisonId: pending.comparisonId,
+      tableId: pending.tableId,
+      slot: pending.slot
+    }).finally(function () {
+      carrierIdentifyInFlight = false;
+      updateCarrierIdentifyContinueButton();
+      resetFreightFileInput();
+    });
+  }
+
+  function initCarrierIdentificationPanel() {
+    var input = byId('agenteComparaCarrierNameInput');
+    var cancelBtn = byId('agenteComparaCarrierIdentifyCancel');
+    var continueBtn = byId('agenteComparaCarrierIdentifyContinue');
+    if (input && !input.dataset.agenteComparaCarrierBound) {
+      input.dataset.agenteComparaCarrierBound = '1';
+      input.addEventListener('input', updateCarrierIdentifyContinueButton);
+      input.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          confirmCarrierIdentification();
+        }
+      });
+    }
+    if (cancelBtn && !cancelBtn.dataset.agenteComparaCarrierBound) {
+      cancelBtn.dataset.agenteComparaCarrierBound = '1';
+      cancelBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        cancelCarrierIdentification();
+      });
+    }
+    if (continueBtn && !continueBtn.dataset.agenteComparaCarrierBound) {
+      continueBtn.dataset.agenteComparaCarrierBound = '1';
+      continueBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        if (carrierIdentifyInFlight) return;
+        confirmCarrierIdentification();
+      });
+    }
+  }
+
+  function formatTableStatusShort(status, confirmed) {
+    if (confirmed) return 'Confirmada';
+    var key = String(status || 'empty').toLowerCase();
+    if (key === 'empty') return 'Aguardando envio';
+    if (key === 'locked') return 'Bloqueada';
+    if (key === 'processing') return 'Processando';
+    if (key === 'needs_review') return 'Revisar';
+    if (key === 'confirmed') return 'Confirmada';
+    if (key === 'failed') return 'Erro';
+    return 'Aguardando envio';
+  }
+
+  function formatTableStatusHint(status, confirmed) {
+    if (confirmed) return 'Tabela confirmada.';
+    var key = String(status || 'empty').toLowerCase();
+    if (key === 'empty') return 'Aguardando envio do arquivo.';
+    if (key === 'locked') return 'Bloqueada até concluir a tabela anterior.';
+    if (key === 'processing') return 'Processando o arquivo enviado.';
+    if (key === 'needs_review') return 'Pronta para revisão.';
+    if (key === 'confirmed') return 'Tabela confirmada.';
+    if (key === 'failed') return 'Erro no processamento.';
+    return 'Aguardando envio do arquivo.';
+  }
+
+  function escapeTableTabAttr(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;');
+  }
+
+  function escapeTableTabText(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function isComparisonWizardStep(step) {
+    step = step || comparisonState.currentStep || '';
+    return step === 'PREPARE_TABLE_1' || step === 'PREPARE_TABLE_2' ||
+      step === 'ASK_TABLE_3' || step === 'PREPARE_TABLE_3';
+  }
+
+  function isComparisonCommonParamsStep(step) {
+    step = step || comparisonState.currentStep || '';
+    return step === 'TAXES' || step === 'COVERAGE' ||
+      step === 'CALCULATION_FILE' || step === 'CONFIGURATION_READY';
+  }
+
+  function isComparisonConfigurationReady() {
+    return (comparisonState.currentStep || '') === 'CONFIGURATION_READY';
+  }
+
+  function isComparisonCalculationStep() {
+    var step = comparisonState.currentStep || '';
+    return (
+      step === 'CALCULATION_RUNNING' ||
+      step === 'CALCULATION_READY' ||
+      step === 'CALCULATION_FAILED'
+    );
+  }
+
+  function isComparisonPostConfigStep() {
+    return isComparisonConfigurationReady() || isComparisonCalculationStep();
+  }
+
+  function isComparisonConfigurationFlow() {
+    return isComparisonCommonParamsStep() || isComparisonCalculationStep();
+  }
+
+  function isComparisonWizardComplete() {
+    return false;
+  }
+
+  function isComparisonWizardFlowActive() {
+    return !!comparisonState.comparisonId && isComparisonWizardStep();
+  }
+
+  function isComparisonWizardEngaged() {
+    return comparisonWizardEngaged;
+  }
+
+  function markComparisonWizardEngaged() {
+    comparisonWizardEngaged = true;
+  }
+
+  function resolveComparisonWizardView() {
+    var step = comparisonState.currentStep || '';
+    if (step === 'ASK_TABLE_3') return 'ask_table_3';
+    if (!isComparisonWizardStep(step)) return null;
+
+    var active = activeComparisonTable();
+    var tempTable = currentTempTable;
+    if (tempTable && tempTable.temp_table_id && tempTableMatchesActiveSlot(tempTable)) {
+      var tempStatus = String(tempTable.status || '').toLowerCase();
+      if (tempStatus === 'processing') return 'processing';
+      if (tempStatus === 'needs_review' && active && !active.confirmed) return 'review';
+    }
+    if (active) {
+      var slotStatus = String(active.status || 'empty').toLowerCase();
+      if (slotStatus === 'processing') return 'processing';
+    }
+    return 'upload';
+  }
+
+  function confirmedComparisonTables() {
+    return (comparisonState.tables || []).filter(function (tableMeta) {
+      return tableMeta && tableMeta.confirmed;
+    });
+  }
+
+  function confirmedComparisonTablesForReview() {
+    return confirmedComparisonTables().slice().sort(function (a, b) {
+      return (Number(a.slot_number) || 0) - (Number(b.slot_number) || 0);
+    });
+  }
+
+  function reviewCarrierLabel(tableMeta) {
+    var carrier = tableCarrierDisplay(tableMeta);
+    if (carrier) return carrier;
+    var slot = Number(tableMeta && tableMeta.slot_number) || 0;
+    return slot > 0 ? ('Transportadora ' + slot) : 'Transportadora';
+  }
+
+  function reviewTableTabId(tableId) {
+    return 'table:' + String(tableId || '');
+  }
+
+  function parseReviewTableTabId(tabId) {
+    var raw = String(tabId || '');
+    if (raw.indexOf('table:') !== 0) return null;
+    var tableId = raw.slice('table:'.length);
+    return tableId || null;
+  }
+
+  function resetConfigurationReviewState() {
+    configurationReviewTab = null;
+    reviewTempTablesById = {};
+    reviewSharedTempTable = null;
+    reviewLoadToken += 1;
+    reviewLoadInFlightTableId = null;
+  }
+
+  function bumpComparisonRequestGeneration() {
+    comparisonRequestGeneration += 1;
+    return comparisonRequestGeneration;
+  }
+
+  function isStaleComparisonRequest(generation, comparisonId) {
+    if (generation !== comparisonRequestGeneration) return true;
+    var activeId = comparisonState.comparisonId || null;
+    if (!activeId) return true;
+    if (comparisonId && comparisonId !== activeId) return true;
+    return false;
+  }
+
+  function clearLocalComparisonState() {
+    comparisonState.comparisonId = null;
+    comparisonState.currentStep = null;
+    comparisonState.activeTableId = null;
+    comparisonState.desiredTableCount = 2;
+    comparisonState.primaryTempTableId = null;
+    comparisonState.tables = [];
+    comparisonState.canAdvanceToCoverage = false;
+  }
+
+  function hideTempTableModalShell() {
+    var modal = byId('agenteComparaTempTableModal');
+    if (modal) modal.hidden = true;
+    document.body.classList.remove('agente-compara-temp-table-modal-open');
+    document.body.classList.remove('agente-compara-temp-table-modal-editing');
+  }
+
+  function resetAgenteComparaFrontendState() {
+    bumpComparisonRequestGeneration();
+    comparisonStartPromise = null;
+    reviewLoadToken += 1;
+    stopTempTablePolling();
+    clearPendingFreightTableUpload();
+    freightUploadPreparationInFlight = false;
+    setUploadPreparationLoading(false);
+    resetFreightFileInput();
+    tempTableEditMode = false;
+    tempTableEditSnapshot = null;
+    tempTableSaveInFlight = false;
+    tempTableModalActiveTab = 'freight';
+    setCurrentTempTable(null);
+    closeCarrierIdentificationPanel();
+    hideTempTableModalShell();
+    clearLocalComparisonState();
+    resetConfigurationReviewState();
+    resetTaxStepState();
+    resetCoveragePromptState();
+    resetAuditFileStepState();
+    currentCalculationBases = [];
+    lastAnnouncedTempTableStatus = null;
+    comparisonWizardEngaged = false;
+    comparisonWizardModalSuppressed = false;
+    renderDocuments([], null);
+    setStatus('');
+    setError('');
+    updateClearButton(0);
+  }
+
+  function cacheReviewTempTableIfOwned(tempTable) {
+    if (!tempTable || !tempTable.table_id) return;
+    var meta = findConfirmedReviewTable(tempTable.table_id);
+    if (!meta) return;
+    if (meta.temp_table_id && tempTable.temp_table_id &&
+        meta.temp_table_id !== tempTable.temp_table_id) {
+      return;
+    }
+    reviewTempTablesById[tempTable.table_id] = tempTable;
+  }
+
+  function captureReviewSharedTempTable(tempTable) {
+    if (!tempTable || !tempTable.temp_table_id) return;
+    cacheReviewTempTableIfOwned(tempTable);
+    // coverage_table e audit_batch ficam no record do primary_temp_table_id (recurso global da comparação).
+    var primaryId = comparisonState.primaryTempTableId;
+    if (primaryId && tempTable.temp_table_id === primaryId) {
+      reviewSharedTempTable = tempTable;
+      return;
+    }
+    if (!reviewSharedTempTable) {
+      reviewSharedTempTable = tempTable;
+      return;
+    }
+    if (tempTable.coverage_table || tempTable.audit_batch) {
+      reviewSharedTempTable = tempTable;
+    }
+  }
+
+  function defaultConfigurationReviewTab() {
+    var confirmed = confirmedComparisonTablesForReview();
+    if (confirmed.length && confirmed[0].table_id) {
+      return reviewTableTabId(confirmed[0].table_id);
+    }
+    // Estado inconsistente: sem transportadora confirmada.
+    return 'comparison_file';
+  }
+
+  function ensureConfigurationReviewDefaults(options) {
+    options = options || {};
+    if (!isComparisonConfigurationReady()) return;
+    captureReviewSharedTempTable(currentTempTable);
+    // Entrada/reabertura/refresh completo: 1ª transportadora.
+    // Atualização soft com modal aberto: preserva a aba visual local.
+    if (options.forceFirstCarrier || !configurationReviewTab) {
+      configurationReviewTab = defaultConfigurationReviewTab();
+    }
+    tempTableModalActiveTab = 'configuration_review';
+  }
+
+  function prepareConfigurationReviewRender() {
+    if (!isComparisonConfigurationReady()) return;
+    captureReviewSharedTempTable(currentTempTable);
+    if (!configurationReviewTab) {
+      configurationReviewTab = defaultConfigurationReviewTab();
+    }
+    tempTableModalActiveTab = 'configuration_review';
+  }
+
+  function tempTableMatchesActiveSlot(tempTable) {
+    if (!tempTable || !tempTable.temp_table_id) return false;
+    var active = activeComparisonTable();
+    if (!active) return true;
+    if (tempTable.table_id && active.table_id && tempTable.table_id !== active.table_id) return false;
+    if (tempTable.slot_number != null && active.slot_number != null &&
+        Number(tempTable.slot_number) !== Number(active.slot_number)) return false;
+    return true;
+  }
+
+  function wizardUploadCopy(slotNumber) {
+    if (slotNumber === 2) {
+      return {
+        title: 'Prepare a segunda tabela de frete',
+        text: 'A primeira tabela foi confirmada. Envie agora a segunda tabela obrigatória.',
+        button: 'Enviar segunda tabela'
+      };
+    }
+    if (slotNumber === 3) {
+      return {
+        title: 'Prepare a terceira tabela de frete',
+        text: 'Envie a terceira tabela de frete, opcional nesta comparação.',
+        button: 'Enviar terceira tabela'
+      };
+    }
+    return {
+      title: 'Prepare a primeira tabela de frete',
+      text: 'Envie a tabela de frete da primeira transportadora para iniciar a comparação.',
+      button: 'Enviar tabela de frete'
+    };
+  }
+
+  function setComparisonWizardModalHeader(view) {
+    var titleEl = byId('agenteComparaTempTableModalTitle');
+    var subtitleEl = byId('agenteComparaTempTableModalSubtitle');
+    if (!titleEl || !subtitleEl) return;
+    var active = activeComparisonTable();
+    var slotNumber = active ? Number(active.slot_number) || 1 : 1;
+    if (view === 'upload') {
+      var copy = wizardUploadCopy(slotNumber);
+      titleEl.textContent = copy.title;
+      subtitleEl.textContent = copy.text;
+      return;
+    }
+    if (view === 'processing') {
+      titleEl.textContent = 'Processando tabela de frete';
+      var processingCarrier = tableCarrierDisplay(active);
+      subtitleEl.textContent = processingCarrier
+        ? ('Transportadora: ' + processingCarrier + '. Aguarde enquanto extraímos os dados da tabela enviada.')
+        : 'Aguarde enquanto extraímos os dados da tabela enviada.';
+      return;
+    }
+    if (view === 'review') {
+      var slotReviewLabels = { 1: 'primeira', 2: 'segunda', 3: 'terceira' };
+      var slotReviewLabel = slotReviewLabels[slotNumber] || 'primeira';
+      titleEl.textContent = 'Revisão da ' + slotReviewLabel + ' tabela de frete';
+      var reviewCarrier = tableCarrierDisplay(active);
+      subtitleEl.textContent = '';
+      if (reviewCarrier) {
+        subtitleEl.appendChild(document.createTextNode('Transportadora: ' + reviewCarrier));
+      } else {
+        subtitleEl.textContent = 'Revise os dados extraídos antes de continuar.';
+      }
+      renderModalCarrierEditLink(subtitleEl, active);
+      return;
+    }
+    if (view === 'ask_table_3') {
+      titleEl.textContent = 'Tabelas obrigatórias preparadas';
+      subtitleEl.textContent = 'Deseja adicionar uma terceira tabela de frete ou concluir a preparação com duas tabelas?';
+    }
+  }
+
+  function setComparisonCommonParamsModalHeader() {
+    var titleEl = byId('agenteComparaTempTableModalTitle');
+    var subtitleEl = byId('agenteComparaTempTableModalSubtitle');
+    if (!titleEl || !subtitleEl) return;
+    var step = comparisonState.currentStep || '';
+    if (step === 'TAXES') {
+      titleEl.textContent = 'Impostos do cenário';
+      subtitleEl.textContent = 'Configure os impostos de cada transportadora. A origem e o ISS são comuns a todo o cenário.';
+      return;
+    }
+    if (step === 'COVERAGE') {
+      titleEl.textContent = 'Cidades atendidas';
+      subtitleEl.textContent = 'Configure uma única relação de cidades atendidas para o cenário comparativo.';
+      return;
+    }
+    if (step === 'CALCULATION_FILE') {
+      titleEl.textContent = 'Arquivo para Comparação';
+      subtitleEl.textContent = 'Envie o arquivo operacional com o volume real faturado.';
+      return;
+    }
+    if (step === 'CONFIGURATION_READY') {
+      titleEl.textContent = 'Configuração concluída';
+      subtitleEl.textContent = 'As tabelas de frete, os parâmetros e o arquivo operacional foram preparados. O cálculo comparativo será realizado na próxima etapa.';
+    }
+  }
+
+  function activateComparisonCommonParamsStep(step) {
+    step = step || comparisonState.currentStep || '';
+    if (step === 'TAXES') {
+      taxStepActive = true;
+      tempTableModalActiveTab = 'taxes';
+      initGlobalTaxConfigFromState();
+    } else if (step === 'COVERAGE') {
+      coverageStepActive = true;
+      tempTableModalActiveTab = 'coverage';
+    } else if (step === 'CALCULATION_FILE') {
+      auditFileStepActive = true;
+      tempTableModalActiveTab = 'audit';
+    } else if (step === 'CONFIGURATION_READY') {
+      taxStepActive = true;
+      coverageStepActive = true;
+      auditFileStepActive = true;
+      initGlobalTaxConfigFromState();
+      // Na primeira entrada (aba ainda nula) força a 1ª transportadora; soft status preserva aba.
+      ensureConfigurationReviewDefaults({
+        forceFirstCarrier: !configurationReviewTab || !isTempTableModalOpen()
+      });
+      var initialTableId = parseReviewTableTabId(configurationReviewTab);
+      if (initialTableId) {
+        selectConfigurationReviewTab(configurationReviewTab, { preferCache: true });
+        comparisonWizardModalSuppressed = false;
+        setComparisonCommonParamsModalHeader();
+        updateTempTableModalFooter();
+        if (!isTempTableModalOpen()) {
+          markComparisonWizardEngaged();
+          var readyModal = byId('agenteComparaTempTableModal');
+          if (readyModal) {
+            readyModal.hidden = false;
+            document.body.classList.add('agente-compara-temp-table-modal-open');
+          }
+        }
+        return;
+      }
+      tempTableModalActiveTab = 'configuration_review';
+    }
+    comparisonWizardModalSuppressed = false;
+    setComparisonCommonParamsModalHeader();
+    renderTempTableModalContent(currentTempTable);
+    updateTempTableModalFooter();
+    if (!isTempTableModalOpen()) {
+      markComparisonWizardEngaged();
+      var modal = byId('agenteComparaTempTableModal');
+      if (modal) {
+        modal.hidden = false;
+        document.body.classList.add('agente-compara-temp-table-modal-open');
+      }
+    }
+  }
+
+  function appendWizardConfirmedSummary(container) {
+    var confirmed = confirmedComparisonTables();
+    if (!confirmed.length) return;
+    var wrap = document.createElement('div');
+    wrap.className = 'agente-compara-wizard-summary';
+    confirmed.forEach(function (tableMeta) {
+      var row = document.createElement('div');
+      row.className = 'agente-compara-wizard-summary-row';
+      row.textContent = 'Tabela ' + tableMeta.slot_number + ' — Confirmada';
+      wrap.appendChild(row);
+      var carrier = tableCarrierDisplay(tableMeta);
+      if (carrier) {
+        var carrierEl = document.createElement('div');
+        carrierEl.className = 'agente-compara-wizard-summary-carrier';
+        carrierEl.textContent = carrier;
+        wrap.appendChild(carrierEl);
+      }
+    });
+    container.appendChild(wrap);
+  }
+
+  function bindWizardPrimaryButton(button, handler) {
+    if (!button) return;
+    button.addEventListener('click', function (event) {
+      event.preventDefault();
+      handler();
+    });
+  }
+
+  function triggerComparisonWizardFileInput() {
+    if (
+      uploadInFlight ||
+      freightUploadPreparationInFlight ||
+      pendingFreightTableUpload ||
+      isCarrierIdentificationOpen()
+    ) {
+      return;
+    }
+    if (comparisonStartPromise) return;
+    // Wizard só opera com comparison já ativa; não chama start novamente.
+    if (!comparisonState.comparisonId || !activeComparisonTable()) return;
+    var fileInput = byId('agenteComparaFileInput');
+    if (!fileInput) return;
+    fileInput.click();
+  }
+
+  function renderComparisonWizardUploadBody(body) {
+    var panel = document.createElement('div');
+    panel.className = 'agente-compara-wizard-panel';
+    appendWizardConfirmedSummary(panel);
+    var active = activeComparisonTable();
+    var slotNumber = active ? Number(active.slot_number) || 1 : 1;
+    var copy = wizardUploadCopy(slotNumber);
+    var uploadBtn = document.createElement('button');
+    uploadBtn.type = 'button';
+    uploadBtn.className = 'btn btn-sm btn-primary agente-compara-wizard-upload-btn';
+    uploadBtn.id = 'agenteComparaWizardUploadBtn';
+    uploadBtn.textContent = copy.button;
+    bindWizardPrimaryButton(uploadBtn, triggerComparisonWizardFileInput);
+    panel.appendChild(uploadBtn);
+    body.appendChild(panel);
+  }
+
+  function renderComparisonWizardAskTable3Body(body) {
+    var panel = document.createElement('div');
+    panel.className = 'agente-compara-wizard-panel';
+    appendWizardConfirmedSummary(panel);
+    var actions = document.createElement('div');
+    actions.className = 'agente-compara-wizard-actions';
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn btn-sm btn-primary';
+    addBtn.id = 'agenteComparaWizardAddThirdBtn';
+    addBtn.textContent = 'Adicionar terceira tabela';
+    bindWizardPrimaryButton(addBtn, chooseAddThirdTable);
+    var proceedBtn = document.createElement('button');
+    proceedBtn.type = 'button';
+    proceedBtn.className = 'btn btn-sm btn-outline-primary';
+    proceedBtn.id = 'agenteComparaWizardProceedTwoBtn';
+    proceedBtn.textContent = 'Concluir preparação com duas tabelas';
+    bindWizardPrimaryButton(proceedBtn, chooseProceedWithTwoTables);
+    actions.appendChild(addBtn);
+    actions.appendChild(proceedBtn);
+    panel.appendChild(actions);
+    body.appendChild(panel);
+  }
+
+  function renderComparisonWizardTablesReadyBody(body) {
+    var panel = document.createElement('div');
+    panel.className = 'agente-compara-wizard-panel';
+    appendWizardConfirmedSummary(panel);
+    var info = document.createElement('p');
+    info.className = 'agente-compara-wizard-ready-text small mb-0';
+    info.textContent = 'Preparação das tabelas concluída.';
+    panel.appendChild(info);
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-sm btn-outline-primary agente-compara-wizard-close-btn';
+    closeBtn.textContent = 'Fechar';
+    bindWizardPrimaryButton(closeBtn, closeTempTableModal);
+    panel.appendChild(closeBtn);
+    body.appendChild(panel);
+  }
+
+  function renderComparisonWizardModal() {
+    if (!isComparisonWizardFlowActive()) {
+      renderTempTableModalContent(currentTempTable);
+      updateTempTableModalFooter();
+      return;
+    }
+    var view = resolveComparisonWizardView();
+    if (!view) {
+      renderTempTableModalContent(currentTempTable);
+      updateTempTableModalFooter();
+      return;
+    }
+    setComparisonWizardModalHeader(view);
+    if (view === 'review' || view === 'processing') {
+      renderTempTableModalContent(currentTempTable);
+    } else {
+      var body = byId('agenteComparaTempTableModalBody');
+      if (!body) return;
+      body.innerHTML = '';
+      if (view === 'upload') {
+        renderComparisonWizardUploadBody(body);
+      } else if (view === 'ask_table_3') {
+        renderComparisonWizardAskTable3Body(body);
+      } else if (view === 'tables_ready') {
+        renderComparisonWizardTablesReadyBody(body);
+      }
+    }
+    updateTempTableModalFooter();
+  }
+
+  function shouldAutoOpenComparisonWizard() {
+    if (!comparisonWizardEngaged || comparisonWizardModalSuppressed) return false;
+    if (!isComparisonWizardFlowActive()) return false;
+    var step = comparisonState.currentStep || '';
+    if (step !== 'PREPARE_TABLE_1') return false;
+    var view = resolveComparisonWizardView();
+    return view === 'review' || view === 'processing';
+  }
+
+  function maybeOpenComparisonWizardAfterStatus() {
+    if (!isComparisonWizardFlowActive()) return;
+    if (isTempTableModalOpen()) {
+      if (isComparisonWizardEngaged()) {
+        renderComparisonWizardModal();
+      }
+      return;
+    }
+    if (shouldAutoOpenComparisonWizard()) {
+      openComparisonWizardModal();
+    }
+  }
+
+  function openComparisonWizardModal() {
+    if (!isComparisonWizardEngaged()) return;
+    comparisonWizardModalSuppressed = false;
+    var modal = byId('agenteComparaTempTableModal');
+    if (!modal) return;
+    clearTempTableValidationErrors();
+    setTempTableModalError('');
+    tempTableEditMode = false;
+    tempTableEditSnapshot = null;
+    tempTableModalActiveTab = 'freight';
+    renderComparisonWizardModal();
+    modal.hidden = false;
+    document.body.classList.add('agente-compara-temp-table-modal-open');
+  }
+
+  function refreshComparisonWizardAfterTransition() {
+    comparisonWizardModalSuppressed = false;
+    return fetchDocuments().then(function () {
+      renderComparisonWizardModal();
+      if (!isTempTableModalOpen()) {
+        openComparisonWizardModal();
+      }
+    });
+  }
+
+  function setActiveComparisonTable(tableId, slot) {
+    if (!tableId) return;
+    fetch(API_COMPARISON_SET_ACTIVE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        comparison_id: comparisonState.comparisonId,
+        table_id: tableId,
+        slot: slot
+      })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || data.ok !== true) return;
+        if (data.comparison) syncComparisonStateFromPayload(data.comparison);
+        handleTempTableFromStatus(data);
+        if (taxStepActive) {
+          renderTempTableModalContent(currentTempTable);
+          updateTempTableModalFooter();
+        }
+      })
+      .catch(function () { /* noop */ });
+  }
+
+  function chooseProceedWithTwoTables() {
+    fetch(API_COMPARISON_PROCEED_TWO, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ comparison_id: comparisonState.comparisonId })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.comparison) syncComparisonStateFromPayload(data.comparison);
+        return fetchDocuments();
+      })
+      .then(function () {
+        activateComparisonCommonParamsStep('TAXES');
+      });
+  }
+
+  function chooseAddThirdTable() {
+    fetch(API_COMPARISON_ADD_THIRD, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ comparison_id: comparisonState.comparisonId })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.comparison) syncComparisonStateFromPayload(data.comparison);
+        return refreshComparisonWizardAfterTransition();
+      });
+  }
+
+  function isComparisonPrepareStep() {
+    var step = comparisonState.currentStep || '';
+    return step === 'PREPARE_TABLE_1' || step === 'PREPARE_TABLE_2' || step === 'PREPARE_TABLE_3';
+  }
   var uploadInFlight = false;
+  var comparisonWizardEngaged = false;
+  var comparisonWizardModalSuppressed = false;
   var chatInFlight = false;
   var chatUnlocked = false;
   var chatHistory = [];
@@ -71,12 +1274,19 @@
   var tempTableEditMode = false;
   var tempTableEditSnapshot = null;
   var tempTableSaveInFlight = false;
+  var tempTableSaveExecutionId = null;
   var tempTableValidationErrors = [];
   var openFreightTableKeys = new Set();
   var hasUserTouchedFreightTableOpenState = false;
   var tempTableModalActiveTab = 'freight';
   var taxStepActive = false;
   var taxSaveInFlight = false;
+  var taxContinueInFlight = false;
+  var taxSelectedTableIds = new Set();
+  var globalTaxConfig = null;
+  var taxScenarioCommon = { origin_uf: '', origin_city: '', iss_rate: null };
+  var taxConfigDirty = false;
+  var taxTableUfsPreview = {};
   var coverageStepActive = false;
   var coveragePromptAnswered = false;
   var coveragePromptAccepted = false;
@@ -232,6 +1442,12 @@
   function resetTaxStepState() {
     taxStepActive = false;
     taxSaveInFlight = false;
+    taxContinueInFlight = false;
+    taxSelectedTableIds = new Set();
+    globalTaxConfig = null;
+    taxScenarioCommon = { origin_uf: '', origin_city: '', iss_rate: null };
+    taxConfigDirty = false;
+    taxTableUfsPreview = {};
     if (tempTableModalActiveTab === 'taxes') {
       tempTableModalActiveTab = 'freight';
     }
@@ -257,6 +1473,628 @@
     if (!tempTable || !tempTable.audit_batch) return false;
     var status = String(tempTable.audit_batch.status || '').toLowerCase();
     return status === 'uploaded' || status === 'processed';
+  }
+
+  function calculationFileStatusLabel(status) {
+    var key = String(status || '').toLowerCase();
+    if (key === 'uploaded' || key === 'processed') {
+      return 'Arquivo recebido para comparação';
+    }
+    return 'Arquivo recebido para comparação';
+  }
+
+  function getCalculationFileMetadata(tempTable) {
+    if (!tempTable || !tempTable.audit_batch) return null;
+    var batch = tempTable.audit_batch;
+    var status = String(batch.status || '').toLowerCase();
+    if (status !== 'uploaded' && status !== 'processed') return null;
+    return {
+      source_file_name: batch.source_file_name || '',
+      row_count: batch.row_count,
+      max_rows: batch.max_rows,
+      status: status,
+      visual_status: calculationFileStatusLabel(status)
+    };
+  }
+
+  function shouldShowProcessCalculationsButton(tempTable) {
+    if (!isComparisonPostConfigStep()) return false;
+    if (!comparisonState.comparisonId) return false;
+    if (auditUploadInFlight) return false;
+    var confirmed = confirmedComparisonTablesForReview();
+    if (!confirmed || confirmed.length < 2 || confirmed.length > 3) return false;
+    var meta = getCalculationFileMetadata(tempTable);
+    return !!(meta && (meta.status === 'uploaded' || meta.status === 'processed'));
+  }
+
+  function canEnableProcessCalculationsButton() {
+    if (comparisonCalculationInFlight) return false;
+    if (auditUploadInFlight) return false;
+    if (!comparisonState.comparisonId) return false;
+    var step = comparisonState.currentStep || '';
+    var billing = comparisonCalculationState.billingStatus || '';
+    if (step === 'CALCULATION_RUNNING') return false;
+    // READY vigente só bloqueia novo cálculo quando billing já foi aplicado.
+    if (
+      step === 'CALCULATION_READY' &&
+      !comparisonCalculationState.stale &&
+      billing === 'applied'
+    ) {
+      return false;
+    }
+    if (step === 'CONFIGURATION_READY' || step === 'CALCULATION_FAILED') return true;
+    if (step === 'CALCULATION_READY' && comparisonCalculationState.stale) return true;
+    if (
+      step === 'CALCULATION_READY' &&
+      (billing === 'pending' || billing === 'failed' || billing === 'not_started')
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function setProcessCalculationsButtonState(button) {
+    if (!button) return;
+    var enable = canEnableProcessCalculationsButton();
+    var step = comparisonState.currentStep || '';
+    var loading = comparisonCalculationInFlight || step === 'CALCULATION_RUNNING';
+
+    button.disabled = !enable || loading;
+    button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+    button.setAttribute('aria-busy', loading ? 'true' : 'false');
+
+    var billing = comparisonCalculationState.billingStatus || '';
+    if (loading) {
+      button.classList.add('is-loading');
+      button.textContent = 'Processando cálculos...';
+      button.setAttribute('title', 'Processando cálculos comparativos...');
+    } else if (step === 'CALCULATION_READY' && comparisonCalculationState.stale) {
+      button.classList.remove('is-loading');
+      button.textContent = 'Reprocessar Cálculos';
+      button.setAttribute('title', 'As configurações mudaram. Processe novamente.');
+    } else if (
+      step === 'CALCULATION_READY' &&
+      !comparisonCalculationState.stale &&
+      (billing === 'pending' || billing === 'failed')
+    ) {
+      button.classList.remove('is-loading');
+      button.textContent = billing === 'pending' ? 'Finalizar processamento' : 'Regularizar processamento';
+      button.setAttribute(
+        'title',
+        billing === 'pending'
+          ? 'Cálculo concluído. Finalize o processamento.'
+          : 'Cálculo concluído. Regularize o processamento sem recalcular.'
+      );
+    } else if (step === 'CALCULATION_READY' && !comparisonCalculationState.stale) {
+      button.classList.remove('is-loading');
+      button.textContent = 'Cálculos concluídos';
+      button.setAttribute('title', 'Cálculos comparativos já concluídos para a configuração atual.');
+    } else if (step === 'CALCULATION_FAILED') {
+      button.classList.remove('is-loading');
+      button.textContent = 'Tentar novamente';
+      button.setAttribute('title', 'Tentar processar os cálculos novamente.');
+    } else {
+      button.classList.remove('is-loading');
+      button.textContent = 'Processar Cálculos';
+      button.setAttribute(
+        'title',
+        enable
+          ? 'Processar cálculos comparativos das transportadoras confirmadas.'
+          : 'Conclua a configuração para processar os cálculos.'
+      );
+    }
+
+    bindProcessCalculationsButton(button);
+  }
+
+  function bindProcessCalculationsButton(button) {
+    if (!button || button.dataset.processCalculationsBound === '1') return;
+    button.dataset.processCalculationsBound = '1';
+    button.addEventListener('click', onProcessCalculationsButtonClick);
+  }
+
+  function onProcessCalculationsButtonClick(event) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    processComparisonCalculations();
+  }
+
+  function formatComparisonMoney(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    var n = Number(value);
+    if (!isFinite(n)) return '—';
+    return 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function formatComparisonWeight(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    var n = Number(value);
+    if (!isFinite(n)) return String(value);
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 3 }) + ' kg';
+  }
+
+  function disambiguateCarrierColumnTitle(tables) {
+    var counts = {};
+    (tables || []).forEach(function (table) {
+      var name = String((table && table.carrier_name) || 'Transportadora').trim() || 'Transportadora';
+      counts[name] = (counts[name] || 0) + 1;
+    });
+    return (tables || []).map(function (table) {
+      var name = String((table && table.carrier_name) || 'Transportadora').trim() || 'Transportadora';
+      var title = 'Frete calculado — ' + name;
+      if (counts[name] > 1) {
+        title = name + ' — Tabela ' + String(table.slot_number || '');
+      }
+      return {
+        table_id: table.table_id,
+        slot_number: table.slot_number,
+        carrier_name: name,
+        title: title
+      };
+    });
+  }
+
+  function clearComparisonCalculationResults(container) {
+    if (!container) return;
+    var existing = container.querySelector('#agenteComparaComparisonCalculationResults');
+    if (existing) existing.remove();
+    var status = container.querySelector('#agenteComparaComparisonCalculationStatus');
+    if (status) status.remove();
+  }
+
+  function renderComparisonCalculationStatus(container) {
+    if (!container) return;
+    var existing = container.querySelector('#agenteComparaComparisonCalculationStatus');
+    if (existing) existing.remove();
+
+    var status = document.createElement('p');
+    status.className = 'agente-compara-run-status';
+    status.id = 'agenteComparaComparisonCalculationStatus';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+
+    var step = comparisonState.currentStep || '';
+    var calcStatus = comparisonCalculationState.status || 'not_started';
+
+    var billing = comparisonCalculationState.billingStatus || '';
+    if (comparisonCalculationInFlight || step === 'CALCULATION_RUNNING' || calcStatus === 'CALCULATION_RUNNING') {
+      status.classList.add('is-loading');
+      status.textContent = 'Processando cálculos comparativos...';
+    } else if (calcStatus === 'CALCULATION_READY' && comparisonCalculationState.stale) {
+      status.classList.add('is-error');
+      status.textContent = 'As configurações mudaram. O resultado anterior está desatualizado.';
+    } else if (calcStatus === 'CALCULATION_READY' && billing === 'pending') {
+      status.classList.add('is-loading');
+      status.textContent = 'Finalizando processamento...';
+    } else if (calcStatus === 'CALCULATION_READY' && billing === 'failed') {
+      status.classList.add('is-error');
+      status.textContent =
+        (comparisonCalculationState.error && comparisonCalculationState.error.message) ||
+        'Cálculo concluído, mas a regularização da execução falhou. Tente novamente.';
+    } else if (calcStatus === 'CALCULATION_READY' && billing === 'applied') {
+      status.classList.add('is-success');
+      status.textContent = 'Cálculos concluídos';
+    } else if (calcStatus === 'CALCULATION_READY') {
+      status.classList.add('is-loading');
+      status.textContent = 'Finalizando processamento...';
+    } else if (calcStatus === 'CALCULATION_FAILED') {
+      status.classList.add('is-error');
+      status.textContent =
+        (comparisonCalculationState.error && comparisonCalculationState.error.message) ||
+        'Não foi possível concluir o cálculo comparativo.';
+    } else {
+      return;
+    }
+    container.appendChild(status);
+  }
+
+  function renderComparisonCalculationResults(container, result) {
+    clearComparisonCalculationResults(container);
+    renderComparisonCalculationStatus(container);
+    if (!result || !Array.isArray(result.comparative_rows)) return;
+    if (comparisonCalculationState.stale) return;
+
+    var region = document.createElement('div');
+    region.className = 'agente-compara-comparison-calculation-results';
+    region.id = 'agenteComparaComparisonCalculationResults';
+    region.setAttribute('role', 'region');
+    region.setAttribute('aria-label', 'Resultados do cálculo comparativo');
+
+    var title = document.createElement('h3');
+    title.className = 'agente-compara-run-summary-title';
+    title.textContent = 'Resultado comparativo';
+    region.appendChild(title);
+
+    var scroll = document.createElement('div');
+    scroll.className = 'agente-compara-comparison-calculation-scroll';
+
+    var table = document.createElement('table');
+    table.className = 'agente-compara-comparison-calculation-table';
+    table.setAttribute('aria-label', 'Tabela comparativa de frete calculado');
+
+    var columns = disambiguateCarrierColumnTitle(result.tables || []);
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    [
+      'Documento',
+      'Cidade destino',
+      'UF',
+      'Peso',
+      'Valor da NF'
+    ].forEach(function (label) {
+      var th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+    columns.forEach(function (col) {
+      var th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = col.title;
+      th.setAttribute('data-table-id', col.table_id || '');
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    var fragment = document.createDocumentFragment();
+    result.comparative_rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      var cells = [
+        row.document_number,
+        row.destination_city,
+        row.destination_uf,
+        formatComparisonWeight(row.weight),
+        formatComparisonMoney(row.invoice_value)
+      ];
+      cells.forEach(function (value) {
+        var td = document.createElement('td');
+        td.textContent = hasFieldValue(value) ? String(value) : '—';
+        tr.appendChild(td);
+      });
+
+      var tableResults = row.table_results || {};
+      columns.forEach(function (col) {
+        var td = document.createElement('td');
+        td.setAttribute('data-table-id', col.table_id || '');
+        var cell = tableResults[col.table_id];
+        if (!cell && Array.isArray(tableResults)) {
+          cell = tableResults.find(function (item) {
+            return item && item.table_id === col.table_id;
+          });
+        }
+        if (!cell) {
+          td.textContent = 'Não calculado';
+        } else if (cell.status && cell.status !== 'calculated') {
+          td.textContent = 'Não calculado';
+          var detail =
+            (cell.error && (cell.error.message || cell.error.code)) ||
+            cell.status ||
+            'Erro de domínio';
+          td.title = String(detail);
+          td.setAttribute('aria-label', 'Não calculado: ' + String(detail));
+        } else {
+          td.textContent = formatComparisonMoney(cell.calculated_freight);
+        }
+        tr.appendChild(td);
+      });
+      fragment.appendChild(tr);
+    });
+    tbody.appendChild(fragment);
+    table.appendChild(tbody);
+    scroll.appendChild(table);
+    region.appendChild(scroll);
+    container.appendChild(region);
+  }
+
+  function applyComparisonCalculationPayload(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    comparisonCalculationState.status = payload.status || 'not_started';
+    comparisonCalculationState.executionId = payload.execution_id || null;
+    comparisonCalculationState.fingerprintShort = payload.fingerprint_short || null;
+    comparisonCalculationState.stale = payload.stale === true;
+    comparisonCalculationState.billingStatus = payload.billing_status || null;
+    if (payload.error && typeof payload.error === 'object') {
+      comparisonCalculationState.error = payload.error;
+    } else if (payload.error_code || payload.message) {
+      comparisonCalculationState.error = {
+        code: payload.error_code || null,
+        message: payload.message || null
+      };
+    } else {
+      comparisonCalculationState.error = null;
+    }
+    // Resultado só é liberado com billing applied; não usar path/storage key.
+    if (
+      payload.status === 'CALCULATION_READY' &&
+      payload.result &&
+      !payload.stale &&
+      payload.billing_status === 'applied'
+    ) {
+      comparisonCalculationState.result = payload.result;
+    } else if (payload.status === 'CALCULATION_FAILED') {
+      comparisonCalculationState.result = null;
+    } else if (
+      payload.status === 'CALCULATION_READY' &&
+      (payload.billing_status === 'pending' || payload.billing_status === 'failed')
+    ) {
+      comparisonCalculationState.result = null;
+    } else if (payload.status === 'not_started' || payload.status === 'CALCULATION_RUNNING') {
+      if (payload.status === 'CALCULATION_RUNNING') {
+        comparisonCalculationState.result = null;
+      }
+    }
+    if (payload.current_step) {
+      comparisonState.currentStep = payload.current_step;
+    }
+  }
+
+  function restoreComparisonCalculationFromStatus() {
+    if (!comparisonState.comparisonId) return Promise.resolve(null);
+    if (!isComparisonPostConfigStep() && comparisonState.currentStep !== 'CONFIGURATION_READY') {
+      // Still try restore when step already CALCULATION_* from server.
+      if (!isComparisonCalculationStep()) return Promise.resolve(null);
+    }
+    var url =
+      API_COMPARISON_CALCULATION +
+      '?comparison_id=' +
+      encodeURIComponent(comparisonState.comparisonId || '');
+    return fetch(url, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        }).catch(function () {
+          return { status: r.status, data: null };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || !res.data.ok) return null;
+        applyComparisonCalculationPayload(res.data);
+        var summary = document.getElementById('agenteComparaCalculationFileSummary');
+        if (summary && summary.parentNode) {
+          renderComparisonCalculationResults(summary.parentNode, comparisonCalculationState.result);
+          var btn = document.getElementById('agenteComparaProcessCalculationsButton');
+          setProcessCalculationsButtonState(btn);
+        }
+        return res.data;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function processComparisonCalculations() {
+    if (comparisonCalculationInFlight) return;
+    comparisonCalculationInFlight = true;
+
+    var button = document.getElementById('agenteComparaProcessCalculationsButton');
+    setProcessCalculationsButtonState(button);
+
+    var executionId = generateRequestId();
+    var comparisonId = comparisonState.comparisonId;
+    if (!comparisonId) {
+      comparisonCalculationInFlight = false;
+      setProcessCalculationsButtonState(button);
+      return;
+    }
+
+    var summaryHost = document.getElementById('agenteComparaCalculationFileSummary');
+    if (summaryHost && summaryHost.parentNode) {
+      renderComparisonCalculationStatus(summaryHost.parentNode);
+    }
+
+    fetch(API_COMPARISON_CALCULATE, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Execution-ID': executionId
+      },
+      body: JSON.stringify({
+        comparison_id: comparisonId,
+        execution_id: executionId,
+        schema_version: 1
+      })
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        }).catch(function () {
+          return {
+            status: r.status,
+            data: {
+              ok: false,
+              message: 'Não foi possível processar os cálculos comparativos.'
+            }
+          };
+        });
+      })
+      .then(function (res) {
+        comparisonCalculationInFlight = false;
+        var data = res.data || {};
+        if (res.status === 409) {
+          comparisonCalculationState.error = {
+            code: data.error_code || 'conflict',
+            message: data.message || 'Conflito ao processar os cálculos.'
+          };
+          if (data.status) applyComparisonCalculationPayload(data);
+          else comparisonCalculationState.status = 'CALCULATION_FAILED';
+        } else if (data.status === 'CALCULATION_READY') {
+          // READY matemático: pode vir com billing pending/failed (ok=false) sem liberar result.
+          applyComparisonCalculationPayload(data);
+          comparisonState.currentStep = 'CALCULATION_READY';
+        } else if (data.status === 'CALCULATION_FAILED') {
+          applyComparisonCalculationPayload({
+            status: 'CALCULATION_FAILED',
+            execution_id: data.execution_id || executionId,
+            error: {
+              code: data.error_code || 'agente_compara_calculation_failed',
+              message: data.message || 'Não foi possível concluir o cálculo comparativo.'
+            },
+            current_step: 'CALCULATION_FAILED'
+          });
+          comparisonState.currentStep = 'CALCULATION_FAILED';
+        } else if (data.ok === false) {
+          applyComparisonCalculationPayload({
+            status: 'CALCULATION_FAILED',
+            execution_id: data.execution_id || executionId,
+            error: {
+              code: data.error_code || 'agente_compara_calculation_failed',
+              message: data.message || 'Não foi possível concluir o cálculo comparativo.'
+            },
+            current_step: 'CALCULATION_FAILED'
+          });
+          comparisonState.currentStep = 'CALCULATION_FAILED';
+        } else if (data.status === 'CALCULATION_RUNNING') {
+          applyComparisonCalculationPayload(data);
+          comparisonState.currentStep = 'CALCULATION_RUNNING';
+        }
+
+        button = document.getElementById('agenteComparaProcessCalculationsButton');
+        setProcessCalculationsButtonState(button);
+        var host = document.getElementById('agenteComparaCalculationFileSummary');
+        if (host && host.parentNode) {
+          renderComparisonCalculationResults(host.parentNode, comparisonCalculationState.result);
+        }
+      })
+      .catch(function () {
+        comparisonCalculationInFlight = false;
+        comparisonCalculationState.status = 'CALCULATION_FAILED';
+        comparisonCalculationState.error = {
+          code: 'agente_compara_calculation_failed',
+          message: 'Não foi possível concluir o cálculo comparativo.'
+        };
+        comparisonState.currentStep = 'CALCULATION_FAILED';
+        button = document.getElementById('agenteComparaProcessCalculationsButton');
+        setProcessCalculationsButtonState(button);
+        var host = document.getElementById('agenteComparaCalculationFileSummary');
+        if (host && host.parentNode) {
+          renderComparisonCalculationStatus(host.parentNode);
+        }
+      });
+  }
+
+  function clearCalculationFileSummary(container) {
+    if (!container) return;
+    var existing = container.querySelector('#agenteComparaCalculationFileSummary');
+    if (existing) existing.remove();
+    clearComparisonCalculationResults(container);
+  }
+
+  function appendCalculationFileDetailRow(container, label, value, valueId) {
+    var row = document.createElement('div');
+    row.className = 'agente-compara-temp-table-modal-detail-row';
+    var labelEl = document.createElement('span');
+    labelEl.className = 'agente-compara-temp-table-modal-detail-label';
+    labelEl.textContent = label + ':';
+    var valueEl = document.createElement('strong');
+    valueEl.className = 'agente-compara-temp-table-modal-detail-value';
+    if (valueId) valueEl.id = valueId;
+    valueEl.textContent = hasFieldValue(value) ? String(value) : '—';
+    row.appendChild(labelEl);
+    row.appendChild(valueEl);
+    container.appendChild(row);
+  }
+
+  function renderCalculationFileSummary(container, tempTable, options) {
+    options = options || {};
+    clearCalculationFileSummary(container);
+    var meta = getCalculationFileMetadata(tempTable);
+    if (!meta) return null;
+
+    var summary = document.createElement('div');
+    summary.className = 'agente-compara-audit-file-summary';
+    summary.id = 'agenteComparaCalculationFileSummary';
+    summary.setAttribute('role', 'region');
+    summary.setAttribute('aria-label', 'Arquivo recebido para comparação');
+
+    var summaryTitle = document.createElement('h3');
+    summaryTitle.className = 'agente-compara-audit-file-summary-title';
+    summaryTitle.id = 'agenteComparaCalculationFileSummaryTitle';
+    summaryTitle.textContent = 'Arquivo recebido para comparação';
+    summary.appendChild(summaryTitle);
+
+    appendCalculationFileDetailRow(
+      summary,
+      'Arquivo',
+      meta.source_file_name || '—',
+      'agenteComparaCalculationFileName'
+    );
+    appendCalculationFileDetailRow(
+      summary,
+      'Linhas',
+      meta.row_count != null ? meta.row_count : '—',
+      'agenteComparaCalculationFileRows'
+    );
+    appendCalculationFileDetailRow(
+      summary,
+      'Limite configurado',
+      meta.max_rows != null ? meta.max_rows : '—',
+      'agenteComparaCalculationFileLimit'
+    );
+    appendCalculationFileDetailRow(
+      summary,
+      'Status',
+      meta.visual_status,
+      'agenteComparaCalculationFileStatus'
+    );
+
+    if (options.showProcessButton !== false && shouldShowProcessCalculationsButton(tempTable)) {
+      var runActions = document.createElement('div');
+      runActions.className = 'agente-compara-run-actions';
+      runActions.id = 'agenteComparaProcessCalculationsActions';
+
+      var runBtn = document.createElement('button');
+      runBtn.type = 'button';
+      runBtn.className = 'agente-compara-run-btn';
+      runBtn.id = 'agenteComparaProcessCalculationsButton';
+      runBtn.textContent = 'Processar Cálculos';
+      setProcessCalculationsButtonState(runBtn);
+      runActions.appendChild(runBtn);
+      summary.appendChild(runActions);
+
+      var hint = document.createElement('p');
+      hint.className = 'agente-compara-process-calculations-hint';
+      hint.id = 'agenteComparaProcessCalculationsHint';
+      if (
+        comparisonCalculationState.status === 'CALCULATION_READY' &&
+        !comparisonCalculationState.stale &&
+        comparisonCalculationState.billingStatus === 'applied'
+      ) {
+        hint.textContent = 'Cálculos comparativos concluídos para a configuração atual.';
+      } else if (
+        comparisonCalculationState.status === 'CALCULATION_READY' &&
+        comparisonCalculationState.billingStatus === 'pending'
+      ) {
+        hint.textContent = 'Cálculo concluído. Finalizando processamento...';
+      } else if (
+        comparisonCalculationState.status === 'CALCULATION_READY' &&
+        comparisonCalculationState.billingStatus === 'failed'
+      ) {
+        hint.textContent = 'Cálculo concluído. Regularize o processamento para liberar o resultado.';
+      } else if (comparisonCalculationState.stale) {
+        hint.textContent = 'As configurações mudaram. Processe novamente para atualizar o resultado.';
+      } else if (comparisonCalculationState.status === 'CALCULATION_FAILED') {
+        hint.textContent = 'Houve uma falha no cálculo. Você pode tentar novamente.';
+      } else {
+        hint.textContent = 'Processa o frete calculado de cada transportadora confirmada.';
+      }
+      summary.appendChild(hint);
+    }
+
+    container.appendChild(summary);
+    if (comparisonCalculationState.result || comparisonCalculationState.status === 'CALCULATION_FAILED' || comparisonCalculationState.status === 'CALCULATION_RUNNING') {
+      renderComparisonCalculationResults(container, comparisonCalculationState.result);
+    }
+    return summary;
   }
 
   function shouldShowAuditTab(tempTable) {
@@ -499,11 +2337,20 @@
         if (res.data.temp_table) {
           setCurrentTempTable(res.data.temp_table);
         }
+        if (res.data.comparison) {
+          syncComparisonStateFromPayload(res.data.comparison);
+        } else if (res.data.temp_table && res.data.temp_table.comparison) {
+          syncComparisonStateFromPayload(res.data.temp_table.comparison);
+        }
         if (hasCoverageRows(currentTempTable)) {
           coverageStepActive = true;
           coveragePromptAnswered = true;
           coveragePromptAccepted = true;
-          tempTableModalActiveTab = 'coverage';
+          if ((comparisonState.currentStep || '') === 'CALCULATION_FILE') {
+            activateComparisonCommonParamsStep('CALCULATION_FILE');
+          } else {
+            tempTableModalActiveTab = 'coverage';
+          }
           setCoverageUploadStatus('Arquivo carregado. Revise a aba Cidades atendidas.', 'success');
           if (!isTempTableModalOpen()) {
             appendOperationalMessage('Relação de cidades atendidas carregada. Revise na aba Cidades atendidas.');
@@ -575,9 +2422,18 @@
         if (res.data.temp_table) {
           setCurrentTempTable(res.data.temp_table);
         }
+        if (res.data.comparison) {
+          syncComparisonStateFromPayload(res.data.comparison);
+        } else if (res.data.temp_table && res.data.temp_table.comparison) {
+          syncComparisonStateFromPayload(res.data.temp_table.comparison);
+        }
         tempTableEditMode = false;
         tempTableEditSnapshot = null;
-        renderTempTableModalContent(currentTempTable);
+        if (isComparisonCommonParamsStep('CALCULATION_FILE')) {
+          activateComparisonCommonParamsStep('CALCULATION_FILE');
+        } else {
+          renderTempTableModalContent(currentTempTable);
+        }
         appendOperationalMessage('Relação de cidades atendidas salva temporariamente.');
         fetchDocuments();
       })
@@ -595,8 +2451,39 @@
     var editBtn = byId('agenteComparaTempTableModalEdit');
     var cancelBtn = byId('agenteComparaTempTableModalCancelEdit');
     var saveBtn = byId('agenteComparaTempTableModalSave');
+    var taxSaveBtn = byId('agenteComparaTempTableModalTaxSave');
     var startAuditBtn = byId('agenteComparaTempTableModalStartAudit');
+    var clearSlotBtn = byId('agenteComparaTempTableModalClearSlot');
     var banner = byId('agenteComparaTempTableModalEditBanner');
+    var wizardView = isComparisonWizardFlowActive() ? resolveComparisonWizardView() : null;
+    var wizardNonReview = wizardView && wizardView !== 'review';
+    var canClearSlot = isComparisonWizardStep() && !!comparisonState.comparisonId && !!comparisonState.activeTableId &&
+      !isComparisonCommonParamsStep();
+    if (clearSlotBtn) {
+      clearSlotBtn.hidden = !canClearSlot || !!tempTableEditMode;
+      clearSlotBtn.disabled = !!comparisonResetInFlight || !!tempTableSaveInFlight;
+    }
+    if (isComparisonConfigurationReady()) {
+      if (editBtn) editBtn.hidden = true;
+      if (cancelBtn) cancelBtn.hidden = true;
+      if (banner) banner.hidden = true;
+      if (startAuditBtn) startAuditBtn.hidden = true;
+      if (saveBtn) saveBtn.hidden = true;
+      if (taxSaveBtn) taxSaveBtn.hidden = true;
+      if (clearSlotBtn) clearSlotBtn.hidden = true;
+      document.body.classList.remove('agente-compara-temp-table-modal-editing');
+      return;
+    }
+    if (wizardNonReview) {
+      if (editBtn) editBtn.hidden = true;
+      if (cancelBtn) cancelBtn.hidden = true;
+      if (banner) banner.hidden = true;
+      if (startAuditBtn) startAuditBtn.hidden = true;
+      if (saveBtn) saveBtn.hidden = true;
+      if (taxSaveBtn) taxSaveBtn.hidden = true;
+      document.body.classList.remove('agente-compara-temp-table-modal-editing');
+      return;
+    }
     var onTaxTab = tempTableModalActiveTab === 'taxes' && shouldShowTaxTab(currentTempTable);
     var onCoverageTab = tempTableModalActiveTab === 'coverage' && shouldShowCoverageTab(currentTempTable);
     var onAuditTab = tempTableModalActiveTab === 'audit' && shouldShowAuditTab(currentTempTable);
@@ -610,16 +2497,19 @@
       editBtn.disabled = hideEditOnEmptyCoverage || hideEditOnTaxTab || hideEditOnAuditTab;
     }
     if (startAuditBtn) {
-      startAuditBtn.hidden = !!tempTableEditMode || !onCoverageTab || !canStartAudit || onTaxTab || onAuditTab || hasAuditBatch(currentTempTable);
+      startAuditBtn.hidden = !!tempTableEditMode || !onCoverageTab || !canStartAudit || onTaxTab || onAuditTab || hasAuditBatch(currentTempTable) ||
+        isComparisonConfigurationFlow();
     }
     if (cancelBtn) cancelBtn.hidden = !tempTableEditMode;
     if (banner) banner.hidden = !tempTableEditMode;
     document.body.classList.toggle('agente-compara-temp-table-modal-editing', !!tempTableEditMode);
     if (saveBtn) {
-      saveBtn.disabled = !!(tempTableSaveInFlight || taxSaveInFlight || coverageSaveInFlight);
-      saveBtn.setAttribute('aria-busy', (tempTableSaveInFlight || taxSaveInFlight || coverageSaveInFlight) ? 'true' : 'false');
+      saveBtn.disabled = !!(tempTableSaveInFlight || taxSaveInFlight || taxContinueInFlight || coverageSaveInFlight);
+      saveBtn.setAttribute('aria-busy', (tempTableSaveInFlight || taxSaveInFlight || taxContinueInFlight || coverageSaveInFlight) ? 'true' : 'false');
       if (onTaxTab) {
-        saveBtn.textContent = 'Continuar para cidades';
+        saveBtn.textContent = (taxContinueInFlight || taxSaveInFlight || tempTableSaveInFlight)
+          ? 'Salvando e continuando...'
+          : 'Continuar para cidades';
         saveBtn.hidden = false;
       } else if (onCoverageTab) {
         saveBtn.textContent = 'Salvar';
@@ -630,6 +2520,11 @@
         saveBtn.textContent = 'Salvar e Avançar';
         saveBtn.hidden = false;
       }
+    }
+    if (taxSaveBtn) {
+      taxSaveBtn.hidden = true;
+      taxSaveBtn.disabled = !!(tempTableSaveInFlight || taxSaveInFlight || taxContinueInFlight || coverageSaveInFlight);
+      taxSaveBtn.setAttribute('aria-busy', taxSaveInFlight ? 'true' : 'false');
     }
   }
 
@@ -650,6 +2545,7 @@
 
   function enterTempTableEditMode() {
     if (!currentTempTable || tempTableEditMode) return;
+    resetTempTableSaveExecutionId();
     tempTableEditSnapshot = deepCloneTempTable(currentTempTable);
     tempTableEditMode = true;
     clearTempTableValidationErrors();
@@ -662,6 +2558,7 @@
 
   function cancelTempTableEdit() {
     if (!tempTableEditMode) return;
+    resetTempTableSaveExecutionId();
     if (tempTableEditSnapshot) {
       setCurrentTempTable(deepCloneTempTable(tempTableEditSnapshot), { refreshAuditBi: false });
     }
@@ -686,16 +2583,36 @@
     syncAccessorialMinimumAmountFields(editTarget.accessorial_fees);
   }
 
+  function ensureTempTableSaveExecutionId() {
+    if (!tempTableSaveExecutionId) {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        tempTableSaveExecutionId = window.crypto.randomUUID();
+      } else {
+        tempTableSaveExecutionId = 'save-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      }
+    }
+    return tempTableSaveExecutionId;
+  }
+
+  function resetTempTableSaveExecutionId() {
+    tempTableSaveExecutionId = null;
+  }
+
   function collectTempTableSavePayload() {
     if (!currentTempTable || !currentTempTable.temp_table_id) return null;
     var payload = {
       temp_table_id: currentTempTable.temp_table_id,
+      comparison_id: comparisonState.comparisonId,
+      table_id: comparisonState.activeTableId,
+      slot: activeComparisonTable() ? activeComparisonTable().slot_number : null,
+      edit_version: typeof currentTempTable.edit_version === 'number' ? currentTempTable.edit_version : 0,
       edit_target: {
         freight_tables: [],
         freight_routes: [],
         accessorial_fees: []
       },
-      review_action: 'save_and_advance'
+      review_action: 'save_and_advance',
+      execution_id: ensureTempTableSaveExecutionId()
     };
     populateTempTableSaveEditTarget(payload.edit_target, currentTempTable);
     return payload;
@@ -896,10 +2813,53 @@
 
   function accessorialFeeMissingCalculationBase(fee) {
     if (accessorialFeeIsMinimumAmount(fee)) return false;
+    if (accessorialFeeIsExtractionHypothesis(fee)) return false;
     var baseId = String((fee && fee.calculation_base_id) || '').trim();
     var base = getCalculationBaseById(baseId);
     var basis = normalizeTextKey(fee && fee.calculation_basis);
     return !baseId || !base || basis === normalizeTextKey('não mapeado / revisar');
+  }
+
+  function accessorialFeeIsUserCommitted(fee) {
+    var source = String((fee && fee.classification_source) || '').trim();
+    return source.indexOf('manual_') === 0;
+  }
+
+  function accessorialFeeIsExtractionHypothesis(fee) {
+    if (!fee || accessorialFeeIsUserCommitted(fee)) return false;
+    var source = String(fee.classification_source || '').trim();
+    var status = String(fee.status || '').trim();
+    var baseId = String(fee.calculation_base_id || '').trim();
+    var basis = normalizeTextKey(fee.calculation_basis);
+    if (!baseId && basis === normalizeTextKey('não mapeado / revisar')) return true;
+    if (
+      (source === 'legacy_classifier' || source === 'unmapped_calculation_base')
+      && (status === 'needs_review' || status === 'unknown' || status === 'unsupported' || !status)
+      && !accessorialFeeHasRequiredValue(fee)
+    ) {
+      return true;
+    }
+    if (
+      source === 'configured_calculation_base'
+      && (status === 'needs_review' || status === 'unknown' || status === 'unsupported')
+      && !accessorialFeeHasRequiredValue(fee)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function accessorialFeeShouldBlockAdvance(fee) {
+    if (!fee || typeof fee !== 'object' || isPrimaryFreightAccessorialFee(fee)) return false;
+    if (accessorialFeeIsExtractionHypothesis(fee)) return false;
+    if (accessorialFeeIsMinimumAmount(fee)) return true;
+    var baseId = String(fee.calculation_base_id || '').trim();
+    var basis = normalizeTextKey(fee.calculation_basis);
+    var source = String(fee.classification_source || '').trim();
+    if (!baseId && basis !== normalizeTextKey('não mapeado / revisar') && source.indexOf('manual_') !== 0) {
+      return false;
+    }
+    return true;
   }
 
   function validateLinkedMinimumAccessorialFee(fee, fees, feeIndex) {
@@ -967,6 +2927,34 @@
     return count + ' itens precisam de revisão. Corrija os campos destacados ou exclua as linhas.';
   }
 
+  function accessorialValidationSummaryMessage(errors) {
+    if (!errors || !errors.length) return '';
+    if (errors.length === 1) {
+      var err = errors[0];
+      var detail = err.message || accessorialFieldErrorMessage(err);
+      var name = err.name && String(err.name).trim();
+      if (name && !/^Item \d+$/i.test(name)) {
+        return 'Revise a generalidade "' + name + '": ' + detail;
+      }
+      return detail || 'Revise uma generalidade: informe o valor obrigatório.';
+    }
+    return accessorialAdvanceValidationCountMessage(errors.length);
+  }
+
+  function resolveTempTableSaveErrorMessage(data) {
+    if (!data || typeof data !== 'object') return '';
+    if (Array.isArray(data.errors) && data.errors.length) {
+      return accessorialValidationSummaryMessage(data.errors);
+    }
+    if (data.error_code === 'invalid_accessorial_fees' && data.message) {
+      return String(data.message);
+    }
+    if (data.message && typeof data.message === 'string') {
+      return data.message;
+    }
+    return friendlyError(data);
+  }
+
   function collectTempTableAdvanceValidationErrors() {
     var fees = currentTempTable && Array.isArray(currentTempTable.accessorial_fees)
       ? currentTempTable.accessorial_fees
@@ -975,6 +2963,7 @@
     var errors = [];
     fees.forEach(function (fee, feeIndex) {
       if (!fee || typeof fee !== 'object' || isPrimaryFreightAccessorialFee(fee)) return;
+      if (!accessorialFeeShouldBlockAdvance(fee)) return;
       var error = null;
       if (accessorialFeeIsMinimumAmount(fee)) {
         error = validateLinkedMinimumAccessorialFee(fee, fees, feeIndex);
@@ -1051,7 +3040,7 @@
   function setTempTableValidationErrors(errors) {
     tempTableValidationErrors = Array.isArray(errors) ? errors.slice() : [];
     if (tempTableValidationErrors.length) {
-      setTempTableModalError(accessorialAdvanceValidationCountMessage(tempTableValidationErrors.length));
+      setTempTableModalError(accessorialValidationSummaryMessage(tempTableValidationErrors));
     } else {
       setTempTableModalError('');
     }
@@ -1098,8 +3087,23 @@
   }
 
   function handleBackendTempTableValidationErrors(data) {
-    if (!data || !Array.isArray(data.errors) || !data.errors.length) return false;
-    setTempTableValidationErrors(data.errors);
+    if (!data || typeof data !== 'object') return false;
+    var errors = Array.isArray(data.errors) ? data.errors : [];
+    if (data.error_code === 'invalid_accessorial_fees') {
+      if (errors.length) {
+        setTempTableValidationErrors(errors);
+      } else if (data.message) {
+        setTempTableModalError(String(data.message));
+      } else {
+        return false;
+      }
+      ensureTempTableEditModeForValidation();
+      renderTempTableModalContent(currentTempTable);
+      focusFirstTempTableValidationError();
+      return true;
+    }
+    if (!errors.length) return false;
+    setTempTableValidationErrors(errors);
     ensureTempTableEditModeForValidation();
     renderTempTableModalContent(currentTempTable);
     focusFirstTempTableValidationError();
@@ -1108,19 +3112,29 @@
 
   function saveTempTableAndAdvance() {
     if (!currentTempTable || tempTableSaveInFlight) return;
-    if (!validateTempTableBeforeAdvance()) return;
+    tempTableSaveInFlight = true;
+    updateTempTableModalFooter();
+    if (!validateTempTableBeforeAdvance()) {
+      tempTableSaveInFlight = false;
+      updateTempTableModalFooter();
+      return;
+    }
     var payload = collectTempTableSavePayload();
     if (!payload) {
+      tempTableSaveInFlight = false;
+      updateTempTableModalFooter();
       setTempTableModalError('Nenhuma tabela temporária disponível para salvar.');
       return;
     }
-    tempTableSaveInFlight = true;
-    updateTempTableModalFooter();
     setTempTableModalError('');
+    var saveSucceeded = false;
 
     fetch(API_TEMP_TABLE_SAVE, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Execution-ID': payload.execution_id
+      },
       credentials: 'same-origin',
       body: JSON.stringify(payload)
     })
@@ -1132,15 +3146,42 @@
       .then(function (res) {
         if (!res.data || res.data.ok !== true) {
           if (handleBackendTempTableValidationErrors(res.data)) return;
-          setTempTableModalError(res.data || 'Não foi possível salvar a revisão da tabela temporária.');
+          if (res.status === 500) {
+            setTempTableModalError('Não foi possível salvar a revisão da tabela temporária.');
+            return;
+          }
+          var safeMessage = resolveTempTableSaveErrorMessage(res.data);
+          if (safeMessage) {
+            setTempTableModalError(safeMessage);
+            if (res.data && res.data.error_code === 'invalid_accessorial_fees') {
+              ensureTempTableEditModeForValidation();
+              renderTempTableModalContent(currentTempTable);
+            }
+            return;
+          }
+          setTempTableModalError('Não foi possível salvar a revisão da tabela temporária.');
           return;
         }
+        saveSucceeded = true;
         if (res.data.temp_table) {
           setCurrentTempTable(res.data.temp_table);
+        }
+        if (res.data.comparison) {
+          syncComparisonStateFromPayload(res.data.comparison);
+        } else if (res.data.temp_table && res.data.temp_table.comparison) {
+          syncComparisonStateFromPayload(res.data.temp_table.comparison);
         }
         clearTempTableValidationErrors();
         tempTableEditMode = false;
         tempTableEditSnapshot = null;
+        resetTempTableSaveExecutionId();
+        if (isComparisonPrepareStep()) {
+          return refreshComparisonWizardAfterTransition();
+        }
+        if (isComparisonCommonParamsStep()) {
+          activateComparisonCommonParamsStep(comparisonState.currentStep);
+          return fetchDocuments();
+        }
         taxStepActive = true;
         tempTableModalActiveTab = 'taxes';
         renderTempTableModalContent(currentTempTable);
@@ -1162,12 +3203,62 @@
 
   function handleStartAudit() {
     if (!currentTempTable) return;
+    if ((comparisonState.currentStep || '') === 'COVERAGE') {
+      skipComparisonCoverageAndAdvance();
+      return;
+    }
     auditFileStepActive = true;
     tempTableModalActiveTab = 'audit';
     clearTempTableValidationErrors();
     setTempTableModalError('');
     renderTempTableModalContent(currentTempTable);
     updateTempTableModalFooter();
+  }
+
+  function skipComparisonCoverageAndAdvance() {
+    if (!currentTempTable || !currentTempTable.temp_table_id || tempTableSaveInFlight) return;
+    tempTableSaveInFlight = true;
+    setTempTableModalError('');
+    updateTempTableModalFooter();
+    fetch(API_TEMP_TABLE_SAVE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        temp_table_id: currentTempTable.temp_table_id,
+        review_action: 'skip_coverage_and_advance'
+      })
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true) {
+          setTempTableModalError(res.data || 'Não foi possível avançar para o arquivo operacional.');
+          return;
+        }
+        if (res.data.temp_table) {
+          setCurrentTempTable(res.data.temp_table);
+        }
+        if (res.data.comparison) {
+          syncComparisonStateFromPayload(res.data.comparison);
+        } else if (res.data.temp_table && res.data.temp_table.comparison) {
+          syncComparisonStateFromPayload(res.data.temp_table.comparison);
+        }
+        coveragePromptAnswered = true;
+        coveragePromptAccepted = false;
+        activateComparisonCommonParamsStep('CALCULATION_FILE');
+        return fetchDocuments();
+      })
+      .catch(function () {
+        setTempTableModalError('Não foi possível avançar para o arquivo operacional. Verifique sua conexão e tente novamente.');
+      })
+      .finally(function () {
+        tempTableSaveInFlight = false;
+        updateTempTableModalFooter();
+      });
   }
 
   function appendOperationalMessage(text) {
@@ -1197,8 +3288,20 @@
   function startTempTablePollingIfNeeded(tempTable) {
     stopTempTablePolling();
     if (!tempTable || String(tempTable.status || '').toLowerCase() !== 'processing') return;
+    if (!comparisonState.comparisonId) return;
+    var generation = comparisonRequestGeneration;
+    var expectedComparisonId = comparisonState.comparisonId;
     tempTablePollTimer = window.setInterval(function () {
+      if (tempTableEditMode || tempTableSaveInFlight) return;
+      if (generation !== comparisonRequestGeneration || comparisonState.comparisonId !== expectedComparisonId) {
+        stopTempTablePolling();
+        return;
+      }
       fetchDocuments().then(function (data) {
+        if (generation !== comparisonRequestGeneration) {
+          stopTempTablePolling();
+          return;
+        }
         if (!data || !data.temp_table) {
           stopTempTablePolling();
           return;
@@ -1206,6 +3309,9 @@
         var status = String(data.temp_table.status || '').toLowerCase();
         if (status !== 'processing') {
           stopTempTablePolling();
+          if (isTempTableModalOpen() && isComparisonWizardFlowActive()) {
+            renderComparisonWizardModal();
+          }
         }
       });
     }, TEMP_TABLE_POLL_MS);
@@ -1213,27 +3319,53 @@
 
   function handleTempTableFromStatus(data) {
     if (!data) return;
+    if (Object.prototype.hasOwnProperty.call(data, 'comparison')) {
+      if (data.comparison) {
+        syncComparisonStateFromPayload(data.comparison);
+      } else {
+        syncComparisonStateFromPayload(null);
+        resetConfigurationReviewState();
+        resetTaxStepState();
+        resetCoveragePromptState();
+        resetAuditFileStepState();
+        comparisonWizardEngaged = false;
+        comparisonWizardModalSuppressed = false;
+        hideTempTableModalShell();
+      }
+    }
     currentCalculationBases = Array.isArray(data.calculation_bases) ? data.calculation_bases : [];
     var tempTable = data.temp_table || null;
     var previousTempTableId = currentTempTable && currentTempTable.temp_table_id;
     var nextTempTableId = tempTable && tempTable.temp_table_id;
     if (previousTempTableId && nextTempTableId && previousTempTableId !== nextTempTableId) {
+      tempTableSaveInFlight = false;
       resetTaxStepState();
       resetCoveragePromptState();
       resetAuditFileStepState();
     } else if (previousTempTableId && !nextTempTableId) {
+      tempTableSaveInFlight = false;
       resetTaxStepState();
       resetCoveragePromptState();
       resetAuditFileStepState();
     }
     if (tempTable && tempTable.temp_table_id) {
-      setCurrentTempTable(tempTable);
-    } else {
+      if (!tempTableEditMode && !tempTableSaveInFlight) {
+        setCurrentTempTable(tempTable);
+      }
+    } else if (!tempTableEditMode && !tempTableSaveInFlight) {
       setCurrentTempTable(null);
     }
     renderDocuments(data.documents || [], tempTable);
     announceTempTableStatusIfNeeded(tempTable);
     startTempTablePollingIfNeeded(tempTable);
+    if (!comparisonState.comparisonId) {
+      return;
+    }
+    if (isComparisonCommonParamsStep()) {
+      activateComparisonCommonParamsStep(comparisonState.currentStep);
+      return;
+    }
+    maybeOpenComparisonWizardAfterStatus();
   }
 
   function formatBytes(bytes) {
@@ -2547,6 +4679,10 @@
     openBtn.setAttribute('aria-label', 'Abrir dados da tabela temporária');
     openBtn.addEventListener('click', function () {
       lastTempTableCardButton = openBtn;
+      comparisonWizardModalSuppressed = false;
+      if (isComparisonWizardFlowActive() && !isComparisonWizardComplete()) {
+        markComparisonWizardEngaged();
+      }
       openTempTableModal();
     });
 
@@ -2650,10 +4786,13 @@ function renderDocumentItem(doc) {
 
   function updateClearButton(count) {
     var btn = byId('agenteComparaClearDocuments');
-    var toolbar = byId('agenteComparaDocumentsToolbar');
     var panel = byId('agenteComparaDocumentsPanel');
+    var hasComparison = !!comparisonState.comparisonId;
     if (btn) {
-      btn.style.display = count > 0 ? 'inline-flex' : 'none';
+      btn.textContent = 'Reiniciar comparação';
+      btn.setAttribute('aria-label', 'Reiniciar comparação');
+      btn.style.display = hasComparison ? 'inline-flex' : 'none';
+      btn.disabled = !!comparisonResetInFlight;
     }
     if (panel) {
       if (count > 0) {
@@ -2680,11 +4819,38 @@ function renderDocumentItem(doc) {
   }
 
   function fetchDocuments() {
-    return fetch(API_STATUS, { method: 'GET', credentials: 'same-origin' })
+    var generation = comparisonRequestGeneration;
+    var expectedComparisonId = comparisonState.comparisonId || null;
+    return fetch(API_STATUS + comparisonIdentityQuery(), { method: 'GET', credentials: 'same-origin' })
       .then(function (r) {
         return r.json().then(function (data) { return { status: r.status, data: data }; });
       })
       .then(function (res) {
+        if (generation !== comparisonRequestGeneration) {
+          return null;
+        }
+        var responseComparisonId = res.data && res.data.comparison
+          ? (res.data.comparison.comparison_id || null)
+          : null;
+        if (expectedComparisonId && responseComparisonId && responseComparisonId !== expectedComparisonId) {
+          return null;
+        }
+        // Status vazio antigo após start local: preservar comparison recém-criada.
+        if (
+          !expectedComparisonId &&
+          comparisonState.comparisonId &&
+          res.data &&
+          res.data.ok === true &&
+          !res.data.comparison &&
+          res.data.has_active_comparison === false
+        ) {
+          return null;
+        }
+        if (expectedComparisonId && res.data && res.data.ok === true && !res.data.comparison && res.data.has_active_comparison === false) {
+          // Outra aba/reset removeu a comparação: limpar UI local.
+          resetAgenteComparaFrontendState();
+          return res.data;
+        }
         if (res.status === 401 || res.status === 403) {
           var errData = res.data || {};
           if (errData.error_code === 'franquia_blocked') {
@@ -2707,6 +4873,7 @@ function renderDocumentItem(doc) {
         return res.data;
       })
       .catch(function () {
+        if (generation !== comparisonRequestGeneration) return null;
         setError('Não foi possível carregar os documentos da sessão.');
         return null;
       });
@@ -2716,13 +4883,35 @@ function renderDocumentItem(doc) {
     fetchDocuments();
   }
 
-  function uploadDocument(file) {
+  function uploadDocument(file, carrierName, identityOverride) {
     if (!file || uploadInFlight) return Promise.resolve();
+    var validation = validateCarrierNameInput(carrierName);
+    if (!validation.ok) {
+      setError(validation.message);
+      return Promise.resolve(null);
+    }
+    var comparisonId = identityOverride && identityOverride.comparisonId
+      ? identityOverride.comparisonId
+      : comparisonState.comparisonId;
+    var tableId = identityOverride && identityOverride.tableId
+      ? identityOverride.tableId
+      : comparisonState.activeTableId;
+    var slot = identityOverride && identityOverride.slot != null
+      ? identityOverride.slot
+      : (activeComparisonTable() ? activeComparisonTable().slot_number : null);
+    if (!comparisonId || !tableId || slot == null || slot === '') {
+      setError('Identidade da comparação inconsistente. Selecione o arquivo novamente.');
+      return Promise.resolve(null);
+    }
     setError('');
     setUploadLoading(true);
 
     var formData = new FormData();
     formData.append('file', file, file.name);
+    formData.append('carrier_name', validation.name);
+    formData.append('comparison_id', comparisonId);
+    formData.append('table_id', tableId);
+    formData.append('slot', String(slot));
 
     return fetch(API_UPLOAD, {
       method: 'POST',
@@ -2738,13 +4927,19 @@ function renderDocumentItem(doc) {
           return null;
         }
         setError('');
+        comparisonWizardModalSuppressed = false;
+        markComparisonWizardEngaged();
+        if (res.data.comparison) {
+          syncComparisonStateFromPayload(res.data.comparison);
+        }
         return fetchDocuments().then(function (statusData) {
           if (statusData) return statusData;
           if (res.data.temp_table) {
             handleTempTableFromStatus({
               documents: [],
               temp_table: res.data.temp_table,
-              calculation_bases: res.data.calculation_bases || []
+              calculation_bases: res.data.calculation_bases || [],
+              comparison: res.data.comparison || undefined
             });
           }
           return res.data;
@@ -2781,12 +4976,110 @@ function renderDocumentItem(doc) {
       });
   }
 
-  function clearAllDocuments() {
+  function setResetConfirmError(message) {
+    var el = byId('agenteComparaResetConfirmError');
+    if (!el) return;
+    if (message) {
+      el.textContent = String(message);
+      el.hidden = false;
+    } else {
+      el.textContent = '';
+      el.hidden = true;
+    }
+  }
+
+  function setResetConfirmLoading(loading) {
+    var submitBtn = byId('agenteComparaResetConfirmSubmit');
+    var cancelBtn = byId('agenteComparaResetConfirmCancel');
+    comparisonResetInFlight = !!loading;
+    if (submitBtn) {
+      submitBtn.disabled = !!loading;
+      submitBtn.setAttribute('aria-busy', loading ? 'true' : 'false');
+      submitBtn.textContent = loading ? 'Reiniciando...' : 'Reiniciar comparação';
+    }
+    if (cancelBtn) cancelBtn.disabled = !!loading;
+    updateClearButton(
+      (byId('agenteComparaDocumentsList') && byId('agenteComparaDocumentsList').children.length) || 0
+    );
+  }
+
+  function closeResetConfirmModal() {
+    var modal = byId('agenteComparaResetConfirmModal');
+    if (modal) modal.hidden = true;
+    document.body.classList.remove('agente-compara-reset-confirm-open');
+    setResetConfirmError('');
+    setResetConfirmLoading(false);
+  }
+
+  function openResetConfirmModal() {
+    var modal = byId('agenteComparaResetConfirmModal');
+    if (!modal || comparisonResetInFlight) return;
+    setResetConfirmError('');
+    setResetConfirmLoading(false);
+    modal.hidden = false;
+    document.body.classList.add('agente-compara-reset-confirm-open');
+    var cancelBtn = byId('agenteComparaResetConfirmCancel');
+    if (cancelBtn) cancelBtn.focus();
+  }
+
+  function executeComparisonReset() {
+    if (comparisonResetInFlight) return Promise.resolve(null);
+    setResetConfirmLoading(true);
+    setResetConfirmError('');
     setError('');
+    var previousComparisonId = comparisonState.comparisonId || null;
+    var body = {};
+    if (previousComparisonId) body.comparison_id = previousComparisonId;
+    return fetch(API_COMPARISON_RESET, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body)
+    })
+      .then(function (r) {
+        return r.json().then(function (data) { return { status: r.status, data: data }; });
+      })
+      .then(function (res) {
+        if (!res.data || res.data.ok !== true || res.data.comparison_reset !== true) {
+          var message = (res.data && (res.data.message || res.data.error)) ||
+            'Não foi possível reiniciar a comparação.';
+          setResetConfirmError(message);
+          setError(res.data || friendlyError(res.data) || message);
+          setResetConfirmLoading(false);
+          return null;
+        }
+        // Só limpa frontend após sucesso confirmado.
+        resetAgenteComparaFrontendState();
+        closeResetConfirmModal();
+        return res.data;
+      })
+      .catch(function () {
+        setResetConfirmError('Não foi possível reiniciar a comparação. Tente novamente.');
+        setError('Não foi possível reiniciar a comparação. Tente novamente.');
+        setResetConfirmLoading(false);
+        return null;
+      });
+  }
+
+  function requestRestartComparison() {
+    if (!comparisonState.comparisonId || comparisonResetInFlight) return;
+    openResetConfirmModal();
+  }
+
+  function clearActiveSlotDocuments() {
+    if (!comparisonState.comparisonId || !comparisonState.activeTableId) return;
+    setError('');
+    var body = {
+      comparison_id: comparisonState.comparisonId,
+      table_id: comparisonState.activeTableId
+    };
+    var active = activeComparisonTable();
+    if (active && active.slot_number) body.slot = active.slot_number;
     fetch(API_CLEAR, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin'
+      credentials: 'same-origin',
+      body: JSON.stringify(body)
     })
       .then(function (r) {
         return r.json().then(function (data) { return { status: r.status, data: data }; });
@@ -2796,17 +5089,16 @@ function renderDocumentItem(doc) {
           setError(res.data || friendlyError(res.data));
           return;
         }
-        renderDocuments([], null);
-        setCurrentTempTable(null);
-        lastAnnouncedTempTableStatus = null;
-        stopTempTablePolling();
-        resetCoveragePromptState();
-        resetAuditFileStepState();
-        setStatus('');
+        return fetchDocuments();
       })
       .catch(function () {
-        setError('Não foi possível limpar os documentos.');
+        setError('Não foi possível remover os arquivos desta tabela.');
       });
+  }
+
+  function clearAllDocuments() {
+    // Compat: ação global agora reinicia a comparação com confirmação.
+    requestRestartComparison();
   }
 
   function positionActionsMenu() {
@@ -4399,6 +6691,7 @@ function renderDocumentItem(doc) {
       tr.setAttribute('data-accessorial-fee-index', String(feeIndex));
       var validationError = getAccessorialFeeValidationError(feeIndex);
       if (accessorialFeeHasValidationError(feeIndex)) tr.className = 'accessorial-row--invalid';
+      else if (accessorialFeeIsExtractionHypothesis(item)) tr.className = 'accessorial-row--pending';
       appendAccessorialFieldCell(tr, item.name, function (newValue) {
         if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].name = newValue;
       }, 'Ex.: Pedágio geral');
@@ -4500,7 +6793,400 @@ function renderDocumentItem(doc) {
     });
   }
 
+  function findConfirmedReviewTable(tableId) {
+    if (!tableId || !comparisonState.comparisonId) return null;
+    var tables = comparisonState.tables || [];
+    for (var i = 0; i < tables.length; i++) {
+      var entry = tables[i];
+      if (!entry || entry.table_id !== tableId) continue;
+      if (!entry.confirmed) return null;
+      return entry;
+    }
+    return null;
+  }
+
+  function getReviewDisplayTempTable() {
+    var tableId = parseReviewTableTabId(configurationReviewTab);
+    if (tableId && reviewTempTablesById[tableId]) {
+      return reviewTempTablesById[tableId];
+    }
+    return currentTempTable;
+  }
+
+  function getReviewSharedTempTable() {
+    // coverage e arquivo operacional são globais da comparação (record do primary_temp_table_id).
+    return reviewSharedTempTable || currentTempTable;
+  }
+
+  function renderConfigurationReviewLoading(container, label) {
+    var loading = document.createElement('p');
+    loading.className = 'agente-compara-temp-table-modal-processing';
+    loading.setAttribute('role', 'status');
+    loading.setAttribute('aria-live', 'polite');
+    loading.textContent = label || 'Carregando dados da transportadora...';
+    container.appendChild(loading);
+  }
+
+  function renderConfigurationReviewTaxContent(container) {
+    appendSectionTitle(container, 'Impostos');
+    var section = document.createElement('div');
+    section.className = 'agente-compara-temp-table-modal-section agente-compara-tax-section agente-compara-tax-review-section';
+    initGlobalTaxConfigFromState();
+    var taxConfig = ensureGlobalTaxConfigShell();
+
+    appendDetailRow(section, 'Incluir impostos', taxConfig.include_taxes === true ? 'Sim' : (taxConfig.include_taxes === false ? 'Não' : '—'));
+    appendDetailRow(section, 'UF origem', taxConfig.origin_uf || '—');
+    appendDetailRow(section, 'Cidade origem', taxConfig.origin_city || '—');
+    appendDetailRow(
+      section,
+      'ISS (%)',
+      taxConfig.iss_rate === null || taxConfig.iss_rate === undefined || taxConfig.iss_rate === ''
+        ? '—'
+        : String(taxConfig.iss_rate)
+    );
+    appendDetailRow(section, 'Confirmado', taxConfig.confirmed ? 'Sim' : 'Não');
+
+    var selectedIds = Array.isArray(taxConfig.selected_table_ids) ? taxConfig.selected_table_ids : [];
+    var selectedLabels = selectedIds.map(function (tableId) {
+      var meta = (comparisonState.tables || []).find(function (item) { return item && item.table_id === tableId; });
+      return reviewCarrierLabel(meta || { slot_number: null, carrier_name: '' }) + ' (' + tableId + ')';
+    });
+    appendDetailRow(section, 'Transportadoras selecionadas', selectedLabels.length ? selectedLabels.join(', ') : '—');
+
+    if (taxConfig.include_taxes === true) {
+      var destSection = document.createElement('div');
+      destSection.className = 'agente-compara-tax-destination-ufs';
+      appendSectionTitle(destSection, 'UFs de destino');
+      var destinations = Array.isArray(taxConfig.destination_ufs) ? taxConfig.destination_ufs : [];
+      if (!destinations.length) {
+        var emptyDest = document.createElement('p');
+        emptyDest.className = 'agente-compara-temp-table-modal-empty';
+        emptyDest.textContent = 'Nenhuma UF de destino configurada.';
+        destSection.appendChild(emptyDest);
+      } else {
+        destinations.forEach(function (row) {
+          if (!row || typeof row !== 'object') return;
+          var label = (row.uf || '—') + ' · ' + taxDestinationSourceLabel(row.source);
+          appendDetailRow(destSection, label, Array.isArray(row.evidence) && row.evidence.length ? row.evidence.join(', ') : '—');
+        });
+      }
+      section.appendChild(destSection);
+
+      var ratesSection = document.createElement('div');
+      ratesSection.className = 'agente-compara-tax-icms-rates';
+      appendSectionTitle(ratesSection, 'Matriz de ICMS');
+      var rates = Array.isArray(taxConfig.icms_rates) ? taxConfig.icms_rates : [];
+      if (!rates.length) {
+        var emptyRates = document.createElement('p');
+        emptyRates.className = 'agente-compara-temp-table-modal-empty';
+        emptyRates.textContent = 'Nenhuma alíquota configurada.';
+        ratesSection.appendChild(emptyRates);
+      } else {
+        rates.forEach(function (row) {
+          if (!row || typeof row !== 'object') return;
+          var activeLabel = row.is_active ? 'ativa' : 'inativa';
+          var rateLabel = (row.destination_uf || '—') + ' (' + activeLabel + ')';
+          var rateValue = row.applied_rate === null || row.applied_rate === undefined || row.applied_rate === ''
+            ? '—'
+            : (String(row.applied_rate) + '%');
+          if (row.user_edited) rateValue += ' · ajuste manual';
+          appendDetailRow(ratesSection, rateLabel, rateValue);
+        });
+      }
+      section.appendChild(ratesSection);
+    }
+
+    container.appendChild(section);
+  }
+
+  function renderConfigurationReviewAuditContent(container, tempTable) {
+    appendSectionTitle(container, 'Arquivo para Comparação');
+    var section = document.createElement('div');
+    section.className = 'agente-compara-temp-table-modal-section agente-compara-audit-file-section';
+    var card = document.createElement('div');
+    card.className = 'agente-compara-audit-file-card';
+
+    var intro = document.createElement('p');
+    intro.className = 'agente-compara-audit-file-description';
+    intro.textContent = 'Baixe o modelo, preencha com o volume real faturado e envie o arquivo operacional para preparar a comparação entre as transportadoras.';
+    card.appendChild(intro);
+
+    if (hasAuditBatch(tempTable)) {
+      renderCalculationFileSummary(card, tempTable, { showProcessButton: true });
+    } else {
+      var empty = document.createElement('p');
+      empty.className = 'agente-compara-temp-table-modal-empty';
+      empty.textContent = 'Nenhum arquivo operacional disponível para revisão.';
+      card.appendChild(empty);
+    }
+
+    section.appendChild(card);
+    container.appendChild(section);
+  }
+
+  function renderConfigurationReviewCarrierContent(container, tableMeta, tempTable) {
+    appendSectionTitle(container, reviewCarrierLabel(tableMeta));
+    if (!tempTable) {
+      renderConfigurationReviewLoading(container);
+      return;
+    }
+    var meta = document.createElement('div');
+    meta.className = 'agente-compara-temp-table-modal-meta';
+    appendMetaRow(meta, 'Transportadora', reviewCarrierLabel(tableMeta));
+    appendMetaRow(meta, 'Status', tempTableStatusLabel(tempTable.status));
+    var sourceDocs = Array.isArray(tempTable.source_documents) ? tempTable.source_documents : [];
+    appendMetaRow(meta, 'Documento(s) de origem', sourceDocs.length ? sourceDocs.join(', ') : null);
+    appendMetaRow(meta, 'Criado em', formatDateTime(tempTable.created_at));
+    appendMetaRow(meta, 'Atualizado em', formatDateTime(tempTable.updated_at));
+    appendMetaRow(meta, 'Expira em', formatDateTime(tempTable.expires_at));
+    container.appendChild(meta);
+    renderMainFreightSection(container, tempTable);
+    renderAccessorialFeesSection(container, tempTable.accessorial_fees);
+    renderAdditionalInfoSection(container, tempTable);
+    appendSimpleListSection(container, 'Alertas de leitura', tempTable.reading_alerts);
+    appendSimpleListSection(container, 'Evidências/referências', tempTable.evidence_refs);
+  }
+
+  function renderConfigurationReviewContent(panel) {
+    var tabId = configurationReviewTab || defaultConfigurationReviewTab();
+    var tableId = parseReviewTableTabId(tabId);
+    if (tableId) {
+      var tableMeta = findConfirmedReviewTable(tableId);
+      if (!tableMeta) {
+        var invalid = document.createElement('p');
+        invalid.className = 'agente-compara-temp-table-modal-empty';
+        invalid.textContent = 'Tabela não disponível para revisão nesta comparação.';
+        panel.appendChild(invalid);
+        return;
+      }
+      if (reviewLoadInFlightTableId === tableId && !reviewTempTablesById[tableId]) {
+        renderConfigurationReviewLoading(panel);
+        return;
+      }
+      renderConfigurationReviewCarrierContent(panel, tableMeta, reviewTempTablesById[tableId] || null);
+      return;
+    }
+    if (tabId === 'taxes') {
+      renderConfigurationReviewTaxContent(panel);
+      return;
+    }
+    if (tabId === 'coverage') {
+      var sharedCoverage = getReviewSharedTempTable();
+      appendSectionTitle(panel, 'Cidades Atendidas');
+      var coverageSection = document.createElement('div');
+      coverageSection.className = 'agente-compara-temp-table-modal-section agente-compara-temp-table-modal-coverage-section';
+      if (sharedCoverage && hasCoverageRows(sharedCoverage)) {
+        renderReadonlyCoverageTable(coverageSection, sharedCoverage);
+      } else {
+        var emptyCoverage = document.createElement('p');
+        emptyCoverage.className = 'agente-compara-temp-table-modal-empty';
+        emptyCoverage.textContent = 'Nenhuma cidade atendida disponível para revisão.';
+        coverageSection.appendChild(emptyCoverage);
+      }
+      panel.appendChild(coverageSection);
+      return;
+    }
+    renderConfigurationReviewAuditContent(panel, getReviewSharedTempTable());
+  }
+
+  function renderConfigurationReviewTabs(container) {
+    var tabs = document.createElement('div');
+    tabs.className = 'agente-compara-temp-table-modal-tabs';
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('data-review-mode', 'configuration-ready');
+
+    function makeReviewTab(id, label, active, disabled) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'agente-compara-temp-table-modal-tab' + (active ? ' is-active' : '');
+      btn.id = id;
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      btn.textContent = label;
+      if (disabled) {
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+      }
+      return btn;
+    }
+
+    var activeTab = configurationReviewTab || defaultConfigurationReviewTab();
+    var confirmed = confirmedComparisonTablesForReview();
+    confirmed.forEach(function (tableMeta) {
+      if (!tableMeta || !tableMeta.table_id) return;
+      var tabKey = reviewTableTabId(tableMeta.table_id);
+      var loadingThis = reviewLoadInFlightTableId === tableMeta.table_id && activeTab === tabKey;
+      var tabBtn = makeReviewTab(
+        'agenteComparaReviewTab_' + tableMeta.table_id,
+        reviewCarrierLabel(tableMeta),
+        activeTab === tabKey,
+        loadingThis
+      );
+      tabBtn.setAttribute('data-review-tab', tabKey);
+      tabBtn.setAttribute('data-comparison-id', comparisonState.comparisonId || '');
+      tabBtn.setAttribute('data-table-id', tableMeta.table_id);
+      tabBtn.setAttribute('data-slot-number', String(tableMeta.slot_number || ''));
+      if (tableMeta.temp_table_id) {
+        tabBtn.setAttribute('data-temp-table-id', tableMeta.temp_table_id);
+      }
+      tabBtn.setAttribute('data-carrier-name', tableCarrierDisplay(tableMeta));
+      tabBtn.addEventListener('click', function () {
+        selectConfigurationReviewTab(tabKey);
+      });
+      tabs.appendChild(tabBtn);
+    });
+
+    var taxesTab = makeReviewTab('agenteComparaReviewTabTaxes', 'Impostos', activeTab === 'taxes', false);
+    taxesTab.setAttribute('data-review-tab', 'taxes');
+    taxesTab.addEventListener('click', function () {
+      selectConfigurationReviewTab('taxes');
+    });
+    tabs.appendChild(taxesTab);
+
+    var coverageTab = makeReviewTab('agenteComparaReviewTabCoverage', 'Cidades Atendidas', activeTab === 'coverage', false);
+    coverageTab.setAttribute('data-review-tab', 'coverage');
+    coverageTab.addEventListener('click', function () {
+      selectConfigurationReviewTab('coverage');
+    });
+    tabs.appendChild(coverageTab);
+
+    var fileTab = makeReviewTab('agenteComparaReviewTabComparisonFile', 'Arquivo para Comparação', activeTab === 'comparison_file', false);
+    fileTab.setAttribute('data-review-tab', 'comparison_file');
+    fileTab.addEventListener('click', function () {
+      selectConfigurationReviewTab('comparison_file');
+    });
+    tabs.appendChild(fileTab);
+
+    container.appendChild(tabs);
+  }
+
+  function loadReviewTempTable(tableId) {
+    var tableMeta = findConfirmedReviewTable(tableId);
+    if (!tableMeta) {
+      return Promise.resolve({ ok: false, reason: 'not_found' });
+    }
+    if (reviewTempTablesById[tableId]) {
+      return Promise.resolve({ ok: true, temp_table: reviewTempTablesById[tableId], fromCache: true });
+    }
+    var token = ++reviewLoadToken;
+    var generation = comparisonRequestGeneration;
+    var expectedComparisonId = comparisonState.comparisonId || null;
+    reviewLoadInFlightTableId = tableId;
+    var params = [];
+    if (comparisonState.comparisonId) {
+      params.push('comparison_id=' + encodeURIComponent(comparisonState.comparisonId));
+    }
+    params.push('table_id=' + encodeURIComponent(tableId));
+    return fetch(API_STATUS + '?' + params.join('&'), {
+      method: 'GET',
+      credentials: 'same-origin'
+    })
+      .then(function (r) { return r.json().then(function (data) { return { status: r.status, data: data }; }); })
+      .then(function (res) {
+        if (token !== reviewLoadToken || generation !== comparisonRequestGeneration) {
+          return { ok: false, reason: 'stale' };
+        }
+        if (expectedComparisonId && comparisonState.comparisonId !== expectedComparisonId) {
+          return { ok: false, reason: 'stale' };
+        }
+        if (!comparisonState.comparisonId) {
+          return { ok: false, reason: 'stale' };
+        }
+        if (parseReviewTableTabId(configurationReviewTab) !== tableId) {
+          return { ok: false, reason: 'tab_changed' };
+        }
+        if (!res.data || res.data.ok !== true || !res.data.temp_table) {
+          return { ok: false, reason: 'load_failed', data: res.data };
+        }
+        if (res.data.comparison) {
+          syncComparisonStateFromPayload(res.data.comparison);
+        }
+        if (String(comparisonState.currentStep || '') !== 'CONFIGURATION_READY') {
+          return { ok: false, reason: 'step_changed' };
+        }
+        var loadedMeta = findConfirmedReviewTable(tableId);
+        if (!loadedMeta) {
+          return { ok: false, reason: 'ownership' };
+        }
+        if (loadedMeta.temp_table_id && res.data.temp_table.temp_table_id &&
+            loadedMeta.temp_table_id !== res.data.temp_table.temp_table_id) {
+          return { ok: false, reason: 'temp_mismatch' };
+        }
+        reviewTempTablesById[tableId] = res.data.temp_table;
+        if (reviewLoadInFlightTableId === tableId) {
+          reviewLoadInFlightTableId = null;
+        }
+        return { ok: true, temp_table: res.data.temp_table, fromCache: false };
+      })
+      .catch(function () {
+        if (token === reviewLoadToken && reviewLoadInFlightTableId === tableId) {
+          reviewLoadInFlightTableId = null;
+        }
+        return { ok: false, reason: 'network' };
+      });
+  }
+
+  function selectConfigurationReviewTab(tabId, options) {
+    options = options || {};
+    if (!isComparisonConfigurationReady()) return;
+    var nextTab = tabId || defaultConfigurationReviewTab();
+    configurationReviewTab = nextTab;
+    tempTableModalActiveTab = 'configuration_review';
+    setComparisonCommonParamsModalHeader();
+
+    var tableId = parseReviewTableTabId(nextTab);
+    if (!tableId) {
+      reviewLoadInFlightTableId = null;
+      renderTempTableModalContent(getReviewSharedTempTable() || currentTempTable);
+      updateTempTableModalFooter();
+      return;
+    }
+
+    var tableMeta = findConfirmedReviewTable(tableId);
+    if (!tableMeta) {
+      configurationReviewTab = 'comparison_file';
+      renderTempTableModalContent(getReviewSharedTempTable() || currentTempTable);
+      updateTempTableModalFooter();
+      return;
+    }
+
+    if (options.preferCache && reviewTempTablesById[tableId]) {
+      renderTempTableModalContent(reviewTempTablesById[tableId]);
+      updateTempTableModalFooter();
+      return;
+    }
+
+    if (reviewTempTablesById[tableId] && !options.forceReload) {
+      renderTempTableModalContent(reviewTempTablesById[tableId]);
+      updateTempTableModalFooter();
+      return;
+    }
+
+    // Evita mostrar dados da aba anterior como se fossem da nova durante o lazy load.
+    reviewLoadInFlightTableId = tableId;
+    renderTempTableModalContent(currentTempTable);
+    updateTempTableModalFooter();
+    loadReviewTempTable(tableId).then(function (result) {
+      if (!result || !result.ok) {
+        if (result && (result.reason === 'stale' || result.reason === 'tab_changed')) return;
+        if (parseReviewTableTabId(configurationReviewTab) !== tableId) return;
+        if (reviewLoadInFlightTableId === tableId) reviewLoadInFlightTableId = null;
+        renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
+        return;
+      }
+      if (parseReviewTableTabId(configurationReviewTab) !== tableId) return;
+      renderTempTableModalContent(result.temp_table);
+      updateTempTableModalFooter();
+    });
+  }
+
   function renderTempTableModalTabs(container, tempTable) {
+    if (isComparisonConfigurationReady()) {
+      renderConfigurationReviewTabs(container);
+      return;
+    }
+
     var tabs = document.createElement('div');
     tabs.className = 'agente-compara-temp-table-modal-tabs';
     tabs.setAttribute('role', 'tablist');
@@ -4545,7 +7231,8 @@ function renderDocumentItem(doc) {
       tabs.appendChild(coverageTab);
     }
     if (shouldShowAuditTab(tempTable)) {
-      var auditTab = makeTab('agenteComparaTempTableTabAudit', 'Arquivo para auditoria', tempTableModalActiveTab === 'audit');
+      var auditLabel = 'Arquivo para Comparação';
+      var auditTab = makeTab('agenteComparaTempTableTabAudit', auditLabel, tempTableModalActiveTab === 'audit');
       auditTab.addEventListener('click', function () {
         tempTableModalActiveTab = 'audit';
         renderTempTableModalContent(tempTable);
@@ -4557,7 +7244,12 @@ function renderDocumentItem(doc) {
   }
 
   function renderAuditFileTabContent(container, tempTable) {
-    appendSectionTitle(container, 'Arquivo para auditoria');
+    if (isComparisonConfigurationReady()) {
+      renderConfigurationReviewAuditContent(container, tempTable || getReviewSharedTempTable());
+      return;
+    }
+
+    appendSectionTitle(container, 'Arquivo para Comparação');
 
     var section = document.createElement('div');
     section.className = 'agente-compara-temp-table-modal-section agente-compara-audit-file-section';
@@ -4567,7 +7259,9 @@ function renderDocumentItem(doc) {
 
     var intro = document.createElement('p');
     intro.className = 'agente-compara-audit-file-description';
-    intro.textContent = 'Baixe o modelo, preencha com os fretes cobrados e envie o arquivo para auditoria.';
+    intro.textContent = isComparisonConfigurationFlow()
+      ? 'Baixe o modelo, preencha com o volume real faturado e envie o arquivo operacional para preparar a comparação entre as transportadoras.'
+      : 'Baixe o modelo, preencha com o volume real faturado e envie o arquivo operacional para comparação.';
     card.appendChild(intro);
 
     var actions = document.createElement('div');
@@ -4610,45 +7304,39 @@ function renderDocumentItem(doc) {
     card.appendChild(status);
 
     if (hasAuditBatch(tempTable)) {
-      var summary = document.createElement('div');
-      summary.className = 'agente-compara-audit-file-summary';
       var batch = tempTable.audit_batch;
-      var summaryTitle = document.createElement('p');
-      summaryTitle.className = 'agente-compara-audit-file-summary-title';
-      summaryTitle.textContent = 'Arquivo recebido para auditoria';
-      summary.appendChild(summaryTitle);
-      appendDetailRow(summary, 'Arquivo', batch.source_file_name || '—');
-      appendDetailRow(summary, 'Linhas', batch.row_count != null ? String(batch.row_count) : '—');
-      appendDetailRow(summary, 'Limite configurado', batch.max_rows != null ? String(batch.max_rows) : '—');
-      appendDetailRow(summary, 'Status', 'Arquivo recebido para auditoria');
-      card.appendChild(summary);
-
-      var runActions = document.createElement('div');
-      runActions.className = 'agente-compara-run-actions';
-      var runBtn = document.createElement('button');
-      runBtn.type = 'button';
-      runBtn.className = 'agente-compara-run-btn';
-      runBtn.id = 'agenteComparaRunButton';
-      runBtn.textContent = batch.summary ? 'Processar auditoria novamente' : 'Processar auditoria';
-      runBtn.disabled = auditRunInFlight;
-      runBtn.addEventListener('click', function () {
-        runAuditProcessing();
+      renderCalculationFileSummary(card, tempTable, {
+        showProcessButton: isComparisonPostConfigStep()
       });
-      runActions.appendChild(runBtn);
-      card.appendChild(runActions);
 
-      var runStatus = document.createElement('p');
-      runStatus.className = 'agente-compara-run-status';
-      runStatus.id = 'agenteComparaRunStatus';
-      runStatus.setAttribute('role', 'status');
-      runStatus.setAttribute('aria-live', 'polite');
-      card.appendChild(runStatus);
+      if (!isComparisonConfigurationFlow()) {
+        var runActions = document.createElement('div');
+        runActions.className = 'agente-compara-run-actions';
+        var runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'agente-compara-run-btn';
+        runBtn.id = 'agenteComparaRunButton';
+        runBtn.textContent = batch.summary ? 'Processar novamente' : 'Processar comparação';
+        runBtn.disabled = auditRunInFlight;
+        runBtn.addEventListener('click', function () {
+          runAuditProcessing();
+        });
+        runActions.appendChild(runBtn);
+        card.appendChild(runActions);
 
-      renderAuditRunSummary(card, batch.summary);
-      renderAuditGlobalErrorButton(card, batch.audit_diagnostics);
-      renderAuditDiagnostics(card, batch.audit_diagnostics);
-      renderLegacyAuditDiagnosticsNotice(card, batch);
-      renderAuditRunResults(card, batch.results, batch.audit_diagnostics);
+        var runStatus = document.createElement('p');
+        runStatus.className = 'agente-compara-run-status';
+        runStatus.id = 'agenteComparaRunStatus';
+        runStatus.setAttribute('role', 'status');
+        runStatus.setAttribute('aria-live', 'polite');
+        card.appendChild(runStatus);
+
+        renderAuditRunSummary(card, batch.summary);
+        renderAuditGlobalErrorButton(card, batch.audit_diagnostics);
+        renderAuditDiagnostics(card, batch.audit_diagnostics);
+        renderLegacyAuditDiagnosticsNotice(card, batch);
+        renderAuditRunResults(card, batch.results, batch.audit_diagnostics);
+      }
     }
 
     fileInput.addEventListener('change', function () {
@@ -4753,14 +7441,27 @@ function renderDocumentItem(doc) {
           }
           return res.data;
         }).then(function () {
+          if (res.data.comparison) {
+            syncComparisonStateFromPayload(res.data.comparison);
+          } else if (res.data.temp_table && res.data.temp_table.comparison) {
+            syncComparisonStateFromPayload(res.data.temp_table.comparison);
+          }
+          if (isComparisonConfigurationReady()) {
+            // Libera o flag antes do render para o botão visual aparecer (ainda disabled).
+            auditUploadInFlight = false;
+            activateComparisonCommonParamsStep('CONFIGURATION_READY');
+            selectConfigurationReviewTab('comparison_file', { preferCache: true });
+            return;
+          }
           if (hasAuditBatch(currentTempTable)) {
+            auditUploadInFlight = false;
             auditFileStepActive = true;
             tempTableModalActiveTab = 'audit';
-            setAuditUploadStatus('Arquivo recebido para auditoria.', 'success');
+            setAuditUploadStatus('Arquivo recebido para comparação.', 'success');
             renderTempTableModalContent(currentTempTable);
             updateTempTableModalFooter();
           } else {
-            setAuditUploadStatus('Não foi possível registrar o arquivo auditado.', 'error');
+            setAuditUploadStatus('Não foi possível registrar o arquivo operacional.', 'error');
           }
         });
       })
@@ -6115,6 +8816,10 @@ function renderDocumentItem(doc) {
 
   function runAuditProcessing() {
     if (!hasAuditBatch(currentTempTable) || auditRunInFlight) return;
+    if (isComparisonConfigurationFlow()) {
+      setAuditRunStatus('O cálculo comparativo ainda não foi iniciado.', 'error');
+      return;
+    }
     auditRunInFlight = true;
     setAuditRunStatus('Processando auditoria...', 'loading');
     updateTempTableModalFooter();
@@ -6356,6 +9061,195 @@ function renderDocumentItem(doc) {
     return taxConfig.destination_ufs;
   }
 
+  function syncTaxScenarioCommonFromTaxConfig(taxConfig) {
+    if (!taxConfig || typeof taxConfig !== 'object') return;
+    if (taxConfig.origin_uf) taxScenarioCommon.origin_uf = normalizeTaxUf(taxConfig.origin_uf);
+    if (taxConfig.origin_city) taxScenarioCommon.origin_city = String(taxConfig.origin_city || '');
+    if (taxConfig.iss_rate !== null && taxConfig.iss_rate !== undefined && taxConfig.iss_rate !== '') {
+      taxScenarioCommon.iss_rate = parseTaxRateInput(taxConfig.iss_rate);
+    }
+  }
+
+  function applyTaxScenarioCommonToGlobalTaxConfig() {
+    var taxConfig = ensureGlobalTaxConfigShell();
+    taxConfig.origin_uf = taxScenarioCommon.origin_uf || '';
+    taxConfig.origin_city = taxScenarioCommon.origin_city || '';
+    taxConfig.iss_rate = taxScenarioCommon.iss_rate;
+    if (taxScenarioCommon.origin_uf) {
+      applyTaxManualAdjustments();
+    }
+  }
+
+  function ensureGlobalTaxConfigShell() {
+    if (!globalTaxConfig || typeof globalTaxConfig !== 'object') {
+      globalTaxConfig = {
+        include_taxes: null,
+        origin_uf: '',
+        origin_city: '',
+        iss_rate: null,
+        selected_table_ids: [],
+        destination_ufs: [],
+        icms_rates: [],
+        manual_added_ufs: [],
+        manual_removed_ufs: [],
+        user_edited_rates: {},
+        confirmed: false
+      };
+    }
+    if (!Array.isArray(globalTaxConfig.destination_ufs)) globalTaxConfig.destination_ufs = [];
+    if (!Array.isArray(globalTaxConfig.icms_rates)) globalTaxConfig.icms_rates = [];
+    if (!Array.isArray(globalTaxConfig.manual_added_ufs)) globalTaxConfig.manual_added_ufs = [];
+    if (!Array.isArray(globalTaxConfig.manual_removed_ufs)) globalTaxConfig.manual_removed_ufs = [];
+    if (!globalTaxConfig.user_edited_rates || typeof globalTaxConfig.user_edited_rates !== 'object') {
+      globalTaxConfig.user_edited_rates = {};
+    }
+    return globalTaxConfig;
+  }
+
+  function restoreGlobalTaxConfig(taxConfig) {
+    if (!taxConfig || typeof taxConfig !== 'object') return;
+    globalTaxConfig = deepCloneValue(taxConfig);
+    taxSelectedTableIds = new Set(Array.isArray(taxConfig.selected_table_ids) ? taxConfig.selected_table_ids : []);
+    syncTaxScenarioCommonFromTaxConfig(taxConfig);
+    taxConfigDirty = false;
+  }
+
+  function initGlobalTaxConfigFromState() {
+    if (globalTaxConfig && globalTaxConfig.confirmed) {
+      syncTaxScenarioCommonFromTaxConfig(globalTaxConfig);
+      return;
+    }
+    ensureGlobalTaxConfigShell();
+    syncTaxScenarioCommonFromTaxConfig(globalTaxConfig);
+  }
+
+  function markTaxConfigDirty() {
+    taxConfigDirty = true;
+    if (globalTaxConfig) globalTaxConfig.confirmed = false;
+    comparisonState.canAdvanceToCoverage = false;
+    updateTempTableModalFooter();
+  }
+
+  function collectSelectedTaxTableIds() {
+    return Array.from(taxSelectedTableIds);
+  }
+
+  function recomputeSelectedTaxDestinationUfs() {
+    var byUf = {};
+    var manualRemoved = {};
+    (globalTaxConfig && globalTaxConfig.manual_removed_ufs || []).forEach(function (uf) {
+      manualRemoved[normalizeTaxUf(uf)] = true;
+    });
+    taxSelectedTableIds.forEach(function (tableId) {
+      var preview = taxTableUfsPreview[tableId];
+      if (!preview || !Array.isArray(preview.destination_ufs)) return;
+      preview.destination_ufs.forEach(function (uf) {
+        var normalized = normalizeTaxUf(uf);
+        if (!normalized || manualRemoved[normalized]) return;
+        mergeTaxDestinationEntry(byUf, normalized, 'automatic', '', false);
+      });
+    });
+    (globalTaxConfig && globalTaxConfig.manual_added_ufs || []).forEach(function (uf) {
+      var normalized = normalizeTaxUf(uf);
+      if (!normalized || manualRemoved[normalized]) return;
+      mergeTaxDestinationEntry(byUf, normalized, 'manual', '', true);
+    });
+    return Object.keys(byUf).sort().map(function (uf) { return byUf[uf]; });
+  }
+
+  function applyTaxManualAdjustments() {
+    var taxConfig = ensureGlobalTaxConfigShell();
+    var previousRates = taxConfig.icms_rates || [];
+    taxConfig.destination_ufs = recomputeSelectedTaxDestinationUfs();
+    var originUf = normalizeTaxUf(taxScenarioCommon.origin_uf || taxConfig.origin_uf);
+    if (originUf) {
+      taxConfig.icms_rates = buildIcmsRatesForOrigin(null, originUf, previousRates, taxConfig.destination_ufs);
+    } else {
+      taxConfig.icms_rates = [];
+    }
+  }
+
+  function toggleTaxCarrierSelection(tableId, checked) {
+    if (!tableId) return;
+    if (checked) taxSelectedTableIds.add(tableId);
+    else taxSelectedTableIds.delete(tableId);
+    var taxConfig = ensureGlobalTaxConfigShell();
+    taxConfig.selected_table_ids = collectSelectedTaxTableIds();
+    applyTaxManualAdjustments();
+    markTaxConfigDirty();
+    renderTempTableModalContent(currentTempTable);
+    updateTempTableModalFooter();
+  }
+
+  function taxCarrierUfCount(tableId) {
+    var preview = taxTableUfsPreview[tableId];
+    if (!preview) return 0;
+    return preview.uf_count || (Array.isArray(preview.destination_ufs) ? preview.destination_ufs.length : 0);
+  }
+
+  function renderTaxCarrierCheckboxes(container) {
+    var confirmed = confirmedComparisonTables();
+    if (!confirmed.length) return;
+
+    var section = document.createElement('div');
+    section.className = 'agente-compara-tax-carrier-section';
+
+    var title = document.createElement('p');
+    title.className = 'agente-compara-tax-carrier-title';
+    title.textContent = 'Transportadoras para incidência dos impostos';
+    section.appendChild(title);
+
+    var subtitle = document.createElement('p');
+    subtitle.className = 'agente-compara-tax-hint';
+    subtitle.textContent = 'Selecione as transportadoras sobre as quais os impostos incidirão.';
+    section.appendChild(subtitle);
+
+    var list = document.createElement('div');
+    list.className = 'agente-compara-tax-carrier-list';
+
+    confirmed.forEach(function (tableMeta) {
+      var tableId = tableMeta.table_id;
+      var carrierName = tableCarrierDisplay(tableMeta) || ('Transportadora ' + (tableMeta.slot_number || ''));
+      var ufCount = taxCarrierUfCount(tableId);
+      var label = document.createElement('label');
+      label.className = 'agente-compara-tax-carrier-option';
+      if (taxSelectedTableIds.has(tableId)) label.classList.add('is-active');
+
+      var input = document.createElement('input');
+      input.type = 'checkbox';
+      input.value = tableId;
+      input.checked = taxSelectedTableIds.has(tableId);
+      input.addEventListener('change', function () {
+        toggleTaxCarrierSelection(tableId, input.checked);
+      });
+
+      var textWrap = document.createElement('span');
+      textWrap.className = 'agente-compara-tax-carrier-option-text';
+      textWrap.textContent = carrierName + (ufCount ? ' (' + ufCount + ' UF' + (ufCount === 1 ? '' : 's') + ')' : '');
+
+      label.appendChild(input);
+      label.appendChild(textWrap);
+      list.appendChild(label);
+
+      if (input.checked && ufCount === 0) {
+        var alert = document.createElement('p');
+        alert.className = 'agente-compara-tax-hint agente-compara-tax-empty-uf-alert';
+        alert.textContent = 'Nenhuma UF foi identificada automaticamente nesta tabela.';
+        list.appendChild(alert);
+      }
+    });
+
+    section.appendChild(list);
+
+    var hint = document.createElement('p');
+    hint.className = 'agente-compara-tax-hint agente-compara-tax-carrier-hint';
+    hint.textContent = comparisonState.canAdvanceToCoverage && !taxConfigDirty
+      ? 'Configuração salva. Você pode continuar para cidades.'
+      : 'A configuração será salva ao continuar para cidades.';
+    section.appendChild(hint);
+    container.appendChild(section);
+  }
+
   function rebuildTaxIcmsRates(tempTable, originUf, previousRates) {
     var taxConfig = ensureTaxConfigShell(tempTable);
     var destinationUfs = syncTaxDestinationUfs(tempTable);
@@ -6452,53 +9346,34 @@ function renderDocumentItem(doc) {
       : [];
   }
 
-  function addManualTaxDestinationUf(tempTable, uf) {
-    var taxConfig = ensureTaxConfigShell(tempTable);
+  function addManualTaxDestinationUf(uf) {
+    var taxConfig = ensureGlobalTaxConfigShell();
     var normalizedUf = normalizeTaxUf(uf);
     if (!normalizedUf) return false;
-    var exists = taxConfig.destination_ufs.some(function (item) {
-      return item && normalizeTaxUf(item.uf) === normalizedUf;
-    });
-    if (exists) return false;
-    taxConfig.destination_ufs.push({
-      uf: normalizedUf,
-      source: 'manual',
-      evidence: [],
-      user_confirmed: true
-    });
-    taxConfig.destination_ufs.sort(function (a, b) {
-      return String(a.uf).localeCompare(String(b.uf));
-    });
-    if (taxConfig.origin_uf) {
-      taxConfig.icms_rates = buildIcmsRatesForOrigin(
-        tempTable,
-        taxConfig.origin_uf,
-        taxConfig.icms_rates,
-        taxConfig.destination_ufs
-      );
+    if (taxConfig.manual_removed_ufs.indexOf(normalizedUf) !== -1) {
+      taxConfig.manual_removed_ufs = taxConfig.manual_removed_ufs.filter(function (item) {
+        return normalizeTaxUf(item) !== normalizedUf;
+      });
     }
+    if (taxConfig.manual_added_ufs.indexOf(normalizedUf) === -1) {
+      taxConfig.manual_added_ufs.push(normalizedUf);
+    }
+    applyTaxManualAdjustments();
     return true;
   }
 
-  function removeTaxDestinationUf(tempTable, uf) {
-    var taxConfig = ensureTaxConfigShell(tempTable);
+  function removeTaxDestinationUf(uf) {
+    var taxConfig = ensureGlobalTaxConfigShell();
     var normalizedUf = normalizeTaxUf(uf);
     if (!normalizedUf) return;
-    taxConfig.destination_ufs = taxConfig.destination_ufs.filter(function (item) {
-      return !item || normalizeTaxUf(item.uf) !== normalizedUf;
-    });
-    if (taxConfig.origin_uf) {
-      taxConfig.icms_rates = buildIcmsRatesForOrigin(
-        tempTable,
-        taxConfig.origin_uf,
-        taxConfig.icms_rates.filter(function (rate) {
-          return normalizeTaxUf(rate.destination_uf) !== normalizedUf;
-        }),
-        taxConfig.destination_ufs
-      );
-    } else {
-      taxConfig.icms_rates = [];
+    if (taxConfig.manual_added_ufs.indexOf(normalizedUf) !== -1) {
+      taxConfig.manual_added_ufs = taxConfig.manual_added_ufs.filter(function (item) {
+        return normalizeTaxUf(item) !== normalizedUf;
+      });
+    } else if (taxConfig.manual_removed_ufs.indexOf(normalizedUf) === -1) {
+      taxConfig.manual_removed_ufs.push(normalizedUf);
     }
+    applyTaxManualAdjustments();
   }
 
   function renderTaxOption(container, id, label, checked, onChange) {
@@ -6531,6 +9406,11 @@ function renderDocumentItem(doc) {
     var fields = document.createElement('div');
     fields.className = 'agente-compara-tax-fields';
 
+    var commonTitle = document.createElement('p');
+    commonTitle.className = 'agente-compara-tax-section-label';
+    commonTitle.textContent = 'Parâmetros comuns do cenário';
+    fields.appendChild(commonTitle);
+
     var ufSelect = document.createElement('select');
     ufSelect.className = 'form-control agente-compara-tax-input';
     ufSelect.id = 'agenteComparaTaxOriginUf';
@@ -6542,11 +9422,13 @@ function renderDocumentItem(doc) {
       var option = document.createElement('option');
       option.value = uf;
       option.textContent = uf;
-      option.selected = taxConfig.origin_uf === uf;
+      option.selected = taxScenarioCommon.origin_uf === uf;
       ufSelect.appendChild(option);
     });
     ufSelect.addEventListener('change', function () {
-      setTaxOriginUf(currentTempTable, ufSelect.value);
+      taxScenarioCommon.origin_uf = normalizeTaxUf(ufSelect.value);
+      applyTaxScenarioCommonToGlobalTaxConfig();
+      markTaxConfigDirty();
       renderTempTableModalContent(currentTempTable);
       updateTempTableModalFooter();
     });
@@ -6556,9 +9438,11 @@ function renderDocumentItem(doc) {
     cityInput.type = 'text';
     cityInput.className = 'form-control agente-compara-tax-input';
     cityInput.id = 'agenteComparaTaxOriginCity';
-    cityInput.value = taxConfig.origin_city || '';
+    cityInput.value = taxScenarioCommon.origin_city || '';
     cityInput.addEventListener('input', function () {
-      ensureTaxConfigShell(currentTempTable).origin_city = cityInput.value;
+      taxScenarioCommon.origin_city = cityInput.value;
+      applyTaxScenarioCommonToGlobalTaxConfig();
+      markTaxConfigDirty();
     });
     renderTaxField(fields, 'Cidade origem', cityInput);
 
@@ -6568,9 +9452,11 @@ function renderDocumentItem(doc) {
     issInput.min = '0';
     issInput.className = 'form-control agente-compara-tax-input';
     issInput.id = 'agenteComparaTaxIssRate';
-    issInput.value = taxConfig.iss_rate === null || taxConfig.iss_rate === undefined ? '' : String(taxConfig.iss_rate);
+    issInput.value = taxScenarioCommon.iss_rate === null || taxScenarioCommon.iss_rate === undefined ? '' : String(taxScenarioCommon.iss_rate);
     issInput.addEventListener('input', function () {
-      ensureTaxConfigShell(currentTempTable).iss_rate = parseTaxRateInput(issInput.value);
+      taxScenarioCommon.iss_rate = parseTaxRateInput(issInput.value);
+      applyTaxScenarioCommonToGlobalTaxConfig();
+      markTaxConfigDirty();
     });
     renderTaxField(fields, 'ISS (%)', issInput);
 
@@ -6581,16 +9467,15 @@ function renderDocumentItem(doc) {
     container.appendChild(fields);
   }
 
-  function renderDestinationUfsSection(container, tempTable, taxConfig) {
-    syncTaxDestinationUfs(tempTable);
+  function renderDestinationUfsSection(container, taxConfig) {
     var section = document.createElement('div');
     section.className = 'agente-compara-tax-destination-ufs';
 
     var status = document.createElement('p');
     status.className = 'agente-compara-tax-hint';
     status.textContent = taxConfig.destination_ufs.length
-      ? 'UFs destino identificadas automaticamente. Revise, adicione ou remova antes de continuar.'
-      : 'Nenhuma UF destino foi identificada automaticamente. Informe as UFs destino para montar a matriz de ICMS.';
+      ? 'UFs de destino identificadas nas tabelas selecionadas. Revise, adicione ou remova antes de continuar.'
+      : 'Nenhuma UF de destino foi identificada nas tabelas selecionadas.';
     section.appendChild(status);
 
     var controls = document.createElement('div');
@@ -6616,7 +9501,8 @@ function renderDocumentItem(doc) {
     addBtn.className = 'btn btn-secondary agente-compara-tax-add-uf-btn';
     addBtn.textContent = 'Adicionar';
     addBtn.addEventListener('click', function () {
-      if (!addManualTaxDestinationUf(currentTempTable, ufSelect.value)) return;
+      if (!addManualTaxDestinationUf(ufSelect.value)) return;
+      markTaxConfigDirty();
       renderTempTableModalContent(currentTempTable);
       updateTempTableModalFooter();
     });
@@ -6658,7 +9544,8 @@ function renderDocumentItem(doc) {
       removeBtn.className = 'btn btn-link agente-compara-tax-remove-uf-btn';
       removeBtn.textContent = 'Remover';
       removeBtn.addEventListener('click', function () {
-        removeTaxDestinationUf(currentTempTable, entry.uf);
+        removeTaxDestinationUf(entry.uf);
+        markTaxConfigDirty();
         renderTempTableModalContent(currentTempTable);
         updateTempTableModalFooter();
       });
@@ -6720,13 +9607,14 @@ function renderDocumentItem(doc) {
       input.className = 'form-control agente-compara-tax-rate-input';
       input.value = rate.applied_rate === null || rate.applied_rate === undefined ? '' : String(rate.applied_rate);
       input.addEventListener('input', function () {
-        var tax = ensureTaxConfigShell(currentTempTable);
+        var tax = ensureGlobalTaxConfigShell();
         var row = tax.icms_rates[index];
         if (!row) return;
         var parsed = parseTaxRateInput(input.value);
         row.applied_rate = parsed;
         row.is_active = parsed !== null;
         row.user_edited = !taxRatesEqual(parsed, row.suggested_rate);
+        markTaxConfigDirty();
       });
       rateCell.appendChild(input);
       tr.appendChild(rateCell);
@@ -6739,7 +9627,7 @@ function renderDocumentItem(doc) {
       checkbox.type = 'checkbox';
       checkbox.checked = !!rate.is_active;
       checkbox.addEventListener('change', function () {
-        var tax = ensureTaxConfigShell(currentTempTable);
+        var tax = ensureGlobalTaxConfigShell();
         var row = tax.icms_rates[index];
         if (!row) return;
         row.is_active = checkbox.checked;
@@ -6750,6 +9638,7 @@ function renderDocumentItem(doc) {
           row.applied_rate = row.suggested_rate;
           row.user_edited = false;
         }
+        markTaxConfigDirty();
         renderTempTableModalContent(currentTempTable);
       });
       activeCell.appendChild(checkbox);
@@ -6762,10 +9651,13 @@ function renderDocumentItem(doc) {
   }
 
   function renderTaxTabContent(container, tempTable) {
-    appendSectionTitle(container, 'Impostos no cálculo do frete');
+    appendSectionTitle(container, 'Impostos do cenário');
     var section = document.createElement('div');
     section.className = 'agente-compara-temp-table-modal-section agente-compara-tax-section';
-    var taxConfig = ensureTaxConfigShell(tempTable);
+    initGlobalTaxConfigFromState();
+    var taxConfig = ensureGlobalTaxConfigShell();
+    applyTaxScenarioCommonToGlobalTaxConfig();
+    renderTaxConfigFields(section, tempTable, taxConfig);
 
     var question = document.createElement('p');
     question.className = 'agente-compara-tax-question';
@@ -6775,88 +9667,136 @@ function renderDocumentItem(doc) {
     var options = document.createElement('div');
     options.className = 'agente-compara-tax-options';
     renderTaxOption(options, 'agenteComparaTaxNo', 'Não incluir impostos', taxConfig.include_taxes === false, function () {
-      var tax = ensureTaxConfigShell(currentTempTable);
+      var tax = ensureGlobalTaxConfigShell();
       tax.include_taxes = false;
-      tax.origin_uf = '';
-      tax.origin_city = '';
-      tax.iss_rate = null;
+      tax.selected_table_ids = [];
       tax.destination_ufs = [];
       tax.icms_rates = [];
+      taxSelectedTableIds = new Set();
+      applyTaxScenarioCommonToGlobalTaxConfig();
+      markTaxConfigDirty();
       renderTempTableModalContent(currentTempTable);
       updateTempTableModalFooter();
     });
     renderTaxOption(options, 'agenteComparaTaxYes', 'Incluir impostos', taxConfig.include_taxes === true, function () {
-      var tax = ensureTaxConfigShell(currentTempTable);
+      var tax = ensureGlobalTaxConfigShell();
       tax.include_taxes = true;
-      syncTaxDestinationUfs(currentTempTable, { forceRefresh: !tax.destination_ufs.length });
-      if (tax.origin_uf) {
-        tax.icms_rates = buildIcmsRatesForOrigin(currentTempTable, tax.origin_uf, tax.icms_rates, tax.destination_ufs);
-      }
+      applyTaxScenarioCommonToGlobalTaxConfig();
+      applyTaxManualAdjustments();
+      markTaxConfigDirty();
       renderTempTableModalContent(currentTempTable);
       updateTempTableModalFooter();
     });
     section.appendChild(options);
 
     if (taxConfig.include_taxes === true) {
-      renderTaxConfigFields(section, tempTable, taxConfig);
-      renderDestinationUfsSection(section, tempTable, taxConfig);
+      renderTaxCarrierCheckboxes(section);
+      applyTaxManualAdjustments();
+      renderDestinationUfsSection(section, taxConfig);
       renderIcmsRatesTable(section, taxConfig);
     }
     container.appendChild(section);
   }
 
-  function collectTaxConfigSavePayload() {
-    if (!currentTempTable || !currentTempTable.temp_table_id) return null;
-    var taxConfig = ensureTaxConfigShell(currentTempTable);
+  function collectGlobalTaxConfigPayload() {
+    var taxConfig = ensureGlobalTaxConfigShell();
+    applyTaxScenarioCommonToGlobalTaxConfig();
     if (taxConfig.include_taxes !== true && taxConfig.include_taxes !== false) {
       setTempTableModalError('Escolha se deseja incluir impostos no cálculo do frete.');
       return null;
     }
-    if (taxConfig.include_taxes === false) {
-      return {
-        temp_table_id: currentTempTable.temp_table_id,
-        edit_target: { tax_config: { include_taxes: false } },
-        review_action: 'save_draft'
-      };
-    }
-    var originUf = normalizeTaxUf(taxConfig.origin_uf);
-    if (!originUf) {
-      setTempTableModalError('UF origem é obrigatória para incluir impostos.');
-      return null;
-    }
-    var issRate = parseTaxRateInput(taxConfig.iss_rate);
-    var originCity = String(taxConfig.origin_city || '').trim();
-    if (issRate !== null && !originCity) {
+    var commonOriginUf = normalizeTaxUf(taxScenarioCommon.origin_uf);
+    var commonOriginCity = String(taxScenarioCommon.origin_city || '').trim();
+    var commonIssRate = parseTaxRateInput(taxScenarioCommon.iss_rate);
+    if (commonIssRate !== null && !commonOriginCity) {
       setTempTableModalError('Cidade origem é obrigatória quando ISS estiver preenchido.');
       return null;
     }
-    syncTaxDestinationUfs(currentTempTable);
-    return {
-      temp_table_id: currentTempTable.temp_table_id,
-      edit_target: {
+    var selectedIds = collectSelectedTaxTableIds();
+    if (taxConfig.include_taxes === true && !selectedIds.length) {
+      setTempTableModalError('Selecione ao menos uma transportadora.');
+      return null;
+    }
+    if (taxConfig.include_taxes === false) {
+      return {
+        comparison_id: comparisonState.comparisonId,
         tax_config: {
-          include_taxes: true,
-          origin_uf: originUf,
-          origin_city: originCity || null,
-          iss_rate: issRate,
-          destination_ufs: deepCloneTempTable(taxConfig.destination_ufs) || [],
-          icms_rates: deepCloneTempTable(taxConfig.icms_rates) || []
+          include_taxes: false,
+          origin_uf: commonOriginUf || null,
+          origin_city: commonOriginCity || null,
+          iss_rate: commonIssRate,
+          selected_table_ids: [],
+          destination_ufs: [],
+          icms_rates: [],
+          manual_added_ufs: [],
+          manual_removed_ufs: []
         }
-      },
-      review_action: 'save_draft'
+      };
+    }
+    if (!commonOriginUf) {
+      setTempTableModalError('UF origem é obrigatória para incluir impostos.');
+      return null;
+    }
+    applyTaxManualAdjustments();
+    var icmsRates = taxConfig.icms_rates || [];
+    for (var rateIndex = 0; rateIndex < icmsRates.length; rateIndex++) {
+      var activeRow = icmsRates[rateIndex];
+      if (!activeRow || !activeRow.is_active) continue;
+      if (activeRow.applied_rate === null || activeRow.applied_rate === undefined || activeRow.applied_rate === '') {
+        setTempTableModalError('Informe a alíquota aplicada para cada UF marcada para uso no cálculo.');
+        return null;
+      }
+    }
+    return {
+      comparison_id: comparisonState.comparisonId,
+      tax_config: {
+        include_taxes: true,
+        origin_uf: commonOriginUf,
+        origin_city: commonOriginCity || null,
+        iss_rate: commonIssRate,
+        selected_table_ids: selectedIds,
+        destination_ufs: deepCloneValue(taxConfig.destination_ufs) || [],
+        icms_rates: deepCloneValue(taxConfig.icms_rates) || [],
+        manual_added_ufs: deepCloneValue(taxConfig.manual_added_ufs) || [],
+        manual_removed_ufs: deepCloneValue(taxConfig.manual_removed_ufs) || []
+      }
     };
   }
 
-  function saveTaxConfigAndContinue() {
-    if (!currentTempTable || taxSaveInFlight) return;
-    var payload = collectTaxConfigSavePayload();
-    if (!payload) return;
+  function handleGlobalTaxConfigSaveResponse(res) {
+    if (!res.data || res.data.ok !== true) {
+      setTempTableModalError(res.data || 'Não foi possível salvar a configuração fiscal.');
+      return false;
+    }
+    if (res.data.comparison) {
+      syncComparisonStateFromPayload(res.data.comparison);
+    }
+    if (res.data.tax_config) {
+      restoreGlobalTaxConfig(res.data.tax_config);
+    }
+    if (typeof res.data.can_advance_to_coverage === 'boolean') {
+      comparisonState.canAdvanceToCoverage = res.data.can_advance_to_coverage;
+    }
+    taxConfigDirty = false;
+    return true;
+  }
+
+  function saveGlobalTaxConfig(options) {
+    options = options || {};
+    if (taxSaveInFlight && !options.partOfContinueFlow) {
+      return Promise.resolve({ ok: false, inFlight: true });
+    }
+    var payload = collectGlobalTaxConfigPayload();
+    if (!payload) {
+      return Promise.resolve({ ok: false, validationFailed: true });
+    }
     taxSaveInFlight = true;
-    tempTableSaveInFlight = true;
-    setTempTableModalError('');
+    if (!options.partOfContinueFlow) {
+      setTempTableModalError('');
+    }
     updateTempTableModalFooter();
 
-    fetch(API_TEMP_TABLE_SAVE, {
+    return fetch(API_COMPARISON_TAXES, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
@@ -6868,28 +9808,150 @@ function renderDocumentItem(doc) {
         });
       })
       .then(function (res) {
+        var saved = handleGlobalTaxConfigSaveResponse(res);
+        var result = {
+          ok: saved,
+          status: res.status,
+          comparison: res.data && res.data.comparison,
+          tax_config: res.data && res.data.tax_config,
+          can_advance_to_coverage: res.data && res.data.can_advance_to_coverage
+        };
+        if (saved && !options.partOfContinueFlow) {
+          renderTempTableModalContent(currentTempTable);
+          fetchDocuments();
+        }
+        return result;
+      })
+      .catch(function () {
+        setTempTableModalError('Não foi possível salvar a configuração fiscal. Verifique sua conexão e tente novamente.');
+        return { ok: false, networkError: true };
+      })
+      .finally(function () {
+        if (!options.partOfContinueFlow) {
+          taxSaveInFlight = false;
+          updateTempTableModalFooter();
+        }
+      });
+  }
+
+  function advanceTaxesToCoverage(options) {
+    options = options || {};
+    if ((taxSaveInFlight || tempTableSaveInFlight || taxContinueInFlight) && !options.partOfContinueFlow) {
+      return Promise.resolve({ ok: false, inFlight: true });
+    }
+    if (!options.skipPreconditions) {
+      if (taxConfigDirty) {
+        setTempTableModalError('Salve a configuração de impostos antes de continuar.');
+        return Promise.resolve({ ok: false, preconditionFailed: true });
+      }
+      if (!comparisonState.canAdvanceToCoverage) {
+        setTempTableModalError('Salve a configuração de impostos do cenário antes de continuar.');
+        return Promise.resolve({ ok: false, preconditionFailed: true });
+      }
+    }
+    if (!currentTempTable || !currentTempTable.temp_table_id) {
+      setTempTableModalError('Nenhuma tabela temporária ativa nesta sessão.');
+      return Promise.resolve({ ok: false, validationFailed: true });
+    }
+    if (!options.partOfContinueFlow) {
+      taxSaveInFlight = true;
+      tempTableSaveInFlight = true;
+      setTempTableModalError('');
+      updateTempTableModalFooter();
+    }
+
+    return fetch(API_TEMP_TABLE_SAVE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        temp_table_id: currentTempTable.temp_table_id,
+        comparison_id: comparisonState.comparisonId,
+        table_id: comparisonState.activeTableId,
+        review_action: 'advance_to_coverage'
+      })
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { status: r.status, data: data };
+        });
+      })
+      .then(function (res) {
         if (!res.data || res.data.ok !== true) {
-          setTempTableModalError(res.data || 'Não foi possível salvar a configuração fiscal.');
-          return;
+          setTempTableModalError(res.data || 'Não foi possível avançar para cidades.');
+          return { ok: false, status: res.status, data: res.data };
         }
         if (res.data.temp_table) {
           setCurrentTempTable(res.data.temp_table);
         }
-        taxStepActive = false;
-        coverageStepActive = true;
-        tempTableModalActiveTab = 'coverage';
-        renderTempTableModalContent(currentTempTable);
-        updateTempTableModalFooter();
+        if (res.data.comparison) {
+          syncComparisonStateFromPayload(res.data.comparison);
+        } else if (res.data.temp_table && res.data.temp_table.comparison) {
+          syncComparisonStateFromPayload(res.data.temp_table.comparison);
+        }
+        if (isComparisonCommonParamsStep('COVERAGE')) {
+          activateComparisonCommonParamsStep('COVERAGE');
+        } else {
+          taxStepActive = false;
+          coverageStepActive = true;
+          tempTableModalActiveTab = 'coverage';
+          renderTempTableModalContent(currentTempTable);
+          updateTempTableModalFooter();
+        }
         fetchDocuments();
+        return { ok: true, status: res.status, data: res.data };
       })
       .catch(function () {
-        setTempTableModalError('Não foi possível salvar a configuração fiscal. Verifique sua conexão e tente novamente.');
+        setTempTableModalError('Não foi possível avançar para cidades. Verifique sua conexão e tente novamente.');
+        return { ok: false, networkError: true };
       })
       .finally(function () {
+        if (!options.partOfContinueFlow) {
+          taxSaveInFlight = false;
+          tempTableSaveInFlight = false;
+          updateTempTableModalFooter();
+        }
+      });
+  }
+
+  function saveTaxesAndAdvanceToCoverage() {
+    if (taxContinueInFlight || taxSaveInFlight || tempTableSaveInFlight) return;
+    taxContinueInFlight = true;
+    taxSaveInFlight = true;
+    tempTableSaveInFlight = true;
+    setTempTableModalError('');
+    updateTempTableModalFooter();
+
+    var needsSave = taxConfigDirty || !comparisonState.canAdvanceToCoverage;
+    var chain = needsSave
+      ? saveGlobalTaxConfig({ partOfContinueFlow: true }).then(function (saveResult) {
+        if (!saveResult.ok) {
+          return Promise.reject('save_failed');
+        }
+        if (!comparisonState.canAdvanceToCoverage) {
+          setTempTableModalError('Não foi possível confirmar a configuração fiscal para continuar.');
+          return Promise.reject('cannot_advance');
+        }
+      })
+      : Promise.resolve();
+
+    chain
+      .then(function () {
+        return advanceTaxesToCoverage({ partOfContinueFlow: true, skipPreconditions: true });
+      })
+      .catch(function () {
+        /* erros já tratados nas etapas anteriores */
+      })
+      .finally(function () {
+        taxContinueInFlight = false;
         taxSaveInFlight = false;
         tempTableSaveInFlight = false;
         updateTempTableModalFooter();
       });
+  }
+
+  function saveTaxConfigAndContinue() {
+    saveTaxesAndAdvanceToCoverage();
   }
 
   function renderCoverageUploadHint(container) {
@@ -7094,6 +10156,17 @@ function renderDocumentItem(doc) {
     if (!body) return;
     body.innerHTML = '';
 
+    if (isComparisonConfigurationReady()) {
+      prepareConfigurationReviewRender();
+      renderTempTableModalTabs(body, tempTable);
+      var reviewPanel = document.createElement('div');
+      reviewPanel.className = 'agente-compara-temp-table-modal-tab-panel';
+      reviewPanel.setAttribute('data-configuration-review-tab', configurationReviewTab || '');
+      renderConfigurationReviewContent(reviewPanel);
+      body.appendChild(reviewPanel);
+      return;
+    }
+
     if (!tempTable) {
       var noData = document.createElement('p');
       noData.className = 'agente-compara-temp-table-modal-empty';
@@ -7138,10 +10211,26 @@ function renderDocumentItem(doc) {
   }
 
   function openTempTableModal() {
+    if (isComparisonWizardFlowActive()) {
+      if (!isComparisonWizardEngaged()) {
+        markComparisonWizardEngaged();
+      }
+      openComparisonWizardModal();
+      return;
+    }
     var modal = byId('agenteComparaTempTableModal');
     if (!modal) return;
+    tempTableSaveInFlight = false;
     clearTempTableValidationErrors();
     setTempTableModalError('');
+    if (isComparisonConfigurationReady()) {
+      // Reabertura na mesma sessão: reconstruir abas e abrir na 1ª transportadora.
+      ensureConfigurationReviewDefaults({ forceFirstCarrier: true });
+      selectConfigurationReviewTab(configurationReviewTab, { preferCache: true });
+      modal.hidden = false;
+      document.body.classList.add('agente-compara-temp-table-modal-open');
+      return;
+    }
     renderTempTableModalContent(currentTempTable);
     updateTempTableModalFooter();
     modal.hidden = false;
@@ -7157,19 +10246,41 @@ function renderDocumentItem(doc) {
     modal.hidden = true;
     document.body.classList.remove('agente-compara-temp-table-modal-open');
     resetFreightTableOpenState();
+    tempTableSaveInFlight = false;
     tempTableEditMode = false;
     tempTableEditSnapshot = null;
     clearTempTableValidationErrors();
     setTempTableModalError('');
     updateTempTableModalFooter();
+    if (isComparisonWizardFlowActive()) {
+      comparisonWizardModalSuppressed = true;
+    }
     if (lastTempTableCardButton && typeof lastTempTableCardButton.focus === 'function') {
       lastTempTableCardButton.focus();
     }
   }
 
+  function handleTempTableModalSaveClick(event) {
+    if (event && (tempTableSaveInFlight || taxContinueInFlight)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (tempTableModalActiveTab === 'taxes' && shouldShowTaxTab(currentTempTable)) {
+      saveTaxConfigAndContinue();
+      return;
+    }
+    if (tempTableModalActiveTab === 'coverage' && shouldShowCoverageTab(currentTempTable)) {
+      saveCoverageTableEdit();
+      return;
+    }
+    saveTempTableAndAdvance();
+  }
+
   function initTempTableModal() {
     var modal = byId('agenteComparaTempTableModal');
     var saveBtn = byId('agenteComparaTempTableModalSave');
+    var taxSaveBtn = byId('agenteComparaTempTableModalTaxSave');
     var editBtn = byId('agenteComparaTempTableModalEdit');
     var startAuditBtn = byId('agenteComparaTempTableModalStartAudit');
     var closeBtn = byId('agenteComparaTempTableModalClose');
@@ -7177,17 +10288,19 @@ function renderDocumentItem(doc) {
     var backdrop = byId('agenteComparaTempTableModalBackdrop');
     if (!modal) return;
 
-    if (saveBtn) {
-      saveBtn.addEventListener('click', function () {
-        if (tempTableModalActiveTab === 'taxes' && shouldShowTaxTab(currentTempTable)) {
-          saveTaxConfigAndContinue();
+    if (saveBtn && !saveBtn.dataset.agenteComparaSaveBound) {
+      saveBtn.dataset.agenteComparaSaveBound = '1';
+      saveBtn.addEventListener('click', handleTempTableModalSaveClick);
+    }
+    if (taxSaveBtn && !taxSaveBtn.dataset.agenteComparaTaxSaveBound) {
+      taxSaveBtn.dataset.agenteComparaTaxSaveBound = '1';
+      taxSaveBtn.addEventListener('click', function (event) {
+        if (event && (tempTableSaveInFlight || taxSaveInFlight)) {
+          event.preventDefault();
+          event.stopPropagation();
           return;
         }
-        if (tempTableModalActiveTab === 'coverage' && shouldShowCoverageTab(currentTempTable)) {
-          saveCoverageTableEdit();
-          return;
-        }
-        saveTempTableAndAdvance();
+        saveGlobalTaxConfig();
       });
     }
     if (editBtn) {
@@ -7233,8 +10346,17 @@ function renderDocumentItem(doc) {
     if (uploadItem) {
       uploadItem.addEventListener('click', function (e) {
         e.preventDefault();
-        if (uploadInFlight) return;
+        if (
+          uploadInFlight ||
+          freightUploadPreparationInFlight ||
+          pendingFreightTableUpload ||
+          isCarrierIdentificationOpen()
+        ) {
+          return;
+        }
+        if (comparisonStartPromise) return;
         closeActionsMenu();
+        // Chooser abre no gesto do usuário; start ocorre após seleção do arquivo.
         fileInput.click();
       });
     }
@@ -7243,14 +10365,50 @@ function renderDocumentItem(doc) {
       var file = fileInput.files && fileInput.files[0];
       fileInput.value = '';
       if (!file) return;
-      uploadDocument(file);
+      beginPendingFreightTableUpload(file);
     });
 
     if (clearBtn) {
       clearBtn.addEventListener('click', function () {
-        clearAllDocuments();
+        requestRestartComparison();
       });
     }
+
+    var clearSlotBtn = byId('agenteComparaTempTableModalClearSlot');
+    if (clearSlotBtn) {
+      clearSlotBtn.addEventListener('click', function () {
+        clearActiveSlotDocuments();
+      });
+    }
+
+    var resetCancel = byId('agenteComparaResetConfirmCancel');
+    var resetSubmit = byId('agenteComparaResetConfirmSubmit');
+    var resetBackdrop = byId('agenteComparaResetConfirmBackdrop');
+    if (resetCancel) {
+      resetCancel.addEventListener('click', function () {
+        if (comparisonResetInFlight) return;
+        closeResetConfirmModal();
+      });
+    }
+    if (resetSubmit) {
+      resetSubmit.addEventListener('click', function () {
+        executeComparisonReset();
+      });
+    }
+    if (resetBackdrop) {
+      resetBackdrop.addEventListener('click', function () {
+        if (comparisonResetInFlight) return;
+        closeResetConfirmModal();
+      });
+    }
+    document.addEventListener('keydown', function (e) {
+      var resetModal = byId('agenteComparaResetConfirmModal');
+      if (e.key === 'Escape' && resetModal && !resetModal.hidden) {
+        if (comparisonResetInFlight) return;
+        e.stopPropagation();
+        closeResetConfirmModal();
+      }
+    });
 
     fetchDocuments();
   }
@@ -7283,8 +10441,10 @@ function renderDocumentItem(doc) {
     });
 
     initDocuments();
+    initCarrierIdentificationPanel();
     initTempTableModal();
     initChat();
+    restoreComparisonCalculationFromStatus();
   }
 
   if (document.readyState === 'loading') {

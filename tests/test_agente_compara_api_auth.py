@@ -65,10 +65,13 @@ def _authorized(monkeypatch, web, *, authz=None):
     )
 
 
-def _upload(client, filename: str, content: bytes, mime: str = "text/csv"):
+def _upload(client, filename: str, content: bytes, mime: str = "text/csv", *, carrier_name: str = "Transportadora Teste"):
     return client.post(
         "/api/agente-compara/documents/upload",
-        data={"file": (io.BytesIO(content), filename, mime)},
+        data={
+            "file": (io.BytesIO(content), filename, mime),
+            "carrier_name": carrier_name,
+        },
         content_type="multipart/form-data",
     )
 
@@ -80,6 +83,8 @@ _OPERATIONAL_ENDPOINTS = (
     ("POST", "/api/agente-compara/audit/upload"),
     ("POST", "/api/agente-compara/audit/run"),
     ("POST", "/api/agente-compara/audit-chat"),
+    ("POST", "/api/agente-compara/comparison/reset"),
+    ("POST", "/api/agente-compara/comparison/start"),
 )
 
 

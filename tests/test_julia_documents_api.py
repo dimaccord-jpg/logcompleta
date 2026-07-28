@@ -130,10 +130,13 @@ def _upload_cleide(client, filename: str, content: bytes, mime: str = "text/plai
     )
 
 
-def _upload_ac(client, filename: str, content: bytes, mime: str = "text/csv"):
+def _upload_ac(client, filename: str, content: bytes, mime: str = "text/csv", *, carrier_name: str = "Transportadora Teste"):
     return client.post(
         "/api/agente-compara/documents/upload",
-        data={"file": (io.BytesIO(content), filename, mime)},
+        data={
+            "file": (io.BytesIO(content), filename, mime),
+            "carrier_name": carrier_name,
+        },
         content_type="multipart/form-data",
     )
 

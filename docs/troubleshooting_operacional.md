@@ -1,212 +1,154 @@
 # Troubleshooting Operacional
 
-Data de consolidacao: `2026-07-10`
-Commit de referência: `6701a53`
+Data de consolidação: `2026-07-20`
+Fotografia principal auditada no repositório local: `c2575f8`
 
-## 1. Home publica sem responder
+## 1. Home pública sem responder
 
 Validar:
 
 1. `POST /api/onboarding_discovery`
-2. disponibilidade das chaves Gemini de discovery
+2. chaves Gemini de discovery
 3. fallback local do discovery
 
-Se Gemini falhar, o Copilot ainda deve responder via fallback local.
-
-## 2. Home logada nao mostra a Julia corretamente
+## 2. Home logada não mostra a Júlia corretamente
 
 Comportamento esperado:
 
-- usuario anonimo: Copilot de discovery na Home
-- usuario logado: Julia operacional na Home
-- `/chat_julia?mode=operational`: rota dedicada de acesso direto e handoff
+- usuário anônimo: Copilot de discovery
+- usuário logado: Júlia operacional na Home
+- `/chat_julia?mode=operational`: rota dedicada
 
-Se a Home logada regredir para discovery puro, tratar como regressao.
-
-## 3. Handoff para Julia nao acontece
+## 3. Handoff e login com `next` falham
 
 Conferir:
 
-1. atividade-fim estrategica do pedido
-2. `app/copilot_capabilities.md`
-3. payload com `destination = "julia_operational"`
-4. renderizacao das acoes em `app/static/js/chat_behavior.js`
+1. `app/copilot_capabilities.md`
+2. `app/capability_taxonomy.py`
+3. `_safe_next_redirect`
+4. `tests/test_auth_next_redirect.py`
 
-## 4. Upload documental da Julia falha
+## 4. Upload documental da Júlia falha
 
 Conferir:
 
-1. login do usuario
+1. login do usuário
 2. `avaliar_autorizacao_operacao_por_franquia`
 3. `upload_enabled`
-4. limite de sessao e de arquivo
-5. tipo aceito `.txt,.xml,.csv,.xlsx,.docx,.pdf`
-6. limpeza de expirados e TTL
+4. limite de sessão e de arquivo
+5. tipos suportados
+6. TTL e cleanup
 
-## 5. PDF parece lido quando nao deveria
+## 5. PDF parece lido quando não deveria
 
 Conferir:
 
 1. `app/cleiton_doc_gemini_files.py`
 2. `app/julia_doc_context.py`
-3. testes `test_julia_chat_documental.py` e `test_cleiton_doc_pdf_gemini.py`
+3. testes da Júlia e PDF
 
-Regra oficial:
-
-- nao fingir leitura de conteudo quando houver apenas placeholder
-- se nao encontrar informacao no PDF, a resposta deve deixar isso explicito
-
-## 6. Arquivos temporarios apareceram no Git
+## 6. Arquivos temporários apareceram no Git
 
 Conferir:
 
 1. `.gitignore`
-2. pasta `app/cleiton_doc_tmp/`
+2. `app/cleiton_doc_tmp/`
+3. `tt_*.json`
+4. `.cleanup_meta.json`
+5. `.db` locais
 
-Essa pasta e artefato local/temporario e nao deve ser versionada.
-
-## 7. Admin do Cleiton sem configuracao documental
+## 7. Health check do Render falha
 
 Conferir:
 
-1. rota/admin `agentes_cleiton`
-2. template `app/painel_admin/template_admin/agentes_cleiton.html`
-3. servico `app/services/cleiton_doc_config_service.py`
+1. `render.yaml`
+2. `app/web.py`
+3. rotas reais `/health/liveness` e `/health/readiness`
 
-Regra oficial:
+Há divergência conhecida porque o YAML versionado ainda aponta `healthCheckPath: /health`.
 
-- configuracao documental usa `ConfigRegras`
-- nao depende de migration nova
+## 8. Branch errada no Render
 
-## 8. Onboarding abatendo franquia
+Conferir:
+
+1. `render.yaml`
+2. painel do Render
+3. branch operacional realmente conectada ao serviço
+
+Há divergência conhecida porque o YAML versionado ainda aponta produção para `main`, enquanto o processo operacional informado usa `producao`.
+
+## 9. Onboarding abatendo franquia
 
 Isso continua incorreto.
 
 Conferir:
 
-1. `flow_type = "onboarding_discovery"`
-2. separacao de metricas no dashboard
-3. ausencia de apropriacao operacional indevida
+1. `flow_type = onboarding_discovery`
+2. dashboard admin
+3. `tests/test_ia_metrics_service.py`
 
-## 9. Tabela temporaria da Cleide nao aparece apos upload
+## 10. Tabela temporária da Cleide não aparece após upload
 
 Conferir:
 
 1. `POST /api/cleide-auditoria/documents/upload`
 2. `GET /api/cleide-auditoria/documents/status`
-3. `app/run_cleide_audit_temp_table.py`
-4. `app/cleide_audit_doc_service.py`
-5. `app/cleide_audit_prompt.py`
+3. `run_cleide_audit_temp_table.py`
+4. `cleide_audit_doc_service.py`
 
-Regra oficial:
-
-- a extracao acontece apos upload bem-sucedido
-- o chat da Cleide continua separado da extracao tecnica
-- Cleiton e o owner operacional da tabela temporaria
-- `temp_table` pode nao existir se a extracao falhar, expirar ou se os documentos fonte mudarem
-- a tabela pode voltar em `processing`, `failed`, `expired`, `discarded` ou outro estado tecnico do ciclo documental
-
-## 10. Revisao humana da tabela temporaria falhou
-
-Conferir:
-
-1. `POST /api/cleide-auditoria/temp-table/save`
-2. escopo de sessao, usuario e franquia do artefato ativo
-3. tamanho do payload enviado
-4. se a `temp_table` ainda existe e nao expirou
-
-Regra oficial:
-
-- a revisao humana e permitida apenas para a `temp_table` ativa da sessao
-- erro de escopo, expiracao ou `temp_table_id` divergente deve bloquear a operacao
-- o chat da Cleide nao substitui esse fluxo de revisao
-- a revisao humana nao deve ser tratada como nova conversa de IA
-
-## 11. Correcao assistida da auditoria falhou
-
-Conferir:
-
-1. `POST /api/cleide-auditoria/audit/correction/preview`
-2. `POST /api/cleide-auditoria/audit/correction/apply`
-3. `POST /api/cleide-auditoria/audit/correction/undo`
-4. `app/cleide_audit_correction_service.py`
-
-Regra oficial:
-
-- preview expira
-- apply so pode ocorrer sobre preview seguro
-- undo so desfaz a ultima aplicacao
-- a correcao assistida hoje cobre apenas diagnosticos suportados, especialmente `pricing_dimension_mismatch`
-
-## 12. Tabela temporaria sumiu depois de remover ou trocar documentos
-
-Comportamento esperado:
-
-- a tabela temporaria acompanha os documentos ativos da sessao
-- ao remover ou substituir documento fonte, a tabela anterior pode ser invalidada
-- o estado pode ir para `discarded` ou deixar de aparecer no payload publico
-
-Isso nao e regressao por si so. E o comportamento oficial do ciclo temporario governado.
-
-## 13. Chat da Cleide alterou a tabela temporaria
-
-Isso deve ser tratado como regressao.
-
-Conferir:
-
-1. se a alteracao ocorreu apos `POST /api/cleide-auditoria/chat`
-2. se houve novo upload, remocao ou limpeza documental
-3. se o payload de status mudou sem evento documental correspondente
-
-Regra oficial:
-
-- o chat consulta contexto documental
-- o chat nao deve recriar, alterar ou sobrescrever a tabela temporaria
-
-## 14. BI executivo da auditoria divergiu do contrato esperado
-
-Conferir:
-
-1. `app/templates/cleide_auditoria.html`
-2. `app/static/js/cleide_auditoria.js`
-3. `tests/test_cleide_auditoria_page.py`
-
-Contrato atual:
-
-- Impacto Financeiro por Transportadora
-- Impacto Financeiro por UF Destino
-- Evolucao do Impacto Financeiro no Periodo
-- Pareto do Valor Cobrado a Mais
-
-Se aparecer documentacao falando em 7 graficos, `UF origem`, `Volume por Transportadora`, `Pareto por UF`, `Divergencia Financeira por UF Destino` ou `Evolucao da Divergencia no Periodo` como contrato atual, tratar como documentacao obsoleta.
-
-## 15. Arquivos temporarios tecnicos apareceram no Git
-
-Conferir:
-
-1. `.gitignore`
-2. residuos `app/.tmp_repro_unit*`
-3. residuos `app/cleiton_doc_tmp/tt_*.json`
-4. `.cleanup_meta.json` e outros `.json` residuais em `app/cleiton_doc_tmp/`
-
-Regra oficial:
-
-- artefatos temporarios de teste e da `temp_table` nao devem ser versionados
-- `app/cleiton_doc_tmp/` esta coberto pelo `.gitignore`
-
-## 16. Chat analítico da Cleide continua bloqueado
+## 11. Chat analítico da Cleide continua bloqueado
 
 Conferir, nesta ordem:
 
-1. lote em estado `processed` e com resultado minimamente válido;
-2. `audit_bi.ready === true` e linhas disponíveis;
-3. clique em **Gerar Gráficos**;
-4. resposta de `POST /api/cleide-auditoria/audit-chat/unlock`;
-5. se o `batch_scope` ainda corresponde a `temp_table_id`, `audit_batch_id` e `processed_at`;
-6. autenticação e autorização por franquia.
+1. lote processado
+2. `audit_bi.ready`
+3. clique em gerar gráficos
+4. `POST /api/cleide-auditoria/audit-chat/unlock`
+5. `batch_scope`
+6. autenticação e autorização
 
-Não force `chatUnlocked` no JavaScript. O backend deve permanecer como autoridade do desbloqueio. Troca/reprocessamento de lote invalida o escopo anterior.
+## 12. Consumo de linhas da Cleide parece duplicado
 
-## 17. Consumo de linhas parece duplicado
+Correlacione `CleitonBillingApropriacao`, `ProcessingEvent`, `execution_id` e chave idempotente.
 
-Correlacione `CleitonBillingApropriacao`, `ProcessingEvent`, `execution_id` e a chave idempotente. O upload inicial usa `cleide_audit_batch_upload`; o primeiro processamento não emite `cleide_audit_batch_processed`. Este último só deve existir para reprocessamento explícito de lote obsoleto. Tokens do chat aparecem em `IaConsumoEvento` e não são segunda cobrança de linhas.
+## 13. Tabela temporária do Agente Compara não aparece após upload
+
+Conferir:
+
+1. `POST /api/agente-compara/documents/upload`
+2. `GET /api/agente-compara/documents/status`
+3. `run_agente_compara_temp_table.py`
+4. `agente_compara_doc_service.py`
+
+## 14. Chat analítico do Agente Compara continua bloqueado
+
+Conferir:
+
+1. lote processado
+2. BI válido
+3. `POST /api/agente-compara/audit-chat/unlock`
+4. `batch_scope`
+5. autenticação e autorização
+
+## 15. Consumo de linhas do Agente Compara parece duplicado
+
+Correlacione `CleitonBillingApropriacao`, `ProcessingEvent`, `execution_id` e chave idempotente próprias do namespace `agente-compara-`.
+
+## 16. Documento removido incorretamente entre agentes
+
+Conferir:
+
+1. `source_agent`
+2. `session_key`
+3. ownership antes da remoção física
+4. testes de isolamento de Júlia, Cleide e Agente Compara
+
+## 17. Cron falha por autenticação
+
+Conferir:
+
+1. header `X-Cron-Secret`
+2. valor de `CRON_SECRET`
+3. `tests/test_cron_auth.py`
+
+`?secret=` ainda existe apenas por compatibilidade temporária.

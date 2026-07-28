@@ -46,7 +46,31 @@ def test_agente_compara_template_uses_own_js_and_ids():
     assert 'id="agenteComparaActionsMenu"' in source
     assert 'id="agenteComparaInput"' in source
     assert 'id="agenteComparaSend"' in source
+    assert 'id="agenteComparaTablesPrepPanel"' not in source
+    assert "Continuar preparação das tabelas" not in source
+    assert "agente-compara-continue-prep-panel" not in source
+    assert 'data-typewriter-text="Faça o upload da tabela de frete."' in source
     assert "/api/cleide-auditoria" not in source
+    input_pos = source.index('class="agente-compara-input-area"')
+    docs_pos = source.index('id="agenteComparaDocumentsPanel"')
+    assert input_pos < docs_pos
+
+
+def test_agente_compara_template_save_button_starts_enabled_without_disabled_attr():
+    source = pathlib.Path("app/templates/agente_compara.html").read_text(encoding="utf-8")
+    button_start = source.index('id="agenteComparaTempTableModalSave"')
+    button_chunk = source[button_start - 120: button_start + 220]
+    assert 'type="button"' in button_chunk
+    assert 'disabled' not in button_chunk
+    assert 'aria-disabled' not in button_chunk
+
+
+def test_agente_compara_js_tax_cta_not_blocked_by_dirty_state():
+    js = pathlib.Path("app/static/js/agente_compara.js").read_text(encoding="utf-8")
+    footer_block = js[js.index("function updateTempTableModalFooter()"): js.index("function canEditFreightTables")]
+    assert "saveBtn.disabled = saveBtn.disabled || !comparisonState.canAdvanceToCoverage || taxConfigDirty" not in footer_block
+    assert "Salvando e continuando..." in footer_block
+    assert "function saveTaxesAndAdvanceToCoverage" in js
 
 
 def test_agente_compara_js_has_no_cleide_auditoria_api():
@@ -81,9 +105,62 @@ def test_agente_compara_not_in_base_html_main_nav():
     assert "agente_compara" not in base
 
 
+def test_agente_compara_page_initial_state_no_forced_wizard(monkeypatch):
+    """Página inicial não força wizard: modal fechado, sem botão de retomada."""
+    html = pathlib.Path("app/templates/agente_compara.html").read_text(encoding="utf-8")
+    js = pathlib.Path("app/static/js/agente_compara.js").read_text(encoding="utf-8")
+    assert "Continuar preparação das tabelas" not in html
+    assert "Continuar preparação das tabelas" not in js
+    assert 'id="agenteComparaTempTableModal"' in html
+    modal_start = html.index('id="agenteComparaTempTableModal"')
+    modal_chunk = html[modal_start: modal_start + 400]
+    assert "hidden" in modal_chunk
+    init_block = js[js.index("function initDocuments"): js.index("function init()")]
+    assert "openComparisonWizardModal()" not in init_block
+    assert "shouldAutoOpenComparisonWizard()" not in init_block
+    auto_block = js[js.index("function shouldAutoOpenComparisonWizard"): js.index("function maybeOpenComparisonWizardAfterStatus")]
+    assert "PREPARE_TABLE_2" not in auto_block
+    assert "ASK_TABLE_3" not in auto_block
+    assert "PREPARE_TABLE_3" not in auto_block
+    assert "comparisonWizardModalSuppressed" in auto_block
+
+
 def test_agente_compara_not_advertised_in_copilot_capabilities():
     caps = pathlib.Path("app/copilot_capabilities.md").read_text(encoding="utf-8")
     taxonomy = pathlib.Path("app/capability_taxonomy.py").read_text(encoding="utf-8")
     for token in ("agente-compara", "Compare Tabelas", "agente_compara"):
         assert token not in caps
         assert token not in taxonomy
+
+
+def test_agente_compara_calculation_file_summary_ui_contract():
+    """Etapa 5: resumo do arquivo + botão Processar Cálculos com wiring dedicado."""
+    js = pathlib.Path("app/static/js/agente_compara.js").read_text(encoding="utf-8")
+    html = pathlib.Path("app/templates/agente_compara.html").read_text(encoding="utf-8")
+
+    assert "function renderCalculationFileSummary" in js
+    assert "agenteComparaCalculationFileSummary" in js
+    assert "agenteComparaProcessCalculationsButton" in js
+    assert "Processar Cálculos" in js
+    assert "Arquivo recebido para comparação" in js
+    assert "Arquivo para Comparação" in js
+    assert "function processComparisonCalculations" in js
+    assert "comparisonCalculationInFlight" in js
+
+    assert "agente-compara-process-calculations-hint" in html
+    assert "agente-compara-run-btn.is-loading" in html
+    assert "agente-compara-comparison-calculation-scroll" in html
+
+    assert "cleideAuditRunButton" not in js
+    assert "Arquivo recebido para auditoria" not in js
+    assert "Processar auditoria" not in js
+    assert "Arquivo para auditoria" not in js
+    assert "/api/cleide-auditoria" not in js
+    assert "comparison/calculate" in js
+    process_fn = js[
+        js.index("function processComparisonCalculations") : js.index(
+            "function clearCalculationFileSummary"
+        )
+    ]
+    assert "API_AUDIT_RUN" not in process_fn
+    assert "runAuditProcessing" not in process_fn
