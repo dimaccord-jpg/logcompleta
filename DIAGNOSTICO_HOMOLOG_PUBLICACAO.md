@@ -1,31 +1,29 @@
-# Diagnóstico de Homologação e Publicação
+﻿# Diagnóstico de Homologação e Publicação
 
-Fotografia operacional consolidada em 2026-07-20:
+Referência auditada em 2026-07-28.
 
-- `homolog@c2575f8` auditado localmente;
-- produção promovida informada: `8edae63`;
-- backups informados: `backup/homolog-antes-agente-compara-20260720` e `backup/producao-antes-agente-compara-20260720`;
-- nenhuma migration, tabela ou coluna criada na entrega atual.
+## Estado consolidado
+
+- branch local auditada: `homolog`;
+- commits informados da entrega recente:
+  - `a6fccdc` - `feat: conclui melhorias e calculos do AgenteCompara`
+  - `2653ca2` - `merge: promove melhorias e calculos do AgenteCompara para producao`
+- nenhuma migration nova na entrega do AgenteCompara;
+- cadeia Alembic versionada mantida até `r2s3t4u5v6w7`.
 
 ## Go / No-Go
 
-No-Go se:
+No-Go se houver:
 
-- worktree contiver resíduo não inspecionado;
-- suite falhar;
-- migration necessária estiver ausente;
-- branch real do Render divergir do processo aprovado;
-- health check, autenticação, billing ou cron falharem.
+- falha de autenticação ou bloqueio de franquia não previsto;
+- inconsistência na jornada do AgenteCompara;
+- divergência não resolvida entre branch operacional e alvo real do Render;
+- falha de `db upgrade` no boot;
+- problema de health check, billing, observabilidade ou lock do cálculo.
 
 Go somente após:
 
-- validação da suite relevante;
+- validação da jornada crítica do AgenteCompara;
 - conferência de `/health/liveness` e `/health/readiness`;
-- login e `next`;
-- Júlia, Roberto, Cleide e Agente Compara;
-- billing e observabilidade;
-- inspeção de temporários e schema.
-
-## Branch e Render
-
-O processo operacional informado usa `homolog` e `producao`, mas o `render.yaml` versionado ainda contém produção em `main`. Tratar isso como divergência confirmada entre documentação versionada e processo informado, nunca como equivalência automática.
+- validação de logs e fluxos críticos pós-deploy;
+- confirmação da estratégia de branch usada pelo serviço de produção no Render.

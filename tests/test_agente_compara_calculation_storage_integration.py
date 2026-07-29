@@ -443,7 +443,7 @@ def test_frontend_billing_visibility_contract():
 
     js = Path("app/static/js/agente_compara.js").read_text(encoding="utf-8")
     assert "Finalizando processamento" in js
-    assert "Regularizar" in js
+    assert "Tentar novamente" in js
     assert "billing_status === 'applied'" in js or 'billing_status === "applied"' in js
     process_fn = js[
         js.index("function processComparisonCalculations") : js.index(

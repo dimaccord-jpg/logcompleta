@@ -331,7 +331,9 @@ def test_js_ensure_review_defaults_can_force_or_preserve_tab():
     ready_branch = activate[activate.index("step === 'CONFIGURATION_READY'"):]
     assert "forceFirstCarrier" in ready_branch
     open_block = js[js.index("function openTempTableModal"): js.index("function closeTempTableModal")]
-    assert "forceFirstCarrier: true" in open_block
+    assert "forceFirstCarrier" in open_block
+    assert "forceResultsTab" in open_block or "forceFirstCarrier: true" in open_block
+    assert "shouldEnableResultsReviewTab" in open_block
 
 
 def test_js_activate_configuration_ready_opens_first_carrier_not_audit():
@@ -395,7 +397,7 @@ def test_js_no_visual_arquivo_para_auditoria_in_bid():
 def test_js_footer_hides_actions_in_configuration_ready():
     js = _agente_compara_js()
     footer = js[js.index("function updateTempTableModalFooter()"): js.index("function canEditFreightTables")]
-    ready = footer[footer.index("isComparisonConfigurationReady()"): footer.index("if (wizardNonReview)")]
+    ready = footer[footer.index("isComparisonReviewMode()"): footer.index("if (wizardNonReview)")]
     assert "editBtn.hidden = true" in ready
     assert "saveBtn.hidden = true" in ready
     assert "taxSaveBtn.hidden = true" in ready
@@ -962,11 +964,14 @@ def test_file_substitution_updates_summary_metadata(web_client, monkeypatch):
     assert batch1["source_file_name"] == "arquivo_a.xlsx"
     assert batch1["row_count"] == 1
 
-    # Contrato visual: um único card/botão no JS (re-render limpa o anterior).
+    # Contrato visual: card único do arquivo; CTA pode existir no painel de confirmação/resultados,
+    # mas o re-render remove o anterior antes de recriar (mesmo id).
     js = _agente_compara_js()
     assert "clearCalculationFileSummary(container)" in js
     assert js.count("id = 'agenteComparaCalculationFileSummary'") == 1
-    assert js.count("id = 'agenteComparaProcessCalculationsButton'") == 1
+    assert "id = 'agenteComparaProcessCalculationsButton'" in js
+    assert "agenteComparaConfigurationReadyConfirmation" in js
+    assert "querySelector('#agenteComparaConfigurationReadyConfirmation')" in js
 
     # Reentrada em CALCULATION_FILE permite substituir o arquivo operacional.
     with web_client.session_transaction() as sess:

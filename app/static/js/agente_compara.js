@@ -33,9 +33,27 @@
     fingerprintShort: null,
     stale: false,
     result: null,
+    analytics: null,
     error: null,
     billingStatus: null
   };
+  var comparisonResultsUiState = {
+    page: 1,
+    pageSize: 50,
+    filters: {
+      documentNumber: '',
+      destinationUf: '',
+      destinationCity: '',
+      originUf: '',
+      originCity: '',
+      weightMin: '',
+      weightMax: '',
+      dateFrom: '',
+      dateTo: '',
+      status: 'all'
+    }
+  };
+  var comparisonResultChartInstances = [];
   var comparisonState = {
     comparisonId: null,
     currentStep: null,
@@ -60,6 +78,17 @@
     resetTaxStepState();
     resetCoveragePromptState();
     resetAuditFileStepState();
+    comparisonCalculationState = {
+      status: 'not_started',
+      executionId: null,
+      fingerprintShort: null,
+      stale: false,
+      result: null,
+      analytics: null,
+      error: null,
+      billingStatus: null
+    };
+    resetComparisonResultsUiState();
     lastAnnouncedTempTableStatus = null;
   }
 
@@ -627,6 +656,55 @@
     return isComparisonConfigurationReady() || isComparisonCalculationStep();
   }
 
+  function isComparisonReviewMode() {
+    return isComparisonPostConfigStep();
+  }
+
+  function shouldEnableResultsReviewTab() {
+    var step = comparisonState.currentStep || '';
+    var status = comparisonCalculationState.status || '';
+    if (
+      step === 'CALCULATION_RUNNING' ||
+      step === 'CALCULATION_READY' ||
+      step === 'CALCULATION_FAILED'
+    ) {
+      return true;
+    }
+    return (
+      status === 'CALCULATION_RUNNING' ||
+      status === 'CALCULATION_READY' ||
+      status === 'CALCULATION_FAILED' ||
+      comparisonCalculationInFlight
+    );
+  }
+
+  function resetComparisonResultsUiState() {
+    comparisonResultsUiState.page = 1;
+    comparisonResultsUiState.pageSize = 50;
+    comparisonResultsUiState.filters = {
+      documentNumber: '',
+      destinationUf: '',
+      destinationCity: '',
+      originUf: '',
+      originCity: '',
+      weightMin: '',
+      weightMax: '',
+      dateFrom: '',
+      dateTo: '',
+      status: 'all'
+    };
+    destroyComparisonResultCharts();
+  }
+
+  function destroyComparisonResultCharts() {
+    (comparisonResultChartInstances || []).forEach(function (chart) {
+      try {
+        if (chart && typeof chart.destroy === 'function') chart.destroy();
+      } catch (_err) { /* ignore */ }
+    });
+    comparisonResultChartInstances = [];
+  }
+
   function isComparisonConfigurationFlow() {
     return isComparisonCommonParamsStep() || isComparisonCalculationStep();
   }
@@ -805,20 +883,26 @@
 
   function ensureConfigurationReviewDefaults(options) {
     options = options || {};
-    if (!isComparisonConfigurationReady()) return;
+    if (!isComparisonReviewMode()) return;
     captureReviewSharedTempTable(currentTempTable);
     // Entrada/reabertura/refresh completo: 1ª transportadora.
     // Atualização soft com modal aberto: preserva a aba visual local.
     if (options.forceFirstCarrier || !configurationReviewTab) {
       configurationReviewTab = defaultConfigurationReviewTab();
     }
+    if (options.forceResultsTab && shouldEnableResultsReviewTab()) {
+      configurationReviewTab = 'results';
+    }
     tempTableModalActiveTab = 'configuration_review';
   }
 
   function prepareConfigurationReviewRender() {
-    if (!isComparisonConfigurationReady()) return;
+    if (!isComparisonReviewMode()) return;
     captureReviewSharedTempTable(currentTempTable);
     if (!configurationReviewTab) {
+      configurationReviewTab = defaultConfigurationReviewTab();
+    }
+    if (configurationReviewTab === 'results' && !shouldEnableResultsReviewTab()) {
       configurationReviewTab = defaultConfigurationReviewTab();
     }
     tempTableModalActiveTab = 'configuration_review';
@@ -918,7 +1002,24 @@
     }
     if (step === 'CONFIGURATION_READY') {
       titleEl.textContent = 'Configuração concluída';
-      subtitleEl.textContent = 'As tabelas de frete, os parâmetros e o arquivo operacional foram preparados. O cálculo comparativo será realizado na próxima etapa.';
+      subtitleEl.textContent = 'As configurações estão prontas. O cálculo será iniciado somente após sua confirmação.';
+      return;
+    }
+    if (step === 'CALCULATION_RUNNING') {
+      titleEl.textContent = 'Processando cálculos';
+      subtitleEl.textContent = 'Processando cálculos comparativos...';
+      return;
+    }
+    if (step === 'CALCULATION_READY') {
+      titleEl.textContent = 'Resultados da comparação';
+      subtitleEl.textContent = comparisonCalculationState.stale
+        ? 'As configurações foram alteradas. Processe novamente para atualizar os resultados.'
+        : 'Cálculos concluídos';
+      return;
+    }
+    if (step === 'CALCULATION_FAILED') {
+      titleEl.textContent = 'Falha no cálculo';
+      subtitleEl.textContent = 'Não foi possível concluir o cálculo comparativo.';
     }
   }
 
@@ -1550,20 +1651,20 @@
       button.setAttribute('title', 'Processando cálculos comparativos...');
     } else if (step === 'CALCULATION_READY' && comparisonCalculationState.stale) {
       button.classList.remove('is-loading');
-      button.textContent = 'Reprocessar Cálculos';
-      button.setAttribute('title', 'As configurações mudaram. Processe novamente.');
+      button.textContent = 'Processar Cálculos';
+      button.setAttribute('title', 'As configurações foram alteradas. Processe novamente para atualizar os resultados.');
     } else if (
       step === 'CALCULATION_READY' &&
       !comparisonCalculationState.stale &&
       (billing === 'pending' || billing === 'failed')
     ) {
       button.classList.remove('is-loading');
-      button.textContent = billing === 'pending' ? 'Finalizar processamento' : 'Regularizar processamento';
+      button.textContent = billing === 'pending' ? 'Finalizar processamento' : 'Tentar novamente';
       button.setAttribute(
         'title',
         billing === 'pending'
           ? 'Cálculo concluído. Finalize o processamento.'
-          : 'Cálculo concluído. Regularize o processamento sem recalcular.'
+          : 'Regularize o processamento sem recalcular.'
       );
     } else if (step === 'CALCULATION_READY' && !comparisonCalculationState.stale) {
       button.classList.remove('is-loading');
@@ -1571,7 +1672,7 @@
       button.setAttribute('title', 'Cálculos comparativos já concluídos para a configuração atual.');
     } else if (step === 'CALCULATION_FAILED') {
       button.classList.remove('is-loading');
-      button.textContent = 'Tentar novamente';
+      button.textContent = 'Processar novamente';
       button.setAttribute('title', 'Tentar processar os cálculos novamente.');
     } else {
       button.classList.remove('is-loading');
@@ -1664,15 +1765,13 @@
       status.textContent = 'Processando cálculos comparativos...';
     } else if (calcStatus === 'CALCULATION_READY' && comparisonCalculationState.stale) {
       status.classList.add('is-error');
-      status.textContent = 'As configurações mudaram. O resultado anterior está desatualizado.';
+      status.textContent = 'As configurações foram alteradas. Processe novamente para atualizar os resultados.';
     } else if (calcStatus === 'CALCULATION_READY' && billing === 'pending') {
       status.classList.add('is-loading');
       status.textContent = 'Finalizando processamento...';
     } else if (calcStatus === 'CALCULATION_READY' && billing === 'failed') {
       status.classList.add('is-error');
-      status.textContent =
-        (comparisonCalculationState.error && comparisonCalculationState.error.message) ||
-        'Cálculo concluído, mas a regularização da execução falhou. Tente novamente.';
+      status.textContent = 'Não foi possível concluir a regularização da execução.';
     } else if (calcStatus === 'CALCULATION_READY' && billing === 'applied') {
       status.classList.add('is-success');
       status.textContent = 'Cálculos concluídos';
@@ -1684,46 +1783,574 @@
       status.textContent =
         (comparisonCalculationState.error && comparisonCalculationState.error.message) ||
         'Não foi possível concluir o cálculo comparativo.';
+    } else if (step === 'CONFIGURATION_READY') {
+      status.textContent = 'As configurações estão prontas. O cálculo será iniciado somente após sua confirmação.';
     } else {
       return;
     }
     container.appendChild(status);
   }
 
-  function renderComparisonCalculationResults(container, result) {
-    clearComparisonCalculationResults(container);
-    renderComparisonCalculationStatus(container);
-    if (!result || !Array.isArray(result.comparative_rows)) return;
-    if (comparisonCalculationState.stale) return;
+  function comparisonRowIssueDate(row) {
+    if (!row || typeof row !== 'object') return '';
+    var raw = row.issue_date != null ? row.issue_date : row.data_emissao;
+    return raw == null ? '' : String(raw).trim();
+  }
 
-    var region = document.createElement('div');
-    region.className = 'agente-compara-comparison-calculation-results';
-    region.id = 'agenteComparaComparisonCalculationResults';
-    region.setAttribute('role', 'region');
-    region.setAttribute('aria-label', 'Resultados do cálculo comparativo');
+  function comparisonRowHasOrigin(rows) {
+    var hasCity = false;
+    var hasUf = false;
+    (rows || []).forEach(function (row) {
+      if (row && hasFieldValue(row.origin_city)) hasCity = true;
+      if (row && hasFieldValue(row.origin_uf)) hasUf = true;
+    });
+    return { city: hasCity, uf: hasUf };
+  }
+
+  function comparisonRowHasIssueDate(rows) {
+    return (rows || []).some(function (row) { return !!comparisonRowIssueDate(row); });
+  }
+
+  function comparisonRowHasInvoice(rows) {
+    return (rows || []).some(function (row) { return row && row.invoice_value != null && row.invoice_value !== ''; });
+  }
+
+  function getComparisonCellForTable(row, tableId) {
+    var tableResults = (row && row.table_results) || {};
+    var cell = tableResults[tableId];
+    if (!cell && Array.isArray(tableResults)) {
+      cell = tableResults.find(function (item) {
+        return item && item.table_id === tableId;
+      });
+    }
+    return cell || null;
+  }
+
+  function isComparisonCellCalculated(cell) {
+    if (!cell) return false;
+    if (cell.status && cell.status !== 'calculated') return false;
+    var n = Number(cell.calculated_freight);
+    return isFinite(n);
+  }
+
+  function filterComparativeRows(rows, tables, filters) {
+    filters = filters || comparisonResultsUiState.filters;
+    tables = tables || [];
+    var tableIds = tables.map(function (t) { return t.table_id; });
+    return (rows || []).filter(function (row) {
+      if (!row) return false;
+      var doc = String(row.document_number || '');
+      if (filters.documentNumber && doc.toLowerCase().indexOf(String(filters.documentNumber).toLowerCase()) === -1) {
+        return false;
+      }
+      if (filters.destinationUf && String(row.destination_uf || '').toUpperCase() !== String(filters.destinationUf).toUpperCase()) {
+        return false;
+      }
+      if (filters.destinationCity && String(row.destination_city || '').toLowerCase().indexOf(String(filters.destinationCity).toLowerCase()) === -1) {
+        return false;
+      }
+      if (filters.originUf && String(row.origin_uf || '').toUpperCase() !== String(filters.originUf).toUpperCase()) {
+        return false;
+      }
+      if (filters.originCity && String(row.origin_city || '').toLowerCase().indexOf(String(filters.originCity).toLowerCase()) === -1) {
+        return false;
+      }
+      var weight = Number(row.weight);
+      if (filters.weightMin !== '' && filters.weightMin != null) {
+        var minW = Number(filters.weightMin);
+        if (isFinite(minW) && !(isFinite(weight) && weight >= minW)) return false;
+      }
+      if (filters.weightMax !== '' && filters.weightMax != null) {
+        var maxW = Number(filters.weightMax);
+        if (isFinite(maxW) && !(isFinite(weight) && weight <= maxW)) return false;
+      }
+      var issue = comparisonRowIssueDate(row);
+      if (filters.dateFrom && (!issue || issue < String(filters.dateFrom))) return false;
+      if (filters.dateTo && (!issue || issue > String(filters.dateTo))) return false;
+      if (filters.status && filters.status !== 'all' && tableIds.length) {
+        var calculatedCount = 0;
+        var errorCount = 0;
+        tableIds.forEach(function (tid) {
+          if (isComparisonCellCalculated(getComparisonCellForTable(row, tid))) calculatedCount += 1;
+          else errorCount += 1;
+        });
+        if (filters.status === 'all_calculated' && calculatedCount !== tableIds.length) return false;
+        if (filters.status === 'any_error' && errorCount === 0) return false;
+        if (filters.status === 'none_calculated' && calculatedCount !== 0) return false;
+      }
+      return true;
+    });
+  }
+
+  function paginateRows(rows, page, pageSize) {
+    var total = (rows || []).length;
+    var size = Math.max(1, Number(pageSize) || 50);
+    var maxPage = Math.max(1, Math.ceil(total / size) || 1);
+    var current = Math.min(Math.max(1, Number(page) || 1), maxPage);
+    var start = (current - 1) * size;
+    return {
+      rows: (rows || []).slice(start, start + size),
+      page: current,
+      pageSize: size,
+      total: total,
+      maxPage: maxPage
+    };
+  }
+
+  function appendAnalyticsMetricCard(container, label, value) {
+    var card = document.createElement('div');
+    card.className = 'agente-compara-analytics-card';
+    var labelEl = document.createElement('span');
+    labelEl.className = 'agente-compara-analytics-card-label';
+    labelEl.textContent = label;
+    var valueEl = document.createElement('strong');
+    valueEl.className = 'agente-compara-analytics-card-value';
+    valueEl.textContent = value == null || value === '' ? '—' : String(value);
+    card.appendChild(labelEl);
+    card.appendChild(valueEl);
+    container.appendChild(card);
+  }
+
+  function formatComparisonPercent(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    var n = Number(value);
+    if (!isFinite(n)) return '—';
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+  }
+
+  function renderComparisonAnalyticsSummary(container, analytics) {
+    if (!container || !analytics) return;
+    var section = document.createElement('section');
+    section.className = 'agente-compara-analytics-summary';
+    section.id = 'agenteComparaAnalyticsSummary';
+    section.setAttribute('aria-label', 'Resumo Comparativo');
 
     var title = document.createElement('h3');
     title.className = 'agente-compara-run-summary-title';
-    title.textContent = 'Resultado comparativo';
-    region.appendChild(title);
+    title.textContent = 'Resumo Comparativo';
+    section.appendChild(title);
 
+    var global = analytics.global_summary || {};
+    var globalGrid = document.createElement('div');
+    globalGrid.className = 'agente-compara-analytics-grid';
+    appendAnalyticsMetricCard(globalGrid, 'Tabelas comparadas', analytics.table_count);
+    appendAnalyticsMetricCard(globalGrid, 'Documentos', global.document_count);
+    appendAnalyticsMetricCard(globalGrid, 'Células calculadas', global.calculated_cells);
+    appendAnalyticsMetricCard(globalGrid, 'Células com erro', global.error_cells);
+    appendAnalyticsMetricCard(globalGrid, 'Cobertura média', formatComparisonPercent(global.calculation_coverage_percentage));
+    appendAnalyticsMetricCard(globalGrid, 'Peso total', formatComparisonWeight(global.total_weight));
+    if (global.total_invoice_value != null) {
+      appendAnalyticsMetricCard(globalGrid, 'Valor total de NF', formatComparisonMoney(global.total_invoice_value));
+    }
+    if (global.period_start || global.period_end) {
+      appendAnalyticsMetricCard(
+        globalGrid,
+        'Período',
+        (global.period_start || '—') + ' a ' + (global.period_end || '—')
+      );
+    }
+    section.appendChild(globalGrid);
+
+    var tablesTitle = document.createElement('h4');
+    tablesTitle.className = 'agente-compara-analytics-subtitle';
+    tablesTitle.textContent = 'Indicadores por transportadora';
+    section.appendChild(tablesTitle);
+
+    var tablesWrap = document.createElement('div');
+    tablesWrap.className = 'agente-compara-analytics-tables';
+    (analytics.tables || []).forEach(function (table) {
+      var card = document.createElement('article');
+      card.className = 'agente-compara-analytics-table-card';
+      card.setAttribute('data-table-id', table.table_id || '');
+      card.setAttribute('data-slot-number', String(table.slot_number || ''));
+      var heading = document.createElement('h5');
+      heading.textContent = table.display_name || table.carrier_name || ('Tabela ' + String(table.slot_number || ''));
+      card.appendChild(heading);
+      var metrics = document.createElement('div');
+      metrics.className = 'agente-compara-analytics-table-metrics';
+      appendAnalyticsMetricCard(metrics, 'Total calculado', formatComparisonMoney(table.calculated_freight_total));
+      appendAnalyticsMetricCard(metrics, 'Frete médio', formatComparisonMoney(table.calculated_freight_average));
+      appendAnalyticsMetricCard(metrics, 'Frete/kg', formatComparisonMoney(table.calculated_freight_per_kg));
+      appendAnalyticsMetricCard(metrics, 'Linhas calculadas', table.calculated_rows);
+      appendAnalyticsMetricCard(metrics, 'Linhas não calculadas', table.uncalculated_rows != null ? table.uncalculated_rows : table.error_rows);
+      appendAnalyticsMetricCard(metrics, 'Cobertura do cálculo', formatComparisonPercent(table.coverage_percentage));
+      card.appendChild(metrics);
+      tablesWrap.appendChild(card);
+    });
+    section.appendChild(tablesWrap);
+    container.appendChild(section);
+  }
+
+  function createFilterField(filtersWrap, opts) {
+    var field = document.createElement('div');
+    field.className = 'agente-compara-results-filter-field';
+    var label = document.createElement('label');
+    label.setAttribute('for', opts.id);
+    label.textContent = opts.label;
+    var input;
+    if (opts.type === 'select') {
+      input = document.createElement('select');
+      (opts.options || []).forEach(function (opt) {
+        var option = document.createElement('option');
+        option.value = opt.value;
+        option.textContent = opt.label;
+        if (String(opt.value) === String(opts.value || '')) option.selected = true;
+        input.appendChild(option);
+      });
+    } else {
+      input = document.createElement('input');
+      input.type = opts.type || 'text';
+      if (opts.value != null) input.value = String(opts.value);
+      if (opts.placeholder) input.placeholder = opts.placeholder;
+      if (opts.min != null) input.min = opts.min;
+      if (opts.step != null) input.step = opts.step;
+    }
+    input.id = opts.id;
+    input.className = 'agente-compara-results-filter-input';
+    field.appendChild(label);
+    field.appendChild(input);
+    filtersWrap.appendChild(field);
+    return input;
+  }
+
+  function renderComparisonResultsFilters(container, result, onChange) {
+    var rows = (result && result.comparative_rows) || [];
+    var originAvail = comparisonRowHasOrigin(rows);
+    var hasDates = comparisonRowHasIssueDate(rows);
+    var wrap = document.createElement('section');
+    wrap.className = 'agente-compara-results-filters';
+    wrap.id = 'agenteComparaResultsFilters';
+    wrap.setAttribute('aria-label', 'Filtros do resultado comparativo');
+
+    var heading = document.createElement('h3');
+    heading.className = 'agente-compara-run-summary-title';
+    heading.textContent = 'Filtros';
+    wrap.appendChild(heading);
+
+    var grid = document.createElement('div');
+    grid.className = 'agente-compara-results-filters-grid';
+    var f = comparisonResultsUiState.filters;
+
+    var docInput = createFilterField(grid, {
+      id: 'agenteComparaFilterDocument',
+      label: 'Número do documento',
+      value: f.documentNumber,
+      placeholder: 'Buscar documento'
+    });
+    var ufInput = createFilterField(grid, {
+      id: 'agenteComparaFilterDestinationUf',
+      label: 'UF de destino',
+      value: f.destinationUf,
+      placeholder: 'UF'
+    });
+    var cityInput = createFilterField(grid, {
+      id: 'agenteComparaFilterDestinationCity',
+      label: 'Cidade de destino',
+      value: f.destinationCity,
+      placeholder: 'Cidade'
+    });
+    var originUfInput = null;
+    var originCityInput = null;
+    if (originAvail.uf) {
+      originUfInput = createFilterField(grid, {
+        id: 'agenteComparaFilterOriginUf',
+        label: 'UF de origem',
+        value: f.originUf,
+        placeholder: 'UF origem'
+      });
+    }
+    if (originAvail.city) {
+      originCityInput = createFilterField(grid, {
+        id: 'agenteComparaFilterOriginCity',
+        label: 'Cidade de origem',
+        value: f.originCity,
+        placeholder: 'Cidade origem'
+      });
+    }
+    var weightMinInput = createFilterField(grid, {
+      id: 'agenteComparaFilterWeightMin',
+      label: 'Peso mínimo',
+      type: 'number',
+      value: f.weightMin,
+      min: '0',
+      step: '0.001'
+    });
+    var weightMaxInput = createFilterField(grid, {
+      id: 'agenteComparaFilterWeightMax',
+      label: 'Peso máximo',
+      type: 'number',
+      value: f.weightMax,
+      min: '0',
+      step: '0.001'
+    });
+    var dateFromInput = null;
+    var dateToInput = null;
+    if (hasDates) {
+      dateFromInput = createFilterField(grid, {
+        id: 'agenteComparaFilterDateFrom',
+        label: 'Data de emissão inicial',
+        type: 'date',
+        value: f.dateFrom
+      });
+      dateToInput = createFilterField(grid, {
+        id: 'agenteComparaFilterDateTo',
+        label: 'Data de emissão final',
+        type: 'date',
+        value: f.dateTo
+      });
+    }
+    var statusInput = createFilterField(grid, {
+      id: 'agenteComparaFilterStatus',
+      label: 'Status do cálculo',
+      type: 'select',
+      value: f.status || 'all',
+      options: [
+        { value: 'all', label: 'Todas' },
+        { value: 'all_calculated', label: 'Calculadas em todas as tabelas' },
+        { value: 'any_error', label: 'Com erro em pelo menos uma tabela' },
+        { value: 'none_calculated', label: 'Não calculadas em nenhuma tabela' }
+      ]
+    });
+    wrap.appendChild(grid);
+
+    var actions = document.createElement('div');
+    actions.className = 'agente-compara-results-filters-actions';
+    var applyBtn = document.createElement('button');
+    applyBtn.type = 'button';
+    applyBtn.className = 'agente-compara-run-btn';
+    applyBtn.id = 'agenteComparaApplyFiltersButton';
+    applyBtn.textContent = 'Aplicar filtros';
+    var clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'btn btn-sm btn-outline-primary';
+    clearBtn.id = 'agenteComparaClearFiltersButton';
+    clearBtn.textContent = 'Limpar filtros';
+    actions.appendChild(applyBtn);
+    actions.appendChild(clearBtn);
+    wrap.appendChild(actions);
+
+    function readFilters() {
+      return {
+        documentNumber: docInput.value || '',
+        destinationUf: ufInput.value || '',
+        destinationCity: cityInput.value || '',
+        originUf: originUfInput ? (originUfInput.value || '') : '',
+        originCity: originCityInput ? (originCityInput.value || '') : '',
+        weightMin: weightMinInput.value || '',
+        weightMax: weightMaxInput.value || '',
+        dateFrom: dateFromInput ? (dateFromInput.value || '') : '',
+        dateTo: dateToInput ? (dateToInput.value || '') : '',
+        status: statusInput.value || 'all'
+      };
+    }
+
+    applyBtn.addEventListener('click', function () {
+      comparisonResultsUiState.filters = readFilters();
+      comparisonResultsUiState.page = 1;
+      if (typeof onChange === 'function') onChange();
+    });
+    clearBtn.addEventListener('click', function () {
+      resetComparisonResultsUiState();
+      if (typeof onChange === 'function') onChange();
+    });
+
+    container.appendChild(wrap);
+  }
+
+  function renderComparisonResultsPagination(container, pageInfo, onChange) {
+    var wrap = document.createElement('div');
+    wrap.className = 'agente-compara-results-pagination';
+    wrap.id = 'agenteComparaResultsPagination';
+    wrap.setAttribute('role', 'navigation');
+    wrap.setAttribute('aria-label', 'Paginação dos resultados');
+
+    var info = document.createElement('p');
+    info.className = 'agente-compara-results-pagination-info';
+    info.setAttribute('role', 'status');
+    info.textContent =
+      'Exibindo ' +
+      String(pageInfo.total ? ((pageInfo.page - 1) * pageInfo.pageSize + 1) : 0) +
+      '–' +
+      String(Math.min(pageInfo.page * pageInfo.pageSize, pageInfo.total)) +
+      ' de ' +
+      String(pageInfo.total) +
+      ' documentos filtrados';
+    wrap.appendChild(info);
+
+    var sizeLabel = document.createElement('label');
+    sizeLabel.setAttribute('for', 'agenteComparaResultsPageSize');
+    sizeLabel.textContent = 'Linhas por página';
+    var sizeSelect = document.createElement('select');
+    sizeSelect.id = 'agenteComparaResultsPageSize';
+    [25, 50, 100].forEach(function (size) {
+      var opt = document.createElement('option');
+      opt.value = String(size);
+      opt.textContent = String(size);
+      if (size === pageInfo.pageSize) opt.selected = true;
+      sizeSelect.appendChild(opt);
+    });
+    sizeSelect.addEventListener('change', function () {
+      comparisonResultsUiState.pageSize = Number(sizeSelect.value) || 50;
+      comparisonResultsUiState.page = 1;
+      if (typeof onChange === 'function') onChange();
+    });
+    wrap.appendChild(sizeLabel);
+    wrap.appendChild(sizeSelect);
+
+    var prev = document.createElement('button');
+    prev.type = 'button';
+    prev.id = 'agenteComparaResultsPrevPage';
+    prev.textContent = 'Anterior';
+    prev.disabled = pageInfo.page <= 1;
+    prev.setAttribute('aria-disabled', prev.disabled ? 'true' : 'false');
+    prev.addEventListener('click', function () {
+      if (comparisonResultsUiState.page <= 1) return;
+      comparisonResultsUiState.page -= 1;
+      if (typeof onChange === 'function') onChange();
+    });
+
+    var next = document.createElement('button');
+    next.type = 'button';
+    next.id = 'agenteComparaResultsNextPage';
+    next.textContent = 'Próxima';
+    next.disabled = pageInfo.page >= pageInfo.maxPage;
+    next.setAttribute('aria-disabled', next.disabled ? 'true' : 'false');
+    next.addEventListener('click', function () {
+      if (comparisonResultsUiState.page >= pageInfo.maxPage) return;
+      comparisonResultsUiState.page += 1;
+      if (typeof onChange === 'function') onChange();
+    });
+
+    var pageLabel = document.createElement('span');
+    pageLabel.textContent = 'Página ' + String(pageInfo.page) + ' de ' + String(pageInfo.maxPage);
+    wrap.appendChild(prev);
+    wrap.appendChild(pageLabel);
+    wrap.appendChild(next);
+    container.appendChild(wrap);
+  }
+
+  function renderComparisonResultCharts(container, analytics) {
+    if (!container || !analytics || !Array.isArray(analytics.tables) || !analytics.tables.length) return;
+    destroyComparisonResultCharts();
+    var section = document.createElement('section');
+    section.className = 'agente-compara-results-charts';
+    section.id = 'agenteComparaResultsCharts';
+    section.setAttribute('aria-label', 'Gráficos comparativos');
+
+    var title = document.createElement('h3');
+    title.className = 'agente-compara-run-summary-title';
+    title.textContent = 'Gráficos comparativos';
+    section.appendChild(title);
+
+    var desc = document.createElement('p');
+    desc.className = 'agente-compara-results-charts-desc';
+    desc.textContent = 'Indicadores lado a lado por transportadora, sem ordenação automática por valor.';
+    section.appendChild(desc);
+
+    var grid = document.createElement('div');
+    grid.className = 'agente-compara-results-charts-grid';
+    var labels = analytics.tables.map(function (t) {
+      return t.display_name || t.carrier_name || ('Tabela ' + String(t.slot_number || ''));
+    });
+    var totals = analytics.tables.map(function (t) {
+      var n = Number(t.calculated_freight_total);
+      return isFinite(n) ? n : 0;
+    });
+    var coverage = analytics.tables.map(function (t) {
+      var n = Number(t.coverage_percentage);
+      return isFinite(n) ? n : 0;
+    });
+    var calculated = analytics.tables.map(function (t) { return Number(t.calculated_rows) || 0; });
+    var uncalculated = analytics.tables.map(function (t) {
+      return Number(t.uncalculated_rows != null ? t.uncalculated_rows : t.error_rows) || 0;
+    });
+
+    function addChartCard(key, chartTitle, chartDesc) {
+      var card = document.createElement('div');
+      card.className = 'agente-compara-results-chart-card';
+      var h = document.createElement('h4');
+      h.textContent = chartTitle;
+      var p = document.createElement('p');
+      p.textContent = chartDesc;
+      var canvas = document.createElement('canvas');
+      canvas.id = 'agenteComparaChart_' + key;
+      canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', chartTitle + '. ' + chartDesc);
+      card.appendChild(h);
+      card.appendChild(p);
+      card.appendChild(canvas);
+      grid.appendChild(card);
+      return canvas;
+    }
+
+    var totalCanvas = addChartCard('total', 'Total de frete calculado por tabela', 'Soma do frete calculado em cada transportadora.');
+    var coverageCanvas = addChartCard('coverage', 'Cobertura de cálculo por tabela', 'Percentual de linhas calculadas em cada transportadora.');
+    var mixCanvas = addChartCard('mix', 'Calculadas versus não calculadas', 'Quantidade de linhas calculadas e não calculadas por tabela.');
+    section.appendChild(grid);
+    container.appendChild(section);
+
+    if (typeof window.Chart !== 'function') {
+      var fallback = document.createElement('p');
+      fallback.className = 'agente-compara-temp-table-modal-empty';
+      fallback.textContent = 'Chart.js indisponível nesta página. Os indicadores numéricos permanecem no resumo.';
+      section.appendChild(fallback);
+      return;
+    }
+
+    var commonOpts = {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: { legend: { display: true } }
+    };
+    comparisonResultChartInstances.push(new window.Chart(totalCanvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{ label: 'Total calculado (R$)', data: totals, backgroundColor: 'rgba(0, 196, 140, 0.55)' }]
+      },
+      options: commonOpts
+    }));
+    comparisonResultChartInstances.push(new window.Chart(coverageCanvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{ label: 'Cobertura (%)', data: coverage, backgroundColor: 'rgba(99, 140, 255, 0.55)' }]
+      },
+      options: commonOpts
+    }));
+    comparisonResultChartInstances.push(new window.Chart(mixCanvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          { label: 'Calculadas', data: calculated, backgroundColor: 'rgba(0, 196, 140, 0.55)' },
+          { label: 'Não calculadas', data: uncalculated, backgroundColor: 'rgba(255, 120, 120, 0.45)' }
+        ]
+      },
+      options: commonOpts
+    }));
+  }
+
+  function renderComparisonResultsTable(container, result, pageRows) {
+    var hasOrigin = comparisonRowHasOrigin(result.comparative_rows || []);
+    var hasInvoice = comparisonRowHasInvoice(result.comparative_rows || []);
+    var hasDates = comparisonRowHasIssueDate(result.comparative_rows || []);
     var scroll = document.createElement('div');
     scroll.className = 'agente-compara-comparison-calculation-scroll';
-
     var table = document.createElement('table');
     table.className = 'agente-compara-comparison-calculation-table';
+    table.id = 'agenteComparaComparisonResultsTable';
     table.setAttribute('aria-label', 'Tabela comparativa de frete calculado');
 
     var columns = disambiguateCarrierColumnTitle(result.tables || []);
     var thead = document.createElement('thead');
     var headRow = document.createElement('tr');
-    [
-      'Documento',
-      'Cidade destino',
-      'UF',
-      'Peso',
-      'Valor da NF'
-    ].forEach(function (label) {
+    var commonHeaders = ['Documento'];
+    if (hasOrigin.city || hasOrigin.uf) commonHeaders.push('Origem');
+    commonHeaders.push('Destino', 'Peso');
+    if (hasInvoice) commonHeaders.push('Valor da NF');
+    if (hasDates) commonHeaders.push('Data de emissão');
+    commonHeaders.forEach(function (label) {
       var th = document.createElement('th');
       th.scope = 'col';
       th.textContent = label;
@@ -1741,38 +2368,42 @@
 
     var tbody = document.createElement('tbody');
     var fragment = document.createDocumentFragment();
-    result.comparative_rows.forEach(function (row) {
+    if (!pageRows.length) {
+      var emptyTr = document.createElement('tr');
+      var emptyTd = document.createElement('td');
+      emptyTd.colSpan = commonHeaders.length + columns.length;
+      emptyTd.textContent = 'Nenhum documento corresponde aos filtros atuais.';
+      emptyTr.appendChild(emptyTd);
+      fragment.appendChild(emptyTr);
+    }
+    pageRows.forEach(function (row) {
       var tr = document.createElement('tr');
-      var cells = [
-        row.document_number,
-        row.destination_city,
-        row.destination_uf,
-        formatComparisonWeight(row.weight),
-        formatComparisonMoney(row.invoice_value)
-      ];
-      cells.forEach(function (value) {
+      var originParts = [];
+      if (hasFieldValue(row.origin_city)) originParts.push(String(row.origin_city));
+      if (hasFieldValue(row.origin_uf)) originParts.push(String(row.origin_uf));
+      var destParts = [];
+      if (hasFieldValue(row.destination_city)) destParts.push(String(row.destination_city));
+      if (hasFieldValue(row.destination_uf)) destParts.push(String(row.destination_uf));
+      var values = [row.document_number];
+      if (hasOrigin.city || hasOrigin.uf) values.push(originParts.join(' / ') || '—');
+      values.push(destParts.join(' / ') || '—');
+      values.push(formatComparisonWeight(row.weight));
+      if (hasInvoice) values.push(formatComparisonMoney(row.invoice_value));
+      if (hasDates) values.push(comparisonRowIssueDate(row) || '—');
+      values.forEach(function (value) {
         var td = document.createElement('td');
         td.textContent = hasFieldValue(value) ? String(value) : '—';
         tr.appendChild(td);
       });
-
-      var tableResults = row.table_results || {};
       columns.forEach(function (col) {
         var td = document.createElement('td');
         td.setAttribute('data-table-id', col.table_id || '');
-        var cell = tableResults[col.table_id];
-        if (!cell && Array.isArray(tableResults)) {
-          cell = tableResults.find(function (item) {
-            return item && item.table_id === col.table_id;
-          });
-        }
-        if (!cell) {
-          td.textContent = 'Não calculado';
-        } else if (cell.status && cell.status !== 'calculated') {
+        var cell = getComparisonCellForTable(row, col.table_id);
+        if (!isComparisonCellCalculated(cell)) {
           td.textContent = 'Não calculado';
           var detail =
-            (cell.error && (cell.error.message || cell.error.code)) ||
-            cell.status ||
+            (cell && cell.error && (cell.error.message || cell.error.code)) ||
+            (cell && cell.status) ||
             'Erro de domínio';
           td.title = String(detail);
           td.setAttribute('aria-label', 'Não calculado: ' + String(detail));
@@ -1786,7 +2417,96 @@
     tbody.appendChild(fragment);
     table.appendChild(tbody);
     scroll.appendChild(table);
-    region.appendChild(scroll);
+    container.appendChild(scroll);
+  }
+
+  function refreshComparisonResultsView() {
+    var host = document.getElementById('agenteComparaComparisonResultsHost');
+    if (!host) {
+      var summary = document.getElementById('agenteComparaCalculationFileSummary');
+      if (summary && summary.parentNode) {
+        renderComparisonCalculationResults(summary.parentNode, comparisonCalculationState.result);
+      }
+      return;
+    }
+    renderComparisonCalculationResults(host, comparisonCalculationState.result);
+  }
+
+  function renderComparisonCalculationResults(container, result) {
+    clearComparisonCalculationResults(container);
+    renderComparisonCalculationStatus(container);
+
+    var billing = comparisonCalculationState.billingStatus || '';
+    var calcStatus = comparisonCalculationState.status || '';
+    if (comparisonCalculationState.stale) return;
+    if (calcStatus === 'CALCULATION_READY' && (billing === 'pending' || billing === 'failed')) return;
+    if (calcStatus === 'CALCULATION_RUNNING' || comparisonCalculationInFlight) return;
+    if (calcStatus === 'CALCULATION_FAILED') return;
+    if (!result || !Array.isArray(result.comparative_rows)) {
+      if (calcStatus === 'CALCULATION_READY' && billing === 'applied') {
+        var missing = document.createElement('p');
+        missing.className = 'agente-compara-temp-table-modal-empty';
+        missing.setAttribute('role', 'alert');
+        missing.textContent = 'Nenhum resultado disponível para exibição.';
+        container.appendChild(missing);
+      }
+      return;
+    }
+
+    var region = document.createElement('div');
+    region.className = 'agente-compara-comparison-calculation-results';
+    region.id = 'agenteComparaComparisonCalculationResults';
+    region.setAttribute('role', 'region');
+    region.setAttribute('aria-label', 'Resultados do cálculo comparativo');
+
+    if (comparisonCalculationState.analytics) {
+      renderComparisonAnalyticsSummary(region, comparisonCalculationState.analytics);
+      renderComparisonResultCharts(region, comparisonCalculationState.analytics);
+    }
+
+    var visibleCount = document.createElement('p');
+    visibleCount.className = 'agente-compara-results-visible-count';
+    visibleCount.id = 'agenteComparaResultsVisibleCount';
+    visibleCount.setAttribute('role', 'status');
+
+    function paint() {
+      var existingFilters = region.querySelector('#agenteComparaResultsFilters');
+      if (existingFilters) existingFilters.remove();
+      var existingTable = region.querySelector('#agenteComparaComparisonResultsTable');
+      if (existingTable && existingTable.parentNode) existingTable.parentNode.remove();
+      var existingPager = region.querySelector('#agenteComparaResultsPagination');
+      if (existingPager) existingPager.remove();
+      var existingCount = region.querySelector('#agenteComparaResultsVisibleCount');
+      if (existingCount) existingCount.remove();
+
+      var filtered = filterComparativeRows(result.comparative_rows, result.tables || [], comparisonResultsUiState.filters);
+      var pageInfo = paginateRows(filtered, comparisonResultsUiState.page, comparisonResultsUiState.pageSize);
+      comparisonResultsUiState.page = pageInfo.page;
+      comparisonResultsUiState.pageSize = pageInfo.pageSize;
+
+      renderComparisonResultsFilters(region, result, function () {
+        paint();
+      });
+
+      var countEl = document.createElement('p');
+      countEl.className = 'agente-compara-results-visible-count';
+      countEl.id = 'agenteComparaResultsVisibleCount';
+      countEl.setAttribute('role', 'status');
+      countEl.textContent =
+        'Exibindo ' +
+        String(filtered.length) +
+        ' de ' +
+        String(result.comparative_rows.length) +
+        ' documentos';
+      region.appendChild(countEl);
+
+      renderComparisonResultsTable(region, result, pageInfo.rows);
+      renderComparisonResultsPagination(region, pageInfo, function () {
+        paint();
+      });
+    }
+
+    paint();
     container.appendChild(region);
   }
 
@@ -1815,17 +2535,20 @@
       payload.billing_status === 'applied'
     ) {
       comparisonCalculationState.result = payload.result;
+      comparisonCalculationState.analytics =
+        payload.analytics && typeof payload.analytics === 'object' ? payload.analytics : null;
     } else if (payload.status === 'CALCULATION_FAILED') {
       comparisonCalculationState.result = null;
+      comparisonCalculationState.analytics = null;
     } else if (
       payload.status === 'CALCULATION_READY' &&
-      (payload.billing_status === 'pending' || payload.billing_status === 'failed')
+      (payload.billing_status === 'pending' || payload.billing_status === 'failed' || payload.stale)
     ) {
       comparisonCalculationState.result = null;
+      comparisonCalculationState.analytics = null;
     } else if (payload.status === 'not_started' || payload.status === 'CALCULATION_RUNNING') {
-      if (payload.status === 'CALCULATION_RUNNING') {
-        comparisonCalculationState.result = null;
-      }
+      comparisonCalculationState.result = null;
+      comparisonCalculationState.analytics = null;
     }
     if (payload.current_step) {
       comparisonState.currentStep = payload.current_step;
@@ -1855,11 +2578,22 @@
         });
       })
       .then(function (res) {
-        if (!res.data || !res.data.ok) return null;
-        applyComparisonCalculationPayload(res.data);
-        var summary = document.getElementById('agenteComparaCalculationFileSummary');
-        if (summary && summary.parentNode) {
-          renderComparisonCalculationResults(summary.parentNode, comparisonCalculationState.result);
+        if (!res.data) return null;
+        // ok pode ser false em billing pending/failed; ainda assim restaura estado.
+        if (res.data.status || res.data.billing_status || res.data.current_step) {
+          applyComparisonCalculationPayload(res.data);
+        } else if (!res.data.ok) {
+          return null;
+        }
+        if (shouldEnableResultsReviewTab()) {
+          configurationReviewTab = 'results';
+        }
+        if (isComparisonReviewMode() && isTempTableModalOpen()) {
+          setComparisonCommonParamsModalHeader();
+          renderTempTableModalContent(getReviewSharedTempTable() || currentTempTable);
+          updateTempTableModalFooter();
+        } else {
+          refreshComparisonResultsView();
           var btn = document.getElementById('agenteComparaProcessCalculationsButton');
           setProcessCalculationsButtonState(btn);
         }
@@ -1873,9 +2607,21 @@
   function processComparisonCalculations() {
     if (comparisonCalculationInFlight) return;
     comparisonCalculationInFlight = true;
+    comparisonState.currentStep = comparisonState.currentStep === 'CONFIGURATION_READY'
+      ? 'CALCULATION_RUNNING'
+      : (comparisonState.currentStep || 'CALCULATION_RUNNING');
+    if (comparisonCalculationState.status === 'not_started' || !comparisonCalculationState.status) {
+      comparisonCalculationState.status = 'CALCULATION_RUNNING';
+    }
+    configurationReviewTab = 'results';
+    tempTableModalActiveTab = 'configuration_review';
 
     var button = document.getElementById('agenteComparaProcessCalculationsButton');
     setProcessCalculationsButtonState(button);
+    if (isComparisonReviewMode()) {
+      renderTempTableModalContent(getReviewSharedTempTable() || currentTempTable);
+      updateTempTableModalFooter();
+    }
 
     var executionId = generateRequestId();
     var comparisonId = comparisonState.comparisonId;
@@ -1883,11 +2629,6 @@
       comparisonCalculationInFlight = false;
       setProcessCalculationsButtonState(button);
       return;
-    }
-
-    var summaryHost = document.getElementById('agenteComparaCalculationFileSummary');
-    if (summaryHost && summaryHost.parentNode) {
-      renderComparisonCalculationStatus(summaryHost.parentNode);
     }
 
     fetch(API_COMPARISON_CALCULATE, {
@@ -1928,7 +2669,6 @@
           if (data.status) applyComparisonCalculationPayload(data);
           else comparisonCalculationState.status = 'CALCULATION_FAILED';
         } else if (data.status === 'CALCULATION_READY') {
-          // READY matemático: pode vir com billing pending/failed (ok=false) sem liberar result.
           applyComparisonCalculationPayload(data);
           comparisonState.currentStep = 'CALCULATION_READY';
         } else if (data.status === 'CALCULATION_FAILED') {
@@ -1958,11 +2698,15 @@
           comparisonState.currentStep = 'CALCULATION_RUNNING';
         }
 
-        button = document.getElementById('agenteComparaProcessCalculationsButton');
-        setProcessCalculationsButtonState(button);
-        var host = document.getElementById('agenteComparaCalculationFileSummary');
-        if (host && host.parentNode) {
-          renderComparisonCalculationResults(host.parentNode, comparisonCalculationState.result);
+        configurationReviewTab = 'results';
+        if (isComparisonReviewMode()) {
+          setComparisonCommonParamsModalHeader();
+          renderTempTableModalContent(getReviewSharedTempTable() || currentTempTable);
+          updateTempTableModalFooter();
+        } else {
+          button = document.getElementById('agenteComparaProcessCalculationsButton');
+          setProcessCalculationsButtonState(button);
+          refreshComparisonResultsView();
         }
       })
       .catch(function () {
@@ -1973,11 +2717,14 @@
           message: 'Não foi possível concluir o cálculo comparativo.'
         };
         comparisonState.currentStep = 'CALCULATION_FAILED';
-        button = document.getElementById('agenteComparaProcessCalculationsButton');
-        setProcessCalculationsButtonState(button);
-        var host = document.getElementById('agenteComparaCalculationFileSummary');
-        if (host && host.parentNode) {
-          renderComparisonCalculationStatus(host.parentNode);
+        configurationReviewTab = 'results';
+        if (isComparisonReviewMode()) {
+          renderTempTableModalContent(getReviewSharedTempTable() || currentTempTable);
+          updateTempTableModalFooter();
+        } else {
+          button = document.getElementById('agenteComparaProcessCalculationsButton');
+          setProcessCalculationsButtonState(button);
+          refreshComparisonResultsView();
         }
       });
   }
@@ -2081,7 +2828,7 @@
       ) {
         hint.textContent = 'Cálculo concluído. Regularize o processamento para liberar o resultado.';
       } else if (comparisonCalculationState.stale) {
-        hint.textContent = 'As configurações mudaram. Processe novamente para atualizar o resultado.';
+        hint.textContent = 'As configurações foram alteradas. Processe novamente para atualizar os resultados.';
       } else if (comparisonCalculationState.status === 'CALCULATION_FAILED') {
         hint.textContent = 'Houve uma falha no cálculo. Você pode tentar novamente.';
       } else {
@@ -2463,7 +3210,7 @@
       clearSlotBtn.hidden = !canClearSlot || !!tempTableEditMode;
       clearSlotBtn.disabled = !!comparisonResetInFlight || !!tempTableSaveInFlight;
     }
-    if (isComparisonConfigurationReady()) {
+    if (isComparisonReviewMode()) {
       if (editBtn) editBtn.hidden = true;
       if (cancelBtn) cancelBtn.hidden = true;
       if (banner) banner.hidden = true;
@@ -6899,6 +7646,136 @@ function renderDocumentItem(doc) {
     container.appendChild(section);
   }
 
+  function shouldShowConfigurationProcessCta() {
+    if (!isComparisonReviewMode()) return false;
+    if (!comparisonState.comparisonId) return false;
+    if (auditUploadInFlight || comparisonCalculationInFlight) return true;
+    var step = comparisonState.currentStep || '';
+    var billing = comparisonCalculationState.billingStatus || '';
+    if (step === 'CONFIGURATION_READY') return true;
+    if (step === 'CALCULATION_FAILED') return true;
+    if (step === 'CALCULATION_READY' && comparisonCalculationState.stale) return true;
+    if (step === 'CALCULATION_READY' && (billing === 'pending' || billing === 'failed')) return true;
+    return false;
+  }
+
+  function renderConfigurationReadyConfirmation(container) {
+    if (!container || !shouldShowConfigurationProcessCta()) return;
+    var existing = container.querySelector('#agenteComparaConfigurationReadyConfirmation');
+    if (existing) existing.remove();
+
+    var panel = document.createElement('section');
+    panel.className = 'agente-compara-configuration-ready-confirmation';
+    panel.id = 'agenteComparaConfigurationReadyConfirmation';
+    panel.setAttribute('role', 'region');
+    panel.setAttribute('aria-label', 'Confirmação para processar cálculos');
+
+    var title = document.createElement('h3');
+    title.className = 'agente-compara-configuration-ready-title';
+    title.textContent = 'Configuração pronta para cálculo';
+    panel.appendChild(title);
+
+    var text = document.createElement('p');
+    text.className = 'agente-compara-configuration-ready-text';
+    text.textContent = 'As configurações estão prontas. O cálculo será iniciado somente após sua confirmação.';
+    panel.appendChild(text);
+
+    var summary = document.createElement('div');
+    summary.className = 'agente-compara-configuration-ready-summary';
+    var confirmed = confirmedComparisonTablesForReview();
+    var carrierCounts = {};
+    confirmed.forEach(function (tableMeta) {
+      var name = tableCarrierDisplay(tableMeta) || ('Transportadora ' + String(tableMeta.slot_number || ''));
+      carrierCounts[name] = (carrierCounts[name] || 0) + 1;
+    });
+    confirmed.forEach(function (tableMeta) {
+      var row = document.createElement('div');
+      row.className = 'agente-compara-configuration-ready-summary-row';
+      var name = tableCarrierDisplay(tableMeta) || ('Transportadora ' + String(tableMeta.slot_number || ''));
+      var label = name;
+      if (carrierCounts[name] > 1) {
+        label = name + ' — Tabela ' + String(tableMeta.slot_number || '');
+      }
+      row.textContent = 'Tabela ' + String(tableMeta.slot_number || '') + ': ' + label + ' (confirmada)';
+      summary.appendChild(row);
+    });
+
+    var shared = getReviewSharedTempTable() || currentTempTable;
+    var meta = getCalculationFileMetadata(shared);
+    if (meta) {
+      var fileRow = document.createElement('div');
+      fileRow.className = 'agente-compara-configuration-ready-summary-row';
+      fileRow.textContent = 'Arquivo: ' + (meta.source_file_name || '—');
+      summary.appendChild(fileRow);
+      var rowsRow = document.createElement('div');
+      rowsRow.className = 'agente-compara-configuration-ready-summary-row';
+      rowsRow.textContent = 'Linhas do arquivo: ' + (meta.row_count != null ? String(meta.row_count) : '—');
+      summary.appendChild(rowsRow);
+    }
+    panel.appendChild(summary);
+
+    var actions = document.createElement('div');
+    actions.className = 'agente-compara-run-actions';
+    actions.id = 'agenteComparaProcessCalculationsActions';
+    var runBtn = document.createElement('button');
+    runBtn.type = 'button';
+    runBtn.className = 'agente-compara-run-btn';
+    runBtn.id = 'agenteComparaProcessCalculationsButton';
+    runBtn.textContent = 'Processar Cálculos';
+    setProcessCalculationsButtonState(runBtn);
+    actions.appendChild(runBtn);
+    panel.appendChild(actions);
+
+    var hint = document.createElement('p');
+    hint.className = 'agente-compara-process-calculations-hint';
+    hint.id = 'agenteComparaProcessCalculationsHint';
+    if (comparisonCalculationState.stale) {
+      hint.textContent = 'As configurações foram alteradas. Processe novamente para atualizar os resultados.';
+    } else if (comparisonCalculationState.status === 'CALCULATION_FAILED') {
+      hint.textContent = 'Houve uma falha no cálculo. Você pode processar novamente.';
+    } else if (comparisonCalculationState.billingStatus === 'failed') {
+      hint.textContent = 'Tente novamente para regularizar o processamento sem recalcular.';
+    } else {
+      hint.textContent = 'As configurações estão prontas. O cálculo será iniciado somente após sua confirmação.';
+    }
+    panel.appendChild(hint);
+    container.appendChild(panel);
+  }
+
+  function renderConfigurationReviewResultsContent(container) {
+    appendSectionTitle(container, 'Resultados');
+    var host = document.createElement('div');
+    host.className = 'agente-compara-comparison-results-host';
+    host.id = 'agenteComparaComparisonResultsHost';
+    container.appendChild(host);
+
+    if (!shouldEnableResultsReviewTab()) {
+      var waiting = document.createElement('p');
+      waiting.className = 'agente-compara-temp-table-modal-empty';
+      waiting.textContent = 'Os resultados aparecerão aqui após o processamento dos cálculos.';
+      host.appendChild(waiting);
+      return;
+    }
+
+    var actions = document.createElement('div');
+    actions.className = 'agente-compara-run-actions';
+    if (!document.getElementById('agenteComparaProcessCalculationsButton')) {
+      var runBtn = document.createElement('button');
+      runBtn.type = 'button';
+      runBtn.className = 'agente-compara-run-btn';
+      runBtn.id = 'agenteComparaProcessCalculationsButton';
+      runBtn.textContent = 'Processar Cálculos';
+      setProcessCalculationsButtonState(runBtn);
+      actions.appendChild(runBtn);
+      host.appendChild(actions);
+    } else {
+      var btn = document.getElementById('agenteComparaProcessCalculationsButton');
+      setProcessCalculationsButtonState(btn);
+    }
+
+    renderComparisonCalculationResults(host, comparisonCalculationState.result);
+  }
+
   function renderConfigurationReviewAuditContent(container, tempTable) {
     appendSectionTitle(container, 'Arquivo para Comparação');
     var section = document.createElement('div');
@@ -6912,7 +7789,9 @@ function renderDocumentItem(doc) {
     card.appendChild(intro);
 
     if (hasAuditBatch(tempTable)) {
-      renderCalculationFileSummary(card, tempTable, { showProcessButton: true });
+      renderCalculationFileSummary(card, tempTable, {
+        showProcessButton: !shouldShowConfigurationProcessCta()
+      });
     } else {
       var empty = document.createElement('p');
       empty.className = 'agente-compara-temp-table-modal-empty';
@@ -6986,6 +7865,10 @@ function renderDocumentItem(doc) {
       panel.appendChild(coverageSection);
       return;
     }
+    if (tabId === 'results') {
+      renderConfigurationReviewResultsContent(panel);
+      return;
+    }
     renderConfigurationReviewAuditContent(panel, getReviewSharedTempTable());
   }
 
@@ -7057,6 +7940,21 @@ function renderDocumentItem(doc) {
     });
     tabs.appendChild(fileTab);
 
+    var resultsEnabled = shouldEnableResultsReviewTab();
+    var resultsTab = makeReviewTab('agenteComparaReviewTabResults', 'Resultados', activeTab === 'results', false);
+    resultsTab.setAttribute('data-review-tab', 'results');
+    if (!resultsEnabled) {
+      resultsTab.disabled = true;
+      resultsTab.setAttribute('aria-disabled', 'true');
+      resultsTab.title = 'Disponível após iniciar o processamento dos cálculos.';
+    } else {
+      resultsTab.setAttribute('aria-disabled', 'false');
+      resultsTab.addEventListener('click', function () {
+        selectConfigurationReviewTab('results');
+      });
+    }
+    tabs.appendChild(resultsTab);
+
     container.appendChild(tabs);
   }
 
@@ -7101,7 +7999,7 @@ function renderDocumentItem(doc) {
         if (res.data.comparison) {
           syncComparisonStateFromPayload(res.data.comparison);
         }
-        if (String(comparisonState.currentStep || '') !== 'CONFIGURATION_READY') {
+        if (!isComparisonReviewMode()) {
           return { ok: false, reason: 'step_changed' };
         }
         var loadedMeta = findConfirmedReviewTable(tableId);
@@ -7128,7 +8026,7 @@ function renderDocumentItem(doc) {
 
   function selectConfigurationReviewTab(tabId, options) {
     options = options || {};
-    if (!isComparisonConfigurationReady()) return;
+    if (!isComparisonReviewMode()) return;
     var nextTab = tabId || defaultConfigurationReviewTab();
     configurationReviewTab = nextTab;
     tempTableModalActiveTab = 'configuration_review';
@@ -7182,7 +8080,7 @@ function renderDocumentItem(doc) {
   }
 
   function renderTempTableModalTabs(container, tempTable) {
-    if (isComparisonConfigurationReady()) {
+    if (isComparisonReviewMode()) {
       renderConfigurationReviewTabs(container);
       return;
     }
@@ -7244,7 +8142,7 @@ function renderDocumentItem(doc) {
   }
 
   function renderAuditFileTabContent(container, tempTable) {
-    if (isComparisonConfigurationReady()) {
+    if (isComparisonReviewMode()) {
       renderConfigurationReviewAuditContent(container, tempTable || getReviewSharedTempTable());
       return;
     }
@@ -10156,8 +11054,9 @@ function renderDocumentItem(doc) {
     if (!body) return;
     body.innerHTML = '';
 
-    if (isComparisonConfigurationReady()) {
+    if (isComparisonReviewMode()) {
       prepareConfigurationReviewRender();
+      renderConfigurationReadyConfirmation(body);
       renderTempTableModalTabs(body, tempTable);
       var reviewPanel = document.createElement('div');
       reviewPanel.className = 'agente-compara-temp-table-modal-tab-panel';
@@ -10223,9 +11122,12 @@ function renderDocumentItem(doc) {
     tempTableSaveInFlight = false;
     clearTempTableValidationErrors();
     setTempTableModalError('');
-    if (isComparisonConfigurationReady()) {
-      // Reabertura na mesma sessão: reconstruir abas e abrir na 1ª transportadora.
-      ensureConfigurationReviewDefaults({ forceFirstCarrier: true });
+    if (isComparisonReviewMode()) {
+      // Reabertura na mesma sessão: reconstruir abas; Resultados se cálculo ativo.
+      ensureConfigurationReviewDefaults({
+        forceFirstCarrier: !shouldEnableResultsReviewTab(),
+        forceResultsTab: shouldEnableResultsReviewTab()
+      });
       selectConfigurationReviewTab(configurationReviewTab, { preferCache: true });
       modal.hidden = false;
       document.body.classList.add('agente-compara-temp-table-modal-open');

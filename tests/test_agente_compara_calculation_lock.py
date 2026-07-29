@@ -21,7 +21,13 @@ from tests.cleiton_doc_fixtures import patch_cleiton_doc_store
 
 @pytest.fixture
 def lock_env(tmp_path, monkeypatch):
+    # patch_cleiton_doc_store altera só app.cleiton_doc_store; o storage importa
+    # get_cleiton_doc_tmp_dir por binding local — precisa patchar ambos.
     patch_cleiton_doc_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_result_storage.get_cleiton_doc_tmp_dir",
+        lambda: str(tmp_path),
+    )
     return tmp_path
 
 
@@ -119,10 +125,11 @@ def _write_json_result(path_str: str, payload: dict) -> None:
     os.replace(str(tmp), str(path))
 
 
-def _touch_flag(path_str: str) -> None:
+def _touch_flag(path_str: str, *, note: str = "1") -> None:
     path = Path(path_str)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("1", encoding="utf-8")
+    # monotonic apenas para diagnóstico; não é critério de sucesso.
+    path.write_text(f"{note}|mono={time.monotonic():.6f}", encoding="utf-8")
 
 
 def _patch_tmp_dir(shared_dir: str) -> None:
@@ -148,26 +155,33 @@ def _join_process(proc: multiprocessing.Process, *, timeout: float, label: str) 
 def _multiprocess_lock_holder(
     shared_dir: str,
     comparison_id: str,
-    hold_seconds: float,
-    ready_flag: str,
-    inside_flag: str,
+    acquired_flag: str,
+    release_allowed_flag: str,
     released_flag: str,
     result_path: str,
 ) -> None:
-    """Processo A: adquire, sinaliza, segura, libera."""
+    """Processo A: adquire, sinaliza, aguarda release_allowed, libera."""
     try:
         _patch_tmp_dir(shared_dir)
         from app.agente_compara_calculation_lock import (
             AgenteComparaCalculationLockError,
             acquire_comparison_calculation_lock,
+            resolve_calculation_lock_path,
         )
 
+        lock_path = str(resolve_calculation_lock_path(comparison_id))
         with acquire_comparison_calculation_lock(comparison_id, timeout_seconds=2.0):
-            _touch_flag(inside_flag)
-            _touch_flag(ready_flag)
-            time.sleep(float(hold_seconds))
-        _touch_flag(released_flag)
-        _write_json_result(result_path, {"status": "acquired_and_released"})
+            _touch_flag(acquired_flag, note=f"acquired|path={lock_path}")
+            _wait_for_file(Path(release_allowed_flag), timeout_seconds=30.0)
+        _touch_flag(released_flag, note="released")
+        _write_json_result(
+            result_path,
+            {
+                "status": "acquired_and_released",
+                "lock_path": lock_path,
+                "pid": os.getpid(),
+            },
+        )
     except AgenteComparaCalculationLockError as exc:
         _write_json_result(
             result_path,
@@ -175,6 +189,7 @@ def _multiprocess_lock_holder(
                 "status": "timeout",
                 "error_type": type(exc).__name__,
                 "error_code": getattr(exc, "error_code", None),
+                "pid": os.getpid(),
             },
         )
     except Exception as exc:  # pragma: no cover - diagnostic path
@@ -183,7 +198,8 @@ def _multiprocess_lock_holder(
             {
                 "status": "unexpected_error",
                 "exception_type": type(exc).__name__,
-                "message": str(exc)[:200],
+                "message": str(exc)[:400],
+                "pid": os.getpid(),
             },
         )
 
@@ -192,27 +208,38 @@ def _multiprocess_lock_contender(
     shared_dir: str,
     comparison_id: str,
     lock_timeout_seconds: float,
-    ready_flag: str,
+    acquired_flag: str,
+    started_flag: str,
     inside_flag: str,
     result_path: str,
 ) -> None:
-    """Processo B: espera holder_ready e tenta o mesmo comparison_id."""
+    """Processo B: após holder_acquired, tenta o mesmo comparison_id."""
     try:
         _patch_tmp_dir(shared_dir)
         from app.agente_compara_calculation_lock import (
             ERROR_LOCK_TIMEOUT,
             AgenteComparaCalculationLockError,
             acquire_comparison_calculation_lock,
+            resolve_calculation_lock_path,
         )
 
-        _wait_for_file(Path(ready_flag), timeout_seconds=10.0)
+        _wait_for_file(Path(acquired_flag), timeout_seconds=20.0)
+        lock_path = str(resolve_calculation_lock_path(comparison_id))
+        _touch_flag(started_flag, note=f"started|path={lock_path}")
         try:
             with acquire_comparison_calculation_lock(
                 comparison_id,
                 timeout_seconds=float(lock_timeout_seconds),
             ):
-                _touch_flag(inside_flag)
-                _write_json_result(result_path, {"status": "acquired"})
+                _touch_flag(inside_flag, note="inside")
+                _write_json_result(
+                    result_path,
+                    {
+                        "status": "acquired",
+                        "lock_path": lock_path,
+                        "pid": os.getpid(),
+                    },
+                )
         except AgenteComparaCalculationLockError as exc:
             status = "timeout" if exc.error_code == ERROR_LOCK_TIMEOUT else "lock_error"
             _write_json_result(
@@ -221,6 +248,8 @@ def _multiprocess_lock_contender(
                     "status": status,
                     "error_type": type(exc).__name__,
                     "error_code": exc.error_code,
+                    "lock_path": lock_path,
+                    "pid": os.getpid(),
                 },
             )
     except Exception as exc:  # pragma: no cover - diagnostic path
@@ -229,7 +258,8 @@ def _multiprocess_lock_contender(
             {
                 "status": "unexpected_error",
                 "exception_type": type(exc).__name__,
-                "message": str(exc)[:200],
+                "message": str(exc)[:400],
+                "pid": os.getpid(),
             },
         )
 
@@ -237,7 +267,7 @@ def _multiprocess_lock_contender(
 def _multiprocess_other_comparison(
     shared_dir: str,
     comparison_id: str,
-    ready_flag: str,
+    acquired_flag: str,
     result_path: str,
 ) -> None:
     """Processo C: comparison_id diferente deve adquirir enquanto A segura o original."""
@@ -246,12 +276,21 @@ def _multiprocess_other_comparison(
         from app.agente_compara_calculation_lock import (
             AgenteComparaCalculationLockError,
             acquire_comparison_calculation_lock,
+            resolve_calculation_lock_path,
         )
 
-        _wait_for_file(Path(ready_flag), timeout_seconds=10.0)
+        _wait_for_file(Path(acquired_flag), timeout_seconds=20.0)
+        lock_path = str(resolve_calculation_lock_path(comparison_id))
         try:
             with acquire_comparison_calculation_lock(comparison_id, timeout_seconds=2.0):
-                _write_json_result(result_path, {"status": "acquired"})
+                _write_json_result(
+                    result_path,
+                    {
+                        "status": "acquired",
+                        "lock_path": lock_path,
+                        "pid": os.getpid(),
+                    },
+                )
         except AgenteComparaCalculationLockError as exc:
             _write_json_result(
                 result_path,
@@ -259,6 +298,8 @@ def _multiprocess_other_comparison(
                     "status": "timeout",
                     "error_type": type(exc).__name__,
                     "error_code": exc.error_code,
+                    "lock_path": lock_path,
+                    "pid": os.getpid(),
                 },
             )
     except Exception as exc:  # pragma: no cover - diagnostic path
@@ -267,7 +308,8 @@ def _multiprocess_other_comparison(
             {
                 "status": "unexpected_error",
                 "exception_type": type(exc).__name__,
-                "message": str(exc)[:200],
+                "message": str(exc)[:400],
+                "pid": os.getpid(),
             },
         )
 
@@ -286,10 +328,13 @@ def _multiprocess_post_release(
             acquire_comparison_calculation_lock,
         )
 
-        _wait_for_file(Path(released_flag), timeout_seconds=10.0)
+        _wait_for_file(Path(released_flag), timeout_seconds=20.0)
         try:
             with acquire_comparison_calculation_lock(comparison_id, timeout_seconds=2.0):
-                _write_json_result(result_path, {"status": "acquired"})
+                _write_json_result(
+                    result_path,
+                    {"status": "acquired", "pid": os.getpid()},
+                )
         except AgenteComparaCalculationLockError as exc:
             _write_json_result(
                 result_path,
@@ -297,6 +342,7 @@ def _multiprocess_post_release(
                     "status": "timeout",
                     "error_type": type(exc).__name__,
                     "error_code": exc.error_code,
+                    "pid": os.getpid(),
                 },
             )
     except Exception as exc:  # pragma: no cover - diagnostic path
@@ -305,16 +351,18 @@ def _multiprocess_post_release(
             {
                 "status": "unexpected_error",
                 "exception_type": type(exc).__name__,
-                "message": str(exc)[:200],
+                "message": str(exc)[:400],
+                "pid": os.getpid(),
             },
         )
 
 
 def test_multiprocess_same_comparison_lock(lock_env):
     """
-    Prova multiprocesso real via spawn + arquivos-sinal.
+    Prova multiprocesso real via spawn + handshake por arquivos-sinal.
 
-    Não usa multiprocessing.Queue / Manager (WinError 5 no ambiente atual).
+    Holder libera somente após `release_allowed` do pai — sem hold baseado
+    apenas em sleep. Não usa multiprocessing.Queue / Manager.
     """
     ctx = multiprocessing.get_context("spawn")
     shared = os.fspath(lock_env)
@@ -324,9 +372,10 @@ def test_multiprocess_same_comparison_lock(lock_env):
     cmp_same = "cmp-lock-mp-same"
     cmp_other = "cmp-lock-mp-other"
 
-    ready_flag = os.fspath(signal_dir / "holder_ready.flag")
-    holder_inside = os.fspath(signal_dir / "holder_inside.flag")
+    acquired_flag = os.fspath(signal_dir / "holder_acquired.flag")
+    contender_started = os.fspath(signal_dir / "contender_started.flag")
     contender_inside = os.fspath(signal_dir / "contender_inside.flag")
+    release_allowed = os.fspath(signal_dir / "release_allowed.flag")
     released_flag = os.fspath(signal_dir / "holder_released.flag")
 
     holder_result = os.fspath(signal_dir / "holder_result.json")
@@ -334,9 +383,7 @@ def test_multiprocess_same_comparison_lock(lock_env):
     other_result = os.fspath(signal_dir / "other_comparison_result.json")
     post_result = os.fspath(signal_dir / "post_release_result.json")
 
-    # hold longo o bastante para cobrir o cold-start do spawn no Windows
-    # enquanto contender/other já estão vivos esperando o sinal.
-    hold_seconds = 4.0
+    # Timeout curto e conhecido: holder permanece vivo até o pai liberar.
     contender_lock_timeout = 0.8
 
     processes: list[multiprocessing.Process] = []
@@ -346,21 +393,45 @@ def test_multiprocess_same_comparison_lock(lock_env):
             args=(
                 shared,
                 cmp_same,
-                hold_seconds,
-                ready_flag,
-                holder_inside,
+                acquired_flag,
+                release_allowed,
                 released_flag,
                 holder_result,
             ),
             name="lock-holder",
         )
+        processes.append(holder)
+        holder.start()
+
+        # Espera prova de aquisição; se o holder morrer, expõe o JSON de erro.
+        try:
+            _wait_for_file(Path(acquired_flag), timeout_seconds=25.0)
+        except TimeoutError:
+            if not holder.is_alive():
+                holder_payload = (
+                    _read_json_result(Path(holder_result))
+                    if Path(holder_result).is_file()
+                    else {"status": "missing_result"}
+                )
+                raise AssertionError(
+                    "Holder morreu antes de holder_acquired.flag: "
+                    f"exitcode={holder.exitcode} payload={holder_payload}"
+                ) from None
+            raise
+
+        assert holder.is_alive(), (
+            "Holder não está vivo após holder_acquired.flag; "
+            f"exitcode={holder.exitcode}"
+        )
+
         contender = ctx.Process(
             target=_multiprocess_lock_contender,
             args=(
                 shared,
                 cmp_same,
                 contender_lock_timeout,
-                ready_flag,
+                acquired_flag,
+                contender_started,
                 contender_inside,
                 contender_result,
             ),
@@ -368,23 +439,21 @@ def test_multiprocess_same_comparison_lock(lock_env):
         )
         other = ctx.Process(
             target=_multiprocess_other_comparison,
-            args=(shared, cmp_other, ready_flag, other_result),
+            args=(shared, cmp_other, acquired_flag, other_result),
             name="lock-other",
         )
-        processes.extend([holder, contender, other])
-
-        # Inicia todos juntos: contender/other esperam o flag (sem sleep frágil no pai).
-        holder.start()
+        processes.extend([contender, other])
         contender.start()
         other.start()
 
-        _wait_for_file(Path(ready_flag), timeout_seconds=20.0)
-        assert Path(holder_inside).is_file()
+        _wait_for_file(Path(contender_started), timeout_seconds=25.0)
+        assert holder.is_alive(), "Holder morreu durante a tentativa do contender"
 
         _join_process(contender, timeout=25.0, label="contender")
         _join_process(other, timeout=25.0, label="other")
         assert contender.exitcode == 0, f"contender exitcode={contender.exitcode}"
         assert other.exitcode == 0, f"other exitcode={other.exitcode}"
+        assert holder.is_alive(), "Holder liberou/morreu antes do fim do contender"
 
         contender_payload = _read_json_result(Path(contender_result))
         other_payload = _read_json_result(Path(other_result))
@@ -393,8 +462,21 @@ def test_multiprocess_same_comparison_lock(lock_env):
         assert not Path(contender_inside).is_file()
         assert other_payload.get("status") == "acquired", other_payload
 
+        # Mesmo path físico para same comparison_id (diagnóstico).
+        holder_acquired_note = Path(acquired_flag).read_text(encoding="utf-8")
+        contender_started_note = Path(contender_started).read_text(encoding="utf-8")
+        assert "path=" in holder_acquired_note
+        assert "path=" in contender_started_note
+        holder_path = holder_acquired_note.split("path=", 1)[1].split("|", 1)[0]
+        contender_path = contender_started_note.split("path=", 1)[1].split("|", 1)[0]
+        assert holder_path == contender_path == contender_payload.get("lock_path")
+
+        _touch_flag(release_allowed, note="release")
         _join_process(holder, timeout=25.0, label="holder")
-        assert holder.exitcode == 0, f"holder exitcode={holder.exitcode}"
+        assert holder.exitcode == 0, (
+            f"holder exitcode={holder.exitcode} "
+            f"payload={_read_json_result(Path(holder_result)) if Path(holder_result).is_file() else None}"
+        )
         holder_payload = _read_json_result(Path(holder_result))
         assert holder_payload.get("status") == "acquired_and_released", holder_payload
         assert Path(released_flag).is_file()

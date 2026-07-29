@@ -621,7 +621,7 @@ def test_agente_compara_js_comparison_common_params_flow():
     assert "function isComparisonCommonParamsStep" in js
     assert "function activateComparisonCommonParamsStep" in js
     assert "CONFIGURATION_READY" in js
-    assert "O cálculo comparativo será realizado na próxima etapa." in js
+    assert "As configurações estão prontas. O cálculo será iniciado somente após sua confirmação." in js
     assert "function renderConfigurationReviewTabs" in js
     assert "Arquivo para Comparação" in js
     assert "Arquivo para auditoria" not in js
