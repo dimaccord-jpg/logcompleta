@@ -1,14 +1,14 @@
-# Execução Local
+﻿# Execução Local
 
-Referência auditada em 2026-07-20.
+Referência auditada em 2026-07-28. A visão funcional oficial está em `docs/estado_oficial_consolidado.md`.
 
 ## Pré-requisitos
 
-- estar no diretório raiz do projeto;
-- usar `.venv` local sem versioná-la;
+- usar a raiz do projeto;
+- ativar `.venv` local quando aplicável;
 - definir `APP_ENV`, `DATABASE_URL`, `SECRET_KEY`, `APP_DATA_DIR`, `INDICES_FILE_PATH` e `PUBLIC_BASE_URL`.
 
-## Comandos úteis
+## Comandos principais
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
@@ -19,25 +19,20 @@ Referência auditada em 2026-07-20.
 .\.venv\Scripts\python.exe -m flask --app app.web run
 ```
 
-## Validação manual mínima
+## Pontos de validação manual
 
-1. `/` anônimo: discovery, limites de onboarding e handoff com `next` seguro.
-2. `/` logado e `/chat_julia?mode=operational`: Júlia operacional.
-3. `/api/julia/documents/*`: upload, listagem, remoção e limpeza com isolamento por sessão.
-4. `/fretes`: upload, BI, previsão e chat Roberto.
-5. `/auditoria-frete`: upload, `temp_table`, revisão, coverage, lote, BI e `audit-chat/unlock`.
-6. `/agente-compara`: upload, `temp_table`, revisão, coverage, lote, BI e `audit-chat/unlock`.
-7. `/admin/...`: métricas de IA/processamento, billing e configurações.
-8. `/cron/*`: somente em contexto controlado e com `X-Cron-Secret` válido.
-
-## Temporários e artefatos
-
-- `app/cleiton_doc_tmp/` e `tt_*.json` são temporários técnicos;
-- `.db` locais não fazem parte do fluxo oficial;
-- templates `.xlsx` oficiais versionados são exceções explícitas do `.gitignore`.
+1. autenticação e redirecionamento seguro;
+2. `/chat_julia?mode=operational`;
+3. `/fretes`;
+4. `/auditoria-frete`;
+5. `/agente-compara` com jornada completa: start, upload de duas tabelas obrigatórias, terceira opcional, revisão, impostos, coverage, arquivo operacional, cálculo e leitura do resultado;
+6. `/health/liveness` e `/health/readiness`;
+7. `/admin/...` para métricas, billing e observabilidade;
+8. `/cron/*` apenas com segredo válido e em contexto controlado.
 
 ## Observações importantes
 
-- o boot versionado do Render aplica migrations antes do servidor;
-- `APP_ENV` é obrigatório e não tem fallback implícito;
-- o banco oficial é PostgreSQL em todos os ambientes.
+- o banco oficial continua sendo PostgreSQL;
+- o sistema depende das migrations Alembic existentes;
+- `.db` locais, `cache_*.json`, `app/indices.json` e `app/cleiton_doc_tmp/` não são dependências oficiais do deploy;
+- templates oficiais `.xlsx` permanecem versionados por exceção do `.gitignore`.

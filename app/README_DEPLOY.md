@@ -1,69 +1,38 @@
-# Deploy e Promoção
+﻿# Deploy e Promoção
 
-Referência operacional consolidada em 2026-07-20.
+Referência auditada em 2026-07-28. A visão consolidada do estado atual está em `docs/estado_oficial_consolidado.md`.
 
-## Premissas
-
-- executar a partir do diretório do projeto;
-- ativar a virtualenv local quando a validação ocorrer fora do Render;
-- trabalhar primeiro em `homolog`;
-- validar `git fetch`, branch atual, sincronização e `git status --short` antes de qualquer promoção.
-
-## Estado atual documentado
-
-- homolog local auditado nesta atividade: `c2575f8`;
-- produção informada pelo processo operacional: `8edae63`;
-- backup homolog informado: `backup/homolog-antes-agente-compara-20260720`;
-- backup produção informado: `backup/producao-antes-agente-compara-20260720`;
-- sem migration, tabela, coluna ou banco novo na entrega atual.
-
-## Fluxo recomendado
-
-1. `git fetch --all --prune`
-2. `git branch --show-current`
-3. `git status --short`
-4. validar se `homolog` está sincronizada com o remoto pretendido;
-5. executar testes e validações manuais mínimas;
-6. confirmar se a cadeia de migrations existente está íntegra;
-7. somente após aprovação explícita, fazer commit e push em `homolog`;
-8. validar deploy de homologação no Render;
-9. criar backup da branch de produção antes da promoção;
-10. promover `homolog` para a branch operacional de produção com `git merge --no-ff`;
-11. executar novamente as validações pós-merge;
-12. push da branch de produção;
-13. validar build, migrations, login, agentes, billing, cron e health check;
-14. voltar para `homolog`.
-
-## Merge `--no-ff`
-
-Um merge `--no-ff` pode deixar a branch dois commits à frente do remoto de referência:
-
-- o commit já existente da entrega promovida;
-- o novo commit de merge.
-
-Isso é esperado e não deve ser interpretado automaticamente como desvio.
-
-## Render e infraestrutura
-
-Confirmado no código versionado:
+## O que o repositório comprova
 
 - `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn;
-- `render.yaml` declara homolog em `homolog` com `autoDeploy: true`;
-- `render.yaml` declara produção em `main` com `autoDeploy: false`.
+- `render.yaml` versionado declara homolog em `homolog` com `autoDeploy: true`;
+- `render.yaml` versionado declara produção em `main` com `autoDeploy: false`;
+- o código expõe `/health/liveness` e `/health/readiness`.
 
-Divergências a validar fora do código:
+## O que o processo operacional informado registra
 
-- o processo operacional informado usa `producao` como branch de produção;
-- o YAML versionado ainda aponta produção para `main`;
-- o YAML usa `healthCheckPath: /health`, mas o código expõe `/health/liveness` e `/health/readiness`.
+- desenvolvimento e validação em `homolog`;
+- promoção por merge para `producao`;
+- deploy de produção manual no Render.
+
+## Fluxo operacional recomendado
+
+1. validar `git status -sb` e branch atual;
+2. validar testes e checagens necessárias da entrega;
+3. confirmar que não houve mudança de schema fora das migrations versionadas;
+4. validar homologação na branch `homolog`;
+5. promover para a branch operacional de produção adotada pelo time;
+6. executar o deploy manual de produção no Render;
+7. validar logs, health check e fluxos críticos após o deploy.
 
 ## Banco e migrations
 
-- esta entrega não criou migration nova;
-- deploy deve aplicar ou validar a cadeia Alembic já existente;
-- não corrigir schema manualmente sem migration correspondente;
-- `.db` locais e JSON temporários não participam do deploy.
+A entrega recente do AgenteCompara não criou migration, tabela ou coluna nova. Ainda assim, o deploy continua dependente do `db upgrade` no boot para manter a cadeia Alembic já versionada aplicada.
 
-## Rollback
+## Divergências operacionais vigentes
 
-O rollback deve partir do backup de branch criado antes da promoção, não de ajustes manuais de banco ou troca ad hoc de arquivos.
+- o processo informado trata `producao` como branch de produção;
+- o `render.yaml` versionado ainda aponta produção para `main`;
+- o YAML segue com `healthCheckPath: /health`, enquanto o código expõe `/health/liveness` e `/health/readiness`.
+
+Esses pontos devem ser tratados como validações obrigatórias antes de qualquer novo deploy.

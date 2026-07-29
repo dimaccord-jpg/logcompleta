@@ -898,42 +898,154 @@ def test_api_get_not_started(web_client, app, tmp_path, monkeypatch):
     assert body["result"] is None
 
 
-def test_replay_faster_than_first_and_zero_motor(app, tmp_path, monkeypatch):
-    calls = {"motor": 0}
+def test_replay_reuses_stored_result_without_motor_or_additional_billing(app, tmp_path, monkeypatch):
+    """Replay idempotente: reutiliza storage, sem motor nem billing adicionais.
+
+    Não usa comparação temporal relativa (second < first), que é sensível a
+    filesystem/cache/scheduler e não prova o contrato comportamental.
+    """
+    calls = {"motor": 0, "billing": 0, "save": 0, "load": 0}
+    saved_keys: list[str] = []
 
     def motor(context):
         calls["motor"] += 1
-        time.sleep(0.05)
         from app.agente_compara_comparison_calculation_service import calculate_comparison_in_memory
 
         return calculate_comparison_in_memory(context)
+
+    def billing(**kwargs):
+        calls["billing"] += 1
+
+    import app.agente_compara_calculation_execution_service as exec_mod
+    import app.agente_compara_calculation_result_storage as storage_mod
+
+    real_save = storage_mod.save_comparison_calculation_result
+    real_load = storage_mod.load_comparison_calculation_result
+
+    def save_wrapper(**kwargs):
+        calls["save"] += 1
+        meta = real_save(**kwargs)
+        saved_keys.append(str(meta.get("result_storage_key") or meta.get("storage_key") or ""))
+        return meta
+
+    def load_wrapper(**kwargs):
+        calls["load"] += 1
+        return real_load(**kwargs)
+
+    monkeypatch.setattr(storage_mod, "save_comparison_calculation_result", save_wrapper)
+    monkeypatch.setattr(storage_mod, "load_comparison_calculation_result", load_wrapper)
+    monkeypatch.setattr(exec_mod, "save_comparison_calculation_result", save_wrapper)
+    monkeypatch.setattr(exec_mod, "load_comparison_calculation_result", load_wrapper)
 
     with app.app_context():
         _setup_env(monkeypatch, tmp_path)
         state = _ready_comparison_state()
         sess = _session_dict_from_state(state)
-        t0 = time.perf_counter()
-        _exec(
+        comparison_id = state["comparison_id"]
+
+        first = _exec(
             app,
             sess,
-            comparison_id=state["comparison_id"],
-            execution_id="exec-perf",
+            comparison_id=comparison_id,
+            execution_id="exec-replay-stable",
             calculate_fn=motor,
-            emit_billing=lambda **kwargs: None,
+            emit_billing=billing,
         )
-        first = time.perf_counter() - t0
-        t1 = time.perf_counter()
-        _exec(
-            app,
-            sess,
-            comparison_id=state["comparison_id"],
-            execution_id="exec-perf",
-            calculate_fn=motor,
-            emit_billing=lambda **kwargs: None,
-        )
-        second = time.perf_counter() - t1
+        assert first["ok"] is True
+        assert first["idempotent_replay"] is False
+        assert first["status"] == STEP_CALCULATION_READY
+        assert first["billing_status"] == BILLING_STATUS_APPLIED
+        assert first.get("result") is not None
         assert calls["motor"] == 1
-        assert second < first
+        assert calls["billing"] == 1
+        assert calls["save"] == 1
+        # Primeira execução devolve public_result em memória; load pode ser zero.
+        load_after_first = calls["load"]
+
+        persisted_after_first = _persisted(sess)
+        calc_after_first = persisted_after_first["comparison_calculation"]
+        storage_key = calc_after_first.get("result_storage_key")
+        checksum = calc_after_first.get("result_checksum")
+        size_bytes = calc_after_first.get("result_size_bytes")
+        fingerprint = calc_after_first.get("request_fingerprint")
+        fingerprint_short = calc_after_first.get("fingerprint_short")
+        execution_id = calc_after_first.get("execution_id")
+        attempt_count = calc_after_first.get("attempt_count")
+        billing_key = calc_after_first.get("billing_idempotency_key")
+        table_ids = list(calc_after_first.get("table_ids") or [])
+        calculated_table_count = calc_after_first.get("calculated_table_count")
+        calculated_cell_count = calc_after_first.get("calculated_cell_count")
+        error_cell_count = calc_after_first.get("error_cell_count")
+        started_at = calc_after_first.get("started_at")
+        finished_at = calc_after_first.get("finished_at")
+
+        assert storage_key
+        assert checksum
+        assert fingerprint
+        assert execution_id == "exec-replay-stable"
+        assert storage_key in saved_keys
+        assert calc_after_first.get("stale") is not True
+        assert "result" not in calc_after_first or calc_after_first.get("result") is None
+        assert persisted_after_first["current_step"] == STEP_CALCULATION_READY
+
+        files_before_replay = sorted(p.name for p in tmp_path.rglob("*") if p.is_file())
+
+        second = _exec(
+            app,
+            sess,
+            comparison_id=comparison_id,
+            execution_id="exec-replay-stable",
+            calculate_fn=motor,
+            emit_billing=billing,
+        )
+
+        assert second["ok"] is True
+        assert second["idempotent_replay"] is True
+        assert second["status"] == STEP_CALCULATION_READY
+        assert second["billing_status"] == BILLING_STATUS_APPLIED
+        assert second.get("fingerprint_short") == fingerprint_short
+        assert second.get("result") is not None
+        assert second.get("result") == first.get("result")
+        if "analytics" in first or "analytics" in second:
+            assert second.get("analytics") == first.get("analytics")
+
+        # Motor e billing: sem incremento no replay applied.
+        assert calls["motor"] == 1
+        assert calls["billing"] == 1
+        # Sem nova gravação do resultado.
+        assert calls["save"] == 1
+        # Replay lê o storage (contrato atual via _build_success_response).
+        assert calls["load"] > load_after_first
+
+        persisted_after_replay = _persisted(sess)
+        calc_after_replay = persisted_after_replay["comparison_calculation"]
+        assert persisted_after_replay["current_step"] == STEP_CALCULATION_READY
+        assert calc_after_replay.get("status") == STEP_CALCULATION_READY
+        assert calc_after_replay.get("result_storage_key") == storage_key
+        assert calc_after_replay.get("result_checksum") == checksum
+        assert calc_after_replay.get("result_size_bytes") == size_bytes
+        assert calc_after_replay.get("request_fingerprint") == fingerprint
+        assert calc_after_replay.get("fingerprint_short") == fingerprint_short
+        assert calc_after_replay.get("execution_id") == execution_id
+        assert calc_after_replay.get("attempt_count") == attempt_count
+        assert calc_after_replay.get("billing_status") == BILLING_STATUS_APPLIED
+        assert calc_after_replay.get("billing_idempotency_key") == billing_key
+        assert list(calc_after_replay.get("table_ids") or []) == table_ids
+        assert calc_after_replay.get("calculated_table_count") == calculated_table_count
+        assert calc_after_replay.get("calculated_cell_count") == calculated_cell_count
+        assert calc_after_replay.get("error_cell_count") == error_cell_count
+        assert calc_after_replay.get("started_at") == started_at
+        assert calc_after_replay.get("finished_at") == finished_at
+        assert calc_after_replay.get("stale") is not True
+        assert "result" not in calc_after_replay or calc_after_replay.get("result") is None
+
+        files_after_replay = sorted(p.name for p in tmp_path.rglob("*") if p.is_file())
+        assert files_after_replay == files_before_replay
+
+        _assert_no_forbidden(second)
+        import json
+
+        json.dumps(second, ensure_ascii=False, default=str)
 
 
 # ---------------------------------------------------------------------------
@@ -969,7 +1081,7 @@ def test_frontend_process_calculations_contract():
     assert "dataset.processCalculationsBound" in js
     assert "generateRequestId()" in process_fn
     assert "Finalizando processamento" in js
-    assert "Regularizar" in js
+    assert "Tentar novamente" in js
     assert "billing_status === 'applied'" in js
     assert "result_storage_key" not in process_fn
     assert "cleiton_doc_tmp" not in process_fn

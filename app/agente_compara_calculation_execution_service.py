@@ -201,6 +201,33 @@ def _lightweight_calc_for_session(calc: dict) -> dict:
     payload.pop("result", None)
     payload.pop("results_by_table", None)
     payload.pop("comparative_rows", None)
+    # Analytics completo (com agregações) pode ser regenerado do storage; sessão fica leve.
+    analytics = payload.get("analytics")
+    if isinstance(analytics, dict):
+        # Mantém apenas contagens leves se já existirem; remove blocos grandes acidentais.
+        payload["analytics"] = {
+            "schema_version": analytics.get("schema_version"),
+            "comparison_id": analytics.get("comparison_id"),
+            "table_count": analytics.get("table_count"),
+            "row_count": analytics.get("row_count"),
+            "global_summary": analytics.get("global_summary"),
+            "tables": [
+                {
+                    "table_id": t.get("table_id"),
+                    "slot_number": t.get("slot_number"),
+                    "carrier_name": t.get("carrier_name"),
+                    "display_name": t.get("display_name"),
+                    "calculated_freight_total": t.get("calculated_freight_total"),
+                    "calculated_freight_average": t.get("calculated_freight_average"),
+                    "calculated_freight_per_kg": t.get("calculated_freight_per_kg"),
+                    "calculated_rows": t.get("calculated_rows"),
+                    "error_rows": t.get("error_rows"),
+                    "coverage_percentage": t.get("coverage_percentage"),
+                }
+                for t in (analytics.get("tables") or [])
+                if isinstance(t, dict)
+            ],
+        }
     return payload
 
 
@@ -245,6 +272,25 @@ def _load_stored_result_or_raise(calc: dict, *, comparison_id: str) -> dict:
     return _public_result(result) or {}
 
 
+def _build_analytics_for_released_result(result: dict | None) -> dict | None:
+    """Analytics leve somente a partir do result já validado (sem motor/billing/Gemini)."""
+    if not isinstance(result, dict):
+        return None
+    try:
+        from app.agente_compara_comparison_analytics_service import (
+            AgenteComparaComparisonAnalyticsError,
+            build_comparison_analytics,
+        )
+
+        return build_comparison_analytics(result)
+    except AgenteComparaComparisonAnalyticsError:
+        logger.exception("agente_compara_analytics_invalid_result")
+        return None
+    except Exception:
+        logger.exception("agente_compara_analytics_generation_failed")
+        return None
+
+
 def _build_ready_response(
     *,
     state: dict,
@@ -254,6 +300,8 @@ def _build_ready_response(
 ) -> dict:
     billing = (calc.get("billing_status") or BILLING_STATUS_NOT_STARTED).strip()
     release = _billing_allows_result_release(calc)
+    stale = bool(calc.get("stale"))
+    released_result = result if (release and not stale) else None
     payload = {
         "ok": bool(release),
         "status": STEP_CALCULATION_READY,
@@ -261,8 +309,9 @@ def _build_ready_response(
         "fingerprint_short": calc.get("fingerprint_short"),
         "idempotent_replay": bool(idempotent_replay),
         "billing_status": billing,
-        "stale": bool(calc.get("stale")),
-        "result": result if release else None,
+        "stale": stale,
+        "result": released_result,
+        "analytics": _build_analytics_for_released_result(released_result) if released_result else None,
         "comparison": {
             "comparison_id": state.get("comparison_id"),
             "current_step": state.get("current_step"),
@@ -612,6 +661,7 @@ def get_comparison_calculation_status(
         "billing_status": billing,
         "error": calc.get("error") if status == STEP_CALCULATION_FAILED else None,
         "result": None,
+        "analytics": None,
         "previous_result_available": bool(
             stale and calc.get("result_storage_key") and calc.get("status") == STEP_CALCULATION_READY
         ),
@@ -620,20 +670,24 @@ def get_comparison_calculation_status(
     }
     if status == STEP_CALCULATION_RUNNING:
         payload["result"] = None
+        payload["analytics"] = None
         return payload
 
     if status == STEP_CALCULATION_READY and not stale:
         if billing == BILLING_STATUS_APPLIED:
             try:
-                payload["result"] = _load_stored_result_or_raise(
+                loaded = _load_stored_result_or_raise(
                     calc,
                     comparison_id=str(state.get("comparison_id") or ""),
                 )
+                payload["result"] = loaded
+                payload["analytics"] = _build_analytics_for_released_result(loaded)
             except AgenteComparaCalculationExecutionError as exc:
                 payload["ok"] = False
                 payload["error_code"] = exc.error_code
                 payload["message"] = exc.message
                 payload["result"] = None
+                payload["analytics"] = None
         elif billing == BILLING_STATUS_PENDING:
             payload["message"] = "Cálculo concluído. Finalizando processamento..."
             payload["error_code"] = ERROR_BILLING_PENDING

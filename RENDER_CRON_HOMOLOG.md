@@ -1,20 +1,8 @@
-# Render + Cron em Homolog
+﻿# Render + Cron em Homolog
 
-Referência auditada em 2026-07-20.
+Referência auditada em 2026-07-28.
 
-## Premissas
-
-Configurar no ambiente:
-
-- `APP_ENV=homolog`
-- `DATABASE_URL`
-- `CRON_SECRET`
-- storage persistente
-- cadeia de migrations existente
-
-## Cron oficial
-
-Endpoints confirmados no código:
+## Cron confirmado no código
 
 - `POST /cron/executar-cleiton`
 - `POST /cron/finance`
@@ -22,19 +10,17 @@ Endpoints confirmados no código:
 
 Autenticação:
 
-- oficial: header `X-Cron-Secret`
-- compatibilidade temporária: `?secret=`
+- oficial: header `X-Cron-Secret`;
+- compatibilidade temporária: `?secret=`.
 
-Sem segredo válido, a resposta esperada é `403`. Com segredo válido, `200`.
+## Boot do serviço
 
-## Observações de infraestrutura
+- `start.sh` infere `APP_ENV` quando necessário;
+- `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn.
 
-- jobs não dependem de `.db` local nem de `app/cleiton_doc_tmp/`;
-- `start.sh` aplica migrations antes do Gunicorn;
-- `render.yaml` versionado declara homolog em `homolog` e produção em `main`.
+## Pontos operacionais a validar
 
-## Divergências vigentes
-
-- o processo operacional informado trata `producao` como branch de produção;
-- o YAML versionado ainda aponta produção para `main`;
-- o YAML usa `healthCheckPath: /health`, mas o código expõe `/health/liveness` e `/health/readiness`.
+- homolog continua versionado em `homolog` no `render.yaml`;
+- produção continua versionada em `main` no `render.yaml`;
+- o processo operacional informado usa `producao` como branch de produção;
+- o YAML ainda mantém `healthCheckPath: /health`, enquanto o código expõe `/health/liveness` e `/health/readiness`.
