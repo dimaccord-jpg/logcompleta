@@ -501,6 +501,11 @@
          role="alert"
          hidden></div>
 
+    <div class="agente-compara-temp-table-modal-validation small"
+         id="agenteComparaTempTableModalValidation"
+         role="alert"
+         hidden></div>
+
     <div class="agente-compara-temp-table-modal-footer">
 
       <button type="button"
@@ -1628,6 +1633,44 @@
     overflow-y: auto;
     flex: 1 1 auto;
     min-height: 0;
+  }
+
+  .agente-compara-flow-status-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.35rem 0;
+  }
+
+  .agente-compara-flow-status-spinner {
+    width: 1.35rem;
+    height: 1.35rem;
+    border: 2px solid rgba(255, 255, 255, 0.18);
+    border-top-color: var(--af-cyan, #00BFFF);
+    border-radius: 50%;
+    animation: agente-compara-flow-spin 0.8s linear infinite;
+  }
+
+  @keyframes agente-compara-flow-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .agente-compara-flow-status-text {
+    font-size: 0.95rem;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .agente-compara-flow-failed-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.85rem;
+  }
+
+  .agente-compara-flow-failed-text {
+    margin: 0;
+    color: var(--af-text-primary, #F0F0F5);
   }
 
   body.agente-compara-temp-table-modal-editing .agente-compara-temp-table-modal-body {
@@ -2826,6 +2869,32 @@
     outline-offset: 2px;
   }
 
+  .agente-compara-comparison-calc-memory-link {
+    border: none;
+    background: transparent;
+    color: var(--af-accent, #00BFFF);
+    font: inherit;
+    font-size: inherit;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .agente-compara-comparison-calc-memory-link:hover {
+    color: #66d9ff;
+  }
+
+  .agente-compara-comparison-calc-memory-link:focus-visible {
+    outline: 2px solid rgba(0, 191, 255, 0.45);
+    outline-offset: 2px;
+  }
+
+  .agente-compara-calculation-memory-diagnostic {
+    margin: 0.75rem 0;
+  }
+
   .agente-compara-calculation-memory-modal {
     z-index: 2200;
   }
@@ -2971,6 +3040,61 @@
     color: var(--af-danger, #FF4D6A);
     font-size: 0.68rem;
     line-height: 1.25;
+  }
+
+  .accessorial-basis-review {
+    vertical-align: top;
+  }
+
+  .accessorial-basis-review__label {
+    font-weight: 600;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .accessorial-basis-review__secondary {
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--af-text-secondary, #A8B0C0);
+  }
+
+  .accessorial-basis-review__badge {
+    display: inline-block;
+    margin-top: 0.35rem;
+    padding: 0.08rem 0.35rem;
+    border-radius: 0.25rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .accessorial-basis-review__badge--warning {
+    background: rgba(255, 193, 7, 0.16);
+    color: #f0c94d;
+  }
+
+  .accessorial-basis-review__badge--error {
+    background: rgba(255, 77, 106, 0.16);
+    color: var(--af-danger, #FF4D6A);
+  }
+
+  .accessorial-basis-review--warning .accessorial-basis-review__secondary {
+    color: #e6c35c;
+  }
+
+  .accessorial-basis-review--error .accessorial-basis-review__label,
+  .accessorial-basis-review--error .accessorial-basis-review__secondary {
+    color: var(--af-danger, #FF4D6A);
+  }
+
+  .accessorial-basis-review--action-required {
+    box-shadow: inset 3px 0 0 rgba(255, 77, 106, 0.86);
+  }
+
+  .accessorial-basis-extracted-text {
+    margin-top: 0.2rem;
+    font-size: 0.7rem;
+    color: var(--af-text-secondary, #A8B0C0);
   }
 
   .agente-compara-temp-table-modal-row-delete-btn,
@@ -3600,6 +3724,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
-<script src="{{ url_for('static', filename='js/agente_compara.js') }}"></script>
+<script src="{{ url_for('static', filename='js/agente_compara.js') }}?v=ac-flow-modal-1"></script>
 
 {% endblock %}

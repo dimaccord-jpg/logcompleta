@@ -524,6 +524,90 @@ def test_frontend_reset_contract_strings():
     assert "function ensureComparisonStarted" in js
 
 
+def _frontend_js() -> str:
+    return pathlib.Path("app/static/js/agente_compara.js").read_text(encoding="utf-8")
+
+
+def _teardown_block(js: str) -> str:
+    return js[
+        js.index("function teardownTempTableModal") : js.index(
+            "function resetAgenteComparaFrontendState"
+        )
+    ]
+
+
+def _reset_frontend_block(js: str) -> str:
+    return js[
+        js.index("function resetAgenteComparaFrontendState") : js.index(
+            "function cacheReviewTempTableIfOwned"
+        )
+    ]
+
+
+def test_teardown_temp_table_modal_clears_visual_shell_and_content():
+    """Contrato estrutural: teardown destrói conteúdo visual do modal (sem jsdom)."""
+    js = _frontend_js()
+    assert "function teardownTempTableModal" in js
+    teardown = _teardown_block(js)
+    assert "hideTempTableModalShell()" in teardown
+    assert "agenteComparaTempTableModalBody" in teardown
+    assert "replaceChildren()" in teardown
+    assert "agenteComparaTempTableModalTitle" in teardown
+    assert "titleEl.textContent = ''" in teardown
+    assert "agenteComparaTempTableModalSubtitle" in teardown
+    assert "subtitleEl.replaceChildren()" in teardown
+    assert "setTempTableModalError('')" in teardown
+    assert "agenteComparaTempTableModalEdit" in teardown
+    assert "agenteComparaTempTableModalSave" in teardown
+    assert "agenteComparaTempTableModalClearSlot" in teardown
+    assert "removeAttribute('aria-busy')" in teardown
+    assert "agenteComparaCarrierIdentifyPanel" in teardown
+    # Idempotente: não cria listeners nem assume nós existentes
+    assert "addEventListener" not in teardown
+    assert "if (body)" in teardown
+    assert "if (titleEl)" in teardown
+    assert "if (subtitleEl)" in teardown
+    assert "if (modal)" in teardown
+
+
+def test_reset_frontend_calls_teardown_not_only_shell_hide():
+    js = _frontend_js()
+    reset = _reset_frontend_block(js)
+    assert "teardownTempTableModal()" in reset
+    assert "hideTempTableModalShell()" not in reset
+    assert "bumpComparisonRequestGeneration()" in reset
+    assert "stopTempTablePolling()" in reset
+    assert "clearPendingFreightTableUpload()" in reset
+    assert "setCurrentTempTable(null)" in reset
+    assert "clearLocalComparisonState()" in reset
+    assert "resetConfigurationReviewState()" in reset
+    assert "reviewLoadToken += 1" in reset
+    # Ordem: invalidar geração antes do teardown; estado local limpo antes do teardown
+    assert reset.index("bumpComparisonRequestGeneration()") < reset.index("teardownTempTableModal()")
+    assert reset.index("setCurrentTempTable(null)") < reset.index("teardownTempTableModal()")
+    assert reset.index("clearLocalComparisonState()") < reset.index("teardownTempTableModal()")
+    assert reset.index("resetConfigurationReviewState()") < reset.index("teardownTempTableModal()")
+    # Sem chamada backend adicional no reset frontend
+    assert "fetch(" not in reset
+    assert "API_COMPARISON_RESET" not in reset
+
+
+def test_reset_frontend_clears_upload_inflight_and_review_caches():
+    js = _frontend_js()
+    reset = _reset_frontend_block(js)
+    assert "uploadInFlight" in reset
+    assert "setUploadLoading(false)" in reset or "uploadInFlight = false" in reset
+    review_reset = js[
+        js.index("function resetConfigurationReviewState") : js.index(
+            "function bumpComparisonRequestGeneration"
+        )
+    ]
+    assert "reviewTempTablesById = {}" in review_reset
+    assert "reviewSharedTempTable = null" in review_reset
+    assert "reviewLoadToken += 1" in review_reset
+    assert "configurationReviewTab = null" in review_reset
+
+
 def test_reset_then_status_empty_then_start_new_id(web_client):
     boot = _bootstrap_ready_comparison(web_client, table_count=2)
     old_id = boot["comparison_id"]

@@ -1,13 +1,15 @@
-﻿# Estado Oficial Consolidado
+# Estado Oficial Consolidado
 
-Referência consolidada em 2026-07-28, auditada diretamente no código da branch `homolog`.
+Referência consolidada em 2026-07-29, auditada diretamente no código da branch `homolog`.
 
 ## Base desta consolidação
 
 - branch local auditada: `homolog`;
-- commits operacionais informados para a entrega recente do AgenteCompara:
-  - `a6fccdc` - `feat: conclui melhorias e calculos do AgenteCompara`
-  - `2653ca2` - `merge: promove melhorias e calculos do AgenteCompara para producao`
+- working tree auditado: limpo;
+- upstream auditado: `origin/homolog`;
+- relação auditada com o upstream: sem diferença de conteúdo no checkout local (`0  0` em `git rev-list --left-right --count HEAD...origin/homolog`);
+- commit atual auditado: `81d36aa` - `feat: aprimora jornada e analytics do AgenteCompara`;
+- commit equivalente informado em produção por `cherry-pick`: `6b0672e` - `feat: aprimora jornada e analytics do AgenteCompara`;
 - esta consolidação usa como fonte principal o código atual do repositório, os testes do domínio e a infraestrutura versionada (`render.yaml`, `start.sh`, migrations e `.gitignore`);
 - quando há divergência entre processo operacional informado e arquivos versionados, a divergência é registrada explicitamente.
 
@@ -17,8 +19,8 @@ Referência consolidada em 2026-07-28, auditada diretamente no código da branch
 - O banco oficial do sistema segue sendo PostgreSQL via `DATABASE_URL`, com schema governado por Alembic em `migrations/versions/`.
 - O projeto possui duas trilhas de persistência distintas:
   - persistência transacional em banco;
-  - persistência técnica temporária em JSON sob `app/cleiton_doc_tmp/`, usada para documentos, `temp_table`, lotes e resultados auxiliares fora da sessão.
-- O AgenteCompara não é um comparador simples de planilhas. Ele implementa um fluxo multitabela com estado, revisão humana, configuração fiscal global, coverage opcional, arquivo operacional, cálculo comparativo, storage dedicado de resultado e observabilidade própria.
+  - persistência técnica temporária em JSON sob `app/cleiton_doc_tmp/`, usada para documentos, `temp_table`, lotes e resultados comparativos fora da sessão.
+- O AgenteCompara implementa um fluxo multitabela com estado, revisão humana, configuração fiscal global, coverage opcional, arquivo operacional, cálculo comparativo, storage dedicado de resultado, analytics leve de comparação e observabilidade própria.
 
 ## AgenteCompara: arquitetura atual
 
@@ -51,8 +53,8 @@ O fluxo implementado hoje é:
 7. etapa opcional de cidades atendidas
 8. upload do arquivo operacional para comparação
 9. revisão final da configuração
-10. cálculo comparativo multitabela
-11. leitura do resultado consolidado
+10. confirmação explícita e cálculo comparativo multitabela
+11. leitura do resultado consolidado e analytics comparativo
 
 ### Estados oficiais da comparação
 
@@ -96,8 +98,9 @@ Status por tabela:
 - slots 1 e 2 são obrigatórios;
 - slot 3 é opcional;
 - o slot 2 nasce bloqueado e só é liberado após a confirmação da tabela 1;
-- a comparação só avança para parâmetros globais depois que as duas tabelas obrigatórias estiverem confirmadas;
-- se a terceira tabela for confirmada, ela entra no cálculo;
+- após a confirmação da tabela 2, o fluxo entra em `ASK_TABLE_3`;
+- `TABLES_READY` só é alcançado quando as tabelas obrigatórias já estão confirmadas e, se a terceira foi escolhida, ela também está confirmada;
+- `primary_temp_table_id` aponta para a primeira `temp_table` confirmada e é usado como compatibilidade legada e para localizar o arquivo operacional compartilhado; ele não representa sozinho o conjunto comparativo;
 - se existir slot 3, mas ele não estiver confirmado, o cálculo segue com 2 tabelas.
 
 ### Identidade, escopo e proteção contra mistura de contexto
@@ -129,16 +132,11 @@ Comportamento atual:
 
 - exige autenticação;
 - exige autorização via `avaliar_autorizacao_operacao_por_franquia`;
-- aceita `comparison_id`, `table_id`, `slot` e `carrier_name`;
+- exige identificação de `carrier_name` antes do envio;
+- aceita `comparison_id`, `table_id` e `slot`;
 - registra documento no trilho técnico compartilhado do Cleiton, mas com namespace do AgenteCompara;
 - dispara extração técnica da `temp_table` após o upload;
-- devolve:
-  - `document`
-  - `session`
-  - `allowed_formats`
-  - `calculation_bases`
-  - `temp_table`
-  - `comparison`
+- devolve `document`, `session`, `allowed_formats`, `calculation_bases`, `temp_table` e `comparison`.
 
 ### Extração técnica e `temp_table`
 
@@ -150,9 +148,8 @@ Arquivos centrais:
 Comportamento atual:
 
 - a extração técnica usa Gemini quando configurado;
-- o timeout da extração é próprio do fluxo (`AGENTE_COMPARA_TEMP_TABLE_TIMEOUT_MS`) e não herda o timeout genérico de chat;
 - a extração é idempotente por conjunto de documentos + `comparison_id` + `table_id`;
-- resposta inválida do modelo não quebra o upload: a `temp_table` é marcada como `failed`;
+- resposta inválida do modelo não quebra o upload: a `temp_table` pode permanecer com erro ou exigir revisão;
 - quando há dados parciais úteis, o backend força `needs_review`;
 - revisão humana preserva artefatos e impede overwrite automático do mesmo conjunto de origem.
 
@@ -179,9 +176,9 @@ A revisão permite:
 - avançar para coverage;
 - atualizar apenas `carrier_name`.
 
-O frontend implementa modal com:
+O frontend implementa:
 
-- identificação obrigatória da transportadora antes do upload;
+- modal obrigatório para identificar a transportadora antes do upload;
 - edição manual dos dados extraídos;
 - abas de frete, impostos, coverage e arquivo operacional;
 - reinício da jornada;
@@ -243,21 +240,9 @@ Contrato atual do arquivo de entrada, confirmado em `app/agente_compara_doc_serv
 
 - versão de schema: `agente_compara_input_v1`
 - aba oficial: `Modelo AgenteCompara`
-- colunas obrigatórias:
-  - `numero_documento`
-  - `cidade_destino`
-  - `uf_destino`
-  - `peso`
-- colunas opcionais:
-  - `cidade_origem`
-  - `uf_origem`
-  - `valor_nf`
-  - `modal`
-  - `data_emissao`
-- colunas legadas toleradas e ignoradas como base do novo lote:
-  - `transportadora`
-  - `data_entrega`
-  - `valor_frete`
+- colunas obrigatórias: `numero_documento`, `cidade_destino`, `uf_destino`, `peso`
+- colunas opcionais: `cidade_origem`, `uf_origem`, `valor_nf`, `modal`, `data_emissao`
+- colunas legadas toleradas e ignoradas como base do novo lote: `transportadora`, `data_entrega`, `valor_frete`
 
 Ponto importante:
 
@@ -278,7 +263,7 @@ Camadas:
 
 - motor unitário: calcula uma tabela por vez;
 - orquestrador multitabela: executa 2 ou 3 tabelas confirmadas e consolida por `row_index`;
-- serviço de execução: controla fingerprint, lock, idempotência, storage e billing.
+- serviço de execução: controla fingerprint, lock, idempotência, storage, analytics liberado e billing.
 
 ### Regras de cálculo confirmadas
 
@@ -320,21 +305,43 @@ Endpoint de leitura:
 
 Contrato público atual:
 
+- o start exige `execution_id`;
+- há proteção explícita contra clique duplo no frontend;
+- replays idempotentes de mesma configuração retornam `200`;
+- tentativas com etapa inválida, configuração incompleta ou identidade incompatível retornam erro de negócio sem mutação indevida do estado;
 - o resultado é comparativo por `row_index`;
 - cada linha consolida `table_results` por `table_id`;
-- cada célula por transportadora expõe:
-  - `calculated_freight`
-  - `status`
-  - `error`
-  - `components`
-  - `evidence`
-- o payload público não expõe campos proibidos como:
-  - `charged_freight`
-  - `expected_freight`
-  - `difference`
-  - `winner`
-  - `ranking`
-  - `recommendation`
+- cada célula por transportadora expõe `calculated_freight`, `status`, `error`, `components` e `evidence`;
+- o payload público e o analytics derivado não expõem campos proibidos como `charged_freight`, `expected_freight`, `difference`, `winner`, `ranking` e `recommendation`.
+
+### Analytics comparativo
+
+Arquivo central:
+
+- `app/agente_compara_comparison_analytics_service.py`
+
+Responsabilidade real:
+
+- recebe apenas o resultado comparativo já validado;
+- não persiste estado;
+- não chama billing, Gemini nem serviços externos;
+- não muta o resultado de entrada;
+- produz payload serializável com `schema_version`, `comparison_id`, `table_count`, `row_count`, `global_summary` e `tables`.
+
+Métricas confirmadas:
+
+- contagem de documentos;
+- peso total;
+- valor total de NF, quando disponível;
+- período inicial/final, quando disponível;
+- total de células, células calculadas, células com erro e cobertura global;
+- por tabela: total calculado, média, total de peso processado, frete por kg, quantidade de linhas calculadas/com erro, cobertura e contagem de rotas/UFs/cidades.
+
+Limitações confirmadas:
+
+- não calcula vencedor, ranking, recomendação ou economia;
+- depende de `schema_version=1`, `table_count` de 2 ou 3 e `comparative_rows` consistentes;
+- quando não há dados completos, retorna nulos ou percentuais coerentes, em vez de inferir valores artificiais.
 
 ### Storage do resultado
 
@@ -391,27 +398,26 @@ Efeito prático:
 
 ### Documentos e comparação
 
+- `POST /api/agente-compara/documents/upload`
+- `GET /api/agente-compara/documents/status`
+- `DELETE /api/agente-compara/documents/<doc_id>`
+- `POST /api/agente-compara/documents/clear`
 - `POST /api/agente-compara/comparison/start`
 - `POST /api/agente-compara/comparison/reset`
 - `POST /api/agente-compara/comparison/proceed-two-tables`
 - `POST /api/agente-compara/comparison/add-third-table`
 - `POST /api/agente-compara/comparison/set-active-table`
-- `POST /api/agente-compara/documents/upload`
-- `GET /api/agente-compara/documents/status`
-- `DELETE /api/agente-compara/documents/<doc_id>`
-- `POST /api/agente-compara/documents/clear`
-
-### Revisão, impostos, coverage e arquivo
-
-- `POST /api/agente-compara/temp-table/save`
 - `POST /api/agente-compara/comparison/taxes`
+- `POST /api/agente-compara/comparison/calculate`
+- `GET /api/agente-compara/comparison/calculation`
+- `POST /api/agente-compara/temp-table/save`
+
+### Coverage, arquivo, correções e chat
+
 - `POST /api/agente-compara/coverage/upload`
 - `GET /api/agente-compara/audit-template`
 - `POST /api/agente-compara/audit/upload`
 - `POST /api/agente-compara/audit/run`
-
-### Correções e chat
-
 - `POST /api/agente-compara/audit/correction/preview`
 - `POST /api/agente-compara/audit/correction/apply`
 - `POST /api/agente-compara/audit/correction/undo`
@@ -433,19 +439,23 @@ Efeito prático:
 
 ## Interface atual do AgenteCompara
 
-Comportamentos confirmados em `app/static/js/agente_compara.js` e `app/templates/agente_compara.html`:
+Comportamentos confirmados em `app/static/js/agente_compara.js`, `app/templates/agente_compara.html` e testes de UI:
 
 - abertura da jornada via botão de upload;
 - modal obrigatório para identificar `carrier_name`;
+- prevenção de múltiplos envios e de múltiplos disparos de cálculo;
+- bloqueios visuais durante preparação, upload, cálculo e regularização;
 - cards/listagem de documentos anexados por sessão;
 - botão visível para reiniciar comparação;
 - polling de `temp_table` e sincronização com `documents/status`;
 - modal de revisão com modo edição;
-- abas de frete, impostos, coverage e arquivo operacional;
-- etapa final de revisão por transportadora antes do cálculo;
-- BI executivo no próprio fluxo;
+- abas de frete, impostos, coverage, arquivo operacional e resultados;
+- confirmação explícita antes de processar os cálculos;
+- mensagens de estado para cálculo em andamento, billing pendente, falha de regularização e resultado obsoleto;
+- resumo comparativo, filtros, paginação e gráficos no bloco de resultados;
+- BI executivo do lote auditado no próprio template;
 - `audit-chat` liberado por `unlock` depois do bundle analítico;
-- mensagens explícitas para processamento, arquivo ausente, conflito de etapa e reinício.
+- linguagem neutra sem vencedor, ranking ou recomendação automática.
 
 ## Observabilidade, métricas e isolamento frente a outros agentes
 
@@ -480,6 +490,8 @@ Observação importante:
 
 Estado confirmado no repositório:
 
+- PostgreSQL é o banco oficial quando configurado via `DATABASE_URL`;
+- Alembic/Flask-Migrate governam o schema;
 - nenhuma migration nova foi adicionada por esta entrega do AgenteCompara;
 - nenhuma tabela nova foi criada nesta entrega;
 - nenhuma coluna nova foi criada nesta entrega;
@@ -489,24 +501,30 @@ Estado confirmado no repositório:
 Aplicação das migrations:
 
 - `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn;
-- isso vale para boot versionado no Render;
+- isso vale para o boot versionado no Render;
 - a documentação correta é: esta entrega não alterou schema, mas o sistema continua dependendo das migrations versionadas no boot.
+
+Leitura operacional importante:
+
+- arquivos `.db`, `.sqlite`, `.sqlite3` e JSON locais ignorados não fazem parte do banco oficial do deploy;
+- divergências antigas identificadas em `flask db check` para `cleiton_billing_apropriacao`, `franquia` e `multiuser_franquia_codigo` são preexistentes e exigem investigação separada;
+- `flask db migrate` não deve ser usado automaticamente para “corrigir” essas divergências sem investigação.
 
 ## Deploy, homologação e produção
 
 ### O que o código versionado comprova
 
 - `start.sh` infere `APP_ENV` quando necessário;
-- `render.yaml` versionado declara:
-  - homolog com branch `homolog` e `autoDeploy: true`
-  - produção com branch `main` e `autoDeploy: false`
+- `render.yaml` versionado declara homolog com branch `homolog` e `autoDeploy: true`;
+- `render.yaml` versionado declara produção com branch `main` e `autoDeploy: false`;
 - o boot versionado roda migrations antes da aplicação subir.
 
 ### O que o processo operacional informado registra
 
 - homologação pela branch `homolog`;
-- promoção por merge para `producao`;
-- deploy de produção manual no Render.
+- promoção para produção por `cherry-pick`;
+- equivalência funcional entre `81d36aa` em homolog e `6b0672e` em produção;
+- deploy manual de produção no Render.
 
 ### Divergência operacional vigente
 
@@ -547,6 +565,44 @@ Leitura oficial:
 - não fazem parte do deploy versionado;
 - não devem ser documentados como dependências obrigatórias de produção.
 
+## Testes e cobertura efetivamente comprovada
+
+Suites diretamente relacionadas e verificadas:
+
+- `tests/test_agente_compara_comparison_start.py`
+- `tests/test_agente_compara_comparison_journey.py`
+- `tests/test_agente_compara_multitable.py`
+- `tests/test_agente_compara_taxes_multicarrier.py`
+- `tests/test_agente_compara_configuration_review.py`
+- `tests/test_agente_compara_comparison_file_contract.py`
+- `tests/test_agente_compara_temp_table_save.py`
+- `tests/test_agente_compara_doc_upload.py`
+- `tests/test_agente_compara_calculation_execution.py`
+- `tests/test_agente_compara_calculation_lock.py`
+- `tests/test_agente_compara_calculation_result_storage.py`
+- `tests/test_agente_compara_calculation_storage_integration.py`
+- `tests/test_agente_compara_comparison_analytics.py`
+- `tests/test_agente_compara_calculation_journey_ui.py`
+- `tests/test_agente_compara_billing_and_metrics.py`
+- `tests/test_agente_compara_isolation.py`
+
+Garantias efetivamente cobertas:
+
+- start/reset e isolamento de sessão;
+- jornada multitabela com 2 obrigatórias e 3ª opcional;
+- regras de impostos globais e coverage;
+- contrato do arquivo operacional;
+- confirmação, idempotência e conflitos de `execution_id`;
+- lock, concorrência e storage do resultado;
+- integração cálculo + billing + leitura pública;
+- analytics comparativo, determinismo, neutralidade e ausência de campos proibidos;
+- contratos de UI para estados, mensagens, filtros, paginação e gráficos.
+
+Aspectos que a documentação não deve vender como cobertos sem ressalva:
+
+- não foi comprovada aqui cobertura exaustiva de todas as rotas não relacionadas ao AgenteCompara;
+- esta atividade não reexecutou a suíte inteira, apenas auditou o escopo de testes existente no repositório.
+
 ## Limitações e decisões arquiteturais atuais
 
 - o estado da comparação é mantido em sessão Flask, não em banco nem Redis;
@@ -555,6 +611,6 @@ Leitura oficial:
 - a terceira tabela continua opcional;
 - coverage permanece opcional;
 - o chat documental e o chat analítico são fluxos separados;
-- o cálculo comparativo não expõe ranking ou recomendação final de vencedor no contrato público atual;
+- o analytics comparativo não expõe ranking, vencedor ou recomendação final;
 - a liberação pública do resultado depende da conclusão do billing operacional;
 - divergências de branch de produção e health check ainda não foram corrigidas no código versionado.

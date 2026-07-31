@@ -664,6 +664,11 @@ def test_components_and_evidence_preserved():
     assert row["evidence"].get("freight_region") == "SP-Interior 1"
     assert row["evidence"].get("calculation_basis")
     assert row["evidence"].get("calculation_details")
+    memory = row["calculation_memory"]
+    assert memory["status"] == "calculated"
+    assert memory["total"] == row["calculated_freight"]
+    assert memory["table_id"] == result["table_id"]
+    assert any(item["code"] == "WEIGHT_FREIGHT" for item in memory["components"])
 
 
 def test_row_error_does_not_stop_others():

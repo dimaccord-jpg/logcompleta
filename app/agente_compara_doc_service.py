@@ -194,17 +194,63 @@ TEMP_TABLE_REVIEW_ACTION_ADVANCE_TO_COVERAGE = "advance_to_coverage"
 HUMAN_REVIEW_STATUS_REVIEWED = "reviewed"
 HUMAN_REVIEW_STATUS_EDITED = "edited"
 UNMAPPED_CALCULATION_BASIS_LABEL = "não mapeado / revisar"
-ERROR_ACCESSORIAL_CALCULATION_BASE_MESSAGE = "Selecione uma base de cálculo ou exclua a linha."
+ERROR_ACCESSORIAL_CALCULATION_BASE_MESSAGE = "Selecione a base de cálculo antes de continuar."
 ERROR_ACCESSORIAL_VALUE_MESSAGE = "Preencha um valor válido para esta taxa ou exclua a linha."
 ERROR_ACCESSORIAL_UNIT_MESSAGE = "A unidade não é compatível com a base selecionada."
-ERROR_ACCESSORIAL_OPERATION_MESSAGE = "Revise a operação da base de cálculo selecionada."
+ERROR_ACCESSORIAL_OPERATION_MESSAGE = "Ajuste a operação da base de cálculo selecionada."
 ERROR_ACCESSORIAL_MINIMUM_LINK_MESSAGE = (
-    "Esta regra mínima não possui uma taxa principal válida vinculada. Corrija ou exclua a regra antes de continuar."
+    "Vincule a uma taxa principal válida ou exclua a regra."
 )
-ERROR_ACCESSORIAL_ADVANCE_MESSAGE = "Revise as generalidades antes de avançar."
+ERROR_ACCESSORIAL_ADVANCE_MESSAGE = "Resolva as pendências das generalidades antes de avançar."
 ERROR_ACCESSORIAL_RATE_CONFLICT_MESSAGE_TEMPLATE = (
     "Há informações contraditórias na regra {name}. O valor informado é {structured_percent}%, "
     "mas a observação indica {described_percent}%. Corrija uma das informações ou exclua a regra antes de continuar."
+)
+
+# View model público da revisão de taxas (derivado de validation; três categorias).
+REVIEW_PRESENTATION_STATE_RESOLVED = "resolved"
+REVIEW_PRESENTATION_STATE_BLOCKING = "blocking"
+REVIEW_PRESENTATION_STATE_INFORMATIONAL = "informational"
+# Aliases legados mantidos apenas para compatibilidade de imports/testes antigos.
+REVIEW_PRESENTATION_STATE_MAPPED = REVIEW_PRESENTATION_STATE_RESOLVED
+REVIEW_PRESENTATION_STATE_RECOGNIZED = REVIEW_PRESENTATION_STATE_RESOLVED
+REVIEW_PRESENTATION_STATE_MINIMUM_MODIFIER = REVIEW_PRESENTATION_STATE_RESOLVED
+REVIEW_PRESENTATION_STATE_EXTRACTION_HYPOTHESIS = REVIEW_PRESENTATION_STATE_BLOCKING
+REVIEW_PRESENTATION_STATE_UNRESOLVED = REVIEW_PRESENTATION_STATE_BLOCKING
+
+REVIEW_PRESENTATION_LABEL_UNRESOLVED = "Base de cálculo não identificada"
+REVIEW_PRESENTATION_ACTION_UNRESOLVED = "Selecione a base de cálculo antes de continuar."
+REVIEW_PRESENTATION_TEXT_RECOGNIZED = "Regra reconhecida automaticamente."
+REVIEW_PRESENTATION_TEXT_UNCLASSIFIED = "Base não classificada"
+
+_ACCESSORIAL_PUBLIC_RULE_LABELS = {
+    "invoice_percentage": "Percentual sobre o valor da NF",
+    "freight_percentage": "Percentual sobre o frete de envio",
+    "fixed_amount": "Valor fixo",
+    "weight_rate": "Por peso",
+    "weight": "Por peso",
+    "weight_fraction": "Por fração de peso",
+}
+
+_ACCESSORIAL_RELATED_COMPONENT_LABELS = {
+    "risk_management": "GRIS",
+    "ad_valorem": "ADV",
+    "insurance": "Seguro",
+    "toll": "Pedágio",
+    "administrative_fee": "TAS",
+    "operational_fee": "Taxa operacional",
+    "freight_value": "Frete valor",
+}
+
+_RECOGNIZED_ACCESSORIAL_CALCULATION_TYPES = frozenset(
+    {
+        "invoice_percentage",
+        "freight_percentage",
+        "fixed_amount",
+        "weight_rate",
+        "weight",
+        "weight_fraction",
+    }
 )
 
 ERROR_TEMP_TABLE_NOT_FOUND = "agente_compara_temp_table_not_found"
@@ -461,11 +507,19 @@ SOURCE_AGENT_AGENTE_COMPARA = "agente_compara"
 
 
 class AgenteComparaTempTableError(ValueError):
-    def __init__(self, error_code: str, message: str, *, errors: list[dict] | None = None):
+    def __init__(
+        self,
+        error_code: str,
+        message: str,
+        *,
+        errors: list[dict] | None = None,
+        validation: dict | None = None,
+    ):
         super().__init__(message)
         self.error_code = error_code
         self.message = message
         self.errors = list(errors or [])
+        self.validation = copy.deepcopy(validation) if isinstance(validation, dict) else None
 
 
 class AgenteComparaCoverageError(ValueError):
@@ -3683,8 +3737,14 @@ def _accessorial_is_calculable_invoice_percentage(fee: dict) -> bool:
 
 
 def _accessorial_runtime_ignored_reason(fee: dict) -> str:
-    if fee.get("conditions") or fee.get("unsupported_reason"):
+    # Distingue condição presente (indeterminada) de unsupported_reason explícito.
+    # Não avalia texto livre: ausência de avaliador → incompleto, não not_applicable.
+    if fee.get("applicable") is False:
+        return "not_applicable"
+    if fee.get("conditions"):
         return AUDIT_REASON_UNSUPPORTED_ACCESSORIAL_CONDITION
+    if fee.get("unsupported_reason"):
+        return AUDIT_REASON_UNSUPPORTED_REASON_PRESENT
     if fee.get("calculation_type") in {"invoice_percentage", "unknown"}:
         return AUDIT_REASON_AMBIGUOUS_ACCESSORIAL_PERCENTAGE
     return AUDIT_REASON_UNSUPPORTED_ACCESSORIAL_CONDITION
@@ -6524,6 +6584,11 @@ def _public_temp_table(record: dict | None) -> dict | None:
     ui = record.get("ui_visibility") if isinstance(record.get("ui_visibility"), dict) else {}
     correction_history = record.get("correction_history") if isinstance(record.get("correction_history"), list) else []
     last_correction = correction_history[-1] if correction_history and isinstance(correction_history[-1], dict) else {}
+    # Cópia profunda das taxas para anexar review_presentation sem mutar o snapshot persistido.
+    public_accessorial_fees = [
+        copy.deepcopy(fee) if isinstance(fee, dict) else fee
+        for fee in (record.get("accessorial_fees") or [])
+    ]
     public = {
         "temp_table_id": record.get("temp_table_id"),
         "status": record.get("status"),
@@ -6536,7 +6601,7 @@ def _public_temp_table(record: dict | None) -> dict | None:
         "freight_routes": list(record.get("freight_routes") or []),
         "weight_ranges": list(record.get("weight_ranges") or []),
         "freight_values": list(record.get("freight_values") or []),
-        "accessorial_fees": list(record.get("accessorial_fees") or []),
+        "accessorial_fees": public_accessorial_fees,
         "charge_type_detected": record.get("charge_type_detected"),
         "extracted_items": list(record.get("extracted_items") or []),
         "uncertain_fields": list(record.get("uncertain_fields") or []),
@@ -6573,6 +6638,23 @@ def _public_temp_table(record: dict | None) -> dict | None:
     if audit_batch is not None:
         public["audit_batch"] = audit_batch
     public["audit_bi"] = _public_audit_bi(record.get("audit_batch"))
+    try:
+        from app.agente_compara_temp_table_validation_service import (
+            validate_temp_table_for_confirmation,
+        )
+
+        public["validation"] = validate_temp_table_for_confirmation(public)
+    except Exception:
+        logger.exception("Falha ao calcular validation pública da temp_table AgenteCompara.")
+        public["validation"] = {
+            "schema_version": 1,
+            "can_confirm": True,
+            "blocking_count": 0,
+            "warning_count": 0,
+            "blocking_issues": [],
+            "warnings": [],
+        }
+    _attach_accessorial_fee_review_presentations(public)
     return public
 
 
@@ -8781,24 +8863,44 @@ def _accessorial_fee_is_user_committed(fee: dict) -> bool:
     return source.startswith("manual_")
 
 
+def _accessorial_fee_has_formal_unmapped_base(fee: dict) -> bool:
+    """Representação estruturada de base não mapeada (nunca opcional na confirmação)."""
+    if not isinstance(fee, dict):
+        return False
+    base_id = str(fee.get("calculation_base_id") or "").strip()
+    basis = str(fee.get("calculation_basis") or "").strip().lower()
+    source = str(fee.get("classification_source") or "").strip()
+    if source == "unmapped_calculation_base":
+        return True
+    if not base_id and basis == UNMAPPED_CALCULATION_BASIS_LABEL.lower():
+        return True
+    return False
+
+
 def _accessorial_fee_is_extraction_hypothesis(fee: dict) -> bool:
-    """Generalidade incompleta da extração que não deve bloquear o avanço."""
+    """Regra extraída ainda não confirmada; exige ação humana (bloqueante).
+
+    Base formalmente não mapeada, base já definida ou fee manual nunca são hipótese.
+    """
+    if not isinstance(fee, dict):
+        return False
     if _accessorial_fee_is_user_committed(fee):
+        return False
+    if _accessorial_fee_has_formal_unmapped_base(fee):
+        return False
+    base_id = str(fee.get("calculation_base_id") or "").strip()
+    if base_id:
+        return False
+    if _accessorial_fee_uses_new_base_contract(fee):
         return False
     source = str(fee.get("classification_source") or "").strip()
     status = str(fee.get("status") or "").strip()
-    basis = str(fee.get("calculation_basis") or "").strip().lower()
-    base_id = str(fee.get("calculation_base_id") or "").strip()
-    if not base_id and basis == UNMAPPED_CALCULATION_BASIS_LABEL.lower():
-        return True
-    if source in {"legacy_classifier", "unmapped_calculation_base"} and status in {
+    if source in {"legacy_classifier"} and status in {
         "needs_review",
         "unknown",
         "unsupported",
         "",
     }:
-        return not _accessorial_fee_has_required_value_for_operation(fee)
-    if source == "configured_calculation_base" and status in {"needs_review", "unknown", "unsupported"}:
         return not _accessorial_fee_has_required_value_for_operation(fee)
     return False
 
@@ -8806,13 +8908,317 @@ def _accessorial_fee_is_extraction_hypothesis(fee: dict) -> bool:
 def _accessorial_fee_should_block_advance(fee: dict) -> bool:
     if not isinstance(fee, dict) or not _is_general_accessorial_fee_for_base_validation(fee):
         return False
-    if _accessorial_fee_is_extraction_hypothesis(fee):
-        return False
+    if _accessorial_fee_has_formal_unmapped_base(fee):
+        return True
+    # Mínimo sempre passa pelo validador de vínculo (antes da hipótese de extração).
     if _accessorial_fee_is_minimum_modifier(fee):
+        return True
+    # Hipótese extraída ainda não confirmada exige ação humana => bloqueante.
+    if _accessorial_fee_is_extraction_hypothesis(fee):
         return True
     if not _accessorial_fee_uses_new_base_contract(fee):
         return False
     return True
+
+
+def _accessorial_fee_item_identity(fee: dict, index: int) -> str:
+    from app.agente_compara_temp_table_validation_service import accessorial_fee_item_identity
+
+    return accessorial_fee_item_identity(fee, index)
+
+
+def _accessorial_runtime_active_bases_by_id() -> dict[str, dict]:
+    try:
+        active_bases = get_active_calculation_bases_for_runtime(
+            get_agente_compara_config().calculation_bases
+        )
+    except Exception:
+        logger.exception("Falha ao carregar bases ativas para review_presentation.")
+        return {}
+    return {
+        str(base.get("id") or "").strip(): base
+        for base in active_bases
+        if isinstance(base, dict) and str(base.get("id") or "").strip()
+    }
+
+
+def _accessorial_fee_has_mapped_public_base(
+    fee: dict,
+    active_bases_by_id: dict[str, dict] | None = None,
+) -> bool:
+    if not isinstance(fee, dict):
+        return False
+    base_id = str(fee.get("calculation_base_id") or "").strip()
+    if not base_id:
+        return False
+    bases = active_bases_by_id if isinstance(active_bases_by_id, dict) else {}
+    return base_id in bases
+
+
+def _accessorial_fee_has_recognized_operational_rule(fee: dict) -> bool:
+    """Regra operacional estruturada suficiente para apresentação recognized."""
+    if not isinstance(fee, dict):
+        return False
+    if _accessorial_fee_has_formal_unmapped_base(fee):
+        return False
+    if _accessorial_fee_is_minimum_modifier(fee):
+        return False
+    calc_type = str(fee.get("calculation_type") or "").strip()
+    operation = str(fee.get("operation") or "").strip()
+    if calc_type in {"invoice_percentage", "freight_percentage"}:
+        return _accessorial_runtime_rate(fee) is not None
+    if calc_type in {"fixed_amount", "weight_rate", "weight", "weight_fraction"}:
+        return (
+            _accessorial_runtime_amount(fee) is not None
+            or _accessorial_runtime_rate(fee) is not None
+        )
+    if calc_type in _RECOGNIZED_ACCESSORIAL_CALCULATION_TYPES:
+        return True
+    if operation == "ceil_fraction":
+        return _accessorial_runtime_amount(fee) is not None
+    if operation in _SUPPORTED_ACCESSORIAL_ADVANCE_OPERATIONS:
+        return _accessorial_fee_has_required_value_for_operation(fee)
+    return False
+
+
+def _accessorial_ceil_fraction_public_label(fee: dict) -> str | None:
+    label = _sanitize_cell_string(fee.get("calculation_base_label"))
+    if label:
+        return label
+    params = fee.get("operation_parameters")
+    if not isinstance(params, dict):
+        return "Por fração de peso"
+    fraction_size = params.get("fraction_size")
+    if fraction_size in (None, ""):
+        return "Por fração de peso"
+    try:
+        size = Decimal(str(fraction_size).replace(",", "."))
+    except Exception:
+        return "Por fração de peso"
+    if size <= 0:
+        return "Por fração de peso"
+    if size == size.to_integral_value():
+        rendered = str(int(size))
+    else:
+        rendered = _format_brazilian_decimal(size)
+    return f"Por fração de {rendered} kg"
+
+
+def _accessorial_fee_public_rule_label(
+    fee: dict,
+    *,
+    active_bases_by_id: dict[str, dict] | None = None,
+) -> str:
+    bases = active_bases_by_id if isinstance(active_bases_by_id, dict) else {}
+    base_id = str(fee.get("calculation_base_id") or "").strip()
+    if base_id and base_id in bases:
+        base_label = _sanitize_cell_string(bases[base_id].get("label"))
+        if base_label:
+            return base_label
+    configured_label = _sanitize_cell_string(fee.get("calculation_base_label"))
+    source = str(fee.get("classification_source") or "").strip()
+    if configured_label and source in {
+        "configured_calculation_base",
+        "manual_configured_calculation_base",
+    }:
+        return configured_label
+    operation = str(fee.get("operation") or "").strip()
+    if operation == "ceil_fraction":
+        return _accessorial_ceil_fraction_public_label(fee) or "Por fração de peso"
+    if operation == "fixed_amount":
+        return _ACCESSORIAL_PUBLIC_RULE_LABELS["fixed_amount"]
+    if operation == "percentage_of_variable":
+        audit_variable = str(fee.get("audit_variable") or "").strip()
+        if audit_variable == "valor_nf":
+            return _ACCESSORIAL_PUBLIC_RULE_LABELS["invoice_percentage"]
+        if audit_variable in {"frete_envio", "frete_valor", "valor_frete"}:
+            return _ACCESSORIAL_PUBLIC_RULE_LABELS["freight_percentage"]
+    calc_type = str(fee.get("calculation_type") or "").strip()
+    mapped = _ACCESSORIAL_PUBLIC_RULE_LABELS.get(calc_type)
+    if mapped:
+        return mapped
+    if configured_label:
+        return configured_label
+    basis = _sanitize_cell_string(fee.get("calculation_basis"))
+    if basis and basis.lower() != UNMAPPED_CALCULATION_BASIS_LABEL.lower():
+        return basis
+    return REVIEW_PRESENTATION_TEXT_UNCLASSIFIED
+
+
+def _accessorial_related_display_label(
+    fee: dict,
+    accessorial_fees: list,
+    *,
+    exclude_index: int | None = None,
+) -> str | None:
+    related_to = str(fee.get("related_to") or "").strip()
+    base_fee = _find_accessorial_minimum_base_fee(
+        fee,
+        accessorial_fees,
+        exclude_index=exclude_index,
+    )
+    if isinstance(base_fee, dict):
+        name = _sanitize_cell_string(base_fee.get("name"))
+        if name:
+            return name
+    if related_to:
+        return _ACCESSORIAL_RELATED_COMPONENT_LABELS.get(related_to, related_to)
+    return None
+
+
+def _build_accessorial_fee_review_presentation(
+    fee: dict,
+    *,
+    index: int,
+    accessorial_fees: list | None = None,
+    blocking_issue: dict | None = None,
+    active_bases_by_id: dict[str, dict] | None = None,
+) -> dict:
+    """View model determinístico da coluna Base de cálculo (derivado de validation)."""
+    fees = accessorial_fees if isinstance(accessorial_fees, list) else []
+    bases = active_bases_by_id if isinstance(active_bases_by_id, dict) else {}
+    source = str(fee.get("classification_source") or "").strip() or "unknown"
+
+    if isinstance(blocking_issue, dict):
+        reason_code = str(blocking_issue.get("reason_code") or "").strip() or None
+        message = str(blocking_issue.get("message") or "").strip()
+        presentation = {
+            "state": REVIEW_PRESENTATION_STATE_BLOCKING,
+            "basis_label": REVIEW_PRESENTATION_LABEL_UNRESOLVED,
+            "secondary_text": message or REVIEW_PRESENTATION_ACTION_UNRESOLVED,
+            "requires_action": True,
+            "is_blocking": True,
+            "severity": "error",
+            "source": source,
+        }
+        if reason_code:
+            presentation["reason_code"] = reason_code
+        if _accessorial_fee_is_minimum_modifier(fee):
+            related_label = _accessorial_related_display_label(
+                fee, fees, exclude_index=index
+            )
+            if related_label:
+                presentation["related_to_label"] = related_label
+                presentation["basis_label"] = f"Mínimo sem vínculo válido"
+        return presentation
+
+    if _accessorial_fee_has_mapped_public_base(fee, bases):
+        return {
+            "state": REVIEW_PRESENTATION_STATE_RESOLVED,
+            "basis_label": _accessorial_fee_public_rule_label(
+                fee, active_bases_by_id=bases
+            ),
+            "secondary_text": None,
+            "requires_action": False,
+            "is_blocking": False,
+            "severity": "info",
+            "source": source,
+        }
+
+    if _accessorial_fee_is_minimum_modifier(fee):
+        related_label = _accessorial_related_display_label(
+            fee, fees, exclude_index=index
+        )
+        if related_label:
+            return {
+                "state": REVIEW_PRESENTATION_STATE_RESOLVED,
+                "basis_label": f"Mínimo aplicável a {related_label}",
+                "secondary_text": None,
+                "requires_action": False,
+                "is_blocking": False,
+                "severity": "info",
+                "source": source,
+                "related_to_label": related_label,
+            }
+        # Sem issue de validation: não inventar blocker visual órfão.
+        return {
+            "state": REVIEW_PRESENTATION_STATE_INFORMATIONAL,
+            "basis_label": REVIEW_PRESENTATION_TEXT_UNCLASSIFIED,
+            "secondary_text": None,
+            "requires_action": False,
+            "is_blocking": False,
+            "severity": "info",
+            "source": source,
+        }
+
+    if _accessorial_fee_has_recognized_operational_rule(fee):
+        return {
+            "state": REVIEW_PRESENTATION_STATE_RESOLVED,
+            "basis_label": _accessorial_fee_public_rule_label(
+                fee, active_bases_by_id=bases
+            ),
+            "secondary_text": REVIEW_PRESENTATION_TEXT_RECOGNIZED,
+            "requires_action": False,
+            "is_blocking": False,
+            "severity": "info",
+            "source": source,
+        }
+
+    # Sem blocking_issue e sem regra resolvida: puramente informativo (sem linguagem de ação).
+    return {
+        "state": REVIEW_PRESENTATION_STATE_INFORMATIONAL,
+        "basis_label": REVIEW_PRESENTATION_TEXT_UNCLASSIFIED,
+        "secondary_text": None,
+        "requires_action": False,
+        "is_blocking": False,
+        "severity": "info",
+        "source": source,
+    }
+
+
+def _blocking_issue_for_accessorial_fee(
+    fee: dict,
+    index: int,
+    blocking_issues: list,
+) -> dict | None:
+    item_id = _accessorial_fee_item_identity(fee, index)
+    for issue in blocking_issues:
+        if not isinstance(issue, dict):
+            continue
+        section = str(issue.get("section") or "accessorial_fees").strip()
+        if section != "accessorial_fees":
+            continue
+        issue_item_id = str(issue.get("item_id") or "").strip()
+        if issue_item_id and issue_item_id == item_id:
+            return issue
+        try:
+            issue_index = int(issue.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if issue_index == index and (
+            not issue_item_id
+            or issue_item_id == item_id
+            or issue_item_id.startswith("accessorial_fees:")
+        ):
+            return issue
+    return None
+
+
+def _attach_accessorial_fee_review_presentations(public: dict) -> None:
+    """Anexa review_presentation às taxas públicas sem mutar o record original."""
+    if not isinstance(public, dict):
+        return
+    fees = public.get("accessorial_fees")
+    if not isinstance(fees, list):
+        return
+    validation = public.get("validation") if isinstance(public.get("validation"), dict) else {}
+    blocking_issues = (
+        validation.get("blocking_issues")
+        if isinstance(validation.get("blocking_issues"), list)
+        else []
+    )
+    active_bases_by_id = _accessorial_runtime_active_bases_by_id()
+    for index, fee in enumerate(fees):
+        if not isinstance(fee, dict):
+            continue
+        issue = _blocking_issue_for_accessorial_fee(fee, index, blocking_issues)
+        fee["review_presentation"] = _build_accessorial_fee_review_presentation(
+            fee,
+            index=index,
+            accessorial_fees=fees,
+            blocking_issue=issue,
+            active_bases_by_id=active_bases_by_id,
+        )
 
 
 def _accessorial_fee_is_minimum_modifier(fee: dict) -> bool:
@@ -8987,6 +9393,11 @@ def _accessorial_advance_validation_error(
         "invalid_minimum_base_link": "minimum_without_base",
         "accessorial_rate_conflict": "accessorial_rate_conflict",
         "percentage_without_audit_variable": "percentage_without_audit_variable",
+        "unsupported_accessorial_condition": "unsupported_accessorial_condition",
+        "conditions_present": "unsupported_accessorial_condition",
+        "unsupported_reason_present": "unsupported_reason_present",
+        "unsupported_operation": "unsupported_operation",
+        "invalid_rule": "invalid_rule",
     }
     return {
         "code": code_by_reason.get(reason_code, reason_code),
@@ -9057,6 +9468,22 @@ def _validate_accessorial_fee_for_advance(
     index: int,
     active_bases_by_id: dict[str, dict],
 ) -> dict | None:
+    # Gate alinhado ao motor: condição/operação inexequível bloqueia confirmação.
+    from app.agente_compara_calculation_completeness_service import (
+        classify_accessorial_execution_support,
+    )
+
+    support = classify_accessorial_execution_support(fee)
+    if support.get("blocking") is True:
+        reason = str(support.get("reason_code") or "unsupported_accessorial_condition")
+        field = "conditions" if "condition" in reason or "unsupported_reason" in reason else "operation"
+        return _accessorial_advance_validation_error(
+            index=index,
+            fee=fee,
+            field=field,
+            reason_code=reason,
+            message=str(support.get("message") or ERROR_ACCESSORIAL_OPERATION_MESSAGE),
+        )
     if _accessorial_fee_missing_calculation_base(fee, active_bases_by_id):
         return _accessorial_advance_validation_error(
             index=index,
@@ -9105,39 +9532,33 @@ def _validate_accessorial_fee_for_advance(
 
 
 def _validate_accessorial_fees_ready_to_advance(accessorial_fees) -> None:
-    if not isinstance(accessorial_fees, list):
-        return
-    active_bases = get_active_calculation_bases_for_runtime(
-        get_agente_compara_config().calculation_bases
+    from app.agente_compara_temp_table_validation_service import (
+        validate_temp_table_for_confirmation,
+        validation_errors_for_api,
     )
-    active_bases_by_id = {
-        str(base.get("id") or "").strip(): base
-        for base in active_bases
-        if str(base.get("id") or "").strip()
-    }
-    errors: list[dict] = []
-    for index, fee in enumerate(accessorial_fees):
-        if not _accessorial_fee_should_block_advance(fee):
-            continue
-        if _accessorial_fee_is_minimum_modifier(fee):
-            error = _validate_linked_minimum_amount_for_advance(
-                fee,
-                index,
-                accessorial_fees,
-                active_bases_by_id,
-            )
-            if error is not None:
-                errors.append(error)
-            continue
-        error = _validate_accessorial_fee_for_advance(fee, index, active_bases_by_id)
-        if error is not None:
-            errors.append(error)
-    if errors:
-        raise AgenteComparaTempTableError(
-            ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES,
-            ERROR_ACCESSORIAL_ADVANCE_MESSAGE,
-            errors=errors,
-        )
+
+    snapshot = {"accessorial_fees": accessorial_fees if isinstance(accessorial_fees, list) else []}
+    validation = validate_temp_table_for_confirmation(snapshot)
+    if validation.get("can_confirm"):
+        return
+    errors = validation_errors_for_api(validation)
+    logger.info(
+        "temp_table_confirmation_blocked blocking_count=%s reason_codes=%s",
+        validation.get("blocking_count"),
+        sorted(
+            {
+                str(issue.get("code") or "")
+                for issue in (validation.get("blocking_issues") or [])
+                if isinstance(issue, dict) and issue.get("code")
+            }
+        ),
+    )
+    raise AgenteComparaTempTableError(
+        ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES,
+        ERROR_ACCESSORIAL_ADVANCE_MESSAGE,
+        errors=errors,
+        validation=validation,
+    )
 
 
 def _assert_temp_table_scope(record: dict, *, user_scope=None, franquia_scope=None) -> None:

@@ -1,6 +1,6 @@
-﻿# Runtime IA e Observabilidade
+# Runtime IA e Observabilidade
 
-Referência auditada em 2026-07-28. Estado funcional consolidado em `docs/estado_oficial_consolidado.md`.
+Referência auditada em 2026-07-29. Estado funcional consolidado em `docs/estado_oficial_consolidado.md`.
 
 ## Trilhas separadas
 
@@ -27,7 +27,8 @@ Leitura operacional correta:
 - upload do arquivo operacional e reprocessamentos têm eventos distintos;
 - o cálculo comparativo também gera evento próprio;
 - isso não significa, por si só, duplicação automática de linhas faturadas;
-- o resultado comparativo só é liberado publicamente quando `billing_status=applied`.
+- o resultado comparativo só é liberado publicamente quando `billing_status=applied`;
+- o analytics comparativo retornado ao frontend é derivado do resultado já liberado e não executa billing nem Gemini.
 
 ## Cleide e Júlia
 

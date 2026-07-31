@@ -299,7 +299,13 @@
     if (attachBtn) {
       attachBtn.setAttribute('aria-busy', on ? 'true' : 'false');
     }
-    setStatus(on ? 'Preparando envio...' : '');
+    if (on) {
+      setStatus(UPLOAD_PAGE_STATUS_PREPARING);
+      return;
+    }
+    if (getUploadPageStatusText() === UPLOAD_PAGE_STATUS_PREPARING) {
+      setStatus('');
+    }
   }
 
   function resetFreightFileInput() {
@@ -308,53 +314,33 @@
   }
 
   function closeCarrierIdentificationPanel() {
-    var panel = byId('agenteComparaCarrierIdentifyPanel');
-    var body = byId('agenteComparaTempTableModalBody');
-    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
-    if (panel) panel.hidden = true;
-    if (body) body.hidden = false;
-    if (footer) footer.hidden = false;
+    restoreCarrierIdentifyPanelHome();
     setCarrierIdentifyError('');
     carrierIdentifyInFlight = false;
     updateCarrierIdentifyContinueButton();
-    if (!uploadInFlight && !isTempTableModalOpen()) {
-      var modal = byId('agenteComparaTempTableModal');
-      if (modal && !currentTempTable) {
-        modal.hidden = true;
-        document.body.classList.remove('agente-compara-temp-table-modal-open');
-      }
+    if (comparisonFlowView === 'carrier_identification') {
+      comparisonFlowView = null;
     }
   }
 
   function openCarrierIdentificationPanel(options) {
     options = options || {};
-    var panel = byId('agenteComparaCarrierIdentifyPanel');
-    var input = byId('agenteComparaCarrierNameInput');
-    var body = byId('agenteComparaTempTableModalBody');
-    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
-    if (!panel || !input) return;
-    carrierEditOnlyMode = !!options.editOnly;
-    var preset = options.presetName || '';
-    if (!preset && pendingFreightTableUpload && pendingFreightTableUpload.carrierName) {
-      preset = pendingFreightTableUpload.carrierName;
+    markComparisonWizardEngaged();
+    comparisonWizardModalSuppressed = false;
+    renderAndShowComparisonFlowModal('carrier_identification', options);
+  }
+
+  function cancelCarrierIdentification() {
+    closeCarrierIdentificationPanel();
+    clearPendingFreightTableUpload();
+    freightUploadPreparationInFlight = false;
+    setUploadPreparationLoading(false);
+    resetFreightFileInput();
+    if (!currentTempTable) {
+      closeTempTableModal();
+    } else if (isReviewReadyTempTable(currentTempTable)) {
+      renderAndShowComparisonFlowModal('review');
     }
-    input.value = preset;
-    setCarrierIdentifyError('');
-    if (!isTempTableModalOpen()) {
-      var modal = byId('agenteComparaTempTableModal');
-      if (modal) {
-        modal.hidden = false;
-        document.body.classList.add('agente-compara-temp-table-modal-open');
-      }
-    }
-    if (body) body.hidden = true;
-    if (footer) footer.hidden = true;
-    panel.hidden = false;
-    updateCarrierIdentifyContinueButton();
-    window.setTimeout(function () {
-      input.focus();
-      if (typeof input.select === 'function') input.select();
-    }, 0);
   }
 
   function pendingUploadContextStillValid(pending) {
@@ -419,14 +405,6 @@
         freightUploadPreparationInFlight = false;
         setUploadPreparationLoading(false);
       });
-  }
-
-  function cancelCarrierIdentification() {
-    closeCarrierIdentificationPanel();
-    clearPendingFreightTableUpload();
-    freightUploadPreparationInFlight = false;
-    setUploadPreparationLoading(false);
-    resetFreightFileInput();
   }
 
   function openCarrierNameEdit() {
@@ -523,6 +501,9 @@
           closeCarrierIdentificationPanel();
           carrierEditOnlyMode = false;
           updateCarrierIdentifyContinueButton();
+          if (isReviewReadyTempTable(currentTempTable) && isTempTableModalOpen()) {
+            transitionComparisonFlowModal('review');
+          }
         });
       return;
     }
@@ -544,8 +525,13 @@
     var pending = pendingFreightTableUpload;
     pending.carrierName = validation.name;
     var file = pending.file;
+    var fileName = file && file.name ? file.name : '';
     clearPendingFreightTableUpload();
+    // Mantém o mesmo modal aberto: identificação → uploading (sem fechar/reabrir).
     closeCarrierIdentificationPanel();
+    markComparisonWizardEngaged();
+    comparisonWizardModalSuppressed = false;
+    transitionComparisonFlowModal('uploading', { fileName: fileName });
 
     uploadDocument(file, validation.name, {
       comparisonId: pending.comparisonId,
@@ -726,6 +712,11 @@
   }
 
   function resolveComparisonWizardView() {
+    if (comparisonFlowView === 'carrier_identification') return 'carrier_identification';
+    if (uploadInFlight || comparisonFlowView === 'uploading') {
+      if (uploadInFlight) return 'uploading';
+    }
+
     var step = comparisonState.currentStep || '';
     if (step === 'ASK_TABLE_3') return 'ask_table_3';
     if (!isComparisonWizardStep(step)) return null;
@@ -735,8 +726,12 @@
     if (tempTable && tempTable.temp_table_id && tempTableMatchesActiveSlot(tempTable)) {
       var tempStatus = String(tempTable.status || '').toLowerCase();
       if (tempStatus === 'processing') return 'processing';
+      if (tempStatus === 'failed' || tempStatus === 'expired' || tempStatus === 'discarded') {
+        return 'failed';
+      }
       if (tempStatus === 'needs_review' && active && !active.confirmed) return 'review';
     }
+    if (comparisonFlowView === 'failed') return 'failed';
     if (active) {
       var slotStatus = String(active.status || 'empty').toLowerCase();
       if (slotStatus === 'processing') return 'processing';
@@ -795,6 +790,17 @@
     return false;
   }
 
+  function isCurrentComparisonRequest(generation, comparisonId, tableId) {
+    if (generation !== comparisonRequestGeneration) return false;
+    var activeComparisonId = comparisonState.comparisonId || null;
+    if (!comparisonId || !activeComparisonId || comparisonId !== activeComparisonId) return false;
+    if (tableId) {
+      var activeTableId = comparisonState.activeTableId || null;
+      if (activeTableId && tableId !== activeTableId) return false;
+    }
+    return true;
+  }
+
   function clearLocalComparisonState() {
     comparisonState.comparisonId = null;
     comparisonState.currentStep = null;
@@ -807,9 +813,337 @@
 
   function hideTempTableModalShell() {
     var modal = byId('agenteComparaTempTableModal');
-    if (modal) modal.hidden = true;
+    if (modal) {
+      modal.hidden = true;
+      modal.removeAttribute('aria-busy');
+    }
     document.body.classList.remove('agente-compara-temp-table-modal-open');
     document.body.classList.remove('agente-compara-temp-table-modal-editing');
+  }
+
+  /**
+   * Único opener oficial da shell #agenteComparaTempTableModal.
+   * Se já estiver aberta, não reabre (evita piscar backdrop).
+   */
+  function showTempTableModalShell() {
+    var modal = byId('agenteComparaTempTableModal');
+    if (!modal) return false;
+    if (!modal.hidden) return true;
+    modal.hidden = false;
+    document.body.classList.add('agente-compara-temp-table-modal-open');
+    return true;
+  }
+
+  function rememberCarrierIdentifyPanelHome() {
+    var panel = byId('agenteComparaCarrierIdentifyPanel');
+    if (!panel || carrierIdentifyPanelHomeParent) return;
+    carrierIdentifyPanelHomeParent = panel.parentNode;
+    carrierIdentifyPanelHomeNext = panel.nextSibling;
+  }
+
+  function restoreCarrierIdentifyPanelHome() {
+    var panel = byId('agenteComparaCarrierIdentifyPanel');
+    if (!panel) return;
+    rememberCarrierIdentifyPanelHome();
+    if (carrierIdentifyPanelHomeParent && panel.parentNode !== carrierIdentifyPanelHomeParent) {
+      if (carrierIdentifyPanelHomeNext && carrierIdentifyPanelHomeNext.parentNode === carrierIdentifyPanelHomeParent) {
+        carrierIdentifyPanelHomeParent.insertBefore(panel, carrierIdentifyPanelHomeNext);
+      } else {
+        carrierIdentifyPanelHomeParent.appendChild(panel);
+      }
+    }
+    panel.hidden = true;
+  }
+
+  function clearPageUploadStatusWhileModalOpen() {
+    if (isTempTableModalOpen()) {
+      setStatus('');
+    }
+  }
+
+  function buildFlowStatusBody(message, options) {
+    options = options || {};
+    var wrap = document.createElement('div');
+    wrap.className = 'agente-compara-flow-status-panel';
+    wrap.setAttribute('role', 'status');
+    wrap.setAttribute('aria-live', 'polite');
+    var spinner = document.createElement('div');
+    spinner.className = 'agente-compara-flow-status-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    var text = document.createElement('p');
+    text.className = 'agente-compara-flow-status-text mb-0';
+    text.textContent = message || '';
+    wrap.appendChild(spinner);
+    wrap.appendChild(text);
+    if (options.fileName) {
+      var fileEl = document.createElement('p');
+      fileEl.className = 'agente-compara-flow-status-file small text-muted mb-0';
+      fileEl.textContent = String(options.fileName);
+      wrap.appendChild(fileEl);
+    }
+    return wrap;
+  }
+
+  function renderCarrierIdentificationFlowView(options) {
+    options = options || {};
+    var titleEl = byId('agenteComparaTempTableModalTitle');
+    var subtitleEl = byId('agenteComparaTempTableModalSubtitle');
+    var body = byId('agenteComparaTempTableModalBody');
+    var panel = byId('agenteComparaCarrierIdentifyPanel');
+    var input = byId('agenteComparaCarrierNameInput');
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    var modal = byId('agenteComparaTempTableModal');
+    if (!titleEl || !subtitleEl || !body || !panel || !input) return false;
+
+    rememberCarrierIdentifyPanelHome();
+    titleEl.textContent = 'Identifique a transportadora';
+    subtitleEl.textContent = 'Confirme a transportadora responsável pela tabela antes de continuar.';
+    carrierEditOnlyMode = !!options.editOnly;
+    var preset = options.presetName || '';
+    if (!preset && pendingFreightTableUpload && pendingFreightTableUpload.carrierName) {
+      preset = pendingFreightTableUpload.carrierName;
+    }
+    input.value = preset;
+    setCarrierIdentifyError('');
+    body.hidden = false;
+    if (footer) footer.hidden = false;
+    body.replaceChildren();
+    body.appendChild(panel);
+    panel.hidden = false;
+    if (modal) modal.removeAttribute('aria-busy');
+    updateTempTableModalFooter();
+    updateCarrierIdentifyContinueButton();
+    return !!(titleEl.textContent && !panel.hidden && body.contains(panel));
+  }
+
+  function renderUploadingFlowView(options) {
+    options = options || {};
+    var titleEl = byId('agenteComparaTempTableModalTitle');
+    var subtitleEl = byId('agenteComparaTempTableModalSubtitle');
+    var body = byId('agenteComparaTempTableModalBody');
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    var modal = byId('agenteComparaTempTableModal');
+    if (!titleEl || !subtitleEl || !body) return false;
+    restoreCarrierIdentifyPanelHome();
+    titleEl.textContent = 'Enviando tabela de frete';
+    subtitleEl.textContent = 'Aguarde enquanto o documento é enviado.';
+    body.hidden = false;
+    if (footer) footer.hidden = false;
+    body.replaceChildren();
+    body.appendChild(buildFlowStatusBody(UPLOAD_PAGE_STATUS_SENDING, {
+      fileName: options.fileName || ''
+    }));
+    if (modal) modal.setAttribute('aria-busy', 'true');
+    setStatus('');
+    updateTempTableModalFooter();
+    return !!(titleEl.textContent && body.childNodes.length);
+  }
+
+  function renderProcessingFlowView(options) {
+    options = options || {};
+    var titleEl = byId('agenteComparaTempTableModalTitle');
+    var subtitleEl = byId('agenteComparaTempTableModalSubtitle');
+    var body = byId('agenteComparaTempTableModalBody');
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    var modal = byId('agenteComparaTempTableModal');
+    if (!titleEl || !subtitleEl || !body) return false;
+    restoreCarrierIdentifyPanelHome();
+    titleEl.textContent = 'Processando tabela de frete';
+    subtitleEl.textContent = options.subtitle || 'Estamos estruturando os dados para revisão.';
+    body.hidden = false;
+    if (footer) footer.hidden = false;
+    body.replaceChildren();
+    body.appendChild(buildFlowStatusBody(UPLOAD_PAGE_STATUS_PROCESSING));
+    if (modal) modal.setAttribute('aria-busy', 'true');
+    setStatus('');
+    updateTempTableModalFooter();
+    return !!(titleEl.textContent && body.childNodes.length);
+  }
+
+  function renderFailedFlowView(options) {
+    options = options || {};
+    var titleEl = byId('agenteComparaTempTableModalTitle');
+    var subtitleEl = byId('agenteComparaTempTableModalSubtitle');
+    var body = byId('agenteComparaTempTableModalBody');
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    var modal = byId('agenteComparaTempTableModal');
+    if (!titleEl || !subtitleEl || !body) return false;
+    restoreCarrierIdentifyPanelHome();
+    var message = options.message || comparisonFlowFailedMessage ||
+      'Não foi possível processar a tabela. Tente novamente.';
+    comparisonFlowFailedMessage = message;
+    titleEl.textContent = 'Não foi possível processar a tabela';
+    subtitleEl.textContent = 'Revise o arquivo enviado e tente novamente.';
+    body.hidden = false;
+    if (footer) footer.hidden = false;
+    body.replaceChildren();
+    var panel = document.createElement('div');
+    panel.className = 'agente-compara-flow-failed-panel';
+    var text = document.createElement('p');
+    text.className = 'agente-compara-flow-failed-text';
+    text.textContent = message;
+    panel.appendChild(text);
+    var retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'btn btn-sm btn-primary agente-compara-flow-retry-btn';
+    retryBtn.textContent = 'Tentar novamente';
+    retryBtn.addEventListener('click', function (event) {
+      event.preventDefault();
+      retryFailedFreightTableUpload();
+    });
+    panel.appendChild(retryBtn);
+    body.appendChild(panel);
+    if (modal) modal.removeAttribute('aria-busy');
+    setStatus('');
+    updateTempTableModalFooter();
+    return !!(titleEl.textContent && body.childNodes.length);
+  }
+
+  function renderReviewFlowView() {
+    var body = byId('agenteComparaTempTableModalBody');
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    var modal = byId('agenteComparaTempTableModal');
+    if (!body) return false;
+    if (!isReviewReadyTempTable(currentTempTable)) return false;
+    restoreCarrierIdentifyPanelHome();
+    body.hidden = false;
+    if (footer) footer.hidden = false;
+    setComparisonWizardModalHeader('review');
+    renderTempTableModalContent(currentTempTable);
+    updateTempTableModalFooter();
+    if (modal) modal.removeAttribute('aria-busy');
+    completeTempTableProcessingUi();
+    setStatus('');
+    var titleEl = byId('agenteComparaTempTableModalTitle');
+    return !!(titleEl && titleEl.textContent && body.childNodes.length);
+  }
+
+  function renderComparisonFlowView(view, options) {
+    options = options || {};
+    if (!view) return false;
+    comparisonFlowView = view;
+    if (view === 'carrier_identification') return renderCarrierIdentificationFlowView(options);
+    if (view === 'uploading') return renderUploadingFlowView(options);
+    if (view === 'processing') return renderProcessingFlowView(options);
+    if (view === 'failed') return renderFailedFlowView(options);
+    if (view === 'review') return renderReviewFlowView();
+    // Demais views do wizard/revisão compartilhada.
+    restoreCarrierIdentifyPanelHome();
+    var body = byId('agenteComparaTempTableModalBody');
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    if (body) body.hidden = false;
+    if (footer) footer.hidden = false;
+    if (view === 'upload' || view === 'ask_table_3' || view === 'tables_ready') {
+      var renderedLegacy = renderComparisonWizardModal();
+      return !!renderedLegacy;
+    }
+    return false;
+  }
+
+  /**
+   * Controlador visual único: renderiza a view e abre a shell somente se necessário.
+   * Com modal já aberto, apenas troca o conteúdo (sem reabrir backdrop).
+   */
+  function renderAndShowComparisonFlowModal(view, options) {
+    options = options || {};
+    if (!view) return false;
+    clearTempTableValidationErrors();
+    if (view !== 'failed') setTempTableModalError('');
+    var rendered = renderComparisonFlowView(view, options);
+    if (!rendered) return false;
+    clearPageUploadStatusWhileModalOpen();
+    if (!showTempTableModalShell()) return false;
+    clearPageUploadStatusWhileModalOpen();
+    if (view === 'carrier_identification') {
+      var input = byId('agenteComparaCarrierNameInput');
+      if (input) {
+        input.focus();
+        if (typeof input.select === 'function') input.select();
+      }
+    }
+    return true;
+  }
+
+  function transitionComparisonFlowModal(view, options) {
+    if (!isTempTableModalOpen()) {
+      return renderAndShowComparisonFlowModal(view, options);
+    }
+    var rendered = renderComparisonFlowView(view, options);
+    if (rendered) clearPageUploadStatusWhileModalOpen();
+    return rendered;
+  }
+
+  function retryFailedFreightTableUpload() {
+    var fileInput = byId('agenteComparaFileInput');
+    comparisonFlowFailedMessage = '';
+    comparisonFlowView = null;
+    if (fileInput) {
+      fileInput.click();
+    }
+  }
+
+  function teardownTempTableModal() {
+    hideTempTableModalShell();
+    restoreCarrierIdentifyPanelHome();
+    comparisonFlowView = null;
+    comparisonFlowFailedMessage = '';
+    var modal = byId('agenteComparaTempTableModal');
+    if (modal) {
+      modal.removeAttribute('aria-busy');
+    }
+
+    var body = byId('agenteComparaTempTableModalBody');
+    if (body) {
+      body.replaceChildren();
+      body.hidden = false;
+    }
+
+    var titleEl = byId('agenteComparaTempTableModalTitle');
+    if (titleEl) titleEl.textContent = '';
+
+    var subtitleEl = byId('agenteComparaTempTableModalSubtitle');
+    if (subtitleEl) subtitleEl.replaceChildren();
+
+    setTempTableModalError('');
+    clearTempTableValidationErrors();
+
+    var banner = byId('agenteComparaTempTableModalEditBanner');
+    if (banner) banner.hidden = true;
+
+    var panel = byId('agenteComparaCarrierIdentifyPanel');
+    if (panel) panel.hidden = true;
+    setCarrierIdentifyError('');
+    carrierIdentifyInFlight = false;
+
+    var footer = document.querySelector('.agente-compara-temp-table-modal-footer');
+    if (footer) footer.hidden = false;
+
+    var editBtn = byId('agenteComparaTempTableModalEdit');
+    var cancelBtn = byId('agenteComparaTempTableModalCancelEdit');
+    var saveBtn = byId('agenteComparaTempTableModalSave');
+    var taxSaveBtn = byId('agenteComparaTempTableModalTaxSave');
+    var startAuditBtn = byId('agenteComparaTempTableModalStartAudit');
+    var clearSlotBtn = byId('agenteComparaTempTableModalClearSlot');
+    if (editBtn) {
+      editBtn.hidden = true;
+      editBtn.removeAttribute('aria-busy');
+    }
+    if (cancelBtn) cancelBtn.hidden = true;
+    if (saveBtn) {
+      saveBtn.hidden = true;
+      saveBtn.removeAttribute('aria-busy');
+    }
+    if (taxSaveBtn) {
+      taxSaveBtn.hidden = true;
+      taxSaveBtn.removeAttribute('aria-busy');
+    }
+    if (startAuditBtn) startAuditBtn.hidden = true;
+    if (clearSlotBtn) clearSlotBtn.hidden = true;
+
+    tempTableEditMode = false;
+    tempTableEditSnapshot = null;
+    tempTableSaveInFlight = false;
+    tempTableModalActiveTab = 'freight';
   }
 
   function resetAgenteComparaFrontendState() {
@@ -820,16 +1154,20 @@
     clearPendingFreightTableUpload();
     freightUploadPreparationInFlight = false;
     setUploadPreparationLoading(false);
+    if (uploadInFlight) {
+      setUploadLoading(false);
+    } else {
+      uploadInFlight = false;
+    }
     resetFreightFileInput();
     tempTableEditMode = false;
     tempTableEditSnapshot = null;
     tempTableSaveInFlight = false;
     tempTableModalActiveTab = 'freight';
     setCurrentTempTable(null);
-    closeCarrierIdentificationPanel();
-    hideTempTableModalShell();
     clearLocalComparisonState();
     resetConfigurationReviewState();
+    teardownTempTableModal();
     resetTaxStepState();
     resetCoveragePromptState();
     resetAuditFileStepState();
@@ -946,6 +1284,21 @@
     if (!titleEl || !subtitleEl) return;
     var active = activeComparisonTable();
     var slotNumber = active ? Number(active.slot_number) || 1 : 1;
+    if (view === 'carrier_identification') {
+      titleEl.textContent = 'Identifique a transportadora';
+      subtitleEl.textContent = 'Confirme a transportadora responsável pela tabela antes de continuar.';
+      return;
+    }
+    if (view === 'uploading') {
+      titleEl.textContent = 'Enviando tabela de frete';
+      subtitleEl.textContent = 'Aguarde enquanto o documento é enviado.';
+      return;
+    }
+    if (view === 'failed') {
+      titleEl.textContent = 'Não foi possível processar a tabela';
+      subtitleEl.textContent = 'Revise o arquivo enviado e tente novamente.';
+      return;
+    }
     if (view === 'upload') {
       var copy = wizardUploadCopy(slotNumber);
       titleEl.textContent = copy.title;
@@ -956,8 +1309,8 @@
       titleEl.textContent = 'Processando tabela de frete';
       var processingCarrier = tableCarrierDisplay(active);
       subtitleEl.textContent = processingCarrier
-        ? ('Transportadora: ' + processingCarrier + '. Aguarde enquanto extraímos os dados da tabela enviada.')
-        : 'Aguarde enquanto extraímos os dados da tabela enviada.';
+        ? ('Transportadora: ' + processingCarrier + '. Estamos estruturando os dados para revisão.')
+        : 'Estamos estruturando os dados para revisão.';
       return;
     }
     if (view === 'review') {
@@ -1052,11 +1405,7 @@
         updateTempTableModalFooter();
         if (!isTempTableModalOpen()) {
           markComparisonWizardEngaged();
-          var readyModal = byId('agenteComparaTempTableModal');
-          if (readyModal) {
-            readyModal.hidden = false;
-            document.body.classList.add('agente-compara-temp-table-modal-open');
-          }
+          showTempTableModalShell();
         }
         return;
       }
@@ -1068,11 +1417,7 @@
     updateTempTableModalFooter();
     if (!isTempTableModalOpen()) {
       markComparisonWizardEngaged();
-      var modal = byId('agenteComparaTempTableModal');
-      if (modal) {
-        modal.hidden = false;
-        document.body.classList.add('agente-compara-temp-table-modal-open');
-      }
+      showTempTableModalShell();
     }
   }
 
@@ -1180,71 +1525,131 @@
     body.appendChild(panel);
   }
 
+  function isReviewReadyTempTable(tempTable) {
+    if (!tempTable || !tempTable.temp_table_id) return false;
+    if (String(tempTable.status || '').toLowerCase() !== 'needs_review') return false;
+    if (!comparisonState.comparisonId) return false;
+    if (
+      tempTable.comparison_id &&
+      tempTable.comparison_id !== comparisonState.comparisonId
+    ) {
+      return false;
+    }
+    if (
+      tempTable.table_id &&
+      comparisonState.activeTableId &&
+      tempTable.table_id !== comparisonState.activeTableId
+    ) {
+      return false;
+    }
+    var active = activeComparisonTable();
+    if (!active || active.confirmed) return false;
+    if (!tempTableMatchesActiveSlot(tempTable)) return false;
+    return true;
+  }
+
   function renderComparisonWizardModal() {
     if (!isComparisonWizardFlowActive()) {
+      if (!currentTempTable) return false;
       renderTempTableModalContent(currentTempTable);
       updateTempTableModalFooter();
-      return;
+      return true;
     }
     var view = resolveComparisonWizardView();
     if (!view) {
+      if (!currentTempTable) return false;
       renderTempTableModalContent(currentTempTable);
       updateTempTableModalFooter();
-      return;
+      return true;
     }
+    if (
+      view === 'carrier_identification' ||
+      view === 'uploading' ||
+      view === 'processing' ||
+      view === 'failed' ||
+      view === 'review'
+    ) {
+      return renderComparisonFlowView(view);
+    }
+    var body = byId('agenteComparaTempTableModalBody');
+    if (!body) return false;
     setComparisonWizardModalHeader(view);
-    if (view === 'review' || view === 'processing') {
-      renderTempTableModalContent(currentTempTable);
+    body.innerHTML = '';
+    if (view === 'upload') {
+      renderComparisonWizardUploadBody(body);
+    } else if (view === 'ask_table_3') {
+      renderComparisonWizardAskTable3Body(body);
+    } else if (view === 'tables_ready') {
+      renderComparisonWizardTablesReadyBody(body);
     } else {
-      var body = byId('agenteComparaTempTableModalBody');
-      if (!body) return;
-      body.innerHTML = '';
-      if (view === 'upload') {
-        renderComparisonWizardUploadBody(body);
-      } else if (view === 'ask_table_3') {
-        renderComparisonWizardAskTable3Body(body);
-      } else if (view === 'tables_ready') {
-        renderComparisonWizardTablesReadyBody(body);
-      }
+      return false;
     }
     updateTempTableModalFooter();
+    return true;
   }
 
   function shouldAutoOpenComparisonWizard() {
     if (!comparisonWizardEngaged || comparisonWizardModalSuppressed) return false;
     if (!isComparisonWizardFlowActive()) return false;
+    if (uploadInFlight) return false;
+    if (comparisonFlowView === 'uploading' || comparisonFlowView === 'carrier_identification') {
+      return false;
+    }
     var step = comparisonState.currentStep || '';
     if (step !== 'PREPARE_TABLE_1') return false;
     var view = resolveComparisonWizardView();
-    return view === 'review' || view === 'processing';
+    if (view !== 'review') return false;
+    return isReviewReadyTempTable(currentTempTable);
   }
 
   function maybeOpenComparisonWizardAfterStatus() {
     if (!isComparisonWizardFlowActive()) return;
+    if (!comparisonState.comparisonId) return;
+    var resolved = resolveComparisonWizardView();
     if (isTempTableModalOpen()) {
-      if (isComparisonWizardEngaged()) {
-        renderComparisonWizardModal();
+      if (!isComparisonWizardEngaged()) return;
+      if (resolved === 'processing') {
+        transitionComparisonFlowModal('processing');
+        return;
       }
+      if (resolved === 'failed') {
+        transitionComparisonFlowModal('failed');
+        return;
+      }
+      if (resolved === 'review' && isReviewReadyTempTable(currentTempTable)) {
+        transitionComparisonFlowModal('review');
+        return;
+      }
+      if (resolved === 'uploading' || resolved === 'carrier_identification') {
+        return;
+      }
+      renderComparisonWizardModal();
       return;
     }
-    if (shouldAutoOpenComparisonWizard()) {
-      openComparisonWizardModal();
-    }
+    if (uploadInFlight) return;
+    if (!shouldAutoOpenComparisonWizard()) return;
+    if (resolveComparisonWizardView() !== 'review') return;
+    if (!isReviewReadyTempTable(currentTempTable)) return;
+    renderAndShowComparisonFlowModal('review');
   }
 
   function openComparisonWizardModal() {
     if (!isComparisonWizardEngaged()) return;
     comparisonWizardModalSuppressed = false;
-    var modal = byId('agenteComparaTempTableModal');
-    if (!modal) return;
     clearTempTableValidationErrors();
     setTempTableModalError('');
     tempTableEditMode = false;
     tempTableEditSnapshot = null;
     tempTableModalActiveTab = 'freight';
-    renderComparisonWizardModal();
-    modal.hidden = false;
-    document.body.classList.add('agente-compara-temp-table-modal-open');
+    var view = resolveComparisonWizardView() || 'upload';
+    if (view === 'review' || view === 'processing' || view === 'uploading' ||
+        view === 'failed' || view === 'carrier_identification') {
+      renderAndShowComparisonFlowModal(view);
+      return;
+    }
+    var rendered = renderComparisonWizardModal();
+    if (!rendered) return;
+    showTempTableModalShell();
   }
 
   function refreshComparisonWizardAfterTransition() {
@@ -1318,6 +1723,13 @@
     return step === 'PREPARE_TABLE_1' || step === 'PREPARE_TABLE_2' || step === 'PREPARE_TABLE_3';
   }
   var uploadInFlight = false;
+  var UPLOAD_PAGE_STATUS_SENDING = 'Enviando documento...';
+  var UPLOAD_PAGE_STATUS_PREPARING = 'Preparando envio...';
+  var UPLOAD_PAGE_STATUS_PROCESSING = 'Estruturando tabela temporária...';
+  var comparisonFlowView = null;
+  var comparisonFlowFailedMessage = '';
+  var carrierIdentifyPanelHomeParent = null;
+  var carrierIdentifyPanelHomeNext = null;
   var comparisonWizardEngaged = false;
   var comparisonWizardModalSuppressed = false;
   var chatInFlight = false;
@@ -1828,9 +2240,26 @@
 
   function isComparisonCellCalculated(cell) {
     if (!cell) return false;
-    if (cell.status && cell.status !== 'calculated') return false;
+    var status = cell.final_status || cell.status;
+    if (status && status !== 'calculated' && status !== 'calculated_with_warnings') return false;
+    if (cell.is_partial_value) return false;
     var n = Number(cell.calculated_freight);
     return isFinite(n);
+  }
+
+  function isComparisonCellIncomplete(cell) {
+    if (!cell) return false;
+    var status = cell.final_status || cell.status;
+    return status === 'incomplete' || !!cell.is_partial_value;
+  }
+
+  function comparisonCellStatusLabel(cell, memory) {
+    var status = (memory && memory.status) || (cell && (cell.final_status || cell.status)) || '';
+    if (memory && memory.status_label) return String(memory.status_label);
+    if (status === 'incomplete') return 'Cálculo incompleto';
+    if (status === 'calculated_with_warnings') return 'Calculado com ressalvas';
+    if (status === 'calculated') return 'Calculado';
+    return 'Não calculado';
   }
 
   function filterComparativeRows(rows, tables, filters) {
@@ -2331,6 +2760,609 @@
     }));
   }
 
+  var comparisonCalculationMemoryModalEl = null;
+  var comparisonCalculationMemoryEscapeHandler = null;
+  var comparisonCalculationMemoryOpenerEl = null;
+
+  function comparisonMemoryDisplayText(value) {
+    if (value === null || value === undefined) return '';
+    var text = String(value).trim();
+    return text;
+  }
+
+  function comparisonMemoryHasValue(value) {
+    return !(value === null || value === undefined || value === '');
+  }
+
+  function resolveComparisonCalculationMemory(row, tableResult) {
+    if (!row || !tableResult || typeof tableResult !== 'object') return null;
+    if (!comparisonMemoryHasValue(row.row_index) || !comparisonMemoryHasValue(tableResult.table_id)) {
+      return null;
+    }
+    var owned = getComparisonCellForTable(row, tableResult.table_id);
+    if (!owned || owned !== tableResult) {
+      if (!owned || String(owned.table_id || '') !== String(tableResult.table_id || '')) {
+        return null;
+      }
+    }
+    var memory = tableResult.calculation_memory;
+    if (memory && typeof memory === 'object') return memory;
+    var fallbackStatus = 'not_calculated';
+    if (isComparisonCellIncomplete(tableResult)) fallbackStatus = 'incomplete';
+    else if (isComparisonCellCalculated(tableResult)) {
+      fallbackStatus =
+        (tableResult.final_status || tableResult.status) === 'calculated_with_warnings'
+          ? 'calculated_with_warnings'
+          : 'calculated';
+    }
+    return {
+      schema_version: 1,
+      status: fallbackStatus,
+      status_label: comparisonCellStatusLabel(tableResult, { status: fallbackStatus }),
+      total_label: fallbackStatus === 'incomplete' ? 'Valor parcial calculado' : 'Total calculado',
+      row_index: row.row_index,
+      table_id: tableResult.table_id,
+      slot_number: tableResult.slot_number,
+      carrier_name: tableResult.carrier_name,
+      calculated_freight: tableResult.calculated_freight,
+      is_partial_value: fallbackStatus === 'incomplete',
+      components: [],
+      taxes: [],
+      total: fallbackStatus === 'not_calculated' ? null : tableResult.calculated_freight,
+      blocking_issues: tableResult.blocking_issues || [],
+      warnings: tableResult.warnings || [],
+      evidence: tableResult.evidence || {},
+      diagnostic: tableResult.error
+        ? {
+            code: tableResult.error.code || tableResult.status || 'not_calculated',
+            message: tableResult.error.message || 'Não foi possível calcular esta linha.',
+            component: null,
+            reason: tableResult.status || null,
+            evidence: tableResult.evidence || {}
+          }
+        : null
+    };
+  }
+
+  function ensureComparisonCalculationMemoryModal() {
+    if (comparisonCalculationMemoryModalEl) return comparisonCalculationMemoryModalEl;
+
+    var modal = document.createElement('div');
+    modal.className = 'agente-compara-temp-table-modal agente-compara-calculation-memory-modal';
+    modal.id = 'agenteComparaComparisonCalculationMemoryModal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'agenteComparaComparisonCalculationMemoryModalTitle');
+    modal.setAttribute('aria-describedby', 'agenteComparaComparisonCalculationMemoryModalSubtitle');
+    modal.hidden = true;
+
+    var backdrop = document.createElement('div');
+    backdrop.className = 'agente-compara-temp-table-modal-backdrop';
+    backdrop.id = 'agenteComparaComparisonCalculationMemoryModalBackdrop';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'agente-compara-temp-table-modal-dialog';
+
+    var header = document.createElement('div');
+    header.className = 'agente-compara-temp-table-modal-header';
+
+    var headerMain = document.createElement('div');
+    headerMain.className = 'agente-compara-temp-table-modal-header-main';
+
+    var title = document.createElement('h2');
+    title.className = 'agente-compara-temp-table-modal-title';
+    title.id = 'agenteComparaComparisonCalculationMemoryModalTitle';
+    title.textContent = 'Memória de cálculo';
+
+    var subtitle = document.createElement('p');
+    subtitle.className = 'agente-compara-temp-table-modal-subtitle';
+    subtitle.id = 'agenteComparaComparisonCalculationMemoryModalSubtitle';
+    subtitle.textContent = 'Detalhamento do frete calculado da célula selecionada.';
+
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'agente-compara-temp-table-modal-close-btn';
+    closeBtn.id = 'agenteComparaComparisonCalculationMemoryModalClose';
+    closeBtn.setAttribute('aria-label', 'Fechar memória de cálculo');
+    var closeIcon = document.createElement('span');
+    closeIcon.setAttribute('aria-hidden', 'true');
+    closeIcon.textContent = '\u00d7';
+    closeBtn.appendChild(closeIcon);
+
+    headerMain.appendChild(title);
+    headerMain.appendChild(subtitle);
+    header.appendChild(headerMain);
+    header.appendChild(closeBtn);
+
+    var body = document.createElement('div');
+    body.className = 'agente-compara-temp-table-modal-body';
+    body.id = 'agenteComparaComparisonCalculationMemoryModalBody';
+
+    var footer = document.createElement('div');
+    footer.className = 'agente-compara-temp-table-modal-footer';
+    footer.id = 'agenteComparaComparisonCalculationMemoryModalFooter';
+    var footerClose = document.createElement('button');
+    footerClose.type = 'button';
+    footerClose.className = 'agente-compara-btn agente-compara-btn-secondary';
+    footerClose.id = 'agenteComparaComparisonCalculationMemoryModalFooterClose';
+    footerClose.textContent = 'Fechar';
+    footer.appendChild(footerClose);
+
+    dialog.appendChild(header);
+    dialog.appendChild(body);
+    dialog.appendChild(footer);
+    modal.appendChild(backdrop);
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+
+    closeBtn.addEventListener('click', closeComparisonCalculationMemory);
+    footerClose.addEventListener('click', closeComparisonCalculationMemory);
+    backdrop.addEventListener('click', closeComparisonCalculationMemory);
+
+    comparisonCalculationMemoryModalEl = modal;
+    return modal;
+  }
+
+  function isComparisonCalculationMemoryModalOpen() {
+    return !!(comparisonCalculationMemoryModalEl && !comparisonCalculationMemoryModalEl.hidden);
+  }
+
+  function closeComparisonCalculationMemory() {
+    if (!comparisonCalculationMemoryModalEl || comparisonCalculationMemoryModalEl.hidden) return;
+    comparisonCalculationMemoryModalEl.hidden = true;
+    var body = byId('agenteComparaComparisonCalculationMemoryModalBody');
+    if (body) {
+      while (body.firstChild) body.removeChild(body.firstChild);
+    }
+    if (comparisonCalculationMemoryEscapeHandler) {
+      document.removeEventListener('keydown', comparisonCalculationMemoryEscapeHandler, true);
+      comparisonCalculationMemoryEscapeHandler = null;
+    }
+    var opener = comparisonCalculationMemoryOpenerEl;
+    comparisonCalculationMemoryOpenerEl = null;
+    if (opener && document.contains(opener) && typeof opener.focus === 'function') {
+      opener.focus();
+    } else {
+      var region = byId('agenteComparaComparisonResultsHost') || byId('agenteComparaComparisonResultsTable');
+      if (region && typeof region.focus === 'function') region.focus();
+    }
+  }
+
+  function appendComparisonMemoryDetail(container, label, value) {
+    if (!comparisonMemoryHasValue(value) && value !== 0) return;
+    appendDetailRow(container, label, String(value));
+  }
+
+  function buildLegacyComparisonMemoryRows(tableResult) {
+    var rows = [];
+    var components = (tableResult && tableResult.components) || {};
+    if (comparisonMemoryHasValue(components.weight_freight)) {
+      rows.push({ label: 'Frete-peso', basis: '', amount: components.weight_freight, note: '' });
+    }
+    if (comparisonMemoryHasValue(components.freight_value_component)) {
+      rows.push({ label: 'Frete-valor', basis: '', amount: components.freight_value_component, note: '' });
+    }
+    if (comparisonMemoryHasValue(components.toll)) {
+      rows.push({ label: 'Pedágio', basis: '', amount: components.toll, note: '' });
+    }
+    if (Array.isArray(components.accessorials)) {
+      components.accessorials.forEach(function (item) {
+        if (!item || typeof item !== 'object') return;
+        rows.push({
+          label: comparisonMemoryDisplayText(item.label || item.name) || 'Adicional',
+          basis: comparisonMemoryDisplayText(item.details),
+          amount: item.amount,
+          note: item.minimum_applied ? 'Mínimo aplicado' : ''
+        });
+      });
+    }
+    return rows;
+  }
+
+  function renderComparisonCalculationMemoryContent(row, tableResult) {
+    var body = byId('agenteComparaComparisonCalculationMemoryModalBody');
+    if (!body) return;
+    while (body.firstChild) body.removeChild(body.firstChild);
+
+    var memory = resolveComparisonCalculationMemory(row, tableResult) || {};
+    var isIncomplete = isComparisonCellIncomplete(tableResult) || memory.status === 'incomplete';
+    var isCalculated =
+      !isIncomplete &&
+      isComparisonCellCalculated(tableResult) &&
+      memory.status !== 'not_calculated';
+    var carrier = comparisonMemoryDisplayText(tableResult.carrier_name) || 'Transportadora';
+    var slot = comparisonMemoryHasValue(tableResult.slot_number) ? String(tableResult.slot_number) : '—';
+
+    var summary = document.createElement('div');
+    summary.className = 'agente-compara-calculation-memory-summary';
+    appendComparisonMemoryDetail(summary, 'Documento', row.document_number);
+    var destParts = [];
+    if (comparisonMemoryDisplayText(row.destination_city)) destParts.push(comparisonMemoryDisplayText(row.destination_city));
+    if (comparisonMemoryDisplayText(row.destination_uf)) destParts.push(comparisonMemoryDisplayText(row.destination_uf));
+    appendComparisonMemoryDetail(summary, 'Destino', destParts.length ? destParts.join(' / ') : null);
+    appendComparisonMemoryDetail(summary, 'Peso', comparisonMemoryHasValue(row.weight) ? formatComparisonWeight(row.weight) : null);
+    appendComparisonMemoryDetail(summary, 'Valor da NF', comparisonMemoryHasValue(row.invoice_value) ? formatComparisonMoney(row.invoice_value) : null);
+    appendComparisonMemoryDetail(summary, 'Transportadora', carrier + ' — Tabela ' + slot);
+    appendComparisonMemoryDetail(summary, 'Status', comparisonCellStatusLabel(tableResult, memory));
+    body.appendChild(summary);
+
+    if (isIncomplete) {
+      var incompleteSection = document.createElement('div');
+      incompleteSection.className = 'agente-compara-calculation-memory-diagnostic';
+      appendComparisonMemoryDetail(
+        incompleteSection,
+        memory.total_label || 'Valor parcial calculado',
+        formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight)
+      );
+      var blocking = memory.blocking_issues || tableResult.blocking_issues || [];
+      if (Array.isArray(blocking) && blocking.length) {
+        blocking.forEach(function (issue, idx) {
+          if (!issue || typeof issue !== 'object') return;
+          var label = comparisonMemoryDisplayText(issue.label) || comparisonMemoryDisplayText(issue.component_code) || ('Componente ' + String(idx + 1));
+          appendComparisonMemoryDetail(
+            incompleteSection,
+            'Não avaliado: ' + label,
+            comparisonMemoryDisplayText(issue.message) || comparisonMemoryDisplayText(issue.reason_code) || 'Componente crítico não resolvido'
+          );
+        });
+      } else {
+        appendComparisonMemoryDetail(
+          incompleteSection,
+          'Motivo',
+          (tableResult.error && tableResult.error.message) || 'Há componentes potencialmente aplicáveis não avaliados.'
+        );
+      }
+      body.appendChild(incompleteSection);
+
+      var incompleteNote = document.createElement('p');
+      incompleteNote.className = 'agente-compara-temp-table-modal-empty';
+      incompleteNote.textContent = 'Este valor parcial não é um frete definitivo e não entra na comparação como cálculo completo.';
+      body.appendChild(incompleteNote);
+
+      var incompleteComponents = Array.isArray(memory.components) ? memory.components : [];
+      if (incompleteComponents.length) {
+        var incTitle = document.createElement('h3');
+        incTitle.className = 'agente-compara-temp-table-modal-section-title';
+        incTitle.textContent = 'Componentes';
+        body.appendChild(incTitle);
+        incompleteComponents.forEach(function (item) {
+          if (!item || typeof item !== 'object') return;
+          var note = item.ignored
+            ? (comparisonMemoryDisplayText(item.reason) || 'Ignorado')
+            : (item.amount != null ? formatComparisonMoney(item.amount) : '');
+          appendComparisonMemoryDetail(
+            body,
+            comparisonMemoryDisplayText(item.label) || comparisonMemoryDisplayText(item.code) || 'Componente',
+            note
+          );
+        });
+      }
+      return;
+    }
+
+    if (!isCalculated) {
+      var diagnostic = memory.diagnostic || {};
+      var diagSection = document.createElement('div');
+      diagSection.className = 'agente-compara-calculation-memory-diagnostic';
+      appendComparisonMemoryDetail(diagSection, 'Motivo', diagnostic.message || (tableResult.error && tableResult.error.message) || 'Não foi possível calcular esta linha.');
+      appendComparisonMemoryDetail(diagSection, 'Código', diagnostic.code || (tableResult.error && tableResult.error.code) || tableResult.status);
+      appendComparisonMemoryDetail(diagSection, 'Componente/regra', diagnostic.component || diagnostic.reason);
+      body.appendChild(diagSection);
+
+      var orientation = document.createElement('p');
+      orientation.className = 'agente-compara-temp-table-modal-empty';
+      var code = String(diagnostic.code || tableResult.status || '');
+      if (code.indexOf('missing_coverage') >= 0) {
+        orientation.textContent = 'Orientação: destino não atendido ou sem mapeamento de cobertura.';
+      } else if (code.indexOf('missing_freight_rule') >= 0) {
+        orientation.textContent = 'Orientação: nenhuma faixa ou regra de frete aplicável para os dados informados.';
+      } else if (code.indexOf('unsupported_pricing') >= 0) {
+        orientation.textContent = 'Orientação: regra incompatível com o modelo de precificação suportado.';
+      } else if (code.indexOf('invalid_') >= 0) {
+        orientation.textContent = 'Orientação: valor obrigatório ausente ou inválido para o cálculo.';
+      } else {
+        orientation.textContent = 'Orientação: revise os dados operacionais e a tabela preparada para esta célula.';
+      }
+      body.appendChild(orientation);
+
+      var evidence = (diagnostic && diagnostic.evidence) || memory.evidence || {};
+      var evidenceKeys = Object.keys(evidence || {});
+      if (evidenceKeys.length) {
+        var evidenceTitle = document.createElement('h3');
+        evidenceTitle.className = 'agente-compara-temp-table-modal-section-title';
+        evidenceTitle.textContent = 'Evidências';
+        body.appendChild(evidenceTitle);
+        evidenceKeys.forEach(function (key) {
+          var value = evidence[key];
+          if (Array.isArray(value)) value = value.join(', ');
+          else if (value && typeof value === 'object') return;
+          appendComparisonMemoryDetail(body, key, value);
+        });
+      }
+      return;
+    }
+
+    var pricing = memory.pricing || {};
+    var evidence = memory.evidence || tableResult.evidence || {};
+    appendComparisonMemoryDetail(
+      body,
+      memory.total_label || 'Total calculado',
+      formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight)
+    );
+    if (memory.status === 'calculated_with_warnings' || (Array.isArray(memory.warnings) && memory.warnings.length)) {
+      (memory.warnings || []).forEach(function (warning, idx) {
+        if (!warning || typeof warning !== 'object') return;
+        appendComparisonMemoryDetail(
+          body,
+          'Ressalva ' + String(idx + 1),
+          comparisonMemoryDisplayText(warning.message) || comparisonMemoryDisplayText(warning.reason_code) || 'Ressalva não bloqueante'
+        );
+      });
+    }
+    appendComparisonMemoryDetail(body, 'Região', pricing.freight_region || evidence.freight_region);
+    appendComparisonMemoryDetail(body, 'Faixa', pricing.weight_band || evidence.weight_band);
+    appendComparisonMemoryDetail(body, 'Base', pricing.weight_basis || evidence.weight_basis || evidence.calculation_basis);
+    appendComparisonMemoryDetail(body, 'Precificação', pricing.pricing_type || evidence.pricing_type);
+
+    var componentRows = [];
+    if (Array.isArray(memory.components) && memory.components.length) {
+      memory.components.forEach(function (item) {
+        if (!item || typeof item !== 'object') return;
+        var noteParts = [];
+        if (item.ignored) noteParts.push('Ignorado');
+        if (item.minimum_applied) noteParts.push('Mínimo aplicado');
+        if (comparisonMemoryDisplayText(item.reason)) noteParts.push(comparisonMemoryDisplayText(item.reason));
+        componentRows.push({
+          label: comparisonMemoryDisplayText(item.label) || comparisonMemoryDisplayText(item.code) || 'Componente',
+          basis: comparisonMemoryDisplayText(item.basis) || comparisonMemoryDisplayText(item.operation),
+          rate: comparisonMemoryHasValue(item.rate) ? String(item.rate) : '',
+          quantity: comparisonMemoryHasValue(item.quantity) ? String(item.quantity) : '',
+          minimum: comparisonMemoryHasValue(item.minimum_amount) ? formatComparisonMoney(item.minimum_amount) : '',
+          amount: item.ignored ? null : item.amount,
+          note: noteParts.join(' · '),
+          ignored: !!item.ignored
+        });
+      });
+    } else {
+      componentRows = buildLegacyComparisonMemoryRows(tableResult);
+    }
+
+    if (componentRows.length) {
+      var sectionTitle = document.createElement('h3');
+      sectionTitle.className = 'agente-compara-temp-table-modal-section-title';
+      sectionTitle.textContent = 'Componentes';
+      body.appendChild(sectionTitle);
+
+      var scrollWrap = document.createElement('div');
+      scrollWrap.className = 'agente-compara-temp-table-modal-freight-scroll agente-compara-calculation-memory-table-scroll';
+      var table = document.createElement('table');
+      table.className = 'agente-compara-temp-table-modal-freight-table agente-compara-calculation-memory-table';
+      var thead = document.createElement('thead');
+      var headerRow = document.createElement('tr');
+      ['Componente', 'Base/regra', 'Taxa', 'Qtd.', 'Mínimo', 'Valor', 'Observação'].forEach(function (label) {
+        appendTableCell(headerRow, label, true, false);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      var tbody = document.createElement('tbody');
+      componentRows.forEach(function (memoryRow) {
+        var tr = document.createElement('tr');
+        appendTableCell(tr, memoryRow.label, false, true);
+        appendTableCell(tr, memoryRow.basis || '', false, true);
+        appendTableCell(tr, memoryRow.rate || '', false, true);
+        appendTableCell(tr, memoryRow.quantity || '', false, true);
+        appendTableCell(tr, memoryRow.minimum || '', false, true);
+        appendTableCell(
+          tr,
+          memoryRow.ignored ? 'Ignorado' : formatComparisonMoney(memoryRow.amount),
+          false,
+          true
+        );
+        appendTableCell(tr, memoryRow.note || '', false, true);
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      scrollWrap.appendChild(table);
+      body.appendChild(scrollWrap);
+    }
+
+    var taxes = Array.isArray(memory.taxes) ? memory.taxes : [];
+    if (!taxes.length && tableResult.components && comparisonMemoryHasValue(tableResult.components.taxes)) {
+      if (comparisonMemoryHasValue(tableResult.components.icms)) {
+        taxes.push({ label: 'ICMS', amount: tableResult.components.icms, applied: true });
+      }
+      if (comparisonMemoryHasValue(tableResult.components.iss)) {
+        taxes.push({ label: 'ISS', amount: tableResult.components.iss, applied: true });
+      }
+    }
+    if (taxes.length) {
+      var taxTitle = document.createElement('h3');
+      taxTitle.className = 'agente-compara-temp-table-modal-section-title';
+      taxTitle.textContent = 'Impostos';
+      body.appendChild(taxTitle);
+      var taxScroll = document.createElement('div');
+      taxScroll.className = 'agente-compara-temp-table-modal-freight-scroll agente-compara-calculation-memory-table-scroll';
+      var taxTable = document.createElement('table');
+      taxTable.className = 'agente-compara-temp-table-modal-freight-table agente-compara-calculation-memory-table';
+      var taxHead = document.createElement('thead');
+      var taxHeadRow = document.createElement('tr');
+      ['Imposto', 'Base', 'Alíquota', 'Valor'].forEach(function (label) {
+        appendTableCell(taxHeadRow, label, true, false);
+      });
+      taxHead.appendChild(taxHeadRow);
+      taxTable.appendChild(taxHead);
+      var taxBody = document.createElement('tbody');
+      taxes.forEach(function (tax) {
+        if (!tax || typeof tax !== 'object') return;
+        var tr = document.createElement('tr');
+        appendTableCell(tr, comparisonMemoryDisplayText(tax.label || tax.tax_type) || 'Imposto', false, true);
+        appendTableCell(tr, comparisonMemoryHasValue(tax.basis) ? formatComparisonMoney(tax.basis) : '', false, true);
+        appendTableCell(tr, comparisonMemoryHasValue(tax.rate) ? String(tax.rate) : '', false, true);
+        appendTableCell(
+          tr,
+          tax.ignored || tax.applied === false
+            ? (comparisonMemoryDisplayText(tax.reason) || 'Não aplicado')
+            : formatComparisonMoney(tax.amount),
+          false,
+          true
+        );
+        taxBody.appendChild(tr);
+      });
+      taxTable.appendChild(taxBody);
+      taxScroll.appendChild(taxTable);
+      body.appendChild(taxScroll);
+    }
+
+    var totals = document.createElement('div');
+    totals.className = 'agente-compara-calculation-memory-total';
+    var subtotalLabel = document.createElement('span');
+    subtotalLabel.className = 'agente-compara-calculation-memory-total-label';
+    var subtotalValue = memory.subtotal_before_taxes;
+    if (!comparisonMemoryHasValue(subtotalValue) && tableResult.components) {
+      subtotalValue = tableResult.components.subtotal;
+    }
+    subtotalLabel.textContent = comparisonMemoryHasValue(subtotalValue)
+      ? ('Subtotal: ' + formatComparisonMoney(subtotalValue))
+      : 'Subtotal: —';
+    var totalLabel = document.createElement('strong');
+    totalLabel.className = 'agente-compara-calculation-memory-total-value';
+    totalLabel.textContent = 'Total: ' + formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight);
+    totals.appendChild(subtotalLabel);
+    totals.appendChild(totalLabel);
+    body.appendChild(totals);
+
+    if (evidence && typeof evidence === 'object') {
+      var safeEvidenceKeys = [
+        'freight_region',
+        'calculation_basis',
+        'calculation_details',
+        'pricing_type',
+        'pricing_lookup_key',
+        'pricing_lookup_kind',
+        'weight_band',
+        'weight_basis'
+      ];
+      var hasEvidence = safeEvidenceKeys.some(function (key) {
+        return comparisonMemoryHasValue(evidence[key]);
+      });
+      if (hasEvidence) {
+        var evidenceTitle = document.createElement('h3');
+        evidenceTitle.className = 'agente-compara-temp-table-modal-section-title';
+        evidenceTitle.textContent = 'Evidências';
+        body.appendChild(evidenceTitle);
+        safeEvidenceKeys.forEach(function (key) {
+          appendComparisonMemoryDetail(body, key, evidence[key]);
+        });
+      }
+    }
+  }
+
+  function openComparisonCalculationMemory(row, tableResult, openerEl) {
+    if (!row || !tableResult) return;
+    if (!comparisonMemoryHasValue(row.row_index) || !comparisonMemoryHasValue(tableResult.table_id)) return;
+    var owned = getComparisonCellForTable(row, tableResult.table_id);
+    if (!owned) return;
+
+    var modal = ensureComparisonCalculationMemoryModal();
+    var subtitle = byId('agenteComparaComparisonCalculationMemoryModalSubtitle');
+    var carrier = comparisonMemoryDisplayText(tableResult.carrier_name) || 'Transportadora';
+    var slot = comparisonMemoryHasValue(tableResult.slot_number) ? String(tableResult.slot_number) : '—';
+    var doc = comparisonMemoryDisplayText(row.document_number);
+    if (subtitle) {
+      subtitle.textContent = doc
+        ? ('Linha ' + String(row.row_index) + ' — ' + carrier + ' — Tabela ' + slot + ' — documento ' + doc)
+        : ('Linha ' + String(row.row_index) + ' — ' + carrier + ' — Tabela ' + slot);
+    }
+    renderComparisonCalculationMemoryContent(row, owned);
+    comparisonCalculationMemoryOpenerEl = openerEl || null;
+    modal.hidden = false;
+    var closeBtn = byId('agenteComparaComparisonCalculationMemoryModalClose');
+    if (closeBtn && typeof closeBtn.focus === 'function') closeBtn.focus();
+
+    if (!comparisonCalculationMemoryEscapeHandler) {
+      comparisonCalculationMemoryEscapeHandler = function (e) {
+        if (e.key === 'Escape' && isComparisonCalculationMemoryModalOpen()) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeComparisonCalculationMemory();
+        }
+      };
+      document.addEventListener('keydown', comparisonCalculationMemoryEscapeHandler, true);
+    }
+  }
+
+  function appendComparisonFreightCell(td, row, tableResult, columnTitle) {
+    var carrier = comparisonMemoryDisplayText(tableResult && tableResult.carrier_name) || 'Transportadora';
+    if (isComparisonCellIncomplete(tableResult)) {
+      var partialMoney = formatComparisonMoney(tableResult.calculated_freight);
+      var incompleteBtn = document.createElement('button');
+      incompleteBtn.type = 'button';
+      incompleteBtn.className = 'agente-compara-comparison-calc-memory-link agente-compara-comparison-calc-incomplete';
+      incompleteBtn.textContent = partialMoney
+        ? (partialMoney + ' parcial — ver detalhes')
+        : 'Cálculo incompleto — ver detalhes';
+      incompleteBtn.title = 'Cálculo incompleto: valor parcial não é frete definitivo';
+      incompleteBtn.setAttribute(
+        'aria-label',
+        'Cálculo incompleto do frete' +
+          (partialMoney ? ' (valor parcial ' + partialMoney + ')' : '') +
+          ' — ' + carrier + (columnTitle ? ' (' + columnTitle + ')' : '') +
+          '. Abrir memória de cálculo.'
+      );
+      incompleteBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openComparisonCalculationMemory(row, tableResult, incompleteBtn);
+      });
+      td.appendChild(incompleteBtn);
+      return;
+    }
+    if (!isComparisonCellCalculated(tableResult)) {
+      var detail =
+        (tableResult && tableResult.error && (tableResult.error.message || tableResult.error.code)) ||
+        (tableResult && tableResult.status) ||
+        'Erro de domínio';
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'agente-compara-comparison-calc-memory-link';
+      btn.textContent = 'Não calculado — Ver motivo';
+      btn.title = String(detail);
+      btn.setAttribute(
+        'aria-label',
+        'Ver motivo do frete não calculado — ' + carrier + (columnTitle ? ' (' + columnTitle + ')' : '')
+      );
+      btn.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openComparisonCalculationMemory(row, tableResult, btn);
+      });
+      td.appendChild(btn);
+      return;
+    }
+
+    var money = formatComparisonMoney(tableResult.calculated_freight);
+    var calcBtn = document.createElement('button');
+    calcBtn.type = 'button';
+    calcBtn.className = 'agente-compara-comparison-calc-memory-link';
+    var status = tableResult.final_status || tableResult.status;
+    if (status === 'calculated_with_warnings') {
+      calcBtn.textContent = money + ' (ressalvas)';
+      calcBtn.title = 'Calculado com ressalvas — abrir memória';
+    } else {
+      calcBtn.textContent = money;
+    }
+    calcBtn.setAttribute(
+      'aria-label',
+      'Ver memória de cálculo do frete de ' + money + ' — ' + carrier
+    );
+    calcBtn.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      openComparisonCalculationMemory(row, tableResult, calcBtn);
+    });
+    td.appendChild(calcBtn);
+  }
+
   function renderComparisonResultsTable(container, result, pageRows) {
     var hasOrigin = comparisonRowHasOrigin(result.comparative_rows || []);
     var hasInvoice = comparisonRowHasInvoice(result.comparative_rows || []);
@@ -2341,6 +3373,7 @@
     table.className = 'agente-compara-comparison-calculation-table';
     table.id = 'agenteComparaComparisonResultsTable';
     table.setAttribute('aria-label', 'Tabela comparativa de frete calculado');
+    table.tabIndex = -1;
 
     var columns = disambiguateCarrierColumnTitle(result.tables || []);
     var thead = document.createElement('thead');
@@ -2399,17 +3432,7 @@
         var td = document.createElement('td');
         td.setAttribute('data-table-id', col.table_id || '');
         var cell = getComparisonCellForTable(row, col.table_id);
-        if (!isComparisonCellCalculated(cell)) {
-          td.textContent = 'Não calculado';
-          var detail =
-            (cell && cell.error && (cell.error.message || cell.error.code)) ||
-            (cell && cell.status) ||
-            'Erro de domínio';
-          td.title = String(detail);
-          td.setAttribute('aria-label', 'Não calculado: ' + String(detail));
-        } else {
-          td.textContent = formatComparisonMoney(cell.calculated_freight);
-        }
+        appendComparisonFreightCell(td, row, cell, col.title);
         tr.appendChild(td);
       });
       fragment.appendChild(tr);
@@ -3251,7 +4274,22 @@
     if (banner) banner.hidden = !tempTableEditMode;
     document.body.classList.toggle('agente-compara-temp-table-modal-editing', !!tempTableEditMode);
     if (saveBtn) {
-      saveBtn.disabled = !!(tempTableSaveInFlight || taxSaveInFlight || taxContinueInFlight || coverageSaveInFlight);
+      var freightSaveBlocked = false;
+      if (!onTaxTab && !onCoverageTab && !onAuditTab) {
+        freightSaveBlocked = !tempTableConfirmationCanProceed();
+        renderTempTableConfirmationValidationMessage();
+      } else {
+        clearTempTableConfirmationValidationMessage();
+      }
+      var saveDisabled = !!(
+        tempTableSaveInFlight
+        || taxSaveInFlight
+        || taxContinueInFlight
+        || coverageSaveInFlight
+        || freightSaveBlocked
+      );
+      saveBtn.disabled = saveDisabled;
+      saveBtn.setAttribute('aria-disabled', saveDisabled ? 'true' : 'false');
       saveBtn.setAttribute('aria-busy', (tempTableSaveInFlight || taxSaveInFlight || taxContinueInFlight || coverageSaveInFlight) ? 'true' : 'false');
       if (onTaxTab) {
         saveBtn.textContent = (taxContinueInFlight || taxSaveInFlight || tempTableSaveInFlight)
@@ -3555,16 +4593,25 @@
   }
 
   function accessorialMinimumLinkErrorMessage() {
-    return 'Esta regra mínima não possui uma taxa principal válida vinculada. Corrija ou exclua a regra antes de continuar.';
+    return 'Vincule a uma taxa principal válida ou exclua a regra.';
+  }
+
+  function accessorialFeeHasFormalUnmappedBase(fee) {
+    if (!fee || typeof fee !== 'object') return false;
+    var baseId = String(fee.calculation_base_id || '').trim();
+    var basis = normalizeTextKey(fee.calculation_basis);
+    var source = String(fee.classification_source || '').trim();
+    if (source === 'unmapped_calculation_base') return true;
+    if (!baseId && basis === normalizeTextKey('não mapeado / revisar')) return true;
+    return false;
   }
 
   function accessorialFeeMissingCalculationBase(fee) {
     if (accessorialFeeIsMinimumAmount(fee)) return false;
-    if (accessorialFeeIsExtractionHypothesis(fee)) return false;
     var baseId = String((fee && fee.calculation_base_id) || '').trim();
     var base = getCalculationBaseById(baseId);
     var basis = normalizeTextKey(fee && fee.calculation_basis);
-    return !baseId || !base || basis === normalizeTextKey('não mapeado / revisar');
+    return !baseId || !base || basis === normalizeTextKey('não mapeado / revisar') || accessorialFeeHasFormalUnmappedBase(fee);
   }
 
   function accessorialFeeIsUserCommitted(fee) {
@@ -3572,23 +4619,24 @@
     return source.indexOf('manual_') === 0;
   }
 
+  function accessorialFeeUsesNewBaseContract(fee) {
+    var baseId = String((fee && fee.calculation_base_id) || '').trim();
+    var basis = normalizeTextKey(fee && fee.calculation_basis);
+    var source = String((fee && fee.classification_source) || '').trim();
+    return !!baseId || basis === normalizeTextKey('não mapeado / revisar') || source.indexOf('manual_') === 0;
+  }
+
   function accessorialFeeIsExtractionHypothesis(fee) {
     if (!fee || accessorialFeeIsUserCommitted(fee)) return false;
+    if (accessorialFeeHasFormalUnmappedBase(fee)) return false;
+    var baseId = String(fee.calculation_base_id || '').trim();
+    if (baseId) return false;
+    if (accessorialFeeUsesNewBaseContract(fee)) return false;
     var source = String(fee.classification_source || '').trim();
     var status = String(fee.status || '').trim();
-    var baseId = String(fee.calculation_base_id || '').trim();
-    var basis = normalizeTextKey(fee.calculation_basis);
-    if (!baseId && basis === normalizeTextKey('não mapeado / revisar')) return true;
     if (
-      (source === 'legacy_classifier' || source === 'unmapped_calculation_base')
+      source === 'legacy_classifier'
       && (status === 'needs_review' || status === 'unknown' || status === 'unsupported' || !status)
-      && !accessorialFeeHasRequiredValue(fee)
-    ) {
-      return true;
-    }
-    if (
-      source === 'configured_calculation_base'
-      && (status === 'needs_review' || status === 'unknown' || status === 'unsupported')
       && !accessorialFeeHasRequiredValue(fee)
     ) {
       return true;
@@ -3598,8 +4646,9 @@
 
   function accessorialFeeShouldBlockAdvance(fee) {
     if (!fee || typeof fee !== 'object' || isPrimaryFreightAccessorialFee(fee)) return false;
-    if (accessorialFeeIsExtractionHypothesis(fee)) return false;
+    if (accessorialFeeHasFormalUnmappedBase(fee)) return true;
     if (accessorialFeeIsMinimumAmount(fee)) return true;
+    if (accessorialFeeIsExtractionHypothesis(fee)) return true;
     var baseId = String(fee.calculation_base_id || '').trim();
     var basis = normalizeTextKey(fee.calculation_basis);
     var source = String(fee.classification_source || '').trim();
@@ -3609,12 +4658,106 @@
     return true;
   }
 
+  function buildLocalTempTableValidationSummary() {
+    var errors = collectTempTableAdvanceValidationErrors();
+    return {
+      schema_version: 1,
+      can_confirm: errors.length === 0,
+      blocking_count: errors.length,
+      warning_count: 0,
+      blocking_issues: errors.map(function (error, idx) {
+        return {
+          code: error.reason_code === 'missing_calculation_base'
+            ? 'UNMAPPED_CALCULATION_BASE'
+            : (error.code || error.reason_code || 'BLOCKING_ISSUE'),
+          section: error.section || 'accessorial_fees',
+          item_id: error.item_id || ('accessorial_fees:' + (error.index != null ? error.index : idx)),
+          index: error.index,
+          field: error.field || '',
+          label: error.name || ('Item ' + ((error.index != null ? error.index : idx) + 1)),
+          reason_code: error.reason_code,
+          severity: 'blocking',
+          message: error.message || accessorialFieldErrorMessage(error)
+        };
+      }),
+      warnings: []
+    };
+  }
+
+  function resolveTempTableValidationState() {
+    if (tempTableEditMode) {
+      return buildLocalTempTableValidationSummary();
+    }
+    var remote = currentTempTable && currentTempTable.validation;
+    if (remote && typeof remote === 'object' && typeof remote.can_confirm === 'boolean') {
+      return remote;
+    }
+    return buildLocalTempTableValidationSummary();
+  }
+
+  function tempTableConfirmationCanProceed() {
+    var validation = resolveTempTableValidationState();
+    return !!(validation && validation.can_confirm === true && Number(validation.blocking_count || 0) === 0);
+  }
+
+  function tempTableBlockingCountMessage(count) {
+    var n = Number(count) || 0;
+    if (n <= 0) return '';
+    if (n === 1) {
+      return 'Resolva 1 pendência antes de salvar e avançar.';
+    }
+    return 'Resolva ' + n + ' pendências antes de salvar e avançar.';
+  }
+
+  function clearTempTableConfirmationValidationMessage() {
+    var el = byId('agenteComparaTempTableModalValidation');
+    if (!el) return;
+    el.hidden = true;
+    el.replaceChildren();
+  }
+
+  function renderTempTableConfirmationValidationMessage() {
+    var el = byId('agenteComparaTempTableModalValidation');
+    if (!el) return;
+    var validation = resolveTempTableValidationState();
+    var count = Number(validation && validation.blocking_count) || 0;
+    var issues = (validation && Array.isArray(validation.blocking_issues)) ? validation.blocking_issues : [];
+    if (count <= 0) {
+      el.hidden = true;
+      el.replaceChildren();
+      return;
+    }
+    el.hidden = false;
+    el.setAttribute('role', 'alert');
+    var summary = document.createElement('p');
+    summary.className = 'agente-compara-temp-table-validation-summary';
+    summary.textContent = tempTableBlockingCountMessage(count);
+    el.replaceChildren(summary);
+    if (issues.length) {
+      var list = document.createElement('ul');
+      list.className = 'agente-compara-temp-table-validation-list';
+      issues.slice(0, 8).forEach(function (issue) {
+        var item = document.createElement('li');
+        var label = (issue && issue.label) ? String(issue.label) : 'Item';
+        var message = (issue && issue.message) ? String(issue.message) : '';
+        item.textContent = message ? (label + ': ' + message) : label;
+        if (issue && issue.index != null) {
+          item.setAttribute('data-accessorial-fee-index', String(issue.index));
+        }
+        list.appendChild(item);
+      });
+      el.appendChild(list);
+    }
+  }
+
   function validateLinkedMinimumAccessorialFee(fee, fees, feeIndex) {
+    var feeName = hasFieldValue(fee && fee.name) ? String(fee.name) : '';
+    var displayName = feeName || ('Item ' + (feeIndex + 1));
     if (!accessorialFeeHasValidMinimumAmount(fee)) {
       return {
         section: 'accessorial_fees',
         index: feeIndex,
-        name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+        name: displayName,
         field: 'value',
         reason_code: 'invalid_accessorial_value',
         message: accessorialValueErrorMessage()
@@ -3625,10 +4768,12 @@
       return {
         section: 'accessorial_fees',
         index: feeIndex,
-        name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+        name: displayName,
         field: 'related_to',
         reason_code: relatedTo ? 'invalid_minimum_base_link' : 'missing_minimum_base_link',
-        message: accessorialMinimumLinkErrorMessage()
+        message: feeName
+          ? ('Vincule ' + feeName + ' a uma taxa principal válida ou exclua a regra.')
+          : accessorialMinimumLinkErrorMessage()
       };
     }
     return null;
@@ -3662,38 +4807,32 @@
       error.reason_code === 'missing_minimum_base_link'
       || error.reason_code === 'invalid_minimum_base_link'
     ) {
-      return accessorialMinimumLinkErrorMessage();
+      return error.message || accessorialMinimumLinkErrorMessage();
     }
     return error.message || '';
   }
 
   function accessorialAdvanceValidationCountMessage(count) {
-    if (count === 1) {
-      return '1 item precisa de revisão. Corrija os campos destacados ou exclua a linha.';
-    }
-    return count + ' itens precisam de revisão. Corrija os campos destacados ou exclua as linhas.';
+    return tempTableBlockingCountMessage(count);
   }
 
   function accessorialValidationSummaryMessage(errors) {
     if (!errors || !errors.length) return '';
-    if (errors.length === 1) {
-      var err = errors[0];
-      var detail = err.message || accessorialFieldErrorMessage(err);
-      var name = err.name && String(err.name).trim();
-      if (name && !/^Item \d+$/i.test(name)) {
-        return 'Revise a generalidade "' + name + '": ' + detail;
-      }
-      return detail || 'Revise uma generalidade: informe o valor obrigatório.';
-    }
     return accessorialAdvanceValidationCountMessage(errors.length);
   }
 
   function resolveTempTableSaveErrorMessage(data) {
     if (!data || typeof data !== 'object') return '';
+    if (data.validation && Number(data.validation.blocking_count) > 0) {
+      return tempTableBlockingCountMessage(data.validation.blocking_count);
+    }
     if (Array.isArray(data.errors) && data.errors.length) {
       return accessorialValidationSummaryMessage(data.errors);
     }
     if (data.error_code === 'invalid_accessorial_fees' && data.message) {
+      return String(data.message);
+    }
+    if (data.error === 'TEMP_TABLE_HAS_BLOCKING_ISSUES' && data.message) {
       return String(data.message);
     }
     if (data.message && typeof data.message === 'string') {
@@ -3714,14 +4853,19 @@
       var error = null;
       if (accessorialFeeIsMinimumAmount(fee)) {
         error = validateLinkedMinimumAccessorialFee(fee, fees, feeIndex);
-      } else if (accessorialFeeMissingCalculationBase(fee)) {
+      } else if (accessorialFeeIsExtractionHypothesis(fee) || accessorialFeeMissingCalculationBase(fee)) {
+        var feeName = hasFieldValue(fee.name) ? String(fee.name) : '';
+        var isHypothesis = accessorialFeeIsExtractionHypothesis(fee);
         error = {
           section: 'accessorial_fees',
           index: feeIndex,
-          name: hasFieldValue(fee.name) ? String(fee.name) : 'Item ' + (feeIndex + 1),
+          name: feeName || ('Item ' + (feeIndex + 1)),
           field: 'calculation_base_id',
-          reason_code: 'missing_calculation_base',
-          message: accessorialCalculationBaseErrorMessage()
+          reason_code: isHypothesis ? 'unconfirmed_extracted_rule' : 'missing_calculation_base',
+          code: isHypothesis ? 'UNCONFIRMED_EXTRACTED_RULE' : 'UNMAPPED_CALCULATION_BASE',
+          message: feeName
+            ? ('Selecione a base de cálculo de ' + feeName + '.')
+            : 'Selecione a base de cálculo antes de continuar.'
         };
       } else if (!accessorialFeeOperationIsComplete(fee)) {
         error = {
@@ -3791,10 +4935,13 @@
     } else {
       setTempTableModalError('');
     }
+    updateTempTableModalFooter();
   }
 
   function refreshTempTableValidationErrorsAfterAccessorialEdit() {
-    if (!tempTableValidationErrors.length) return;
+    if (currentTempTable && typeof currentTempTable === 'object') {
+      currentTempTable.validation = buildLocalTempTableValidationSummary();
+    }
     setTempTableValidationErrors(collectTempTableAdvanceValidationErrors());
   }
 
@@ -3823,6 +4970,9 @@
 
   function validateTempTableBeforeAdvance() {
     var errors = collectTempTableAdvanceValidationErrors();
+    if (currentTempTable && typeof currentTempTable === 'object') {
+      currentTempTable.validation = buildLocalTempTableValidationSummary();
+    }
     setTempTableValidationErrors(errors);
     if (errors.length) {
       ensureTempTableEditModeForValidation();
@@ -3835,12 +4985,34 @@
 
   function handleBackendTempTableValidationErrors(data) {
     if (!data || typeof data !== 'object') return false;
+    var validation = data.validation && typeof data.validation === 'object' ? data.validation : null;
     var errors = Array.isArray(data.errors) ? data.errors : [];
-    if (data.error_code === 'invalid_accessorial_fees') {
+    if (validation && Array.isArray(validation.blocking_issues) && validation.blocking_issues.length && !errors.length) {
+      errors = validation.blocking_issues.map(function (issue, idx) {
+        return {
+          section: issue.section || 'accessorial_fees',
+          index: issue.index != null ? issue.index : idx,
+          name: issue.label || ('Item ' + (idx + 1)),
+          field: issue.field || 'calculation_base_id',
+          reason_code: issue.reason_code || issue.code,
+          code: issue.code,
+          message: issue.message || ''
+        };
+      });
+    }
+    var isBlocking =
+      data.error_code === 'invalid_accessorial_fees'
+      || data.error === 'TEMP_TABLE_HAS_BLOCKING_ISSUES'
+      || !!(validation && validation.can_confirm === false);
+    if (isBlocking) {
+      if (currentTempTable && validation) {
+        currentTempTable.validation = validation;
+      }
       if (errors.length) {
         setTempTableValidationErrors(errors);
       } else if (data.message) {
         setTempTableModalError(String(data.message));
+        updateTempTableModalFooter();
       } else {
         return false;
       }
@@ -3859,6 +5031,11 @@
 
   function saveTempTableAndAdvance() {
     if (!currentTempTable || tempTableSaveInFlight) return;
+    if (!tempTableConfirmationCanProceed()) {
+      validateTempTableBeforeAdvance();
+      updateTempTableModalFooter();
+      return;
+    }
     tempTableSaveInFlight = true;
     updateTempTableModalFooter();
     if (!validateTempTableBeforeAdvance()) {
@@ -3900,7 +5077,7 @@
           var safeMessage = resolveTempTableSaveErrorMessage(res.data);
           if (safeMessage) {
             setTempTableModalError(safeMessage);
-            if (res.data && res.data.error_code === 'invalid_accessorial_fees') {
+            if (res.data && (res.data.error_code === 'invalid_accessorial_fees' || res.data.error === 'TEMP_TABLE_HAS_BLOCKING_ISSUES')) {
               ensureTempTableEditModeForValidation();
               renderTempTableModalContent(currentTempTable);
             }
@@ -4077,7 +5254,7 @@
         resetAuditFileStepState();
         comparisonWizardEngaged = false;
         comparisonWizardModalSuppressed = false;
-        hideTempTableModalShell();
+        teardownTempTableModal();
       }
     }
     currentCalculationBases = Array.isArray(data.calculation_bases) ? data.calculation_bases : [];
@@ -4105,6 +5282,23 @@
     renderDocuments(data.documents || [], tempTable);
     announceTempTableStatusIfNeeded(tempTable);
     startTempTablePollingIfNeeded(tempTable);
+    syncUploadPageStatusFromTempTable(tempTable);
+    if (tempTable && tempTable.temp_table_id && isTempTableModalOpen() && isComparisonWizardEngaged()) {
+      var flowStatus = String(tempTable.status || '').toLowerCase();
+      if (flowStatus === 'processing') {
+        transitionComparisonFlowModal('processing');
+      } else if (flowStatus === 'needs_review' && isReviewReadyTempTable(currentTempTable || tempTable)) {
+        transitionComparisonFlowModal('review');
+      } else if (
+        flowStatus === 'failed' ||
+        flowStatus === 'expired' ||
+        flowStatus === 'discarded'
+      ) {
+        transitionComparisonFlowModal('failed', {
+          message: tempTableContextNote(tempTable)
+        });
+      }
+    }
     if (!comparisonState.comparisonId) {
       return;
     }
@@ -4232,6 +5426,74 @@
     el.textContent = message || '';
   }
 
+  function getUploadPageStatusText() {
+    var el = byId('agenteComparaUploadStatus');
+    return el ? String(el.textContent || '') : '';
+  }
+
+  function isTransientUploadPageStatus(message) {
+    var text = String(message || '');
+    if (!text) return false;
+    if (text === UPLOAD_PAGE_STATUS_SENDING) return true;
+    if (text === UPLOAD_PAGE_STATUS_PREPARING) return true;
+    if (text === UPLOAD_PAGE_STATUS_PROCESSING) return true;
+    if (text.indexOf('Estruturando tabela temporária') === 0) return true;
+    return false;
+  }
+
+  function clearTransientUploadPageStatus() {
+    if (isTransientUploadPageStatus(getUploadPageStatusText())) {
+      setStatus('');
+    }
+  }
+
+  function setTempTableProcessingPageStatus() {
+    setStatus(UPLOAD_PAGE_STATUS_PROCESSING);
+  }
+
+  function syncUploadPageStatusFromTempTable(tempTable) {
+    // Com wizard/modal aberto, o status operacional fica só dentro do modal.
+    if (isTempTableModalOpen() && isComparisonWizardFlowActive()) {
+      setStatus('');
+      return;
+    }
+    if (uploadInFlight) return;
+    if (!tempTable || !tempTable.status) {
+      clearTransientUploadPageStatus();
+      return;
+    }
+    var status = String(tempTable.status || '').toLowerCase();
+    if (status === 'processing') {
+      setTempTableProcessingPageStatus();
+      return;
+    }
+    if (
+      status === 'needs_review' ||
+      status === 'failed' ||
+      status === 'expired' ||
+      status === 'discarded' ||
+      status === 'awaiting_validation' ||
+      status === 'validated'
+    ) {
+      clearTransientUploadPageStatus();
+    }
+  }
+
+  /**
+   * Encerra estado visual transitório de upload/processamento antes da revisão.
+   * Não toca no modal, não faz fetch e não altera dados da tabela.
+   */
+  function completeTempTableProcessingUi() {
+    if (uploadInFlight) {
+      uploadInFlight = false;
+      var attachBtn = byId('agenteComparaAttachBtn');
+      if (attachBtn) {
+        attachBtn.setAttribute('aria-busy', 'false');
+      }
+    }
+    clearTransientUploadPageStatus();
+  }
+
   function setUploadLoading(on) {
     uploadInFlight = !!on;
     var attachBtn = byId('agenteComparaAttachBtn');
@@ -4240,7 +5502,21 @@
       attachBtn.setAttribute('aria-busy', on ? 'true' : 'false');
     }
     if (fileInput && on) fileInput.value = '';
-    setStatus(on ? 'Enviando documento...' : '');
+    if (on) {
+      // Mensagem operacional no modal; página permanece neutra durante o wizard.
+      if (isTempTableModalOpen()) {
+        setStatus('');
+        if (comparisonFlowView !== 'uploading') {
+          transitionComparisonFlowModal('uploading');
+        }
+      } else {
+        setStatus(UPLOAD_PAGE_STATUS_SENDING);
+      }
+      return;
+    }
+    if (getUploadPageStatusText() === UPLOAD_PAGE_STATUS_SENDING) {
+      setStatus('');
+    }
   }
 
   function docTypeLabel(doc) {
@@ -5637,27 +6913,71 @@ function renderDocumentItem(doc) {
       setError(validation.message);
       return Promise.resolve(null);
     }
-    var comparisonId = identityOverride && identityOverride.comparisonId
+    var requestGenerationAtStart = comparisonRequestGeneration;
+    var comparisonIdAtStart = identityOverride && identityOverride.comparisonId
       ? identityOverride.comparisonId
       : comparisonState.comparisonId;
-    var tableId = identityOverride && identityOverride.tableId
+    var tableIdAtStart = identityOverride && identityOverride.tableId
       ? identityOverride.tableId
       : comparisonState.activeTableId;
     var slot = identityOverride && identityOverride.slot != null
       ? identityOverride.slot
       : (activeComparisonTable() ? activeComparisonTable().slot_number : null);
-    if (!comparisonId || !tableId || slot == null || slot === '') {
+    if (!comparisonIdAtStart || !tableIdAtStart || slot == null || slot === '') {
       setError('Identidade da comparação inconsistente. Selecione o arquivo novamente.');
+      return Promise.resolve(null);
+    }
+    if (!isCurrentComparisonRequest(requestGenerationAtStart, comparisonIdAtStart, tableIdAtStart)) {
       return Promise.resolve(null);
     }
     setError('');
     setUploadLoading(true);
 
+    function uploadAttemptStillActive() {
+      return isCurrentComparisonRequest(
+        requestGenerationAtStart,
+        comparisonIdAtStart,
+        tableIdAtStart
+      );
+    }
+
+    function responseMatchesUploadAttempt(data) {
+      if (!data) return false;
+      if (data.comparison_id && data.comparison_id !== comparisonIdAtStart) return false;
+      if (
+        data.comparison &&
+        data.comparison.comparison_id &&
+        data.comparison.comparison_id !== comparisonIdAtStart
+      ) {
+        return false;
+      }
+      if (data.table_id && data.table_id !== tableIdAtStart) return false;
+      if (data.temp_table) {
+        if (
+          data.temp_table.comparison_id &&
+          data.temp_table.comparison_id !== comparisonIdAtStart
+        ) {
+          return false;
+        }
+        if (data.temp_table.table_id && data.temp_table.table_id !== tableIdAtStart) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (!uploadAttemptStillActive()) {
+      if (requestGenerationAtStart === comparisonRequestGeneration) {
+        setUploadLoading(false);
+      }
+      return Promise.resolve(null);
+    }
+
     var formData = new FormData();
     formData.append('file', file, file.name);
     formData.append('carrier_name', validation.name);
-    formData.append('comparison_id', comparisonId);
-    formData.append('table_id', tableId);
+    formData.append('comparison_id', comparisonIdAtStart);
+    formData.append('table_id', tableIdAtStart);
     formData.append('slot', String(slot));
 
     return fetch(API_UPLOAD, {
@@ -5666,22 +6986,46 @@ function renderDocumentItem(doc) {
       credentials: 'same-origin'
     })
       .then(function (r) {
-        return r.json().then(function (data) { return { status: r.status, data: data }; });
+        if (!uploadAttemptStillActive()) {
+          return { status: r.status, data: null, stale: true };
+        }
+        return r.json().then(function (data) {
+          if (!uploadAttemptStillActive()) {
+            return { status: r.status, data: null, stale: true };
+          }
+          return { status: r.status, data: data };
+        });
       })
       .then(function (res) {
+        if (!res || res.stale || !uploadAttemptStillActive()) {
+          return null;
+        }
         if (!res.data || res.data.ok !== true) {
           setError(res.data || friendlyError(res.data));
+          if (isTempTableModalOpen()) {
+            transitionComparisonFlowModal('failed', {
+              message: friendlyError(res.data) || 'Não foi possível enviar o documento. Tente novamente.'
+            });
+          }
+          return null;
+        }
+        if (!responseMatchesUploadAttempt(res.data)) {
           return null;
         }
         setError('');
         comparisonWizardModalSuppressed = false;
         markComparisonWizardEngaged();
         if (res.data.comparison) {
+          if (!uploadAttemptStillActive()) return null;
           syncComparisonStateFromPayload(res.data.comparison);
         }
+        if (!uploadAttemptStillActive()) return null;
         return fetchDocuments().then(function (statusData) {
+          if (!uploadAttemptStillActive()) return null;
           if (statusData) return statusData;
           if (res.data.temp_table) {
+            if (!uploadAttemptStillActive()) return null;
+            if (!responseMatchesUploadAttempt(res.data)) return null;
             handleTempTableFromStatus({
               documents: [],
               temp_table: res.data.temp_table,
@@ -5693,11 +7037,43 @@ function renderDocumentItem(doc) {
         });
       })
       .catch(function () {
+        if (!uploadAttemptStillActive()) return null;
         setError('Não foi possível enviar o documento. Tente novamente.');
+        if (isTempTableModalOpen()) {
+          transitionComparisonFlowModal('failed', {
+            message: 'Não foi possível enviar o documento. Tente novamente.'
+          });
+        }
         return null;
       })
       .finally(function () {
+        if (requestGenerationAtStart !== comparisonRequestGeneration) return;
+        if (
+          comparisonState.comparisonId &&
+          comparisonIdAtStart !== comparisonState.comparisonId
+        ) {
+          return;
+        }
+        // Encerra só a fase HTTP; processing/review assumem a view do modal.
         setUploadLoading(false);
+        syncUploadPageStatusFromTempTable(currentTempTable);
+        if (isTempTableModalOpen() && currentTempTable) {
+          var endStatus = String(currentTempTable.status || '').toLowerCase();
+          if (endStatus === 'processing') {
+            transitionComparisonFlowModal('processing');
+          } else if (endStatus === 'needs_review' && isReviewReadyTempTable(currentTempTable)) {
+            transitionComparisonFlowModal('review');
+          } else if (
+            endStatus === 'failed' ||
+            endStatus === 'expired' ||
+            endStatus === 'discarded'
+          ) {
+            transitionComparisonFlowModal('failed', {
+              message: tempTableContextNote(currentTempTable)
+            });
+          }
+        }
+        maybeOpenComparisonWizardAfterStatus();
       });
   }
 
@@ -7302,24 +8678,129 @@ function renderDocumentItem(doc) {
 
   function appendReadonlyCalculationBasisCell(tr, item) {
     var td = document.createElement('td');
+    var presentation = item && item.review_presentation && typeof item.review_presentation === 'object'
+      ? item.review_presentation
+      : null;
+
+    if (presentation) {
+      var state = String(presentation.state || '').trim();
+      var severity = String(presentation.severity || '').trim() || 'info';
+      var requiresAction = presentation.requires_action === true;
+      var isBlocking = presentation.is_blocking === true;
+      var basisLabel = hasFieldValue(presentation.basis_label)
+        ? String(presentation.basis_label)
+        : '';
+      var secondaryText = hasFieldValue(presentation.secondary_text)
+        ? String(presentation.secondary_text)
+        : '';
+
+      td.className = 'accessorial-basis-review accessorial-basis-review--' + severity;
+      if (requiresAction || isBlocking) {
+        td.className += ' accessorial-basis-review--action-required';
+      }
+
+      var labelEl = document.createElement('div');
+      labelEl.className = 'accessorial-basis-review__label';
+      labelEl.textContent = basisLabel || 'Base não classificada';
+      td.appendChild(labelEl);
+
+      if (secondaryText) {
+        var secondaryEl = document.createElement('div');
+        secondaryEl.className = 'accessorial-basis-review__secondary';
+        secondaryEl.textContent = secondaryText;
+        td.appendChild(secondaryEl);
+      }
+
+      if (severity === 'error') {
+        var badge = document.createElement('span');
+        badge.className = 'accessorial-basis-review__badge accessorial-basis-review__badge--error';
+        badge.setAttribute('aria-hidden', 'true');
+        badge.textContent = 'Bloqueante';
+        td.appendChild(badge);
+      }
+
+      var ariaParts = [basisLabel || 'Base de cálculo'];
+      if (secondaryText) ariaParts.push(secondaryText);
+      if (requiresAction) ariaParts.push('ação obrigatória');
+      if (state) ariaParts.push('estado ' + state);
+      td.setAttribute('aria-label', ariaParts.join('. '));
+      tr.appendChild(td);
+      return;
+    }
+
+    // Compatibilidade com payload legado sem review_presentation.
     var baseId = String((item && item.calculation_base_id) || '').trim();
     var resolvedBase = baseId ? getCalculationBaseById(baseId) : null;
+    var source = String((item && item.classification_source) || '').trim();
+    var modifier = String((item && item.modifier_type) || '').trim();
+    var calcType = String((item && item.calculation_type) || '').trim();
+    var relatedTo = String((item && item.related_to) || '').trim();
+
     if (resolvedBase) {
+      td.className = 'accessorial-basis-review accessorial-basis-review--info';
       td.textContent = hasFieldValue(item.calculation_base_label)
         ? String(item.calculation_base_label)
         : String(resolvedBase.label || '');
-    } else {
-      var extracted = hasFieldValue(item.raw_calculation_basis)
-        ? String(item.raw_calculation_basis)
-        : (hasFieldValue(item.calculation_basis) ? String(item.calculation_basis) : '');
-      td.textContent = 'não mapeado / revisar';
-      if (extracted && normalizeTextKey(extracted) !== normalizeTextKey('não mapeado / revisar')) {
-        var extra = document.createElement('div');
-        extra.className = 'accessorial-basis-extracted-text';
-        extra.textContent = 'texto extraído: ' + extracted;
-        td.appendChild(extra);
-      }
+      tr.appendChild(td);
+      return;
     }
+
+    if (source === 'unmapped_calculation_base' || accessorialFeeHasFormalUnmappedBase(item)) {
+      td.className = 'accessorial-basis-review accessorial-basis-review--error accessorial-basis-review--action-required';
+      var unresolvedLabel = document.createElement('div');
+      unresolvedLabel.className = 'accessorial-basis-review__label';
+      unresolvedLabel.textContent = 'Base de cálculo não identificada';
+      td.appendChild(unresolvedLabel);
+      var unresolvedHint = document.createElement('div');
+      unresolvedHint.className = 'accessorial-basis-review__secondary';
+      unresolvedHint.textContent = 'Selecione a base de cálculo antes de continuar.';
+      td.appendChild(unresolvedHint);
+      var unresolvedBadge = document.createElement('span');
+      unresolvedBadge.className = 'accessorial-basis-review__badge accessorial-basis-review__badge--error';
+      unresolvedBadge.setAttribute('aria-hidden', 'true');
+      unresolvedBadge.textContent = 'Bloqueante';
+      td.appendChild(unresolvedBadge);
+      td.setAttribute('aria-label', 'Base de cálculo não identificada. Ação obrigatória.');
+      tr.appendChild(td);
+      return;
+    }
+
+    if ((modifier === 'minimum_amount' || calcType === 'minimum_amount') && relatedTo) {
+      td.className = 'accessorial-basis-review accessorial-basis-review--info';
+      td.textContent = 'Mínimo aplicável a ' + relatedTo;
+      td.setAttribute('aria-label', 'Mínimo aplicável a ' + relatedTo);
+      tr.appendChild(td);
+      return;
+    }
+
+    td.className = 'accessorial-basis-review accessorial-basis-review--error accessorial-basis-review--action-required';
+    var legacyLabel = document.createElement('div');
+    legacyLabel.className = 'accessorial-basis-review__label';
+    legacyLabel.textContent = 'Base não classificada';
+    td.appendChild(legacyLabel);
+    var legacyHint = document.createElement('div');
+    legacyHint.className = 'accessorial-basis-review__secondary';
+    legacyHint.textContent = 'Selecione a base de cálculo antes de continuar.';
+    td.appendChild(legacyHint);
+    var extracted = hasFieldValue(item && item.raw_calculation_basis)
+      ? String(item.raw_calculation_basis)
+      : (hasFieldValue(item && item.calculation_basis) ? String(item.calculation_basis) : '');
+    if (
+      extracted
+      && normalizeTextKey(extracted) !== normalizeTextKey('não mapeado / revisar')
+      && normalizeTextKey(extracted) !== normalizeTextKey('Base não classificada')
+    ) {
+      var extra = document.createElement('div');
+      extra.className = 'accessorial-basis-extracted-text';
+      extra.textContent = 'texto extraído: ' + extracted;
+      td.appendChild(extra);
+    }
+    var legacyBadge = document.createElement('span');
+    legacyBadge.className = 'accessorial-basis-review__badge accessorial-basis-review__badge--error';
+    legacyBadge.setAttribute('aria-hidden', 'true');
+    legacyBadge.textContent = 'Bloqueante';
+    td.appendChild(legacyBadge);
+    td.setAttribute('aria-label', 'Base não classificada. Ação obrigatória.');
     tr.appendChild(td);
   }
 
@@ -11052,7 +12533,24 @@ function renderDocumentItem(doc) {
   function renderTempTableModalContent(tempTable) {
     var body = byId('agenteComparaTempTableModalBody');
     if (!body) return;
-    body.innerHTML = '';
+    if (
+      tempTable &&
+      tempTable.comparison_id &&
+      comparisonState.comparisonId &&
+      tempTable.comparison_id !== comparisonState.comparisonId
+    ) {
+      return;
+    }
+    if (
+      tempTable &&
+      tempTable.table_id &&
+      comparisonState.activeTableId &&
+      tempTable.table_id !== comparisonState.activeTableId &&
+      !isComparisonReviewMode()
+    ) {
+      return;
+    }
+    body.replaceChildren();
 
     if (isComparisonReviewMode()) {
       prepareConfigurationReviewRender();
@@ -11117,26 +12615,36 @@ function renderDocumentItem(doc) {
       openComparisonWizardModal();
       return;
     }
-    var modal = byId('agenteComparaTempTableModal');
-    if (!modal) return;
     tempTableSaveInFlight = false;
     clearTempTableValidationErrors();
     setTempTableModalError('');
     if (isComparisonReviewMode()) {
-      // Reabertura na mesma sessão: reconstruir abas; Resultados se cálculo ativo.
       ensureConfigurationReviewDefaults({
         forceFirstCarrier: !shouldEnableResultsReviewTab(),
         forceResultsTab: shouldEnableResultsReviewTab()
       });
       selectConfigurationReviewTab(configurationReviewTab, { preferCache: true });
-      modal.hidden = false;
-      document.body.classList.add('agente-compara-temp-table-modal-open');
+      showTempTableModalShell();
       return;
+    }
+    if (currentTempTable) {
+      var status = String(currentTempTable.status || '').toLowerCase();
+      if (status === 'processing') {
+        renderAndShowComparisonFlowModal('processing');
+        return;
+      }
+      if (status === 'failed' || status === 'expired' || status === 'discarded') {
+        renderAndShowComparisonFlowModal('failed');
+        return;
+      }
+      if (status === 'needs_review') {
+        renderAndShowComparisonFlowModal('review');
+        return;
+      }
     }
     renderTempTableModalContent(currentTempTable);
     updateTempTableModalFooter();
-    modal.hidden = false;
-    document.body.classList.add('agente-compara-temp-table-modal-open');
+    if (!showTempTableModalShell()) return;
     var saveBtn = byId('agenteComparaTempTableModalSave');
     if (saveBtn) saveBtn.focus();
   }
@@ -11145,8 +12653,9 @@ function renderDocumentItem(doc) {
     var modal = byId('agenteComparaTempTableModal');
     if (!modal || modal.hidden) return;
     closeAuditCalculationMemory();
-    modal.hidden = true;
-    document.body.classList.remove('agente-compara-temp-table-modal-open');
+    hideTempTableModalShell();
+    restoreCarrierIdentifyPanelHome();
+    comparisonFlowView = null;
     resetFreightTableOpenState();
     tempTableSaveInFlight = false;
     tempTableEditMode = false;
@@ -11174,6 +12683,25 @@ function renderDocumentItem(doc) {
     }
     if (tempTableModalActiveTab === 'coverage' && shouldShowCoverageTab(currentTempTable)) {
       saveCoverageTableEdit();
+      return;
+    }
+    var saveBtn = byId('agenteComparaTempTableModalSave');
+    if (saveBtn && (saveBtn.disabled || saveBtn.getAttribute('aria-disabled') === 'true')) {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      validateTempTableBeforeAdvance();
+      updateTempTableModalFooter();
+      return;
+    }
+    if (!tempTableConfirmationCanProceed()) {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      validateTempTableBeforeAdvance();
+      updateTempTableModalFooter();
       return;
     }
     saveTempTableAndAdvance();
@@ -11354,4 +12882,27 @@ function renderDocumentItem(doc) {
   } else {
     init();
   }
+
+  // Hook de teste/browser: injeta resultado já calculado sem POST calculate.
+  document.addEventListener('agente-compara:inject-comparison-result', function (event) {
+    var detail = event && event.detail;
+    if (!detail || typeof detail !== 'object') return;
+    var payload = detail.payload && typeof detail.payload === 'object' ? detail.payload : detail;
+    applyComparisonCalculationPayload(payload);
+    if (payload.current_step) {
+      comparisonState.currentStep = payload.current_step;
+    } else if (payload.status === 'CALCULATION_READY') {
+      comparisonState.currentStep = 'CALCULATION_READY';
+    }
+    configurationReviewTab = 'results';
+    var host = document.getElementById('agenteComparaComparisonResultsHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'agenteComparaComparisonResultsHost';
+      host.className = 'agente-compara-comparison-results-host';
+      var root = document.querySelector('.agente-compara-page') || document.body;
+      root.appendChild(host);
+    }
+    renderComparisonCalculationResults(host, comparisonCalculationState.result);
+  });
 })();

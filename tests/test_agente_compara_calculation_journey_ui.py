@@ -123,10 +123,34 @@ def test_results_table_uses_text_content_and_no_storage_path():
     assert "textContent" in table_fn
     assert "innerHTML" not in table_fn
     assert "result_storage_key" not in table_fn
-    assert "Não calculado" in table_fn
+    assert "appendComparisonFreightCell" in table_fn
+    assert "Não calculado" in js
+    assert "appendComparisonFreightCell" in js
+    assert "openComparisonCalculationMemory" in js
+    assert "agenteComparaComparisonCalculationMemoryModal" in js
+    assert "agente-compara-comparison-calc-memory-link" in js
+    assert "Ver memória de cálculo do frete de" in js
+    assert "Não calculado — Ver motivo" in js
+    memory_open = _fn(js, "openComparisonCalculationMemory", "appendComparisonFreightCell")
+    assert "fetch(" not in memory_open
+    assert "processComparisonCalculations" not in memory_open
     process_fn = _fn(js, "processComparisonCalculations", "clearCalculationFileSummary")
     assert "result_storage_key" not in process_fn
     assert "storage_path" not in process_fn
+
+
+def test_comparison_calculation_memory_modal_a11y_and_focus():
+    js = _js()
+    assert "function closeComparisonCalculationMemory" in js
+    assert "function renderComparisonCalculationMemoryContent" in js
+    assert "aria-modal" in _fn(js, "ensureComparisonCalculationMemoryModal", "isComparisonCalculationMemoryModalOpen")
+    assert "Escape" in _fn(js, "openComparisonCalculationMemory", "appendComparisonFreightCell")
+    assert "comparisonCalculationMemoryOpenerEl" in js
+    close_fn = _fn(js, "closeComparisonCalculationMemory", "buildLegacyComparisonMemoryRows")
+    assert "focus" in close_fn
+    assert "innerHTML" not in _fn(js, "renderComparisonCalculationMemoryContent", "openComparisonCalculationMemory")
+    assert "row_index" in _fn(js, "openComparisonCalculationMemory", "appendComparisonFreightCell")
+    assert "table_id" in _fn(js, "openComparisonCalculationMemory", "appendComparisonFreightCell")
 
 
 def test_html_has_chartjs_and_results_css():
@@ -174,3 +198,20 @@ def test_restore_prefers_results_tab_when_calculation_active():
     assert "shouldEnableResultsReviewTab()" in restore
     assert "configurationReviewTab = 'results'" in restore
     assert "applyComparisonCalculationPayload" in restore
+
+
+def test_incomplete_freight_cell_and_memory_contracts():
+    js = _js()
+    assert "function isComparisonCellIncomplete" in js
+    assert "function comparisonCellStatusLabel" in js
+    cell_fn = _fn(js, "appendComparisonFreightCell", "renderComparisonResultsTable")
+    assert "parcial — ver detalhes" in cell_fn or "Cálculo incompleto — ver detalhes" in cell_fn
+    assert "agente-compara-comparison-calc-incomplete" in cell_fn
+    assert "aria-label" in cell_fn
+    memory_fn = _fn(js, "renderComparisonCalculationMemoryContent", "appendComparisonFreightCell")
+    assert "comparisonCellStatusLabel" in memory_fn or "Cálculo incompleto" in memory_fn
+    assert "Valor parcial calculado" in memory_fn or "total_label" in memory_fn
+    assert "não é um frete definitivo" in memory_fn
+    calc_fn = _fn(js, "isComparisonCellCalculated", "isComparisonCellIncomplete")
+    assert "calculated_with_warnings" in calc_fn
+    assert "is_partial_value" in calc_fn

@@ -305,7 +305,8 @@ def test_temp_table_save_por_cte_missing_value_returns_detailed_error(web_client
     assert resp.status_code == 400
     body = resp.get_json()
     assert body["error_code"] == ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES
-    assert body["message"] == "Revise as generalidades antes de avançar."
+    assert body["message"] == "Resolva as pendências das generalidades antes de avançar."
+    assert body["error"] == "TEMP_TABLE_HAS_BLOCKING_ISSUES"
     assert body["errors"][0]["field"] == "value"
     assert body["errors"][0]["reason_code"] == "invalid_accessorial_value"
     with web_client.session_transaction() as sess:
@@ -336,7 +337,8 @@ def test_temp_table_save_route_returns_400_with_errors(web_client):
     assert resp.status_code == 400
     body = resp.get_json()
     assert body["error_code"] == ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES
-    assert body["message"] == "Revise as generalidades antes de avançar."
+    assert body["message"] == "Resolva as pendências das generalidades antes de avançar."
+    assert body["error"] == "TEMP_TABLE_HAS_BLOCKING_ISSUES"
     assert body["errors"][0]["field"] == "value"
     assert body["errors"][0]["reason_code"] == "invalid_accessorial_value"
     assert body["message"] != "Não foi possível salvar a revisão da tabela temporária."
@@ -411,7 +413,8 @@ def test_temp_table_save_removed_optional_accessorial_does_not_block(web_client)
     assert resp.get_json()["comparison"]["current_step"] == STEP_PREPARE_TABLE_2
 
 
-def test_temp_table_save_extraction_hypothesis_does_not_block_advance(web_client):
+def test_temp_table_save_unmapped_extraction_base_blocks_advance(web_client):
+    """Base formalmente não mapeada bloqueia confirmação (request direto, sem UI)."""
     saved = _apply_payload(
         web_client,
         _sample_hengst_freight_tables_payload(
@@ -430,8 +433,361 @@ def test_temp_table_save_extraction_hypothesis_does_not_block_advance(web_client
         ),
     )
     resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["error_code"] == ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES
+    assert body["error"] == "TEMP_TABLE_HAS_BLOCKING_ISSUES"
+    assert body["validation"]["can_confirm"] is False
+    assert body["validation"]["blocking_count"] >= 1
+    assert body["validation"]["blocking_issues"][0]["code"] == "UNMAPPED_CALCULATION_BASE"
+    assert body["errors"][0]["field"] == "calculation_base_id"
+    with web_client.session_transaction() as sess:
+        state = sess.get(AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY)
+    table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+    assert table_1["confirmed"] is not True
+    assert state["current_step"] == STEP_PREPARE_TABLE_1
+
+
+def test_temp_table_save_three_print_blockers_direct_request(web_client):
+    """Retorno sem base + hipótese de extração + mínimo sem vínculo bloqueiam save."""
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(
+            accessorial_fees=[
+                {
+                    "name": "Retorno/Devolução",
+                    "item_id": "fee-ret",
+                    "value": "",
+                    "unit": "",
+                    "calculation_base_id": None,
+                    "calculation_basis": "não mapeado / revisar",
+                    "classification_source": "unmapped_calculation_base",
+                    "status": "needs_review",
+                    "notes": "",
+                },
+                {
+                    "name": "Reentrega",
+                    "item_id": "fee-ree",
+                    "value": "",
+                    "unit": "",
+                    "calculation_base_id": None,
+                    "calculation_basis": "",
+                    "classification_source": "legacy_classifier",
+                    "status": "needs_review",
+                    "notes": "",
+                },
+                {
+                    "name": "Reentrega Mínimo",
+                    "item_id": "fee-min",
+                    "value": "25,00",
+                    "unit": "R$",
+                    "minimum_amount": 25.0,
+                    "calculation_type": "minimum_amount",
+                    "modifier_type": "minimum_amount",
+                    "related_to": None,
+                    "classification_source": "legacy_classifier",
+                    "status": "needs_review",
+                    "notes": "",
+                },
+            ]
+        ),
+    )
+    resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["error"] == "TEMP_TABLE_HAS_BLOCKING_ISSUES"
+    assert body["validation"]["can_confirm"] is False
+    assert body["validation"]["blocking_count"] == 3
+    codes = {issue.get("code") for issue in body["validation"]["blocking_issues"]}
+    assert "UNMAPPED_CALCULATION_BASE" in codes
+    assert "UNCONFIRMED_EXTRACTED_RULE" in codes
+    assert "MINIMUM_WITHOUT_BASE" in codes
+    with web_client.session_transaction() as sess:
+        state = sess.get(AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY)
+    table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+    assert table_1["confirmed"] is not True
+    assert state["current_step"] == STEP_PREPARE_TABLE_1
+
+
+def test_temp_table_save_unsupported_condition_blocks_direct_request(web_client):
+    """Request direto com condição inexequível: API rejeita e não avança o slot."""
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(
+            accessorial_fees=[
+                _manual_accessorial_fee(
+                    name="TAS",
+                    value="10,00",
+                    unit="R$",
+                    notes="somente para remessas especiais",
+                )
+            ]
+        ),
+    )
+    edited = _save_payload_for_record(saved)
+    edited["edit_target"]["accessorial_fees"][0].update(
+        {
+            "calculation_base_id": "por_cte",
+            "calculation_basis": "por CTe",
+            "classification_source": "manual_configured_calculation_base",
+            "operation": "fixed_amount",
+            "calculation_type": "fixed_amount",
+            "status": "calculable",
+            "conditions": "somente para remessas especiais",
+        }
+    )
+    resp = _post_temp_table_save(web_client, edited)
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["error_code"] == ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES
+    assert body["validation"]["can_confirm"] is False
+    assert body["validation"]["blocking_count"] >= 1
+    codes = {issue.get("code") for issue in body["validation"]["blocking_issues"]}
+    reasons = {issue.get("reason_code") for issue in body["validation"]["blocking_issues"]}
+    assert "UNSUPPORTED_CONDITION" in codes or "unsupported_accessorial_condition" in reasons
+    with web_client.session_transaction() as sess:
+        state = sess.get(AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY)
+    table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+    assert table_1["confirmed"] is not True
+    assert state["current_step"] == STEP_PREPARE_TABLE_1
+    # Slot 2 não liberado.
+    assert state["current_step"] != STEP_PREPARE_TABLE_2
+
+
+def test_temp_table_public_payload_includes_validation_summary(web_client):
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(
+            accessorial_fees=[
+                {
+                    "name": "GRIS",
+                    "value": "",
+                    "unit": "",
+                    "calculation_basis": "não mapeado / revisar",
+                    "calculation_base_id": None,
+                    "classification_source": "unmapped_calculation_base",
+                    "status": "needs_review",
+                }
+            ]
+        ),
+    )
+    from app.agente_compara_doc_service import _public_temp_table, load_temp_table_record
+
+    record = load_temp_table_record(saved["temp_table_id"], ttl_hours=24)
+    public = _public_temp_table(record)
+    assert public["validation"]["can_confirm"] is False
+    assert public["validation"]["blocking_count"] >= 1
+
+
+def _advance_slot_to_prepare(web_client, slot_number: int) -> dict:
+    """Confirma slots anteriores com snapshot válido até chegar no slot alvo."""
+    from app.agente_compara_comparison_state import (
+        STEP_ASK_TABLE_3,
+        STEP_PREPARE_TABLE_3,
+        add_third_table,
+        get_comparison_state,
+    )
+    from app.agente_compara_doc_service import (
+        FIELD_COMPARISON_ID,
+        FIELD_SLOT_NUMBER,
+        FIELD_TABLE_ID,
+        TEMP_TABLE_STATUS_NEEDS_REVIEW,
+        _coerce_temp_table_payload,
+        _temp_table_path,
+        _write_temp_table_atomic,
+    )
+    from uuid import uuid4
+
+    if slot_number == 1:
+        return _apply_payload(web_client, _sample_hengst_freight_tables_payload(accessorial_fees=[]))
+
+    # slot 1 confirmado
+    saved_1 = _apply_payload(web_client, _sample_hengst_freight_tables_payload(accessorial_fees=[]))
+    resp_1 = _post_temp_table_save(web_client, _save_payload_for_record(saved_1))
+    assert resp_1.status_code == 200
+
+    if slot_number == 2:
+        payload = _sample_hengst_freight_tables_payload(accessorial_fees=[])
+        with web_client.session_transaction() as sess:
+            state = get_comparison_state(sess)
+            assert state["current_step"] == STEP_PREPARE_TABLE_2
+            table_2 = next(t for t in state["tables"].values() if t["slot_number"] == 2)
+            comparison_id = state["comparison_id"]
+            table_id = table_2["table_id"]
+            table_2["doc_ids"] = ["doc-2"]
+            table_2["status"] = "processing"
+            sess[AGENTE_COMPARA_DOC_IDS_SESSION_KEY] = ["doc-2"]
+            sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+
+        with web_client.application.app_context():
+            with web_client.application.test_request_context():
+                record = _coerce_temp_table_payload(payload, source_doc_ids=["doc-2"])
+        record[FIELD_COMPARISON_ID] = comparison_id
+        record[FIELD_TABLE_ID] = table_id
+        record[FIELD_SLOT_NUMBER] = 2
+        record["temp_table_id"] = uuid4().hex
+        record["status"] = TEMP_TABLE_STATUS_NEEDS_REVIEW
+        with web_client.application.app_context():
+            _write_temp_table_atomic(_temp_table_path(record["temp_table_id"]), record)
+
+        with web_client.session_transaction() as sess:
+            state = get_comparison_state(sess)
+            table_2 = next(t for t in state["tables"].values() if t["slot_number"] == 2)
+            table_2["temp_table_id"] = record["temp_table_id"]
+            table_2["status"] = "needs_review"
+            sess[AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY] = record["temp_table_id"]
+            sess[AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY] = ["doc-2"]
+            sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+        return record
+
+    # slot 3
+    saved_2 = _advance_slot_to_prepare(web_client, 2)
+    resp_2 = _post_temp_table_save(web_client, _save_payload_for_record(saved_2))
+    assert resp_2.status_code == 200
+    body_2 = resp_2.get_json()
+    assert body_2["comparison"]["current_step"] == STEP_ASK_TABLE_3
+
+    with web_client.session_transaction() as sess:
+        state = get_comparison_state(sess)
+        state = add_third_table(state, session_obj=sess)
+        assert state["current_step"] == STEP_PREPARE_TABLE_3
+
+    payload = _sample_hengst_freight_tables_payload(accessorial_fees=[])
+    with web_client.session_transaction() as sess:
+        state = get_comparison_state(sess)
+        table_3 = next(t for t in state["tables"].values() if t["slot_number"] == 3)
+        comparison_id = state["comparison_id"]
+        table_id = table_3["table_id"]
+        table_3["doc_ids"] = ["doc-3"]
+        table_3["status"] = "processing"
+        sess[AGENTE_COMPARA_DOC_IDS_SESSION_KEY] = ["doc-3"]
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+
+    with web_client.application.app_context():
+        with web_client.application.test_request_context():
+            record = _coerce_temp_table_payload(payload, source_doc_ids=["doc-3"])
+    record[FIELD_COMPARISON_ID] = comparison_id
+    record[FIELD_TABLE_ID] = table_id
+    record[FIELD_SLOT_NUMBER] = 3
+    record["temp_table_id"] = uuid4().hex
+    record["status"] = TEMP_TABLE_STATUS_NEEDS_REVIEW
+    with web_client.application.app_context():
+        _write_temp_table_atomic(_temp_table_path(record["temp_table_id"]), record)
+
+    with web_client.session_transaction() as sess:
+        state = get_comparison_state(sess)
+        table_3 = next(t for t in state["tables"].values() if t["slot_number"] == 3)
+        table_3["temp_table_id"] = record["temp_table_id"]
+        table_3["status"] = "needs_review"
+        sess[AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY] = record["temp_table_id"]
+        sess[AGENTE_COMPARA_TEMP_TABLE_SOURCE_DOCS_SESSION_KEY] = ["doc-3"]
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+    return record
+
+
+def _unmapped_fee_payload():
+    return {
+        "name": "Pedagio geral",
+        "value": "",
+        "unit": "",
+        "calculation_basis": "não mapeado / revisar",
+        "calculation_base_id": None,
+        "classification_source": "unmapped_calculation_base",
+        "status": "needs_review",
+        "notes": "",
+    }
+
+
+@pytest.mark.parametrize("slot_number,expected_step", [
+    (1, STEP_PREPARE_TABLE_1),
+    (2, STEP_PREPARE_TABLE_2),
+    (3, "PREPARE_TABLE_3"),
+])
+def test_temp_table_save_blocks_unmapped_base_on_all_slots(web_client, slot_number, expected_step):
+    from app.agente_compara_comparison_state import STEP_PREPARE_TABLE_3
+
+    if expected_step == "PREPARE_TABLE_3":
+        expected_step = STEP_PREPARE_TABLE_3
+
+    base_record = _advance_slot_to_prepare(web_client, slot_number)
+    # Replace fees with unmapped blocker via save payload
+    edited = _save_payload_for_record(base_record)
+    edited["edit_target"]["accessorial_fees"] = [_unmapped_fee_payload()]
+    resp = _post_temp_table_save(web_client, edited)
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["validation"]["can_confirm"] is False
+    assert body["validation"]["blocking_issues"][0]["code"] == "UNMAPPED_CALCULATION_BASE"
+    with web_client.session_transaction() as sess:
+        state = sess.get(AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY)
+    table = next(t for t in state["tables"].values() if t["slot_number"] == slot_number)
+    assert table["confirmed"] is not True
+    assert state["current_step"] == expected_step
+
+
+def test_temp_table_save_edit_resolves_unmapped_and_confirms(web_client):
+    saved = _apply_payload(
+        web_client,
+        _sample_hengst_freight_tables_payload(accessorial_fees=[_unmapped_fee_payload()]),
+    )
+    blocked = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert blocked.status_code == 400
+
+    edited = _save_payload_for_record(saved)
+    edited["edit_target"]["accessorial_fees"] = [
+        {
+            **_manual_accessorial_fee(name="Pedagio geral", value="10,00", unit="R$"),
+            "calculation_base_id": "por_cte",
+            "calculation_basis": "por CTe",
+            "classification_source": "manual_configured_calculation_base",
+            "operation": "fixed_amount",
+            "calculation_type": "fixed_amount",
+            "status": "calculable",
+        }
+    ]
+    resp = _post_temp_table_save(web_client, edited)
     assert resp.status_code == 200
     assert resp.get_json()["comparison"]["current_step"] == STEP_PREPARE_TABLE_2
+    with web_client.session_transaction() as sess:
+        state = sess.get(AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY)
+    table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+    assert table_1["confirmed"] is True
+
+
+def test_agente_compara_js_save_error_helpers():
+    js = open("app/static/js/agente_compara.js", encoding="utf-8").read()
+    assert "function resolveTempTableSaveErrorMessage" in js
+    assert "function accessorialValidationSummaryMessage" in js
+    assert "function accessorialFeeShouldBlockAdvance" in js
+    assert "function accessorialFeeIsExtractionHypothesis" in js
+    assert "function accessorialFeeHasFormalUnmappedBase" in js
+    assert "function tempTableConfirmationCanProceed" in js
+    assert "function resolveTempTableValidationState" in js
+    assert "TEMP_TABLE_HAS_BLOCKING_ISSUES" in js
+    assert "aria-disabled" in js
+    assert "Resolva" in js and "pendência" in js
+    save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function byId(id)")]
+    assert "handleBackendTempTableValidationErrors(res.data)" in save_block
+    assert "resolveTempTableSaveErrorMessage(res.data)" in save_block
+    assert "tempTableConfirmationCanProceed()" in save_block
+    assert "res.status === 500" in save_block
+    assert "setTempTableModalError(res.data ||" not in save_block
+
+
+def test_agente_compara_js_footer_disables_save_when_validation_blocks():
+    js = open("app/static/js/agente_compara.js", encoding="utf-8").read()
+    footer_block = js[js.index("function updateTempTableModalFooter()"): js.index("function canEditFreightTables")]
+    assert "tempTableConfirmationCanProceed()" in footer_block
+    assert "aria-disabled" in footer_block
+    assert "freightSaveBlocked" in footer_block
+    assert "saveBtn.disabled = !tempTableEditMode" not in footer_block
+    assert "renderTempTableConfirmationValidationMessage()" in footer_block
+    # Editar permanece disponível (não desabilitado por validation)
+    assert "editBtn.disabled = hideEditOnEmptyCoverage || hideEditOnTaxTab || hideEditOnAuditTab;" in footer_block
+    click_block = js[js.index("function handleTempTableModalSaveClick"): js.index("function initTempTableModal")]
+    assert "aria-disabled" in click_block
+    assert "tempTableConfirmationCanProceed()" in click_block
+    assert "saveTempTableAndAdvance()" in click_block
 
 
 def test_temp_table_save_failure_does_not_confirm_table(web_client):
@@ -467,19 +823,6 @@ def test_temp_table_save_invalid_payload_returns_400_not_500(web_client):
     assert resp.status_code == 400
     assert resp.get_json()["error_code"] == "agente_compara_temp_table_invalid_payload"
     assert resp.get_json()["message"] != "Não foi possível salvar a revisão da tabela temporária."
-
-
-def test_agente_compara_js_save_error_helpers():
-    js = open("app/static/js/agente_compara.js", encoding="utf-8").read()
-    assert "function resolveTempTableSaveErrorMessage" in js
-    assert "function accessorialValidationSummaryMessage" in js
-    assert "function accessorialFeeShouldBlockAdvance" in js
-    assert "function accessorialFeeIsExtractionHypothesis" in js
-    save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function byId(id)")]
-    assert "handleBackendTempTableValidationErrors(res.data)" in save_block
-    assert "resolveTempTableSaveErrorMessage(res.data)" in save_block
-    assert "res.status === 500" in save_block
-    assert "setTempTableModalError(res.data ||" not in save_block
 
 
 def test_agente_compara_js_polling_respects_edit_mode():
@@ -652,7 +995,11 @@ def test_temp_table_save_idempotency_cache_stored_in_session(web_client):
 def test_agente_compara_js_save_guard_and_execution_id():
     js = open("app/static/js/agente_compara.js", encoding="utf-8").read()
     save_block = js[js.index("function saveTempTableAndAdvance"): js.index("function byId(id)")]
-    assert save_block.index("tempTableSaveInFlight = true") < save_block.index("validateTempTableBeforeAdvance()")
+    assert "tempTableConfirmationCanProceed()" in save_block
+    in_flight_idx = save_block.index("tempTableSaveInFlight = true")
+    after_in_flight = save_block[in_flight_idx:]
+    assert "validateTempTableBeforeAdvance()" in after_in_flight
+    assert after_in_flight.index("validateTempTableBeforeAdvance()") < after_in_flight.index("fetch(API_TEMP_TABLE_SAVE")
     assert "if (!saveSucceeded)" not in save_block
     assert "resetTempTableSaveExecutionId()" in save_block
     assert "ensureTempTableSaveExecutionId()" in js
@@ -669,7 +1016,8 @@ def test_agente_compara_js_save_guard_and_execution_id():
 def test_agente_compara_js_save_footer_allows_confirmation_without_edit_mode():
     js = open("app/static/js/agente_compara.js", encoding="utf-8").read()
     footer_block = js[js.index("function updateTempTableModalFooter()"): js.index("function canEditFreightTables")]
-    assert "saveBtn.disabled = !!(tempTableSaveInFlight || taxSaveInFlight || taxContinueInFlight || coverageSaveInFlight);" in footer_block
+    assert "freightSaveBlocked = !tempTableConfirmationCanProceed();" in footer_block
+    assert "saveBtn.disabled = saveDisabled;" in footer_block
     assert "saveBtn.hidden = false;" in footer_block
     assert "saveBtn.disabled = !tempTableEditMode" not in footer_block
     assert "saveBtn.hidden = !tempTableEditMode;" in footer_block

@@ -1,6 +1,6 @@
-﻿# Arquitetura Oficial
+# Arquitetura Oficial
 
-Referência arquitetural auditada em 2026-07-28. A fonte oficial de estado e contratos é `docs/estado_oficial_consolidado.md`.
+Referência arquitetural auditada em 2026-07-29. A fonte oficial de estado e contratos é `docs/estado_oficial_consolidado.md`.
 
 ## Mapa de superfícies
 
@@ -10,7 +10,7 @@ Referência arquitetural auditada em 2026-07-28. A fonte oficial de estado e con
 | `/chat_julia?mode=operational` | autenticado | consultoria operacional da Júlia |
 | `/fretes` | autenticado | BI e chat do Roberto |
 | `/auditoria-frete` | página pública; API protegida | auditoria operacional da Cleide |
-| `/agente-compara` | página pública; API protegida | comparação multitabela do AgenteCompara |
+| `/agente-compara` | página pública; APIs protegidas | comparação multitabela do AgenteCompara |
 | `/admin/...` | admin | billing, métricas, custos e observabilidade |
 
 ## Aplicação e blueprints
@@ -30,13 +30,15 @@ Referência arquitetural auditada em 2026-07-28. A fonte oficial de estado e con
 
 O AgenteCompara implementa arquitetura em camadas:
 
-- rotas HTTP em `app/agente_compara_api_routes.py`;
+- página em `app/agente_compara_routes.py`;
+- rotas HTTP/API em `app/agente_compara_api_routes.py`;
 - estado multitabela em `app/agente_compara_comparison_state.py`;
 - upload, revisão, coverage e arquivo operacional em `app/agente_compara_doc_service.py`;
 - extração técnica da `temp_table` em `app/run_agente_compara_temp_table.py`;
 - cálculo unitário em `app/agente_compara_calculation_service.py`;
 - orquestração multitabela em `app/agente_compara_comparison_calculation_service.py`;
-- execução, lock, idempotência, storage e billing em `app/agente_compara_calculation_execution_service.py`, `app/agente_compara_calculation_lock.py` e `app/agente_compara_calculation_result_storage.py`.
+- execução, lock, idempotência, storage e billing em `app/agente_compara_calculation_execution_service.py`, `app/agente_compara_calculation_lock.py` e `app/agente_compara_calculation_result_storage.py`;
+- analytics comparativo derivado do resultado liberado em `app/agente_compara_comparison_analytics_service.py`.
 
 ## Isolamento entre agentes
 
@@ -49,6 +51,7 @@ O AgenteCompara implementa arquitetura em camadas:
 
 - `start.sh` aplica `db upgrade` antes do Gunicorn;
 - `render.yaml` versionado aponta homolog para `homolog` e produção para `main`;
+- `start.sh` aceita `producao` como alias de produção para inferência de `APP_ENV`;
 - o código expõe `/health/liveness` e `/health/readiness`.
 
 A diferença entre branch operacional informada de produção (`producao`) e branch versionada no YAML (`main`) continua sendo uma divergência operacional, não uma equivalência comprovada em código.

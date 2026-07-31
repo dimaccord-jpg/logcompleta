@@ -422,7 +422,7 @@ def test_js_empty_journey_uses_start_before_pending_identity():
     js = _js()
     assert "var API_COMPARISON_START = '/api/agente-compara/comparison/start'" in js
     assert "function ensureComparisonStarted()" in js
-    pending = js[js.index("function beginPendingFreightTableUpload"): js.index("function cancelCarrierIdentification")]
+    pending = js[js.index("function beginPendingFreightTableUpload"): js.index("function openCarrierNameEdit")]
     assert pending.index("ensureComparisonStarted()") < pending.index("pendingFreightTableUpload = {")
     assert "comparisonId: comparisonState.comparisonId" in pending
     assert "openCarrierIdentificationPanel" in pending
@@ -445,10 +445,13 @@ def test_js_upload_requires_explicit_identity_after_start():
     js = _js()
     upload = js[js.index("function uploadDocument"): js.index("function removeDocument")]
     assert "Identidade da comparação inconsistente" in upload
-    assert "formData.append('comparison_id', comparisonId)" in upload
-    assert "formData.append('table_id', tableId)" in upload
+    assert "formData.append('comparison_id', comparisonIdAtStart)" in upload
+    assert "formData.append('table_id', tableIdAtStart)" in upload
     assert "formData.append('slot', String(slot))" in upload
     assert "if (comparisonId) formData.append" not in upload
+    assert "if (comparisonIdAtStart) formData.append" not in upload
+    assert "requestGenerationAtStart" in upload
+    assert "isCurrentComparisonRequest" in upload
 
 
 def test_js_stale_empty_status_preserved_after_start():
@@ -467,7 +470,7 @@ def test_js_double_click_reuses_start_promise():
     ensure = js[js.index("function ensureComparisonStarted"): js.index("function activeComparisonTable")]
     assert "if (comparisonStartPromise)" in ensure
     assert "return comparisonStartPromise;" in ensure
-    pending = js[js.index("function beginPendingFreightTableUpload"): js.index("function cancelCarrierIdentification")]
+    pending = js[js.index("function beginPendingFreightTableUpload"): js.index("function openCarrierNameEdit")]
     assert "if (comparisonStartPromise) return;" in pending
     init = js[js.index("function initDocuments"): js.index("function init()")]
     assert "if (comparisonStartPromise) return;" in init
