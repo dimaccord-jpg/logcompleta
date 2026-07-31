@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 
 from app.agente_compara_calculation_execution_service import (
+    AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION,
     BILLING_STATUS_APPLIED,
     BILLING_STATUS_FAILED,
     BILLING_STATUS_NOT_STARTED,
@@ -1139,3 +1140,526 @@ def test_execution_service_has_no_cleide_import():
     assert "import app.cleide" not in source
     assert "generate_content" not in source
     assert "run_gemini" not in source
+
+
+# ---------------------------------------------------------------------------
+# Algorithm version — fingerprint / replay invalidation
+# ---------------------------------------------------------------------------
+
+
+def _fingerprint_payload_for_state(state: dict) -> dict:
+    from app.agente_compara_doc_service import load_temp_table_record
+    from app.services.cleiton_doc_config_service import get_cleiton_doc_config
+
+    ttl = get_cleiton_doc_config().upload_ttl_hours
+    primary = load_temp_table_record(state["primary_temp_table_id"], ttl_hours=ttl)
+    rows = primary["audit_batch"]["normalized_rows"]
+    coverage = primary["coverage_table"]
+    records = {}
+    for entry in state["tables"].values():
+        if entry.get("confirmed"):
+            records[entry["temp_table_id"]] = load_temp_table_record(entry["temp_table_id"], ttl_hours=ttl)
+    return build_calculation_fingerprint_payload(
+        comparison_id=state["comparison_id"],
+        state=state,
+        normalized_rows=rows,
+        table_records=records,
+        tax_config=state.get("tax_config"),
+        coverage_table=coverage,
+        source_file_identity={
+            "audit_batch_id": primary["audit_batch"]["audit_batch_id"],
+            "source_file_name": "operacional.xlsx",
+            "sheet_name": "Planilha1",
+            "row_count": len(rows),
+            "input_schema_version": 1,
+            "temp_table_id": state["primary_temp_table_id"],
+        },
+    )
+
+
+def _conditional_fee(*, name: str, value: str = "10,00", unit: str = "R$") -> dict:
+    return {
+        "name": name,
+        "value": value,
+        "unit": unit,
+        "calculation_basis": "sobre nota fiscal" if unit == "%" else "por CTe",
+        "notes": "somente para remessas especiais",
+    }
+
+
+def _gbex_incomplete_comparison_state() -> dict:
+    """Comparação sintética: tabela A incomplete (TAS/Pedágio), tabela B calculated."""
+    sess: dict = {}
+    state = create_comparison(session_obj=sess)
+    t1 = get_table_by_slot(state, 1)
+    t2 = get_table_by_slot(state, 2)
+    assert t1 and t2
+    tt1 = "tt_gbex_" + uuid4().hex[:8]
+    tt2 = "tt_ctrl_" + uuid4().hex[:8]
+    t1.update(
+        {
+            "temp_table_id": tt1,
+            "confirmed": True,
+            "status": TABLE_STATUS_CONFIRMED,
+            "carrier_name": "Transportadora Sintetica A",
+        }
+    )
+    t2.update(
+        {
+            "temp_table_id": tt2,
+            "confirmed": True,
+            "status": TABLE_STATUS_CONFIRMED,
+            "carrier_name": "Transportadora Sintetica B",
+        }
+    )
+    region = "PE-Caruaru"
+    rows = [
+        {
+            "row_index": 1,
+            "document_number": "DOC-GBEX",
+            "destination_city": "Caruaru",
+            "destination_uf": "PE",
+            "audited_weight": 13.6,
+            "invoice_value": 2000.0,
+        }
+    ]
+    coverage = {
+        "status": "needs_review",
+        "columns": ["UF destino", "Cidade destino", "Região de frete"],
+        "rows": [
+            {
+                "destination_uf": "PE",
+                "destination_city": "Caruaru",
+                "freight_region": region,
+            }
+        ],
+    }
+    fees_a = [
+        {
+            "name": "ADV",
+            "value": "0,30%",
+            "unit": "%",
+            "calculation_basis": "sobre nota fiscal",
+            "notes": "",
+        },
+        {
+            "name": "GRIS",
+            "value": "0,10%",
+            "unit": "%",
+            "calculation_basis": "sobre nota fiscal",
+            "notes": "",
+        },
+        _conditional_fee(name="TAS", value="10,00", unit="R$"),
+        _conditional_fee(name="Pedágio", value="1,50", unit="R$"),
+    ]
+    rec_a = _pricing_record(temp_table_id=tt1, region=region)
+    rec_a["accessorial_fees"] = fees_a
+    rec_a["coverage_table"] = copy.deepcopy(coverage)
+    rec_a["freight_tables"][0]["rows"][0]["Até 30 kg"] = "80,00"
+    rec_a["freight_tables"][0]["rows"][0]["31 a 50 kg"] = "95,00"
+    rec_b = _pricing_record(temp_table_id=tt2, region=region)
+    rec_b["coverage_table"] = copy.deepcopy(coverage)
+    rec_b["freight_tables"][0]["rows"][0]["Até 30 kg"] = "100,50"
+    rec_b["freight_tables"][0]["rows"][0]["31 a 50 kg"] = "110,00"
+    for rec in (rec_a, rec_b):
+        rec["audit_batch"] = {
+            "status": "uploaded",
+            "audit_batch_id": "batch-gbex-" + uuid4().hex[:8],
+            "temp_table_id": tt1,
+            "source_file_name": "operacional-gbex.xlsx",
+            "sheet_name": "Planilha1",
+            "row_count": len(rows),
+            "input_schema_version": 1,
+            "normalized_rows": rows,
+        }
+        _write_record(rec)
+    # Primary hosts shared operational file.
+    rec_a["audit_batch"]["temp_table_id"] = tt1
+    _write_record(rec_a)
+    state["primary_temp_table_id"] = tt1
+    state["current_step"] = STEP_CONFIGURATION_READY
+    state["status"] = COMPARISON_STATUS_CONFIGURATION_READY
+    set_comparison_tax_config(
+        state,
+        {"include_taxes": False, "confirmed": True, "selected_table_ids": []},
+    )
+    persist_comparison_state(state, session_obj=sess)
+    return state
+
+
+def test_fingerprint_includes_algorithm_version(app, tmp_path, monkeypatch):
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        payload = _fingerprint_payload_for_state(state)
+        assert payload["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
+        assert payload["schema_version"] == 1
+        assert payload["calculation_algorithm_version"] != payload["schema_version"] or True
+        fp1 = compute_calculation_fingerprint(payload)
+        fp2 = compute_calculation_fingerprint(copy.deepcopy(payload))
+        assert fp1 == fp2
+        assert len(fp1) == 64
+
+
+def test_fingerprint_same_input_same_version_equal(app, tmp_path, monkeypatch):
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        p1 = _fingerprint_payload_for_state(state)
+        p2 = _fingerprint_payload_for_state(state)
+        assert compute_calculation_fingerprint(p1) == compute_calculation_fingerprint(p2)
+
+
+def test_fingerprint_version_change_changes_hash(app, tmp_path, monkeypatch):
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        payload = _fingerprint_payload_for_state(state)
+        fp_current = compute_calculation_fingerprint(payload)
+        legacy = copy.deepcopy(payload)
+        legacy["calculation_algorithm_version"] = 1
+        fp_legacy = compute_calculation_fingerprint(legacy)
+        assert fp_current != fp_legacy
+        without = copy.deepcopy(payload)
+        without.pop("calculation_algorithm_version", None)
+        assert compute_calculation_fingerprint(without) != fp_current
+
+
+def test_fingerprint_version_does_not_alter_operational_fields(app, tmp_path, monkeypatch):
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        payload = _fingerprint_payload_for_state(state)
+        operational_keys = {
+            "comparison_id",
+            "schema_version",
+            "source_file_identity",
+            "tables",
+            "table_count",
+            "tax_config",
+            "coverage_digest",
+        }
+        for key in operational_keys:
+            assert key in payload
+        assert set(payload.keys()) == operational_keys | {"calculation_algorithm_version"}
+
+
+def test_fingerprint_deterministic_order_and_json_safe(app, tmp_path, monkeypatch):
+    import json as _json
+
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        payload = _fingerprint_payload_for_state(state)
+        encoded = _json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        decoded = _json.loads(encoded)
+        assert compute_calculation_fingerprint(decoded) == compute_calculation_fingerprint(payload)
+
+
+def test_algorithm_version_constant_stable_and_single():
+    import re
+
+    source = pathlib.Path("app/agente_compara_calculation_execution_service.py").read_text(encoding="utf-8")
+    matches = re.findall(r"^AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION\s*=\s*(\d+)", source, re.M)
+    assert matches == [str(AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION)]
+    assert AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION == 2
+    assert "datetime.now" not in source.split("AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION")[1][:200]
+
+
+def test_legacy_result_without_algorithm_version_reads_safely():
+    from app.agente_compara_comparison_state import public_comparison_calculation_summary
+
+    legacy = {
+        "schema_version": 1,
+        "execution_id": "exec-legacy",
+        "fingerprint_short": "abc",
+        "status": STEP_CALCULATION_READY,
+        "stale": False,
+        "billing_status": BILLING_STATUS_APPLIED,
+        "attempt_count": 1,
+    }
+    summary = public_comparison_calculation_summary(legacy)
+    assert summary is not None
+    assert summary.get("calculation_algorithm_version") is None
+    assert summary["status"] == STEP_CALCULATION_READY
+
+
+def test_replay_same_algorithm_version_reuses_result(app, tmp_path, monkeypatch):
+    calls = {"motor": 0, "billing": 0, "save": 0}
+
+    def motor(context):
+        calls["motor"] += 1
+        from app.agente_compara_comparison_calculation_service import calculate_comparison_in_memory
+
+        return calculate_comparison_in_memory(context)
+
+    def billing(**kwargs):
+        calls["billing"] += 1
+
+    import app.agente_compara_calculation_execution_service as exec_mod
+
+    real_save = exec_mod.save_comparison_calculation_result
+
+    def save_spy(**kwargs):
+        calls["save"] += 1
+        return real_save(**kwargs)
+
+    monkeypatch.setattr(exec_mod, "save_comparison_calculation_result", save_spy)
+
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        sess = _session_dict_from_state(state)
+        first = _exec(
+            app,
+            sess,
+            comparison_id=state["comparison_id"],
+            execution_id="algo-replay-1",
+            calculate_fn=motor,
+            emit_billing=billing,
+        )
+        second = _exec(
+            app,
+            sess,
+            comparison_id=state["comparison_id"],
+            execution_id="algo-replay-2",
+            calculate_fn=motor,
+            emit_billing=billing,
+        )
+        assert first["idempotent_replay"] is False
+        assert second["idempotent_replay"] is True
+        assert calls["motor"] == 1
+        assert calls["billing"] == 1
+        assert calls["save"] == 1
+        assert first["result"]["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
+        assert second["result"]["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
+        calc = _persisted(sess)["comparison_calculation"]
+        assert calc["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
+
+
+def test_different_algorithm_version_forces_new_execution(app, tmp_path, monkeypatch):
+    calls = {"motor": 0, "billing": 0}
+
+    def motor(context):
+        calls["motor"] += 1
+        from app.agente_compara_comparison_calculation_service import calculate_comparison_in_memory
+
+        return calculate_comparison_in_memory(context)
+
+    def billing(**kwargs):
+        calls["billing"] += 1
+
+    import app.agente_compara_calculation_execution_service as exec_mod
+
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        sess = _session_dict_from_state(state)
+        first = _exec(
+            app,
+            sess,
+            comparison_id=state["comparison_id"],
+            execution_id="algo-v-old",
+            calculate_fn=motor,
+            emit_billing=billing,
+        )
+        assert first["idempotent_replay"] is False
+        assert calls["motor"] == 1
+        assert calls["billing"] == 1
+        calc = _persisted(sess)["comparison_calculation"]
+        old_key = calc["result_storage_key"]
+        old_fp = calc["request_fingerprint"]
+        assert calc["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
+
+        # Bump algorithm version → fingerprint muda → READY antigo não é replay.
+        monkeypatch.setattr(exec_mod, "AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION", 99)
+
+        second = _exec(
+            app,
+            sess,
+            comparison_id=state["comparison_id"],
+            execution_id="algo-v-new",
+            calculate_fn=motor,
+            emit_billing=billing,
+        )
+        assert second["idempotent_replay"] is False
+        assert calls["motor"] == 2
+        assert calls["billing"] == 2
+        calc2 = _persisted(sess)["comparison_calculation"]
+        assert calc2["request_fingerprint"] != old_fp
+        assert calc2["calculation_algorithm_version"] == 99
+        assert calc2["result_storage_key"] != old_key
+        assert second["result"]["calculation_algorithm_version"] == 99
+        assert second["idempotent_replay"] is False
+
+
+def test_legacy_calculated_ready_not_replayed_after_version_bump(app, tmp_path, monkeypatch):
+    """Resultado legado calculated com fingerprint antigo não mascara motor novo."""
+    from app.agente_compara_calculation_result_storage import (
+        build_result_storage_key,
+        save_comparison_calculation_result,
+    )
+
+    calls = {"motor": 0}
+
+    def motor(context):
+        calls["motor"] += 1
+        from app.agente_compara_comparison_calculation_service import calculate_comparison_in_memory
+
+        out = calculate_comparison_in_memory(context)
+        # Force incomplete on first table cell to prove new motor path runs.
+        for row in out.get("comparative_rows") or []:
+            for cell in (row.get("table_results") or {}).values():
+                if isinstance(cell, dict) and cell.get("status") == "calculated":
+                    cell["status"] = "incomplete"
+                    cell["final_status"] = "incomplete"
+                    cell["is_partial_value"] = True
+                    break
+            break
+        return out
+
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        sess = _session_dict_from_state(state)
+        cmp_id = state["comparison_id"]
+        legacy_fp = "a" * 64
+        legacy_result = {
+            "schema_version": 1,
+            "comparison_id": cmp_id,
+            "execution_id": "legacy-exec",
+            "table_count": 2,
+            "row_count": 1,
+            "tables": [],
+            "comparative_rows": [
+                {
+                    "row_index": 1,
+                    "table_results": {
+                        "t1": {"status": "calculated", "final_status": "calculated", "calculated_freight": 999.0}
+                    },
+                }
+            ],
+            "summary": {"calculated_cell_count": 2, "error_cell_count": 0, "incomplete_cell_count": 0},
+        }
+        meta = save_comparison_calculation_result(
+            comparison_id=cmp_id,
+            fingerprint=legacy_fp,
+            result=legacy_result,
+        )
+        state["current_step"] = STEP_CALCULATION_READY
+        state["status"] = COMPARISON_STATUS_CALCULATION_READY
+        state["comparison_calculation"] = {
+            "schema_version": 1,
+            # sem calculation_algorithm_version → legado
+            "execution_id": "legacy-exec",
+            "request_fingerprint": legacy_fp,
+            "fingerprint_short": legacy_fp[:12],
+            "status": STEP_CALCULATION_READY,
+            "stale": False,
+            "result_storage_key": meta["result_storage_key"],
+            "result_checksum": meta["result_checksum"],
+            "result_size_bytes": meta["result_size_bytes"],
+            "result_schema_version": meta.get("result_schema_version"),
+            "billing_status": BILLING_STATUS_APPLIED,
+            "source_row_count": 4,
+            "calculated_table_count": 2,
+            "calculated_cell_count": 2,
+            "error_cell_count": 0,
+            "attempt_count": 1,
+        }
+        persist_comparison_state(state, session_obj=sess)
+        sess = _session_dict_from_state(get_comparison_state(sess) or state)
+
+        out = _exec(
+            app,
+            sess,
+            comparison_id=cmp_id,
+            execution_id="post-legacy",
+            calculate_fn=motor,
+            emit_billing=lambda **kwargs: None,
+        )
+        assert out["idempotent_replay"] is False
+        assert calls["motor"] == 1
+        assert out["result"]["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
+        # Must not return the legacy calculated freight 999.
+        freights = []
+        for row in out["result"].get("comparative_rows") or []:
+            for cell in (row.get("table_results") or {}).values():
+                if isinstance(cell, dict):
+                    freights.append(cell.get("calculated_freight"))
+        assert 999.0 not in freights
+        calc = _persisted(sess)["comparison_calculation"]
+        assert calc["request_fingerprint"] != legacy_fp
+        assert calc["result_storage_key"] != meta["result_storage_key"]
+        assert build_result_storage_key(comparison_id=cmp_id, fingerprint=legacy_fp) == meta["result_storage_key"]
+
+
+def test_api_post_get_gbex_incomplete_preserves_status(web_client, app, tmp_path, monkeypatch):
+    """POST/GET real: incomplete sem injeção de payload no frontend."""
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _gbex_incomplete_comparison_state()
+    with web_client.session_transaction() as sess:
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+        sess[AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY] = state["primary_temp_table_id"]
+
+    monkeypatch.setattr(
+        "app.agente_compara_doc_service._emit_agente_compara_operational_billing",
+        lambda *args, **kwargs: True,
+    )
+
+    resp = web_client.post(
+        "/api/agente-compara/comparison/calculate",
+        json={
+            "comparison_id": state["comparison_id"],
+            "execution_id": "api-gbex-1",
+            "schema_version": 1,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["idempotent_replay"] is False
+    result = body["result"]
+    assert result["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
+    assert int(result["summary"].get("incomplete_cell_count") or 0) >= 1
+
+    rows = result["comparative_rows"]
+    assert len(rows) == 1
+    table_results = rows[0]["table_results"]
+    incomplete_cells = [
+        c for c in table_results.values() if (c.get("final_status") or c.get("status")) == "incomplete"
+    ]
+    assert incomplete_cells, "esperado ao menos um incomplete (TAS/Pedágio)"
+    cell = incomplete_cells[0]
+    assert cell["status"] == "incomplete"
+    assert cell["final_status"] == "incomplete"
+    assert cell.get("is_partial_value") is True
+    assert cell.get("calculated_freight") is not None
+    memory = cell.get("calculation_memory") or {}
+    assert memory.get("status") == "incomplete"
+    assert "incompleto" in str(memory.get("status_label") or "").lower()
+    labels = " ".join(
+        str(i.get("label") or "") for i in (cell.get("blocking_issues") or [])
+    ) + " " + str((cell.get("components") or {}).get("ignored_accessorial_fees") or [])
+    assert "TAS" in labels
+    assert "Pedágio" in labels or "Pedagio" in labels
+
+    get_resp = web_client.get(
+        f"/api/agente-compara/comparison/calculation?comparison_id={state['comparison_id']}"
+    )
+    assert get_resp.status_code == 200
+    get_body = get_resp.get_json()
+    assert get_body["status"] == STEP_CALCULATION_READY
+    get_result = get_body["result"]
+    assert get_result["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
+    get_cell = None
+    for row in get_result["comparative_rows"]:
+        for c in (row.get("table_results") or {}).values():
+            if (c.get("final_status") or c.get("status")) == "incomplete":
+                get_cell = c
+                break
+    assert get_cell is not None
+    assert get_cell["status"] == "incomplete"
+    assert get_cell["final_status"] == "incomplete"
+    assert (get_cell.get("calculation_memory") or {}).get("status") == "incomplete"

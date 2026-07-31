@@ -1005,6 +1005,9 @@ def agente_compara_temp_table_save():
         }
         if exc.errors:
             payload["errors"] = exc.errors
+        if getattr(exc, "validation", None):
+            payload["validation"] = exc.validation
+            payload["error"] = "TEMP_TABLE_HAS_BLOCKING_ISSUES"
         if exc.error_code == ERROR_TAX_CONFIG_PENDING and exc.errors:
             payload["pending_tax_tables"] = exc.errors
         return (

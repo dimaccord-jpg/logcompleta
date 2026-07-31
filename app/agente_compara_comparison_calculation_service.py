@@ -21,6 +21,8 @@ from typing import Any
 from app.agente_compara_calculation_service import (
     STATUS_AMBIGUOUS_COVERAGE_MAPPING,
     STATUS_CALCULATED,
+    STATUS_CALCULATED_WITH_WARNINGS,
+    STATUS_INCOMPLETE,
     STATUS_INVALID_INVOICE_VALUE,
     STATUS_INVALID_WEIGHT,
     STATUS_MISSING_COVERAGE_MAPPING,
@@ -62,12 +64,29 @@ ERROR_SERIALIZATION = "agente_compara_multi_table_serialization"
 _ALLOWED_DOMAIN_STATUSES = frozenset(
     {
         STATUS_CALCULATED,
+        STATUS_CALCULATED_WITH_WARNINGS,
+        STATUS_INCOMPLETE,
         STATUS_MISSING_COVERAGE_MAPPING,
         STATUS_AMBIGUOUS_COVERAGE_MAPPING,
         STATUS_MISSING_FREIGHT_RULE,
         STATUS_INVALID_WEIGHT,
         STATUS_INVALID_INVOICE_VALUE,
         STATUS_UNSUPPORTED_PRICING_MODEL,
+    }
+)
+
+_COMPLETE_COMPARABLE_STATUSES = frozenset(
+    {
+        STATUS_CALCULATED,
+        STATUS_CALCULATED_WITH_WARNINGS,
+    }
+)
+
+_STATUSES_WITH_PUBLIC_FREIGHT = frozenset(
+    {
+        STATUS_CALCULATED,
+        STATUS_CALCULATED_WITH_WARNINGS,
+        STATUS_INCOMPLETE,
     }
 )
 
@@ -759,6 +778,8 @@ def validate_single_table_result(
         )
 
     calculated_count = unit_result.get("calculated_count")
+    calculated_with_warnings_count = unit_result.get("calculated_with_warnings_count", 0)
+    incomplete_count = unit_result.get("incomplete_count", 0)
     error_count = unit_result.get("error_count")
     if not isinstance(calculated_count, int) or not isinstance(error_count, int):
         raise MultiTableCalculationInvariantError(
@@ -768,7 +789,17 @@ def validate_single_table_result(
             slot_number=context.slot_number,
             execution_id=context.execution_id,
         )
-    if calculated_count + error_count != expected_row_count:
+    if not isinstance(calculated_with_warnings_count, int):
+        calculated_with_warnings_count = 0
+    if not isinstance(incomplete_count, int):
+        incomplete_count = 0
+    if (
+        calculated_count
+        + calculated_with_warnings_count
+        + incomplete_count
+        + error_count
+        != expected_row_count
+    ):
         raise MultiTableCalculationInvariantError(
             "Contagens unitárias incoerentes.",
             comparison_id=context.comparison_id,
@@ -814,8 +845,8 @@ def validate_single_table_result(
                 execution_id=context.execution_id,
             )
         freight = item.get("calculated_freight")
-        if status == STATUS_CALCULATED:
-            if freight is None:
+        if status in _STATUSES_WITH_PUBLIC_FREIGHT:
+            if status in _COMPLETE_COMPARABLE_STATUSES and freight is None:
                 raise MultiTableCalculationInvariantError(
                     "calculated_freight ausente em linha calculada.",
                     comparison_id=context.comparison_id,
@@ -823,7 +854,9 @@ def validate_single_table_result(
                     slot_number=context.slot_number,
                     execution_id=context.execution_id,
                 )
-            if isinstance(freight, float) and (math.isnan(freight) or math.isinf(freight)):
+            if freight is not None and isinstance(freight, float) and (
+                math.isnan(freight) or math.isinf(freight)
+            ):
                 raise MultiTableCalculationInvariantError(
                     "calculated_freight não finito no resultado unitário.",
                     error_code=ERROR_SERIALIZATION,
@@ -895,15 +928,29 @@ def consolidate_results_by_row_index(
         for unit_result, by_row in zip(unit_results, results_by_row_per_table):
             table_id = unit_result["table_id"]
             cell = by_row[row_index]
+            memory = copy.deepcopy(cell.get("calculation_memory")) if isinstance(cell.get("calculation_memory"), dict) else None
+            if isinstance(memory, dict):
+                memory["table_id"] = table_id
+                memory["slot_number"] = unit_result["slot_number"]
+                memory["carrier_name"] = unit_result["carrier_name"]
+                memory["row_index"] = row_index
             table_results[table_id] = {
                 "table_id": table_id,
                 "carrier_name": unit_result["carrier_name"],
                 "slot_number": unit_result["slot_number"],
                 "calculated_freight": cell.get("calculated_freight"),
                 "status": cell.get("status"),
+                "raw_status": cell.get("raw_status"),
+                "final_status": cell.get("final_status") or cell.get("status"),
+                "completeness_status": cell.get("completeness_status"),
+                "completeness": copy.deepcopy(cell.get("completeness")),
+                "is_partial_value": bool(cell.get("is_partial_value")),
+                "blocking_issues": copy.deepcopy(cell.get("blocking_issues") or []),
+                "warnings": copy.deepcopy(cell.get("warnings") or []),
                 "error": copy.deepcopy(cell.get("error")),
                 "components": copy.deepcopy(cell.get("components") or {}),
                 "evidence": copy.deepcopy(cell.get("evidence") or {}),
+                "calculation_memory": memory,
             }
         row_payload = {
             "row_index": row_index,
@@ -1034,6 +1081,8 @@ def calculate_comparison_in_memory(context: MultiTableCalculationContext) -> dic
     tables_meta: list[dict] = []
     results_by_table: dict[str, dict] = {}
     calculated_cell_count = 0
+    calculated_with_warnings_cell_count = 0
+    incomplete_cell_count = 0
     error_cell_count = 0
     tables_with_all_rows_calculated = 0
     tables_with_row_errors = 0
@@ -1043,10 +1092,14 @@ def calculate_comparison_in_memory(context: MultiTableCalculationContext) -> dic
         # Snapshot defensivo: não mutar resultado unitário original.
         unit_snapshot = copy.deepcopy(unit_result)
         calc_count = int(unit_snapshot["calculated_count"])
+        warn_count = int(unit_snapshot.get("calculated_with_warnings_count") or 0)
+        incomplete_count = int(unit_snapshot.get("incomplete_count") or 0)
         err_count = int(unit_snapshot["error_count"])
         calculated_cell_count += calc_count
+        calculated_with_warnings_cell_count += warn_count
+        incomplete_cell_count += incomplete_count
         error_cell_count += err_count
-        if err_count == 0:
+        if err_count == 0 and incomplete_count == 0:
             tables_with_all_rows_calculated += 1
         else:
             tables_with_row_errors += 1
@@ -1059,14 +1112,27 @@ def calculate_comparison_in_memory(context: MultiTableCalculationContext) -> dic
                 "slot_number": unit_snapshot["slot_number"],
                 "carrier_name": unit_snapshot["carrier_name"],
                 "calculated_count": calc_count,
+                "calculated_with_warnings_count": warn_count,
+                "incomplete_count": incomplete_count,
                 "error_count": err_count,
                 "summary": {
                     "total_calculated_freight": summary.get("total_calculated_freight"),
                     "calculated_count": calc_count,
+                    "calculated_with_warnings_count": warn_count,
+                    "incomplete_count": incomplete_count,
                     "error_count": err_count,
                 },
             }
         )
+        # Memória de cálculo canônica fica em comparative_rows[table_results]
+        # para evitar duplicar o payload em results_by_table.
+        public_results = []
+        for row in unit_snapshot.get("results") or []:
+            if not isinstance(row, dict):
+                continue
+            slim = dict(row)
+            slim.pop("calculation_memory", None)
+            public_results.append(slim)
         results_by_table[table_id] = {
             "comparison_id": unit_snapshot["comparison_id"],
             "table_id": table_id,
@@ -1075,8 +1141,10 @@ def calculate_comparison_in_memory(context: MultiTableCalculationContext) -> dic
             "carrier_name": unit_snapshot["carrier_name"],
             "row_count": unit_snapshot["row_count"],
             "calculated_count": calc_count,
+            "calculated_with_warnings_count": warn_count,
+            "incomplete_count": incomplete_count,
             "error_count": err_count,
-            "results": unit_snapshot["results"],
+            "results": public_results,
             "summary": copy.deepcopy(summary),
             "duration_ms": unit_snapshot.get("duration_ms", 0),
             "schema_version": unit_snapshot.get("schema_version"),
@@ -1084,7 +1152,13 @@ def calculate_comparison_in_memory(context: MultiTableCalculationContext) -> dic
 
     table_count = len(unit_results)
     total_calculation_cells = expected_row_count * table_count
-    if calculated_cell_count + error_cell_count != total_calculation_cells:
+    if (
+        calculated_cell_count
+        + calculated_with_warnings_cell_count
+        + incomplete_cell_count
+        + error_cell_count
+        != total_calculation_cells
+    ):
         raise MultiTableCalculationInvariantError(
             "Contagens globais de células incoerentes.",
             comparison_id=context.comparison_id,
@@ -1107,6 +1181,8 @@ def calculate_comparison_in_memory(context: MultiTableCalculationContext) -> dic
             "completed_table_count": table_count,
             "total_calculation_cells": total_calculation_cells,
             "calculated_cell_count": calculated_cell_count,
+            "calculated_with_warnings_cell_count": calculated_with_warnings_cell_count,
+            "incomplete_cell_count": incomplete_cell_count,
             "error_cell_count": error_cell_count,
             "tables_with_all_rows_calculated": tables_with_all_rows_calculated,
             "tables_with_row_errors": tables_with_row_errors,
@@ -1122,12 +1198,15 @@ def calculate_comparison_in_memory(context: MultiTableCalculationContext) -> dic
 
     logger.info(
         "agente_compara_multi_table_calc comparison_id=%s execution_id=%s table_count=%s "
-        "row_count=%s calculated_cell_count=%s error_cell_count=%s duration_ms=%s",
+        "row_count=%s calculated_cell_count=%s calculated_with_warnings_cell_count=%s "
+        "incomplete_cell_count=%s error_cell_count=%s duration_ms=%s",
         context.comparison_id,
         context.execution_id,
         table_count,
         expected_row_count,
         calculated_cell_count,
+        calculated_with_warnings_cell_count,
+        incomplete_cell_count,
         error_cell_count,
         duration_ms,
     )

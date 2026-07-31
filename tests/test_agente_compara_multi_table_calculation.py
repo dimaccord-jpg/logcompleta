@@ -1136,6 +1136,87 @@ def test_components_and_evidence_preserved():
     cell = result["comparative_rows"][0]["table_results"][t1["table_id"]]
     assert cell["components"] == unit["components"]
     assert cell["evidence"] == unit["evidence"]
+    assert "calculation_memory" not in unit
+    assert isinstance(cell["calculation_memory"], dict)
+    assert cell["calculation_memory"]["total"] == cell["calculated_freight"]
+    assert cell["calculation_memory"]["table_id"] == t1["table_id"]
+    assert cell["calculation_memory"]["row_index"] == result["comparative_rows"][0]["row_index"]
+
+
+def test_calculation_memory_same_carrier_different_tables():
+    records = {
+        "tt_slot1": _pricing_record(temp_table_id="tt_slot1", weight_50="100,50"),
+        "tt_slot2": _pricing_record(temp_table_id="tt_slot2", weight_50="180,00"),
+    }
+    state = _comparison_state(slot1_carrier="Mesma", slot2_carrier="Mesma")
+    rows = [_row(row_index=1, document_number="DOC-1")]
+    ctx = build_multi_table_calculation_context(
+        comparison_id=state["comparison_id"],
+        comparison_state=state,
+        normalized_rows=rows,
+        table_records=records,
+        coverage_table=_coverage_rows(("SP", "Campinas", "SP-Interior 1")),
+    )
+    result = calculate_comparison_in_memory(ctx)
+    t1 = get_table_by_slot(state, 1)
+    t2 = get_table_by_slot(state, 2)
+    row = result["comparative_rows"][0]
+    mem_a = row["table_results"][t1["table_id"]]["calculation_memory"]
+    mem_b = row["table_results"][t2["table_id"]]["calculation_memory"]
+    assert mem_a["carrier_name"] == "Mesma"
+    assert mem_b["carrier_name"] == "Mesma"
+    assert mem_a["table_id"] == t1["table_id"]
+    assert mem_b["table_id"] == t2["table_id"]
+    assert mem_a["total"] != mem_b["total"]
+    assert mem_a["total"] == row["table_results"][t1["table_id"]]["calculated_freight"]
+    assert mem_b["total"] == row["table_results"][t2["table_id"]]["calculated_freight"]
+
+
+def test_calculation_memory_repeated_document_numbers():
+    records = _default_records()
+    state = _comparison_state()
+    rows = [
+        _row(row_index=1, document_number="DOC-REP"),
+        _row(row_index=2, document_number="DOC-REP", audited_weight=30.0),
+    ]
+    ctx = build_multi_table_calculation_context(
+        comparison_id=state["comparison_id"],
+        comparison_state=state,
+        normalized_rows=rows,
+        table_records=records,
+        coverage_table=_coverage_rows(("SP", "Campinas", "SP-Interior 1")),
+    )
+    result = calculate_comparison_in_memory(ctx)
+    t1 = get_table_by_slot(state, 1)
+    row1 = result["comparative_rows"][0]
+    row2 = result["comparative_rows"][1]
+    assert row1["document_number"] == row2["document_number"]
+    assert row1["row_index"] != row2["row_index"]
+    mem1 = row1["table_results"][t1["table_id"]]["calculation_memory"]
+    mem2 = row2["table_results"][t1["table_id"]]["calculation_memory"]
+    assert mem1["row_index"] == row1["row_index"]
+    assert mem2["row_index"] == row2["row_index"]
+    assert mem1["total"] != mem2["total"]
+
+
+def test_calculation_memory_not_calculated_serialized():
+    records = {
+        "tt_slot1": _pricing_record(temp_table_id="tt_slot1"),
+        "tt_slot2": _pricing_record(temp_table_id="tt_slot2", region="OUTRA-REGIAO"),
+    }
+    state, _ctx, result = _build_and_run(
+        records=records,
+        rows=[_row(row_index=1)],
+    )
+    t2 = get_table_by_slot(state, 2)
+    cell = result["comparative_rows"][0]["table_results"][t2["table_id"]]
+    memory = cell["calculation_memory"]
+    assert cell["status"] != "calculated"
+    assert memory["status"] == "not_calculated"
+    assert memory["total"] is None
+    assert memory["diagnostic"]
+    assert memory["diagnostic"]["message"]
+    json.dumps(result, allow_nan=False)
 
 
 # ---------------------------------------------------------------------------

@@ -65,6 +65,13 @@ logger = logging.getLogger(__name__)
 
 CALCULATION_EXECUTION_SCHEMA_VERSION = 1
 
+# Semântica do motor/completeza/statusos que afeta o significado do resultado.
+# Incrementar quando a lógica de cálculo ou o contrato de completeza mudar
+# de forma incompatível com resultados anteriores (invalida replay via fingerprint).
+# Não confundir com CALCULATION_EXECUTION_SCHEMA_VERSION, MULTI_TABLE_CALCULATION_SCHEMA_VERSION
+# nem RESULT_STORAGE_SCHEMA_VERSION.
+AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION = 2
+
 BILLING_STATUS_NOT_STARTED = "not_started"
 BILLING_STATUS_PENDING = "pending"
 BILLING_STATUS_APPLIED = "applied"
@@ -167,6 +174,7 @@ def _require_session_obj(session_obj=None):
 def _empty_calculation_object() -> dict:
     return {
         "schema_version": CALCULATION_EXECUTION_SCHEMA_VERSION,
+        "calculation_algorithm_version": AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION,
         "execution_id": None,
         "request_fingerprint": None,
         "fingerprint_short": None,
@@ -503,6 +511,7 @@ def build_calculation_fingerprint_payload(
     return {
         "comparison_id": (comparison_id or "").strip(),
         "schema_version": int(schema_version),
+        "calculation_algorithm_version": int(AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION),
         "source_file_identity": {
             "audit_batch_id": source_file_identity.get("audit_batch_id"),
             "source_file_name": source_file_identity.get("source_file_name"),
@@ -940,17 +949,41 @@ def execute_comparison_calculation(
 
                 logger.info(
                     "agente_compara_comparison_calc replay comparison_id=%s execution_id=%s fingerprint=%s "
-                    "table_count=%s row_count=%s status=%s idempotent_replay=true",
+                    "table_count=%s row_count=%s status=%s idempotent_replay=true "
+                    "calculation_algorithm_version=%s replay_version_match=true",
                     cmp_id,
                     existing.get("execution_id"),
                     fingerprint_short,
                     existing.get("calculated_table_count"),
                     existing.get("source_row_count"),
                     existing.get("status"),
+                    AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION,
                 )
                 # Loads from storage when billing applied; never uses session result.
                 # Missing/corrupt storage raises ERROR_RESULT_MISSING (no silent recalculate).
                 return _build_success_response(state=state, calc=existing, idempotent_replay=True)
+
+            existing_algo = existing.get("calculation_algorithm_version")
+            if (
+                existing_status == STEP_CALCULATION_READY
+                and existing_fp
+                and existing_fp != fingerprint
+                and (
+                    existing_algo is None
+                    or int(existing_algo) != int(AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION)
+                )
+            ):
+                logger.info(
+                    "agente_compara_comparison_calc replay_rejected_version_mismatch "
+                    "comparison_id=%s execution_id=%s fingerprint=%s "
+                    "existing_algorithm_version=%s current_algorithm_version=%s "
+                    "replay_rejected_version_mismatch=true",
+                    cmp_id,
+                    exec_id,
+                    fingerprint_short,
+                    existing_algo,
+                    AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION,
+                )
 
             if existing_status == STEP_CALCULATION_RUNNING and existing_fp == fingerprint:
                 if existing_exec == exec_id:
@@ -993,6 +1026,7 @@ def execute_comparison_calculation(
                     "execution_id": exec_id,
                     "request_fingerprint": fingerprint,
                     "fingerprint_short": fingerprint_short,
+                    "calculation_algorithm_version": AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION,
                     "status": STEP_CALCULATION_RUNNING,
                     "stale": False,
                     "started_at": _utcnow_iso(),
@@ -1031,13 +1065,15 @@ def execute_comparison_calculation(
 
             logger.info(
                 "agente_compara_comparison_calc start comparison_id=%s execution_id=%s fingerprint=%s "
-                "table_count=%s row_count=%s status=%s idempotent_replay=false",
+                "table_count=%s row_count=%s status=%s idempotent_replay=false "
+                "calculation_algorithm_version=%s",
                 cmp_id,
                 exec_id,
                 fingerprint_short,
                 len(entries),
                 len(rows),
                 STEP_CALCULATION_RUNNING,
+                AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION,
             )
 
             motor = calculate_fn or calculate_comparison_in_memory
@@ -1055,6 +1091,9 @@ def execute_comparison_calculation(
                     ttl_hours=effective_ttl,
                 )
                 result = motor(context)
+                if isinstance(result, dict):
+                    result = dict(result)
+                    result["calculation_algorithm_version"] = AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
                 validate_comparison_result_serializable(
                     result, comparison_id=cmp_id, execution_id=exec_id
                 )
@@ -1261,7 +1300,8 @@ def execute_comparison_calculation(
             logger.info(
                 "agente_compara_comparison_calc done comparison_id=%s execution_id=%s fingerprint=%s "
                 "table_count=%s row_count=%s total_calculation_cells=%s calculated_cell_count=%s "
-                "error_cell_count=%s duration_ms=%s status=%s idempotent_replay=false billing_status=%s",
+                "error_cell_count=%s duration_ms=%s status=%s idempotent_replay=false billing_status=%s "
+                "calculation_algorithm_version=%s",
                 cmp_id,
                 exec_id,
                 fingerprint_short,
@@ -1273,6 +1313,7 @@ def execute_comparison_calculation(
                 duration_ms,
                 STEP_CALCULATION_READY,
                 ready_calc.get("billing_status"),
+                AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION,
             )
 
             return _build_ready_response(

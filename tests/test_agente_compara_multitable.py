@@ -363,9 +363,11 @@ def test_agente_compara_js_upload_form_data_includes_comparison_identity():
     upload_block = js[js.index("function uploadDocument"): js.index("function removeDocument")]
     assert "formData.append('file', file, file.name)" in upload_block
     assert "formData.append('carrier_name', validation.name)" in upload_block
-    assert "formData.append('comparison_id', comparisonId)" in upload_block
-    assert "formData.append('table_id', tableId)" in upload_block
+    assert "formData.append('comparison_id', comparisonIdAtStart)" in upload_block
+    assert "formData.append('table_id', tableIdAtStart)" in upload_block
     assert "formData.append('slot', String(slot))" in upload_block
+    assert "requestGenerationAtStart" in upload_block
+    assert "isCurrentComparisonRequest" in upload_block
 
 
 def test_agente_compara_js_carrier_identification_flow():
@@ -409,7 +411,7 @@ def test_agente_compara_js_refresh_does_not_call_upload():
 
 def test_agente_compara_js_upload_slot_resolves_from_active_table():
     js = _agente_compara_js()
-    pending_block = js[js.index("function beginPendingFreightTableUpload"): js.index("function cancelCarrierIdentification")]
+    pending_block = js[js.index("function beginPendingFreightTableUpload"): js.index("function openCarrierNameEdit")]
     assert "ensureComparisonStarted()" in pending_block
     assert "activeComparisonTable()" in pending_block
     assert "active.table_id" in pending_block
@@ -503,7 +505,7 @@ def test_agente_compara_js_wizard_upload_form_data_uses_active_slot():
     js = _agente_compara_js()
     upload_block = js[js.index("function uploadDocument"): js.index("function removeDocument")]
     assert "formData.append('slot', String(slot))" in upload_block
-    pending_block = js[js.index("function beginPendingFreightTableUpload"): js.index("function cancelCarrierIdentification")]
+    pending_block = js[js.index("function beginPendingFreightTableUpload"): js.index("function openCarrierNameEdit")]
     assert "slot: active.slot_number" in pending_block
     assert "ensureComparisonStarted()" in pending_block
 
@@ -588,8 +590,12 @@ def test_agente_compara_js_auto_open_only_first_table_after_upload():
     js = _agente_compara_js()
     auto_block = js[js.index("function shouldAutoOpenComparisonWizard"): js.index("function maybeOpenComparisonWizardAfterStatus")]
     assert "step !== 'PREPARE_TABLE_1'" in auto_block or "step === 'PREPARE_TABLE_1'" in auto_block
-    assert "'review'" in auto_block
-    assert "'processing'" in auto_block
+    assert "view !== 'review'" in auto_block
+    assert "isReviewReadyTempTable(currentTempTable)" in auto_block
+    assert "uploadInFlight" in auto_block
+    # processing NÃO dispara auto-open
+    assert "view === 'review' || view === 'processing'" not in auto_block
+    assert "'processing'" not in auto_block
     assert "comparisonWizardModalSuppressed" in auto_block
 
 

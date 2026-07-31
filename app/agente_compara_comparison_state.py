@@ -943,6 +943,7 @@ def public_comparison_calculation_summary(
         return None
     payload = {
         "schema_version": calc.get("schema_version"),
+        "calculation_algorithm_version": calc.get("calculation_algorithm_version"),
         "execution_id": calc.get("execution_id"),
         "fingerprint_short": calc.get("fingerprint_short"),
         "status": calc.get("status"),

@@ -15,6 +15,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.agente_compara_calculation_memory_service import build_calculation_memory
+from app.agente_compara_calculation_completeness_service import (
+    STATUS_CALCULATED_WITH_WARNINGS as COMPLETENESS_STATUS_CALCULATED_WITH_WARNINGS,
+    STATUS_INCOMPLETE as COMPLETENESS_STATUS_INCOMPLETE,
+    STATUS_NOT_CALCULATED as COMPLETENESS_STATUS_NOT_CALCULATED,
+    evaluate_calculation_completeness,
+)
 from app.agente_compara_comparison_state import (
     TABLE_STATUS_CONFIRMED,
     get_comparison_state,
@@ -40,6 +47,9 @@ logger = logging.getLogger(__name__)
 SINGLE_TABLE_CALCULATION_SCHEMA_VERSION = 1
 
 STATUS_CALCULATED = "calculated"
+STATUS_CALCULATED_WITH_WARNINGS = COMPLETENESS_STATUS_CALCULATED_WITH_WARNINGS
+STATUS_INCOMPLETE = COMPLETENESS_STATUS_INCOMPLETE
+STATUS_NOT_CALCULATED = COMPLETENESS_STATUS_NOT_CALCULATED
 STATUS_MISSING_COVERAGE_MAPPING = AUDIT_STATUS_MISSING_COVERAGE
 STATUS_AMBIGUOUS_COVERAGE_MAPPING = AUDIT_STATUS_AMBIGUOUS_COVERAGE
 STATUS_MISSING_FREIGHT_RULE = AUDIT_STATUS_MISSING_FREIGHT_RULE
@@ -56,6 +66,31 @@ _DOMAIN_ROW_STATUSES = frozenset(
         STATUS_INVALID_WEIGHT,
         STATUS_INVALID_INVOICE_VALUE,
         STATUS_UNSUPPORTED_PRICING_MODEL,
+    }
+)
+
+# Status finais públicos do motor unitário (pós-completeza).
+_FINAL_ROW_STATUSES = frozenset(
+    {
+        STATUS_CALCULATED,
+        STATUS_CALCULATED_WITH_WARNINGS,
+        STATUS_INCOMPLETE,
+        *_DOMAIN_ROW_STATUSES,
+    }
+)
+
+# Status com valor monetário utilizável como frete completo/comparável.
+_COMPLETE_ROW_STATUSES = frozenset(
+    {
+        STATUS_CALCULATED,
+        STATUS_CALCULATED_WITH_WARNINGS,
+    }
+)
+
+# Status que podem expor valor parcial para diagnóstico (não comparável).
+_PARTIAL_VALUE_STATUSES = frozenset(
+    {
+        STATUS_INCOMPLETE,
     }
 )
 
@@ -186,16 +221,64 @@ def _row_error_payload(code: str, message: str) -> dict:
 
 
 def _map_row_status(raw_status: str | None, *, has_expected: bool) -> str:
-    if has_expected and (raw_status is None or raw_status == ""):
-        return STATUS_CALCULATED
+    """Mapeia status bruto do núcleo (pré-completeza).
+
+    A existência de expected_freight sozinha NÃO implica calculated definitivo;
+    a completeza é aplicada em etapa posterior.
+    """
     if raw_status in _DOMAIN_ROW_STATUSES:
         return raw_status
+    if has_expected and (raw_status is None or raw_status == "" or raw_status == STATUS_CALCULATED):
+        return STATUS_CALCULATED
     if raw_status == STATUS_CALCULATED:
         return STATUS_CALCULATED
     raise UnexpectedSingleTableCalculationError(
         "Status de linha inesperado retornado pelo núcleo de cálculo.",
         exception_type="unexpected_row_status",
     )
+
+
+def _apply_completeness_to_row_status(
+    *,
+    raw: dict,
+    raw_status: str,
+    calculated_freight: float | None,
+) -> tuple[str, dict]:
+    """Aplica gate de completeza e retorna (final_status, completeness_payload)."""
+    if raw_status in _DOMAIN_ROW_STATUSES:
+        completeness = evaluate_calculation_completeness(
+            raw,
+            calculated_freight=None,
+            raw_status=raw_status,
+        )
+        completeness["status"] = STATUS_NOT_CALCULATED
+        completeness["completeness_status"] = STATUS_NOT_CALCULATED
+        completeness["is_complete"] = False
+        completeness["has_partial_value"] = False
+        completeness["partial_value"] = None
+        return raw_status, completeness
+
+    completeness = evaluate_calculation_completeness(
+        raw,
+        calculated_freight=calculated_freight,
+        raw_status=raw_status,
+    )
+    final_status = str(completeness.get("status") or STATUS_NOT_CALCULATED)
+    if final_status not in {
+        STATUS_CALCULATED,
+        STATUS_CALCULATED_WITH_WARNINGS,
+        STATUS_INCOMPLETE,
+        STATUS_NOT_CALCULATED,
+    }:
+        final_status = STATUS_NOT_CALCULATED
+    if final_status == STATUS_NOT_CALCULATED and calculated_freight is not None:
+        # Valor presente sem classificação utilizável → incompleto conservador.
+        final_status = STATUS_INCOMPLETE
+        completeness["status"] = STATUS_INCOMPLETE
+        completeness["completeness_status"] = STATUS_INCOMPLETE
+        completeness["has_partial_value"] = True
+        completeness["partial_value"] = calculated_freight
+    return final_status, completeness
 
 
 def _extract_components(raw: dict, calculated_freight: float | None) -> dict:
@@ -249,6 +332,10 @@ def _extract_components(raw: dict, calculated_freight: float | None) -> dict:
             components["gris"] = round(gris_total, 2)
         if found_dispatch:
             components["dispatch"] = round(dispatch_total, 2)
+
+    ignored = source.get("ignored_accessorial_fees")
+    if isinstance(ignored, list) and ignored:
+        components["ignored_accessorial_fees"] = ignored
 
     if source.get("subtotal_before_taxes") is not None:
         components["subtotal"] = source.get("subtotal_before_taxes")
@@ -333,7 +420,14 @@ def _extract_evidence(raw: dict) -> dict:
     return evidence
 
 
-def _normalize_row_result(raw: dict, source_row: dict) -> dict:
+def _normalize_row_result(
+    raw: dict,
+    source_row: dict,
+    *,
+    table_id: str | None = None,
+    slot_number: int | None = None,
+    carrier_name: str | None = None,
+) -> dict:
     if not isinstance(raw, dict):
         raise UnexpectedSingleTableCalculationError(
             "Núcleo de cálculo retornou estrutura inválida.",
@@ -353,12 +447,21 @@ def _normalize_row_result(raw: dict, source_row: dict) -> dict:
             ) from exc
 
     try:
-        status = _map_row_status(raw.get("status"), has_expected=calculated_freight is not None)
+        raw_mapped_status = _map_row_status(
+            raw.get("status"),
+            has_expected=calculated_freight is not None,
+        )
     except UnexpectedSingleTableCalculationError as exc:
         exc.row_index = source_row.get("row_index")
         raise
 
-    if status == STATUS_CALCULATED and calculated_freight is None:
+    final_status, completeness = _apply_completeness_to_row_status(
+        raw=raw,
+        raw_status=raw_mapped_status,
+        calculated_freight=calculated_freight,
+    )
+
+    if final_status in _COMPLETE_ROW_STATUSES and calculated_freight is None:
         raise UnexpectedSingleTableCalculationError(
             "Linha marcada como calculada sem frete válido.",
             exception_type="missing_calculated_freight",
@@ -366,11 +469,29 @@ def _normalize_row_result(raw: dict, source_row: dict) -> dict:
         )
 
     error = None
-    if status != STATUS_CALCULATED:
+    is_partial_value = False
+    public_freight = calculated_freight
+    if final_status in _DOMAIN_ROW_STATUSES:
         diagnostic = raw.get("diagnostic") if isinstance(raw.get("diagnostic"), dict) else {}
-        message = diagnostic.get("message") or f"Falha no cálculo da linha ({status})."
-        error = _row_error_payload(status, str(message))
-        calculated_freight = None
+        message = diagnostic.get("message") or f"Falha no cálculo da linha ({final_status})."
+        error = _row_error_payload(final_status, str(message))
+        public_freight = None
+    elif final_status == STATUS_INCOMPLETE:
+        is_partial_value = True
+        # Mantém valor parcial para diagnóstico; não é frete definitivo.
+        blocking = completeness.get("blocking_issues") if isinstance(completeness, dict) else []
+        first_issue = blocking[0] if isinstance(blocking, list) and blocking else {}
+        message = (
+            (first_issue.get("message") if isinstance(first_issue, dict) else None)
+            or "Cálculo incompleto: há componentes potencialmente aplicáveis não avaliados."
+        )
+        error = _row_error_payload(STATUS_INCOMPLETE, str(message))
+    elif final_status == STATUS_NOT_CALCULATED:
+        public_freight = None
+        error = _row_error_payload(
+            STATUS_NOT_CALCULATED,
+            "Não foi possível calcular esta linha.",
+        )
 
     invoice_value = source_row.get("invoice_value")
     if invoice_value is None:
@@ -383,6 +504,9 @@ def _normalize_row_result(raw: dict, source_row: dict) -> dict:
             exception_type="missing_row_index",
         )
 
+    include_components = final_status in _COMPLETE_ROW_STATUSES or final_status == STATUS_INCOMPLETE
+    include_evidence = include_components or bool(raw.get("freight_region") or raw.get("diagnostic"))
+
     result = {
         "row_index": row_index,
         "document_number": source_row.get("document_number") or raw.get("numero_documento"),
@@ -390,13 +514,30 @@ def _normalize_row_result(raw: dict, source_row: dict) -> dict:
         "destination_uf": source_row.get("destination_uf") or raw.get("destination_uf"),
         "weight": source_row.get("audited_weight", raw.get("audited_weight")),
         "invoice_value": invoice_value,
-        "calculated_freight": calculated_freight,
-        "status": status,
+        "calculated_freight": public_freight,
+        "status": final_status,
+        "raw_status": raw_mapped_status,
+        "final_status": final_status,
+        "completeness_status": completeness.get("completeness_status") or final_status,
+        "completeness": completeness,
+        "is_partial_value": is_partial_value,
+        "blocking_issues": list(completeness.get("blocking_issues") or []),
+        "warnings": list(completeness.get("warnings") or []),
         "error": error,
-        "components": _extract_components(raw, calculated_freight) if status == STATUS_CALCULATED else {},
-        "evidence": _extract_evidence(raw) if (
-            status == STATUS_CALCULATED or raw.get("freight_region") or raw.get("diagnostic")
-        ) else {},
+        "components": _extract_components(raw, public_freight) if include_components else {},
+        "evidence": _extract_evidence(raw) if include_evidence else {},
+        "calculation_memory": build_calculation_memory(
+            raw,
+            calculated_freight=public_freight,
+            status=final_status,
+            error=error,
+            row_index=row_index,
+            table_id=table_id,
+            slot_number=slot_number,
+            carrier_name=carrier_name,
+            completeness=completeness,
+            is_partial_value=is_partial_value,
+        ),
     }
     if result["invoice_value"] is None:
         result.pop("invoice_value", None)
@@ -708,7 +849,15 @@ def calculate_single_table(context: SingleTableCalculationContext) -> dict:
                 accessorial_fees=accessorial_fees,
                 tax_config=tax_snapshot,
             )
-            results.append(_normalize_row_result(raw, source_row))
+            results.append(
+                _normalize_row_result(
+                    raw,
+                    source_row,
+                    table_id=context.table_id,
+                    slot_number=context.slot_number,
+                    carrier_name=context.carrier_name,
+                )
+            )
         except UnexpectedSingleTableCalculationError as exc:
             if exc.comparison_id is None:
                 exc.comparison_id = context.comparison_id
@@ -742,8 +891,12 @@ def calculate_single_table(context: SingleTableCalculationContext) -> dict:
     )
 
     calculated_count = sum(1 for item in results if item.get("status") == STATUS_CALCULATED)
-    error_count = len(results) - calculated_count
-    if calculated_count + error_count != len(results):
+    calculated_with_warnings_count = sum(
+        1 for item in results if item.get("status") == STATUS_CALCULATED_WITH_WARNINGS
+    )
+    incomplete_count = sum(1 for item in results if item.get("status") == STATUS_INCOMPLETE)
+    error_count = len(results) - calculated_count - calculated_with_warnings_count - incomplete_count
+    if calculated_count + calculated_with_warnings_count + incomplete_count + error_count != len(results):
         raise UnexpectedSingleTableCalculationError(
             "Contagens de resultado incoerentes após o cálculo unitário.",
             comparison_id=context.comparison_id,
@@ -756,11 +909,17 @@ def calculate_single_table(context: SingleTableCalculationContext) -> dict:
         sum(
             float(item["calculated_freight"])
             for item in results
-            if item.get("status") == STATUS_CALCULATED and item.get("calculated_freight") is not None
+            if item.get("status") in _COMPLETE_ROW_STATUSES
+            and item.get("calculated_freight") is not None
+            and not item.get("is_partial_value")
         ),
         2,
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
+
+    # Compatibilidade: calculated_count histórico = apenas calculated pleno.
+    # Contagem "sucesso comparável" = calculated + calculated_with_warnings.
+    comparable_count = calculated_count + calculated_with_warnings_count
 
     payload = {
         "schema_version": SINGLE_TABLE_CALCULATION_SCHEMA_VERSION,
@@ -771,12 +930,18 @@ def calculate_single_table(context: SingleTableCalculationContext) -> dict:
         "carrier_name": context.carrier_name,
         "row_count": len(results),
         "calculated_count": calculated_count,
+        "calculated_with_warnings_count": calculated_with_warnings_count,
+        "incomplete_count": incomplete_count,
         "error_count": error_count,
+        "comparable_count": comparable_count,
         "results": results,
         "summary": {
             "total_calculated_freight": total_calculated,
             "calculated_count": calculated_count,
+            "calculated_with_warnings_count": calculated_with_warnings_count,
+            "incomplete_count": incomplete_count,
             "error_count": error_count,
+            "comparable_count": comparable_count,
         },
         "duration_ms": duration_ms,
     }
@@ -785,12 +950,15 @@ def calculate_single_table(context: SingleTableCalculationContext) -> dict:
 
     logger.info(
         "agente_compara_single_table_calc comparison_id=%s table_id=%s slot=%s "
-        "row_count=%s calculated_count=%s error_count=%s duration_ms=%s",
+        "row_count=%s calculated_count=%s calculated_with_warnings_count=%s "
+        "incomplete_count=%s error_count=%s duration_ms=%s",
         context.comparison_id,
         context.table_id,
         context.slot_number,
         payload["row_count"],
         calculated_count,
+        calculated_with_warnings_count,
+        incomplete_count,
         error_count,
         duration_ms,
     )
