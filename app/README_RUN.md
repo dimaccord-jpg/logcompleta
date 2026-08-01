@@ -1,6 +1,6 @@
-# Execução Local
+﻿# Execução Local
 
-Referência auditada em 2026-07-29. A visão funcional oficial está em `docs/estado_oficial_consolidado.md`.
+Referência auditada em 2026-07-31. A visão funcional oficial está em `docs/estado_oficial_consolidado.md`.
 
 ## Pré-requisitos
 
@@ -35,6 +35,8 @@ Referência auditada em 2026-07-29. A visão funcional oficial está em `docs/es
 - o banco oficial continua sendo PostgreSQL via `DATABASE_URL`;
 - o sistema depende das migrations Alembic existentes;
 - esta entrega do AgenteCompara não adicionou migration, tabela nem coluna nova;
+- `playwright>=1.40.0` existe apenas em `requirements-dev.txt` para testes e não deve ser tratado como dependência de execução;
+- os testes versionados são suporte de regressão e documentação executável, mas não são executados automaticamente pelo `build.sh` do deploy;
 - divergências antigas de `flask db check` em constraints/índices de `cleiton_billing_apropriacao`, `franquia` e `multiuser_franquia_codigo` são preexistentes e não devem ser tratadas como pendência da entrega recente;
 - `.db` locais, `cache_*.json`, `app/indices.json` e `app/cleiton_doc_tmp/` não são dependências oficiais do deploy;
 - templates oficiais `.xlsx` permanecem versionados por exceção do `.gitignore`.

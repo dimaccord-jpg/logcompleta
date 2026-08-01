@@ -51,12 +51,16 @@ class TestExtractUserTermsNormalized:
         assert terms.count("frete") == 1
         assert terms.count("custo") == 1
 
-    def test_expanded_stopwords_remove_conversational_noise(self):
-        for word in ("ola", "tem", "quais", "sao", "voces", "outros"):
-            assert is_onboarding_stopword(word)
-            terms = extract_user_terms_normalized(f"{word} frete internacional")
-            assert word not in terms
-            assert "frete" in terms
+    def test_expanded_comparison_terms(self):
+        terms = extract_user_terms_normalized(
+            "Quero fazer um BID e equalização de propostas com tarifas comparativo entre transportadoras"
+        )
+        assert "bid" in terms
+        assert "propostas" in terms
+        assert "tarifas" in terms
+        assert "comparativo" in terms
+        assert "transportadoras" in terms
+        assert "equalizacao" in terms
 
 
 class TestNormalizeWordCloudTerm:

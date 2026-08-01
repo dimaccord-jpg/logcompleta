@@ -781,3 +781,617 @@ def test_analytics_performance_2000x2_and_2000x3():
     assert out3["row_count"] == 2000
     assert out3["table_count"] == 3
     assert elapsed3 < 3.5
+
+def _incomplete_cell(*, table_id: str, carrier_name: str, slot_number: int, partial: float | None = 10.0) -> dict:
+    return {
+        "table_id": table_id,
+        "carrier_name": carrier_name,
+        "slot_number": slot_number,
+        "calculated_freight": partial,
+        "status": "incomplete",
+        "final_status": "incomplete",
+        "is_partial_value": True,
+        "error": {"code": "incomplete"},
+    }
+
+
+def _not_calculated_cell(*, table_id: str, carrier_name: str, slot_number: int) -> dict:
+    return {
+        "table_id": table_id,
+        "carrier_name": carrier_name,
+        "slot_number": slot_number,
+        "calculated_freight": None,
+        "status": "not_calculated",
+        "final_status": "not_calculated",
+        "error": {"code": "not_calculated"},
+    }
+
+
+def _warnings_cell(*, table_id: str, carrier_name: str, slot_number: int, calculated_freight: float) -> dict:
+    return {
+        "table_id": table_id,
+        "carrier_name": carrier_name,
+        "slot_number": slot_number,
+        "calculated_freight": calculated_freight,
+        "status": "calculated_with_warnings",
+        "final_status": "calculated_with_warnings",
+        "error": None,
+        "warnings": [{"code": "warn"}],
+    }
+
+
+def test_executive_schema_version_and_legacy_fields_preserved():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="D1",
+            destination_city="X",
+            destination_uf="sp",
+            weight=10,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=50.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=60.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    assert analytics["schema_version"] == 2
+    assert "global_summary" in analytics
+    assert "tables" in analytics
+    assert "comparability" in analytics
+    assert "competitive_summary" in analytics
+    assert "carrier_competitiveness" in analytics
+    assert "geography" in analytics
+    assert "executive_summary" in analytics
+
+
+def test_comparability_universe_fixture_four_documents():
+    """Fixture obrigatória: 4 docs / 2 transportadoras com universos mistos."""
+    t1 = _table_meta(table_id="t1", slot_number=1, carrier_name="Carrier A")
+    t2 = _table_meta(table_id="t2", slot_number=2, carrier_name="Carrier B")
+    rows = [
+        # Doc 1: ambas calculam — A vence
+        _row(
+            row_index=1,
+            document_number="DOC-1",
+            destination_city="Campinas",
+            destination_uf="SP",
+            weight=10,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="Carrier A", slot_number=1, calculated_freight=100.0),
+                "t2": _cell(table_id="t2", carrier_name="Carrier B", slot_number=2, calculated_freight=120.0),
+            },
+        ),
+        # Doc 2: apenas A calcula — parcial
+        _row(
+            row_index=2,
+            document_number="DOC-2",
+            destination_city="Santos",
+            destination_uf="SP",
+            weight=8,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="Carrier A", slot_number=1, calculated_freight=40.0),
+                "t2": _not_calculated_cell(table_id="t2", carrier_name="Carrier B", slot_number=2),
+            },
+        ),
+        # Doc 3: ambas calculam — B vence
+        _row(
+            row_index=3,
+            document_number="DOC-3",
+            destination_city="Niterói",
+            destination_uf="RJ",
+            weight=5,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="Carrier A", slot_number=1, calculated_freight=90.0),
+                "t2": _cell(table_id="t2", carrier_name="Carrier B", slot_number=2, calculated_freight=70.0),
+            },
+        ),
+        # Doc 4: nenhuma calcula — inconclusivo
+        _row(
+            row_index=4,
+            document_number="DOC-4",
+            destination_city="Salvador",
+            destination_uf="BA",
+            weight=12,
+            table_cells={
+                "t1": _not_calculated_cell(table_id="t1", carrier_name="Carrier A", slot_number=1),
+                "t2": _incomplete_cell(table_id="t2", carrier_name="Carrier B", slot_number=2, partial=15.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=[t1, t2], comparative_rows=rows))
+    cmp_ = analytics["comparability"]
+    assert cmp_["total_rows"] == 4
+    assert cmp_["fully_comparable_rows"] == 2
+    assert cmp_["partially_comparable_rows"] == 1
+    assert cmp_["inconclusive_rows"] == 1
+
+    by_id = {item["table_id"]: item for item in analytics["carrier_competitiveness"]}
+    assert by_id["t1"]["wins"] == 1
+    assert by_id["t2"]["wins"] == 1
+    assert by_id["t1"]["comparable_row_count"] == 2
+    assert by_id["t2"]["comparable_row_count"] == 2
+    # Cobertura individual: A completa em 3 linhas (docs 1-3), B em 2 (docs 1 e 3)
+    assert by_id["t1"]["calculated_rows"] == 3
+    assert by_id["t2"]["calculated_rows"] == 2
+    # Custo médio comparável usa somente docs 1 e 3
+    assert by_id["t1"]["comparable_freight_average"] == 95.0  # (100+90)/2
+    assert by_id["t2"]["comparable_freight_average"] == 95.0  # (120+70)/2
+    # Economia: doc1=20, doc3=20
+    assert analytics["competitive_summary"]["total_potential_savings"] == 40.0
+    assert analytics["competitive_summary"]["decisive_row_count"] == 2
+
+
+def test_three_carriers_second_lowest_is_savings_base():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+        _table_meta(table_id="t3", slot_number=3, carrier_name="C"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="T1",
+            destination_city="Curitiba",
+            destination_uf="PR",
+            weight=10,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=80.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=120.0),
+                "t3": _cell(table_id="t3", carrier_name="C", slot_number=3, calculated_freight=50.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    by_id = {item["table_id"]: item for item in analytics["carrier_competitiveness"]}
+    assert by_id["t3"]["wins"] == 1
+    assert by_id["t1"]["wins"] == 0
+    assert by_id["t2"]["wins"] == 0
+    # Economia = A (segunda menor) - C, NÃO B - C
+    assert analytics["competitive_summary"]["total_potential_savings"] == 30.0
+    assert by_id["t3"]["potential_savings_when_winner"] == 30.0
+    assert analytics["executive_summary"]["lead_table_id"] == "t3"
+
+
+def test_calculated_with_warnings_counts_as_complete():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="W1",
+            destination_city="X",
+            destination_uf="SP",
+            weight=5,
+            table_cells={
+                "t1": _warnings_cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=40.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=55.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    assert analytics["comparability"]["fully_comparable_rows"] == 1
+    assert analytics["tables"][0]["calculated_rows"] == 1
+    assert analytics["tables"][0]["calculated_with_warnings_rows"] == 1
+    assert analytics["carrier_competitiveness"][0]["wins"] == 1
+
+
+def test_incomplete_and_not_calculated_not_complete():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="I1",
+            destination_city="X",
+            destination_uf="SP",
+            weight=5,
+            table_cells={
+                "t1": _incomplete_cell(table_id="t1", carrier_name="A", slot_number=1, partial=10.0),
+                "t2": _not_calculated_cell(table_id="t2", carrier_name="B", slot_number=2),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    assert analytics["comparability"]["inconclusive_rows"] == 1
+    assert analytics["comparability"]["fully_comparable_rows"] == 0
+    by_id = {item["table_id"]: item for item in analytics["carrier_competitiveness"]}
+    assert by_id["t1"]["incomplete_rows"] == 1
+    assert by_id["t1"]["calculated_rows"] == 0
+    assert by_id["t2"]["not_calculated_rows"] == 1
+    assert analytics["competitive_summary"]["total_potential_savings"] == 0.0
+    assert analytics["executive_summary"]["lead_table_id"] is None
+
+
+def test_tie_two_and_three_carriers_no_exclusive_winner():
+    two = build_comparison_analytics(
+        _build_result(
+            tables=[
+                _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+                _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+            ],
+            comparative_rows=[
+                _row(
+                    row_index=1,
+                    document_number="E2",
+                    destination_city="X",
+                    destination_uf="SP",
+                    weight=1,
+                    table_cells={
+                        "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=50.004),
+                        "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=50.001),
+                    },
+                ),
+            ],
+        )
+    )
+    # Ambos arredondam para 50.00 → empate monetário
+    assert two["competitive_summary"]["tie_count"] == 1
+    assert two["competitive_summary"]["decisive_row_count"] == 0
+    assert two["competitive_summary"]["total_potential_savings"] == 0.0
+    assert all(item["wins"] == 0 for item in two["carrier_competitiveness"])
+    assert all(item["ties"] == 1 for item in two["carrier_competitiveness"])
+
+    three = build_comparison_analytics(
+        _build_result(
+            tables=[
+                _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+                _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+                _table_meta(table_id="t3", slot_number=3, carrier_name="C"),
+            ],
+            comparative_rows=[
+                _row(
+                    row_index=1,
+                    document_number="E3",
+                    destination_city="X",
+                    destination_uf="RJ",
+                    weight=1,
+                    table_cells={
+                        "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=10.0),
+                        "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=10.0),
+                        "t3": _cell(table_id="t3", carrier_name="C", slot_number=3, calculated_freight=10.0),
+                    },
+                ),
+            ],
+        )
+    )
+    assert three["competitive_summary"]["tie_count"] == 1
+    assert three["executive_summary"]["lead_table_id"] is None
+
+
+def test_win_percentage_uses_decisive_denominator():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="W1",
+            destination_city="X",
+            destination_uf="SP",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=10.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=20.0),
+            },
+        ),
+        _row(
+            row_index=2,
+            document_number="W2",
+            destination_city="Y",
+            destination_uf="SP",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=15.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=15.0),
+            },
+        ),
+        _row(
+            row_index=3,
+            document_number="W3",
+            destination_city="Z",
+            destination_uf="RJ",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=30.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=25.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    assert analytics["competitive_summary"]["comparable_row_count"] == 3
+    assert analytics["competitive_summary"]["tie_count"] == 1
+    assert analytics["competitive_summary"]["decisive_row_count"] == 2
+    by_id = {item["table_id"]: item for item in analytics["carrier_competitiveness"]}
+    assert by_id["t1"]["wins"] == 1
+    assert by_id["t2"]["wins"] == 1
+    assert by_id["t1"]["win_percentage"] == 50.0
+    assert by_id["t2"]["win_percentage"] == 50.0
+
+
+def test_freight_per_kg_comparable_is_total_over_weight():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="K1",
+            destination_city="X",
+            destination_uf="SP",
+            weight=10,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=100.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=120.0),
+            },
+        ),
+        _row(
+            row_index=2,
+            document_number="K2",
+            destination_city="Y",
+            destination_uf="SP",
+            weight=0,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=50.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=40.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    by_id = {item["table_id"]: item for item in analytics["carrier_competitiveness"]}
+    # frete/kg = soma fretes comparáveis / soma pesos > 0 (peso 0 não entra no denominador)
+    assert by_id["t1"]["comparable_freight_per_kg_average"] == 15.0  # 150/10
+    assert by_id["t2"]["comparable_freight_per_kg_average"] == 16.0  # 160/10
+
+
+def test_geography_winner_by_wins_low_sample_and_no_base():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = [
+        # SP: 2 comparáveis, A vence ambos → baixa amostra
+        _row(
+            row_index=1,
+            document_number="G1",
+            destination_city="Campinas",
+            destination_uf="sp",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=10.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=20.0),
+            },
+        ),
+        _row(
+            row_index=2,
+            document_number="G2",
+            destination_city="Santos",
+            destination_uf="SP",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=12.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=18.0),
+            },
+        ),
+        # RJ: linhas sem comparação
+        _row(
+            row_index=3,
+            document_number="G3",
+            destination_city="Niterói",
+            destination_uf="RJ",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=10.0),
+                "t2": _not_calculated_cell(table_id="t2", carrier_name="B", slot_number=2),
+            },
+        ),
+        # UF ausente
+        _row(
+            row_index=4,
+            document_number="G4",
+            destination_city="?",
+            destination_uf="",
+            weight=1,
+            table_cells={
+                "t1": _not_calculated_cell(table_id="t1", carrier_name="A", slot_number=1),
+                "t2": _not_calculated_cell(table_id="t2", carrier_name="B", slot_number=2),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    by_uf = {item["uf_label"]: item for item in analytics["geography"]["destination_ufs"]}
+    assert "SP" in by_uf
+    assert by_uf["SP"]["uf"] == "SP"
+    assert by_uf["SP"]["comparable_row_count"] == 2
+    assert by_uf["SP"]["winner_table_id"] == "t1"
+    assert by_uf["SP"]["low_sample"] is True
+    assert by_uf["SP"]["map_status"] == "winner"
+    assert by_uf["SP"]["total_potential_savings"] == 16.0  # 10+6
+
+    assert by_uf["RJ"]["comparable_row_count"] == 0
+    assert by_uf["RJ"]["winner_table_id"] is None
+    assert by_uf["RJ"]["has_comparable_base"] is False
+    assert by_uf["RJ"]["map_status"] == "no_comparable_base"
+
+    assert by_uf["N/D"]["uf"] is None
+    assert by_uf["N/D"]["comparable_row_count"] == 0
+    assert by_uf["N/D"]["map_status"] == "no_comparable_base"
+
+    ranking = analytics["geography"]["uf_potential_ranking"]
+    assert ranking[0]["uf_label"] == "SP"
+    assert analytics["geography"]["low_sample_threshold"] == 5
+
+
+def test_geography_uf_tie_after_wins_and_average():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="T1",
+            destination_city="X",
+            destination_uf="MG",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=10.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=20.0),
+            },
+        ),
+        _row(
+            row_index=2,
+            document_number="T2",
+            destination_city="Y",
+            destination_uf="MG",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=20.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=10.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    mg = next(item for item in analytics["geography"]["destination_ufs"] if item["uf"] == "MG")
+    # 1 vitória cada; custo médio igual (15) → empate de UF
+    assert mg["winner_table_id"] is None
+    assert mg["is_tie"] is True
+    assert mg["map_status"] == "tie"
+
+
+def test_no_global_winner_from_raw_totals_with_uneven_coverage():
+    """A calcula 10 com total menor; B calcula 100; só 5 comparáveis — não induzir por total bruto."""
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = []
+    # 5 comparáveis: B vence todas (mais barata no universo comparável)
+    for i in range(5):
+        rows.append(
+            _row(
+                row_index=i + 1,
+                document_number=f"C{i}",
+                destination_city="X",
+                destination_uf="SP",
+                weight=1,
+                table_cells={
+                    "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=100.0),
+                    "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=80.0),
+                },
+            )
+        )
+    # +5 só A (total bruto de A ainda pode parecer baixo em média coberta, mas não no comparável)
+    for i in range(5):
+        rows.append(
+            _row(
+                row_index=10 + i,
+                document_number=f"A{i}",
+                destination_city="Y",
+                destination_uf="RJ",
+                weight=1,
+                table_cells={
+                    "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=1.0),
+                    "t2": _not_calculated_cell(table_id="t2", carrier_name="B", slot_number=2),
+                },
+            )
+        )
+    # +95 só B
+    for i in range(95):
+        rows.append(
+            _row(
+                row_index=20 + i,
+                document_number=f"B{i}",
+                destination_city="Z",
+                destination_uf="MG",
+                weight=1,
+                table_cells={
+                    "t1": _not_calculated_cell(table_id="t1", carrier_name="A", slot_number=1),
+                    "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=200.0),
+                },
+            )
+        )
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    by_id = {item["table_id"]: item for item in analytics["carrier_competitiveness"]}
+    # Total bruto operacional de A (5*100 + 5*1 = 505) << B (5*80 + 95*200)
+    assert analytics["tables"][0]["calculated_freight_total"] == 505.0
+    assert analytics["tables"][1]["calculated_freight_total"] == 19400.0
+    # Competitividade: B vence as 5 comparáveis
+    assert analytics["comparability"]["fully_comparable_rows"] == 5
+    assert by_id["t2"]["wins"] == 5
+    assert by_id["t1"]["wins"] == 0
+    assert analytics["executive_summary"]["lead_table_id"] == "t2"
+    assert by_id["t1"]["comparable_freight_average"] == 100.0
+    assert by_id["t2"]["comparable_freight_average"] == 80.0
+
+
+def test_same_carrier_name_distinct_table_ids_in_competitiveness():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="Mesma"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="Mesma"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="S1",
+            destination_city="X",
+            destination_uf="SP",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="Mesma", slot_number=1, calculated_freight=10.0),
+                "t2": _cell(table_id="t2", carrier_name="Mesma", slot_number=2, calculated_freight=20.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    names = [item["display_name"] for item in analytics["carrier_competitiveness"]]
+    assert names == ["Mesma — Tabela 1", "Mesma — Tabela 2"]
+    assert analytics["carrier_competitiveness"][0]["table_id"] == "t1"
+    assert analytics["carrier_competitiveness"][1]["table_id"] == "t2"
+
+
+def test_duplicate_documents_distinct_row_index_compete_separately():
+    tables = [
+        _table_meta(table_id="t1", slot_number=1, carrier_name="A"),
+        _table_meta(table_id="t2", slot_number=2, carrier_name="B"),
+    ]
+    rows = [
+        _row(
+            row_index=1,
+            document_number="DUP",
+            destination_city="X",
+            destination_uf="SP",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=10.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=20.0),
+            },
+        ),
+        _row(
+            row_index=2,
+            document_number="DUP",
+            destination_city="Y",
+            destination_uf="RJ",
+            weight=1,
+            table_cells={
+                "t1": _cell(table_id="t1", carrier_name="A", slot_number=1, calculated_freight=30.0),
+                "t2": _cell(table_id="t2", carrier_name="B", slot_number=2, calculated_freight=15.0),
+            },
+        ),
+    ]
+    analytics = build_comparison_analytics(_build_result(tables=tables, comparative_rows=rows))
+    assert analytics["global_summary"]["document_count"] == 1
+    assert analytics["comparability"]["fully_comparable_rows"] == 2
+    by_id = {item["table_id"]: item for item in analytics["carrier_competitiveness"]}
+    assert by_id["t1"]["wins"] == 1
+    assert by_id["t2"]["wins"] == 1

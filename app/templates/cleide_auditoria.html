@@ -162,6 +162,8 @@
 
               <div class="cleide-actions-divider" role="separator" aria-hidden="true"></div>
 
+              {% set _auditoria_actions_is_admin = current_user.is_authenticated and user_is_admin(current_user) %}
+
               <a href="{{ url_for('index') }}" class="cleide-actions-item" role="menuitem">
 
                 <i class="bi bi-house-door" aria-hidden="true"></i>
@@ -169,6 +171,8 @@
                 <span>Home</span>
 
               </a>
+
+              {% if _auditoria_actions_is_admin %}
 
               <a href="{{ url_for('fretes') }}" class="cleide-actions-item" role="menuitem">
 
@@ -186,6 +190,8 @@
 
               </a>
 
+              {% endif %}
+
               <a href="{{ url_for('agente_compara.agente_compara_page') if has_endpoint('agente_compara.agente_compara_page') else '/agente-compara' }}" class="cleide-actions-item" role="menuitem">
 
                 <i class="bi bi-table" aria-hidden="true"></i>
@@ -194,6 +200,8 @@
 
               </a>
 
+              {% if _auditoria_actions_is_admin %}
+
               <a href="{{ cleide_feed_href }}" class="cleide-actions-item" role="menuitem">
 
                 <i class="bi bi-rss" aria-hidden="true"></i>
@@ -201,6 +209,8 @@
                 <span>Feed</span>
 
               </a>
+
+              {% endif %}
 
             </div>
 

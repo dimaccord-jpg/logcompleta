@@ -497,6 +497,7 @@ AGENTE_COMPARA_DOCUMENT_UPLOAD_FLOW_TYPE = "agente_compara_document_upload"
 AGENTE_COMPARA_DOCUMENT_PREPARE_FLOW_TYPE = "agente_compara_document_prepare"
 AGENTE_COMPARA_CHAT_FLOW_TYPE = "agente_compara_chat"
 AGENTE_COMPARA_INSIGHTS_CHAT_FLOW_TYPE = "agente_compara_insights_chat"
+AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE = "agente_compara_comparison_chat"
 AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE = "agente_compara_temp_table_extraction"
 AGENTE_COMPARA_COVERAGE_UPLOAD_FLOW_TYPE = "agente_compara_coverage_upload"
 AGENTE_COMPARA_BATCH_UPLOAD_FLOW_TYPE = "agente_compara_batch_upload"
@@ -551,6 +552,11 @@ def agente_compara_chat_idempotency_key(request_id: str) -> str:
 def agente_compara_insights_chat_idempotency_key(request_id: str, batch_scope: str = "") -> str:
     scope = (batch_scope or "").strip() or "unknown"
     return f"agente-compara-insights-chat:{scope}:{(request_id or '').strip()}"
+
+
+def agente_compara_comparison_chat_idempotency_key(request_id: str, scope_key: str = "") -> str:
+    scope = (scope_key or "").strip() or "unknown"
+    return f"agente-compara-comparison-chat:{scope}:{(request_id or '').strip()}"
 
 
 def agente_compara_temp_table_extraction_idempotency_key(

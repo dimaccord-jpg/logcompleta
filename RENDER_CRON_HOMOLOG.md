@@ -1,6 +1,6 @@
-# Render + Cron em Homolog
+﻿# Render + Cron em Homolog
 
-Referência auditada em 2026-07-29.
+Referência auditada em 2026-07-31.
 
 ## Cron confirmado no código
 
@@ -24,5 +24,5 @@ Autenticação:
 - homolog continua versionado em `homolog` no `render.yaml`;
 - produção continua versionada em `main` no `render.yaml`;
 - o processo operacional informado usa `producao` como branch de promoção para produção;
-- a última entrega conhecida foi homologada em `81d36aa` e promovida por `cherry-pick` para `6b0672e`;
+- a publicação validada do AgenteCompara foi homologada em `29b8500` e promovida por `cherry-pick` para `d20672a`;
 - o YAML ainda mantém `healthCheckPath: /health`, enquanto o código expõe `/health/liveness` e `/health/readiness`.

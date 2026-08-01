@@ -171,6 +171,13 @@ DEFAULTS: dict[str, Any] = {
     "document_context_max_chars": 24000,
     "max_documents_considered": 3,
     "question_max_chars": 4000,
+    "comparison_chat_question_max_chars": 4000,
+    "comparison_chat_history_max_items": 10,
+    "comparison_chat_context_max_chars": 48000,
+    "comparison_chat_max_rows": 12,
+    "comparison_chat_max_memories": 6,
+    "comparison_chat_max_table_rules": 24,
+    "comparison_chat_max_ranked_items": 8,
     "fallback_message": DEFAULT_FALLBACK_MESSAGE,
     "no_documents_behavior": "allow_guided",
     "show_documents_used": 1,
@@ -204,6 +211,19 @@ DESCRICOES: dict[str, str] = {
     "document_context_max_chars": "Máximo de caracteres do contexto documental no prompt da Agente Compara.",
     "max_documents_considered": "Máximo de documentos considerados por resposta da Agente Compara.",
     "question_max_chars": "Máximo de caracteres aceitos por pergunta no chat da Agente Compara.",
+    "comparison_chat_question_max_chars": (
+        "Máximo de caracteres por pergunta no chat inteligente da comparação vigente."
+    ),
+    "comparison_chat_history_max_items": (
+        "Janela de histórico (mensagens) do chat inteligente da comparação."
+    ),
+    "comparison_chat_context_max_chars": (
+        "Máximo de caracteres do contexto comparativo montado para o modelo."
+    ),
+    "comparison_chat_max_rows": "Máximo de linhas comparativas incluídas no contexto do chat.",
+    "comparison_chat_max_memories": "Máximo de memórias de cálculo incluídas no contexto do chat.",
+    "comparison_chat_max_table_rules": "Máximo de regras/taxas de tabela incluídas no contexto do chat.",
+    "comparison_chat_max_ranked_items": "Máximo de itens ranqueados (UFs/diffs) no contexto do chat.",
     "fallback_message": "Mensagem amigável exibida em falha de IA da Agente Compara (não é resposta normal).",
     "no_documents_behavior": "Comportamento sem documentos: allow_guided ou require_documents.",
     "show_documents_used": "Exibe metadados dos documentos usados na resposta ao usuário.",
@@ -236,6 +256,13 @@ class AgenteComparaConfig:
     no_hallucination_instruction_enabled: bool
     audited_file_max_bytes: int | None
     audited_file_max_rows: int
+    comparison_chat_question_max_chars: int = 4000
+    comparison_chat_history_max_items: int = 10
+    comparison_chat_context_max_chars: int = 48000
+    comparison_chat_max_rows: int = 12
+    comparison_chat_max_memories: int = 6
+    comparison_chat_max_table_rules: int = 24
+    comparison_chat_max_ranked_items: int = 8
     calculation_bases: list[dict[str, Any]] = field(
         default_factory=lambda: json.loads(
             json.dumps(DEFAULT_CALCULATION_BASES, ensure_ascii=False)
@@ -684,6 +711,20 @@ def _bounded(nome: str, valor: int) -> int:
         return min(max(1, valor), 10)
     if nome == "question_max_chars":
         return min(max(500, valor), 12000)
+    if nome == "comparison_chat_question_max_chars":
+        return min(max(500, valor), 12000)
+    if nome == "comparison_chat_history_max_items":
+        return min(max(1, valor), 100)
+    if nome == "comparison_chat_context_max_chars":
+        return min(max(4000, valor), 200000)
+    if nome == "comparison_chat_max_rows":
+        return min(max(1, valor), 100)
+    if nome == "comparison_chat_max_memories":
+        return min(max(1, valor), 50)
+    if nome == "comparison_chat_max_table_rules":
+        return min(max(1, valor), 100)
+    if nome == "comparison_chat_max_ranked_items":
+        return min(max(1, valor), 50)
     if nome == "audited_file_max_bytes":
         return min(max(1, valor), 200 * 1024 * 1024)
     if nome == "audited_file_max_rows":
@@ -827,6 +868,13 @@ def get_agente_compara_config() -> AgenteComparaConfig:
         document_context_max_chars=_parse_int(cfg_map, "document_context_max_chars"),
         max_documents_considered=_parse_int(cfg_map, "max_documents_considered"),
         question_max_chars=_parse_int(cfg_map, "question_max_chars"),
+        comparison_chat_question_max_chars=_parse_int(cfg_map, "comparison_chat_question_max_chars"),
+        comparison_chat_history_max_items=_parse_int(cfg_map, "comparison_chat_history_max_items"),
+        comparison_chat_context_max_chars=_parse_int(cfg_map, "comparison_chat_context_max_chars"),
+        comparison_chat_max_rows=_parse_int(cfg_map, "comparison_chat_max_rows"),
+        comparison_chat_max_memories=_parse_int(cfg_map, "comparison_chat_max_memories"),
+        comparison_chat_max_table_rules=_parse_int(cfg_map, "comparison_chat_max_table_rules"),
+        comparison_chat_max_ranked_items=_parse_int(cfg_map, "comparison_chat_max_ranked_items"),
         fallback_message=_parse_str(cfg_map, "fallback_message"),
         no_documents_behavior=_parse_str(cfg_map, "no_documents_behavior"),
         show_documents_used=_parse_bool(cfg_map, "show_documents_used"),
@@ -924,6 +972,48 @@ def parsear_agente_compara_config(raw_values: dict[str, Any]) -> AgenteComparaCo
         question_max_chars=_parse_bounded_positive_int_strict(
             _raw("question_max_chars"),
             "question_max_chars",
+        ),
+        comparison_chat_question_max_chars=_parse_bounded_positive_int_strict(
+            _raw("comparison_chat_question_max_chars")
+            if "comparison_chat_question_max_chars" in raw_values
+            else str(getattr(cfg_atual, "comparison_chat_question_max_chars", DEFAULTS["comparison_chat_question_max_chars"])),
+            "comparison_chat_question_max_chars",
+        ),
+        comparison_chat_history_max_items=_parse_bounded_positive_int_strict(
+            _raw("comparison_chat_history_max_items")
+            if "comparison_chat_history_max_items" in raw_values
+            else str(getattr(cfg_atual, "comparison_chat_history_max_items", DEFAULTS["comparison_chat_history_max_items"])),
+            "comparison_chat_history_max_items",
+        ),
+        comparison_chat_context_max_chars=_parse_bounded_positive_int_strict(
+            _raw("comparison_chat_context_max_chars")
+            if "comparison_chat_context_max_chars" in raw_values
+            else str(getattr(cfg_atual, "comparison_chat_context_max_chars", DEFAULTS["comparison_chat_context_max_chars"])),
+            "comparison_chat_context_max_chars",
+        ),
+        comparison_chat_max_rows=_parse_bounded_positive_int_strict(
+            _raw("comparison_chat_max_rows")
+            if "comparison_chat_max_rows" in raw_values
+            else str(getattr(cfg_atual, "comparison_chat_max_rows", DEFAULTS["comparison_chat_max_rows"])),
+            "comparison_chat_max_rows",
+        ),
+        comparison_chat_max_memories=_parse_bounded_positive_int_strict(
+            _raw("comparison_chat_max_memories")
+            if "comparison_chat_max_memories" in raw_values
+            else str(getattr(cfg_atual, "comparison_chat_max_memories", DEFAULTS["comparison_chat_max_memories"])),
+            "comparison_chat_max_memories",
+        ),
+        comparison_chat_max_table_rules=_parse_bounded_positive_int_strict(
+            _raw("comparison_chat_max_table_rules")
+            if "comparison_chat_max_table_rules" in raw_values
+            else str(getattr(cfg_atual, "comparison_chat_max_table_rules", DEFAULTS["comparison_chat_max_table_rules"])),
+            "comparison_chat_max_table_rules",
+        ),
+        comparison_chat_max_ranked_items=_parse_bounded_positive_int_strict(
+            _raw("comparison_chat_max_ranked_items")
+            if "comparison_chat_max_ranked_items" in raw_values
+            else str(getattr(cfg_atual, "comparison_chat_max_ranked_items", DEFAULTS["comparison_chat_max_ranked_items"])),
+            "comparison_chat_max_ranked_items",
         ),
         fallback_message=fallback,
         no_documents_behavior=_coerce_no_documents_behavior(

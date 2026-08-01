@@ -75,13 +75,47 @@ class TestCapabilityTaxonomyStructural:
 
     def test_operational_destinations_require_login_in_taxonomy(self):
         assert DESTINATIONS["feed"].requires_login is False
-        for dest_id in ("julia_operational", "roberto_bi", "cleide_freight_audit", "cleide_audit"):
+        for dest_id in (
+            "julia_operational",
+            "roberto_bi",
+            "cleide_freight_audit",
+            "cleide_audit",
+            "agente_compara",
+        ):
             assert DESTINATIONS[dest_id].requires_login is True
 
     def test_cleide_freight_audit_and_legacy_urls(self):
         assert DESTINATIONS["cleide_freight_audit"].url == "/auditoria-frete"
         assert DESTINATIONS["cleide_audit"].url == "/cleide-bi-frete"
         assert DESTINATIONS["roberto_bi"].url == "/fretes"
+        assert DESTINATIONS["agente_compara"].url == "/agente-compara"
+
+    def test_freight_table_comparison_taxonomy(self):
+        from app.capability_taxonomy import (
+            CAPABILITY_AVAILABILITY,
+            CAPABILITY_DOMAINS_FUTURE,
+            CAPABILITY_DOMAINS_MVP,
+            DOMAIN_DESTINATION_CANDIDATES,
+            DOMAIN_LABELS,
+        )
+
+        assert "freight_table_comparison" in CAPABILITY_DOMAINS_MVP
+        assert "agente_compara" in DESTINATIONS
+        assert DESTINATIONS["agente_compara"].url == "/agente-compara"
+        assert DESTINATIONS["agente_compara"].requires_login is True
+        assert DESTINATIONS["agente_compara"].label == "Iniciar comparação de tabelas"
+        assert DOMAIN_DESTINATION_CANDIDATES["freight_table_comparison"] == ["agente_compara"]
+        assert CAPABILITY_AVAILABILITY["freight_table_comparison"]["available"] is True
+        assert CAPABILITY_AVAILABILITY["future_quotation"]["available"] is False
+        assert CAPABILITY_AVAILABILITY["future_bid"]["available"] is False
+        assert "freight_table_comparison" in CAPABILITY_AVAILABILITY["future_bid"]["alternatives"]
+        assert "BID aberto" in DOMAIN_LABELS["future_bid"] or "mercado" in DOMAIN_LABELS["future_bid"]
+        assert "future_bid" in CAPABILITY_DOMAINS_FUTURE
+        ranked = rank_destinations_from_capabilities([
+            {"domain": "freight_table_comparison", "score": 90},
+        ])
+        assert ranked[0]["destination"] == "agente_compara"
+        assert ranked[0]["url"] == "/agente-compara"
 
     def test_capabilities_document_loads(self):
         doc = load_capabilities_document()
@@ -90,6 +124,7 @@ class TestCapabilityTaxonomyStructural:
         assert "Roberto" in doc
         assert "Cleide" in doc
         assert "Júlia" in doc
+        assert "AgenteCompara" in doc
         assert "WMS" in doc
         assert "Regra-mãe: Artefatos vs Atividade Fim" in doc
         assert "Artefato não define agente" in doc
@@ -100,8 +135,13 @@ class TestCapabilityTaxonomyStructural:
         assert "cleide_freight_audit" in doc
         assert "/auditoria-frete" in doc
         assert "/cleide-bi-frete" in doc
+        assert "/agente-compara" in doc
+        assert "agente_compara" in doc
+        assert "freight_table_comparison" in doc
         assert "memória de cálculo" in doc.lower() or "memoria de calculo" in doc.lower()
-
+        assert "BID de frete (licitações)" not in doc or "comparativo interno" in doc.lower()
+        assert "indisponível" in doc.lower()
+        assert "comparativo interno" in doc.lower() or "BID comparativo" in doc
 
 class TestCopilotParsingAndGuardrails:
     def test_extract_json_object_from_markdown_fence(self):
@@ -1791,3 +1831,526 @@ class TestDiscoveryHandoffLoginNormalization:
         result = cleiton_discovery_reply("Quero auditar cobranças de frete", [])
         assert result["handoff"]["requires_login"] is True
         assert result["handoff"]["url"] == "/auditoria-frete"
+
+
+class TestAgenteComparaOnboardingSkill:
+    """Skill de comparação de tabelas / BID comparativo → AgenteCompara."""
+
+    STRONG_HANDOFF_MESSAGES = (
+        "Quero comparar duas tabelas de frete.",
+        "Quero comparar 3 tabelas de frete.",
+        "Preciso fazer um BID entre três transportadoras.",
+        "Quero aplicar o mesmo volume em propostas diferentes.",
+        "Qual tabela é mais competitiva por UF?",
+        "Quero comparar cobertura e custo de transportadoras.",
+        "Tenho duas propostas comerciais e quero colocá-las lado a lado.",
+        "Quero calcular a economia potencial entre tabelas.",
+    )
+
+    AMBIGUOUS_MESSAGES = (
+        "Tenho uma planilha.",
+        "Tenho duas planilhas.",
+        "Tenho um PDF.",
+        "Quero analisar custos.",
+        "Quero analisar uma tabela.",
+        "Quero um dashboard.",
+        "Quero enviar arquivos.",
+        "Tenho dados de transportadoras.",
+    )
+
+    CLEIDE_MESSAGES = (
+        "Quero conferir se fui cobrado conforme a tabela.",
+        "Preciso encontrar cobranças erradas.",
+        "Quero auditar minhas faturas de frete.",
+        "Paguei o valor correto?",
+    )
+
+    ROBERTO_MESSAGES = (
+        "Quero prever meus custos de frete.",
+        "Quero analisar a evolução histórica.",
+        "Quero uma projeção para os próximos meses.",
+        "Quero indicadores do meu histórico de fretes.",
+    )
+
+    JULIA_MESSAGES = (
+        "Quero uma estratégia para negociar com transportadoras.",
+        "Como estruturo um sourcing logístico?",
+        "Quero reduzir custos por meio de negociação.",
+    )
+
+    HONESTY_MESSAGES = (
+        "Quero que o sistema envie o BID para transportadoras.",
+        "Quero que vocês coletem propostas no mercado.",
+        "Escolha e contrate a melhor empresa.",
+        "Feche automaticamente com a transportadora mais barata.",
+    )
+
+    def test_strong_intents_resolve_to_freight_table_comparison(self):
+        for msg in self.STRONG_HANDOFF_MESSAGES:
+            assert resolve_activity_intent(msg) == "freight_table_comparison", msg
+            assert should_suppress_handoff_for_unclear_activity(msg) is False
+
+    def test_ambiguous_artifacts_do_not_handoff(self):
+        for msg in self.AMBIGUOUS_MESSAGES:
+            intent = resolve_activity_intent(msg)
+            assert intent in (
+                "ambiguous",
+                "artifact_format_question",
+            ), f"{msg!r} → {intent}"
+            assert should_suppress_handoff_for_unclear_activity(msg) is True
+
+    def test_cleide_regression_never_agente_compara(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        for msg in self.CLEIDE_MESSAGES:
+            intent = resolve_activity_intent(msg)
+            assert intent in ("cleide_freight_audit", "cleide_retrospective"), msg
+            result = cleiton_discovery_reply(msg, [])
+            assert result["handoff"] is not None
+            assert result["handoff"]["destination"] == "cleide_freight_audit"
+            assert result["handoff"]["destination"] != "agente_compara"
+
+    def test_roberto_regression_never_agente_compara(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        for msg in self.ROBERTO_MESSAGES:
+            result = cleiton_discovery_reply(msg, [])
+            dest = (result.get("handoff") or {}).get("destination")
+            assert dest != "agente_compara", msg
+            if dest:
+                assert dest == "roberto_bi", msg
+
+    def test_julia_regression_never_agente_compara_without_comparison(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        for msg in self.JULIA_MESSAGES:
+            intent = resolve_activity_intent(msg)
+            assert intent != "freight_table_comparison", msg
+            result = cleiton_discovery_reply(msg, [])
+            dest = (result.get("handoff") or {}).get("destination")
+            assert dest != "agente_compara", msg
+
+    def test_local_fallback_strong_handoff(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        for msg in self.STRONG_HANDOFF_MESSAGES:
+            result = cleiton_discovery_reply(msg, [])
+            assert result["handoff"] is not None, msg
+            assert result["handoff"]["destination"] == "agente_compara", msg
+            assert result["handoff"]["url"] == "/agente-compara"
+            assert result["handoff"]["label"] == "Iniciar comparação de tabelas"
+            assert result["handoff"]["requires_login"] is True
+            assert result["handoff"]["capability_domain"] == "freight_table_comparison"
+            assert result["discovery"]["next_action"] == "handoff"
+            assert "AgenteCompara" in result["reply"] or "tabelas" in result["reply"].lower()
+
+    def test_local_fallback_ambiguous_converse(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        for msg in self.AMBIGUOUS_MESSAGES:
+            result = cleiton_discovery_reply(msg, [])
+            assert result["handoff"] is None, msg
+            assert result["discovery"]["next_action"] == "converse"
+            assert "AgenteCompara" in result["reply"] or "objetivo" in result["reply"].lower()
+
+    def test_local_fallback_honesty_no_auto_contract(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        for msg in self.HONESTY_MESSAGES:
+            result = cleiton_discovery_reply(msg, [])
+            assert result["handoff"] is None, msg
+            reply = result["reply"].lower()
+            assert "não" in reply or "nao" in reply
+            assert "mercado" in reply or "contrata" in reply or "decisão" in reply or "decisao" in reply
+            assert "escolher por você" not in reply
+            assert "fechamos automaticamente" not in reply
+
+    def test_isolated_bid_word_does_not_handoff(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
+        result = cleiton_discovery_reply("bid", [])
+        assert result["handoff"] is None
+        assert resolve_activity_intent("bid") == "ambiguous"
+
+    def test_gemini_guardrail_preserves_agente_compara(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": (
+                "Para comparar duas ou três tabelas de transportadoras sobre o mesmo "
+                "volume de embarques, use o AgenteCompara."
+            ),
+            "recommended_agent": "agente_compara",
+            "handoff": {
+                "destination": "agente_compara",
+                "label": "Iniciar comparação de tabelas",
+            },
+            "confidence": "high",
+            "reason": "comparação multitabela",
+        })
+        result = cleiton_discovery_reply("Quero comparar duas tabelas de frete.", [])
+        assert result["handoff"]["destination"] == "agente_compara"
+        assert result["handoff"]["url"] == "/agente-compara"
+        assert result["handoff"]["label"] == "Iniciar comparação de tabelas"
+        assert result["recommended_agent"] == "agente_compara"
+
+    def test_gemini_ambiguous_suppressed(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Vamos ao AgenteCompara.",
+            "recommended_agent": "agente_compara",
+            "handoff": {"destination": "agente_compara"},
+            "confidence": "high",
+            "reason": "planilha",
+        })
+        result = cleiton_discovery_reply("Tenho duas planilhas.", [])
+        assert result["handoff"] is None
+        assert result["discovery"]["next_action"] == "converse"
+
+    def test_multi_handoff_compara_julia(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Compare no AgenteCompara e depois estruture a negociação com a Júlia.",
+            "handoffs": [
+                {"destination": "agente_compara", "label": "Iniciar comparação de tabelas"},
+                {"destination": "julia_operational", "label": "Estratégia com Júlia"},
+            ],
+            "confidence": "high",
+            "reason": "comparação + estratégia",
+        })
+        result = cleiton_discovery_reply(
+            "Quero comparar propostas e preparar uma estratégia de negociação.",
+            [],
+        )
+        assert result["discovery"]["next_action"] == "multi_handoff"
+        dests = [h["destination"] for h in result["handoffs"]]
+        assert dests == ["agente_compara", "julia_operational"]
+        assert len(result["handoffs"]) == 2
+
+    def test_multi_handoff_compara_cleide(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Compare as tabelas e depois audite as cobranças reais.",
+            "handoffs": [
+                {"destination": "agente_compara", "label": "Iniciar comparação de tabelas"},
+                {"destination": "cleide_freight_audit", "label": "Auditoria de Fretes"},
+            ],
+            "confidence": "high",
+            "reason": "comparação + auditoria",
+        })
+        result = cleiton_discovery_reply(
+            "Quero comparar tabelas e auditar as cobranças reais.",
+            [],
+        )
+        assert result["discovery"]["next_action"] == "multi_handoff"
+        dests = [h["destination"] for h in result["handoffs"]]
+        assert "agente_compara" in dests
+        assert "cleide_freight_audit" in dests
+        assert len(dests) == 2
+
+    def test_multi_handoff_compara_roberto(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Compare as tabelas e projete o impacto futuro com Roberto.",
+            "handoffs": [
+                {"destination": "agente_compara", "label": "Iniciar comparação de tabelas"},
+                {"destination": "roberto_bi", "label": "Prever com Roberto"},
+            ],
+            "confidence": "high",
+            "reason": "comparação + previsão",
+        })
+        result = cleiton_discovery_reply(
+            "Quero comparar tabelas e prever os custos futuros.",
+            [],
+        )
+        assert result["discovery"]["next_action"] == "multi_handoff"
+        dests = [h["destination"] for h in result["handoffs"]]
+        assert dests == ["agente_compara", "roberto_bi"]
+
+    def test_multi_handoff_max_two(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Três caminhos.",
+            "handoffs": [
+                {"destination": "agente_compara"},
+                {"destination": "julia_operational"},
+                {"destination": "roberto_bi"},
+            ],
+            "confidence": "high",
+            "reason": "limite",
+        })
+        result = cleiton_discovery_reply(
+            "Quero comparar propostas e preparar uma estratégia de negociação.",
+            [],
+        )
+        assert len(result["handoffs"]) <= 2
+
+    def test_login_anon_gets_next_agente_compara(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        web = importlib.import_module("app.web")
+        monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+        monkeypatch.setattr(
+            "app.run_cleiton_discovery.cleiton_discovery_reply",
+            lambda *a, **k: {
+                "reply": "AgenteCompara",
+                "handoff": {
+                    "destination": "agente_compara",
+                    "label": "Iniciar comparação de tabelas",
+                    "url": "/agente-compara",
+                    "requires_login": True,
+                },
+                "handoffs": [{
+                    "destination": "agente_compara",
+                    "label": "Iniciar comparação de tabelas",
+                    "url": "/agente-compara",
+                    "requires_login": True,
+                }],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = web.app.test_client().post(
+            "/api/onboarding_discovery",
+            json={"message": "Quero comparar duas tabelas de frete.", "history": []},
+        ).get_json()
+        assert body["handoff"]["url"] == "/login?next=%2Fagente-compara"
+        assert body["handoff"]["requires_login"] is True
+        assert body["handoff"]["canonical_url"] == "/agente-compara"
+
+    def test_login_authenticated_direct_url(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        web = importlib.import_module("app.web")
+        monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=True))
+        monkeypatch.setattr(
+            "app.run_cleiton_discovery.cleiton_discovery_reply",
+            lambda *a, **k: {
+                "reply": "AgenteCompara",
+                "handoff": {
+                    "destination": "agente_compara",
+                    "label": "Iniciar comparação de tabelas",
+                    "url": "/agente-compara",
+                    "requires_login": True,
+                },
+                "handoffs": [{
+                    "destination": "agente_compara",
+                    "label": "Iniciar comparação de tabelas",
+                    "url": "/agente-compara",
+                    "requires_login": True,
+                }],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = web.app.test_client().post(
+            "/api/onboarding_discovery",
+            json={"message": "Quero comparar duas tabelas de frete.", "history": []},
+        ).get_json()
+        assert body["handoff"]["url"] == "/agente-compara"
+        assert body["handoff"]["requires_login"] is True
+
+    def test_login_anon_gets_next_agente_compara_for_numeric_table_count(self, monkeypatch):
+        os.environ.setdefault("APP_ENV", "dev")
+        os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+        os.environ.setdefault("SECRET_KEY", "test-secret")
+        web = importlib.import_module("app.web")
+        monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+        monkeypatch.setattr(
+            "app.run_cleiton_discovery.cleiton_discovery_reply",
+            lambda *a, **k: {
+                "reply": "AgenteCompara",
+                "handoff": {
+                    "destination": "agente_compara",
+                    "label": "Iniciar compara??o de tabelas",
+                    "url": "/agente-compara",
+                    "requires_login": True,
+                    "agent": "agente_compara",
+                    "capability_domain": "freight_table_comparison",
+                },
+                "handoffs": [{
+                    "destination": "agente_compara",
+                    "label": "Iniciar compara??o de tabelas",
+                    "url": "/agente-compara",
+                    "requires_login": True,
+                    "agent": "agente_compara",
+                    "capability_domain": "freight_table_comparison",
+                }],
+                "destination_candidates": [{
+                    "destination": "agente_compara",
+                    "label": "Iniciar compara??o de tabelas",
+                    "url": "/agente-compara",
+                    "agent": "agente_compara",
+                    "score": 90.0,
+                }],
+                "discovery": {"next_action": "handoff", "confidence": "high"},
+            },
+        )
+        body = web.app.test_client().post(
+            "/api/onboarding_discovery",
+            json={"message": "Quero comparar 3 tabelas de frete.", "history": []},
+        ).get_json()
+        assert body["handoff"]["destination"] == "agente_compara"
+        assert body["handoff"]["label"] == "Iniciar compara??o de tabelas"
+        assert body["handoff"]["url"] == "/login?next=%2Fagente-compara"
+        assert body["handoff"]["canonical_url"] == "/agente-compara"
+        assert body["handoffs"][0]["destination"] == "agente_compara"
+        assert body["handoffs"][0]["url"] == "/login?next=%2Fagente-compara"
+        assert body["destination_candidates"][0]["destination"] == "agente_compara"
+        assert body["destination_candidates"][0]["url"] == "/login?next=%2Fagente-compara"
+
+    def test_observability_capability_and_destination(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY_1", raising=False)
+        captured = {}
+
+        def fake_audit(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", fake_audit)
+        result = cleiton_discovery_reply("Quero comparar duas tabelas de frete.", [])
+        assert result["handoff"]["destination"] == "agente_compara"
+        ctx = captured.get("contexto") or {}
+        assert ctx.get("capability_top") == "freight_table_comparison"
+        assert ctx.get("destination_top") == "agente_compara"
+        assert ctx.get("handoff_status") == "handoff"
+        assert "bid" in ctx.get("user_terms_normalized", []) or "tabelas" in (
+            ctx.get("user_terms_normalized") or []
+        ) or "frete" in (ctx.get("user_terms_normalized") or [])
+        assert "@" not in (ctx.get("user_message_sanitized") or "")
+
+    def test_frontend_accepts_arbitrary_handoff_url(self):
+        source = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
+        assert "data-handoff-url" in source
+        assert "navigateHandoff" in source
+        assert "payload.handoffs" in source
+
+    def test_continuity_uses_login_next_only(self):
+        """Continuidade mínima: next=/agente-compara; sem onboarding_julia_context."""
+        web_src = pathlib.Path("app/web.py").read_text(encoding="utf-8")
+        assert "onboarding_julia_context" in web_src
+        assert "onboarding_handoff_context" not in web_src
+        assert "_store_onboarding_julia_context" in web_src
+
+    def test_contract_accepts_agente_compara(self):
+        source = pathlib.Path("app/run_cleiton_discovery.py").read_text(encoding="utf-8")
+        assert "agente_compara" in source
+        assert "freight_table_comparison" in source
+        assert "Não prometa cotação automatizada, BID ou funcionalidades inexistentes." not in source
+        assert "BID comparativo" in source or "BID aberto" in source
+
+    def test_document_canonical_bid_distinction(self):
+        doc = load_capabilities_document()
+        assert "Camada AgenteCompara" in doc
+        assert "BID de frete (licitações)** — indisponível" not in doc
+        assert "comparativo interno" in doc.lower() or "BID comparativo" in doc
+        assert "não dispara uma concorrência" in doc.lower() or "não dispara" in doc.lower()
+
+    def test_local_build_reply_direct(self):
+        local = build_local_conversational_reply("Quero comparar duas tabelas de frete.")
+        assert local["handoff"]["destination"] == "agente_compara"
+        assert local["recommended_agent"] == "agente_compara"
+        assert local["confidence"] == "high"
+
+    def test_gemini_reply_without_handoff_injects_agente_compara(self, monkeypatch):
+        """Regressão: Gemini menciona AgenteCompara no texto mas omite handoff no JSON."""
+        _mock_gemini(monkeypatch, {
+            "reply": (
+                "Para comparar duas ou três tabelas de transportadoras sobre o mesmo "
+                "volume de embarques, use o AgenteCompara. Ele calcula os custos de cada "
+                "tabela e mostra cobertura, diferenças, economia potencial e resultados por UF."
+            ),
+            "recommended_agent": None,
+            "handoff": None,
+            "confidence": "high",
+            "reason": "comparacao multitabela",
+        })
+        result = cleiton_discovery_reply("Quero comparar duas tabelas de frete.", [])
+        assert result["handoff"] is not None
+        assert result["handoff"]["destination"] == "agente_compara"
+        assert result["handoff"]["label"] == "Iniciar comparação de tabelas"
+        assert result["handoff"]["url"] == "/agente-compara"
+        assert result["handoff"]["requires_login"] is True
+        assert result["discovery"]["next_action"] == "handoff"
+        assert "preferred_destination_injected" in (
+            result["discovery"]["pipeline"].get("guardrail_notes") or []
+        )
+        assert "AgenteCompara" in result["reply"]
+
+    def test_gemini_reply_without_handoff_injects_agente_compara_for_numeric_table_count(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Posso ajudar com a compara??o dessas tabelas.",
+            "recommended_agent": None,
+            "handoff": None,
+            "confidence": "high",
+            "reason": "comparacao multitabela",
+        })
+        result = cleiton_discovery_reply("Quero comparar 3 tabelas de frete.", [])
+        assert result["handoff"] is not None
+        assert result["handoff"]["destination"] == "agente_compara"
+        assert result["handoff"]["label"] == "Iniciar comparação de tabelas"
+        assert result["handoff"]["url"] == "/agente-compara"
+        assert result["handoff"]["requires_login"] is True
+        assert result["discovery"]["next_action"] == "handoff"
+        assert "preferred_destination_injected" in (
+            result["discovery"]["pipeline"].get("guardrail_notes") or []
+        )
+
+    def test_gemini_cased_destination_agente_compara_accepted(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Use o AgenteCompara para comparar as tabelas.",
+            "recommended_agent": "AgenteCompara",
+            "handoff": {
+                "destination": "AgenteCompara",
+                "label": "Iniciar comparação de tabelas",
+            },
+            "confidence": "high",
+            "reason": "case",
+        })
+        result = cleiton_discovery_reply("Quero comparar duas tabelas de frete.", [])
+        assert result["handoff"]["destination"] == "agente_compara"
+        assert result["handoff"]["label"] == "Iniciar comparação de tabelas"
+        assert result["handoff"]["url"] == "/agente-compara"
+
+    def test_gemini_hyphen_destination_alias(self):
+        result = _apply_guardrails(
+            {
+                "reply": "Vamos ao AgenteCompara.",
+                "handoff": {"destination": "agente-compara", "label": "Iniciar comparação de tabelas"},
+                "confidence": "high",
+                "reason": "alias",
+            },
+            "Quero comparar duas tabelas de frete.",
+        )
+        assert result["handoff"]["destination"] == "agente_compara"
+        assert result["handoff"]["url"] == "/agente-compara"
+
+    def test_ambiguous_still_no_injected_cta(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Posso ajudar de várias formas. O que você quer fazer com as planilhas?",
+            "recommended_agent": None,
+            "handoff": None,
+            "confidence": "high",
+            "reason": "ambiguidade",
+        })
+        result = cleiton_discovery_reply("Tenho duas planilhas.", [])
+        assert result["handoff"] is None
+        assert result["discovery"]["next_action"] == "converse"
+
+    def test_auditoria_cta_still_works_with_injection_path(self, monkeypatch):
+        _mock_gemini(monkeypatch, {
+            "reply": "Para auditar cobranças, use a Auditoria de Fretes da Cleide.",
+            "recommended_agent": "cleide",
+            "handoff": {
+                "destination": "cleide_freight_audit",
+                "label": "Ir para Auditoria de Fretes",
+            },
+            "confidence": "high",
+            "reason": "auditoria",
+        })
+        result = cleiton_discovery_reply("Quero auditar minhas faturas de frete.", [])
+        assert result["handoff"]["destination"] == "cleide_freight_audit"
+        assert result["handoff"]["url"] == "/auditoria-frete"
+        assert result["handoff"]["requires_login"] is True
+        assert result["handoff"]["label"] == "Ir para Auditoria de Fretes"
+        assert result["discovery"]["next_action"] == "handoff"

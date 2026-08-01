@@ -12,9 +12,10 @@
 
 {% include 'partials/app_global_header.html' %}
 
-<div class="container mb-5">
+<div class="container-fluid agente-compara-layout mb-5">
 
-  <div class="agente-compara-wrapper agente-compara-embedded" id="agenteComparaShell">
+  <div class="agente-compara-wrapper agente-compara-embedded" id="agenteComparaShell"
+       data-brasil-ufs-svg-url="{{ url_for('static', filename='img/brasil-ufs.svg') }}">
 
     <div class="agente-compara-container">
 
@@ -68,6 +69,58 @@
 
       </div>
 
+      <div class="agente-compara-chat-meta px-2 pb-1 d-none"
+
+           id="agenteComparaChatMeta"
+
+           hidden>
+
+        <p class="agente-compara-chat-responsibility small mb-1 d-none"
+
+           id="agenteComparaChatResponsibility"
+
+           hidden>
+
+          As análises apoiam sua avaliação. A decisão final sobre transportadoras e tabelas é responsabilidade do usuário.
+
+        </p>
+
+        <div class="agente-compara-chat-scope small text-muted mb-1"
+
+             id="agenteComparaChatScope"
+
+             aria-live="polite"
+
+             hidden></div>
+
+        <div class="agente-compara-chat-suggestions d-flex flex-wrap gap-1 mb-1 d-none"
+
+             id="agenteComparaChatSuggestions"
+
+             role="group"
+
+             aria-label="Sugestões do chat"
+
+             hidden></div>
+
+        <div class="d-flex justify-content-end mb-1 d-none" hidden>
+
+          <button type="button"
+
+                  class="btn btn-link btn-sm agente-compara-chat-clear-btn p-0 d-none"
+
+                  id="agenteComparaChatClearBtn"
+
+                  hidden>
+
+            Limpar conversa
+
+          </button>
+
+        </div>
+
+      </div>
+
 
 
       <div class="agente-compara-input-area">
@@ -110,17 +163,17 @@
 
                      aria-hidden="true">
 
-              <textarea class="form-control agente-compara-input agente-compara-input--locked"
+              <textarea class="form-control agente-compara-input"
 
                         id="agenteComparaInput"
 
-                        placeholder="Faça o upload da tabela de frete para liberar o chat."
+                        placeholder="Faça o upload da tabela de frete."
 
                         rows="2"
 
                         autocomplete="off"
 
-                        aria-disabled="true"></textarea>
+                        aria-disabled="false"></textarea>
 
               <button type="button"
 
@@ -128,7 +181,9 @@
 
                       id="agenteComparaSend"
 
-                      aria-label="Enviar">
+                      aria-label="Enviar"
+
+                      aria-disabled="false">
 
                 <i class="bi bi-send-fill"></i>
 
@@ -162,6 +217,8 @@
 
               <div class="agente-compara-actions-divider" role="separator" aria-hidden="true"></div>
 
+              {% set _agente_compara_actions_is_admin = current_user.is_authenticated and user_is_admin(current_user) %}
+
               <a href="{{ url_for('index') }}" class="agente-compara-actions-item" role="menuitem">
 
                 <i class="bi bi-house-door" aria-hidden="true"></i>
@@ -169,6 +226,8 @@
                 <span>Home</span>
 
               </a>
+
+              {% if _agente_compara_actions_is_admin %}
 
               <a href="{{ url_for('fretes') }}" class="agente-compara-actions-item" role="menuitem">
 
@@ -186,6 +245,18 @@
 
               </a>
 
+              {% endif %}
+
+              <a href="{{ url_for('cleide.cleide_auditoria') if has_endpoint('cleide.cleide_auditoria') else '/auditoria-frete' }}" class="agente-compara-actions-item" role="menuitem">
+
+                <i class="bi bi-clipboard-check" aria-hidden="true"></i>
+
+                <span>Auditoria de Frete</span>
+
+              </a>
+
+              {% if _agente_compara_actions_is_admin %}
+
               <a href="{{ cleide_feed_href }}" class="agente-compara-actions-item" role="menuitem">
 
                 <i class="bi bi-rss" aria-hidden="true"></i>
@@ -193,6 +264,8 @@
                 <span>Feed</span>
 
               </a>
+
+              {% endif %}
 
             </div>
 
@@ -239,6 +312,176 @@
         <div class="agente-compara-documents-error small" id="agenteComparaDocumentsError" role="alert" style="display: none;"></div>
 
       </div>
+
+      <section class="agente-compara-comparison-dashboard-section"
+
+               id="agenteComparaComparisonDashboard"
+
+               aria-labelledby="agenteComparaComparisonDashboardTitle"
+
+               hidden>
+
+        <div class="agente-compara-comparison-dashboard-header">
+
+          <div class="agente-compara-comparison-dashboard-heading">
+
+            <h2 class="agente-compara-comparison-dashboard-title" id="agenteComparaComparisonDashboardTitle">
+
+              Indicadores da comparação
+
+            </h2>
+
+            <p class="agente-compara-comparison-dashboard-subtitle small mb-0">
+
+              Visão executiva para escolha entre tabelas: cobertura, competitividade de custo e vantagem por UF. Os detalhes por documento ficam no modal.
+
+            </p>
+
+          </div>
+
+          <div class="agente-compara-comparison-dashboard-header-actions">
+
+            <div class="agente-compara-comparison-dashboard-customize"
+
+                 id="agenteComparaComparisonDashboardCustomize"
+
+                 hidden>
+
+              <button type="button"
+
+                      class="btn btn-sm agente-compara-comparison-dashboard-customize-btn"
+
+                      id="agenteComparaComparisonDashboardCustomizeBtn"
+
+                      aria-expanded="false"
+
+                      aria-controls="agenteComparaComparisonDashboardCustomizeMenu"
+
+                      aria-haspopup="true">
+
+                Personalizar gráficos
+
+              </button>
+
+              <span class="agente-compara-comparison-dashboard-hidden-count"
+
+                    id="agenteComparaComparisonDashboardHiddenCount"
+
+                    hidden></span>
+
+              <div class="agente-compara-comparison-dashboard-customize-menu"
+
+                   id="agenteComparaComparisonDashboardCustomizeMenu"
+
+                   role="region"
+
+                   aria-label="Gráficos ocultos do dashboard"
+
+                   hidden>
+
+                <div class="agente-compara-comparison-dashboard-hidden-list"
+
+                     id="agenteComparaComparisonDashboardHiddenList"></div>
+
+                <button type="button"
+
+                        class="btn btn-sm agente-compara-comparison-dashboard-show-all-btn"
+
+                        id="agenteComparaComparisonDashboardShowAllBtn"
+
+                        disabled>
+
+                  Reexibir todos
+
+                </button>
+
+              </div>
+
+            </div>
+
+            <button type="button"
+
+                    class="btn btn-sm agente-compara-comparison-dashboard-details-btn"
+
+                    id="agenteComparaComparisonDashboardOpenDetailsBtn"
+
+                    hidden>
+
+              Ver cálculos detalhados
+
+            </button>
+
+          </div>
+
+        </div>
+
+        <div class="agente-compara-comparison-dashboard-live visually-hidden"
+
+             id="agenteComparaComparisonDashboardLive"
+
+             role="status"
+
+             aria-live="polite"></div>
+
+        <div class="agente-compara-comparison-dashboard-status"
+
+             id="agenteComparaComparisonDashboardStatus"
+
+             role="status"
+
+             aria-live="polite"></div>
+
+        <div class="agente-compara-comparison-dashboard-idle small"
+
+             id="agenteComparaComparisonDashboardIdle">
+
+          Os indicadores comparativos serão exibidos após o cálculo.
+
+        </div>
+
+        <div class="agente-compara-comparison-dashboard-unavailable small"
+
+             id="agenteComparaComparisonDashboardUnavailable"
+
+             role="alert"
+
+             hidden></div>
+
+        <div class="agente-compara-comparison-dashboard-kpis"
+
+             id="agenteComparaComparisonKpis"
+
+             hidden></div>
+
+        <div class="agente-compara-comparison-dashboard-all-hidden"
+
+             id="agenteComparaComparisonDashboardAllHidden"
+
+             hidden>
+
+          <p class="small mb-2">Todos os gráficos estão ocultos.</p>
+
+          <button type="button"
+
+                  class="btn btn-sm agente-compara-comparison-dashboard-restore-charts-btn"
+
+                  id="agenteComparaComparisonDashboardRestoreChartsBtn"
+
+                  hidden>
+
+            Reexibir gráficos
+
+          </button>
+
+        </div>
+
+        <div class="agente-compara-comparison-dashboard-charts"
+
+             id="agenteComparaComparisonCharts"
+
+             hidden></div>
+
+      </section>
 
       <section class="agente-compara-bi-section"
 
@@ -449,62 +692,66 @@
 
     </div>
 
-    <div class="agente-compara-temp-table-modal-body" id="agenteComparaTempTableModalBody"></div>
+    <div class="agente-compara-temp-table-modal-scroll" id="agenteComparaTempTableModalScroll">
 
-    <div class="agente-compara-carrier-identify-panel"
-         id="agenteComparaCarrierIdentifyPanel"
-         role="dialog"
-         aria-labelledby="agenteComparaCarrierIdentifyTitle"
-         hidden>
-      <h3 class="agente-compara-carrier-identify-title" id="agenteComparaCarrierIdentifyTitle">
-        Identifique a transportadora
-      </h3>
-      <p class="agente-compara-carrier-identify-lead">Por favor, informe a transportadora.</p>
-      <label class="agente-compara-carrier-identify-label" for="agenteComparaCarrierNameInput">Transportadora</label>
-      <input type="text"
-             class="form-control form-control-sm agente-compara-carrier-identify-input"
-             id="agenteComparaCarrierNameInput"
-             maxlength="120"
-             placeholder="Digite o nome da transportadora"
-             autocomplete="organization">
-      <p class="agente-compara-carrier-identify-hint small text-muted mb-0">
-        O nome ficará vinculado a esta tabela de frete.
-      </p>
-      <div class="agente-compara-carrier-identify-error small"
-           id="agenteComparaCarrierIdentifyError"
+      <div class="agente-compara-temp-table-modal-edit-banner"
+           id="agenteComparaTempTableModalEditBanner"
+           role="status"
+           hidden>
+        Modo edição ativo
+      </div>
+
+      <div class="agente-compara-temp-table-modal-body" id="agenteComparaTempTableModalBody"></div>
+
+      <div class="agente-compara-carrier-identify-panel"
+           id="agenteComparaCarrierIdentifyPanel"
+           role="dialog"
+           aria-labelledby="agenteComparaCarrierIdentifyTitle"
+           hidden>
+        <h3 class="agente-compara-carrier-identify-title" id="agenteComparaCarrierIdentifyTitle">
+          Identifique a transportadora
+        </h3>
+        <p class="agente-compara-carrier-identify-lead">Por favor, informe a transportadora.</p>
+        <label class="agente-compara-carrier-identify-label" for="agenteComparaCarrierNameInput">Transportadora</label>
+        <input type="text"
+               class="form-control form-control-sm agente-compara-carrier-identify-input"
+               id="agenteComparaCarrierNameInput"
+               maxlength="120"
+               placeholder="Digite o nome da transportadora"
+               autocomplete="organization">
+        <p class="agente-compara-carrier-identify-hint small text-muted mb-0">
+          O nome ficará vinculado a esta tabela de frete.
+        </p>
+        <div class="agente-compara-carrier-identify-error small"
+             id="agenteComparaCarrierIdentifyError"
+             role="alert"
+             hidden></div>
+        <div class="agente-compara-carrier-identify-actions">
+          <button type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  id="agenteComparaCarrierIdentifyCancel">
+            Cancelar
+          </button>
+          <button type="button"
+                  class="btn btn-sm btn-primary"
+                  id="agenteComparaCarrierIdentifyContinue"
+                  disabled>
+            Continuar
+          </button>
+        </div>
+      </div>
+
+      <div class="agente-compara-temp-table-modal-error small"
+           id="agenteComparaTempTableModalError"
            role="alert"
            hidden></div>
-      <div class="agente-compara-carrier-identify-actions">
-        <button type="button"
-                class="btn btn-sm btn-outline-secondary"
-                id="agenteComparaCarrierIdentifyCancel">
-          Cancelar
-        </button>
-        <button type="button"
-                class="btn btn-sm btn-primary"
-                id="agenteComparaCarrierIdentifyContinue"
-                disabled>
-          Continuar
-        </button>
-      </div>
+
+      <div class="agente-compara-temp-table-modal-validation small"
+           id="agenteComparaTempTableModalValidation"
+           role="alert"
+           hidden></div>
+
     </div>
-
-    <div class="agente-compara-temp-table-modal-edit-banner"
-         id="agenteComparaTempTableModalEditBanner"
-         role="status"
-         hidden>
-      Modo edição ativo
-    </div>
-
-    <div class="agente-compara-temp-table-modal-error small"
-         id="agenteComparaTempTableModalError"
-         role="alert"
-         hidden></div>
-
-    <div class="agente-compara-temp-table-modal-validation small"
-         id="agenteComparaTempTableModalValidation"
-         role="alert"
-         hidden></div>
 
     <div class="agente-compara-temp-table-modal-footer">
 
@@ -590,6 +837,15 @@
 
 <style>
 
+  .agente-compara-layout {
+    width: 100%;
+    max-width: 1600px;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: clamp(0.75rem, 2vw, 1.75rem);
+    padding-right: clamp(0.75rem, 2vw, 1.75rem);
+  }
+
   .agente-compara-wrapper.agente-compara-embedded {
 
     border: none;
@@ -602,6 +858,8 @@
 
     margin-bottom: 1rem;
 
+    width: 100%;
+
   }
 
   .agente-compara-container {
@@ -613,6 +871,8 @@
     min-height: 0;
 
     overflow: visible;
+
+    width: 100%;
 
   }
 
@@ -829,6 +1089,60 @@
   .agente-compara-composer--chat-locked .agente-compara-input--locked::placeholder {
 
     color: var(--af-text-muted, #5A5A72);
+
+  }
+
+  .agente-compara-chat-meta {
+
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+
+  }
+
+  .agente-compara-chat-responsibility {
+
+    color: var(--af-text-muted, #9AA0B5);
+
+    line-height: 1.35;
+
+  }
+
+  .agente-compara-chat-suggestion-btn {
+
+    border: 1px solid rgba(255, 255, 255, 0.14);
+
+    background: transparent;
+
+    color: var(--af-text-primary, #E8EAF2);
+
+    border-radius: 999px;
+
+    font-size: 0.75rem;
+
+    padding: 0.2rem 0.65rem;
+
+  }
+
+  .agente-compara-chat-suggestion-btn:hover,
+
+  .agente-compara-chat-suggestion-btn:focus {
+
+    border-color: rgba(120, 160, 255, 0.55);
+
+    color: #fff;
+
+  }
+
+  .agente-compara-chat-clear-btn {
+
+    color: var(--af-text-muted, #9AA0B5) !important;
+
+    text-decoration: none !important;
+
+  }
+
+  .agente-compara-contextual-chat-action {
+
+    margin-top: 0.35rem;
 
   }
 
@@ -1552,8 +1866,8 @@
   .agente-compara-temp-table-modal-dialog {
     position: relative;
     z-index: 1;
-    width: min(920px, 100%);
-    max-height: min(85vh, 900px);
+    width: min(1100px, calc(100vw - 2rem));
+    max-height: min(90vh, 960px);
     display: flex;
     flex-direction: column;
     border-radius: 0.85rem;
@@ -1563,8 +1877,8 @@
   }
 
   body.agente-compara-temp-table-modal-editing .agente-compara-temp-table-modal-dialog {
-    width: min(1280px, calc(100vw - 2rem));
-    max-height: min(92vh, 1100px);
+    width: min(1280px, calc(100vw - 1.5rem));
+    max-height: min(94vh, 1100px);
   }
 
   .agente-compara-temp-table-modal-header {
@@ -1574,6 +1888,7 @@
     gap: 0.75rem;
     padding: 1rem 1.15rem 0.65rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
   }
 
   .agente-compara-temp-table-modal-header-main {
@@ -1628,11 +1943,28 @@
     color: var(--af-text-secondary, #8A8AA3);
   }
 
+  .agente-compara-temp-table-modal-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+  }
+
   .agente-compara-temp-table-modal-body {
     padding: 0.85rem 1.15rem;
     overflow-y: auto;
     flex: 1 1 auto;
     min-height: 0;
+  }
+
+  .agente-compara-temp-table-modal-scroll > .agente-compara-temp-table-modal-body {
+    overflow: visible;
+    flex: 0 0 auto;
+    min-height: auto;
   }
 
   .agente-compara-flow-status-panel {
@@ -1685,10 +2017,11 @@
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
+    flex-shrink: 0;
   }
 
   .agente-compara-temp-table-modal-edit-banner {
-    margin: 0 1.15rem;
+    margin: 0.75rem 1.15rem 0;
     padding: 0.45rem 0.65rem;
     border-radius: 0.45rem;
     font-size: 0.78rem;
@@ -1696,20 +2029,48 @@
     color: #ffd966;
     background: rgba(255, 193, 7, 0.12);
     border: 1px solid rgba(255, 193, 7, 0.35);
+    flex-shrink: 0;
   }
 
   .agente-compara-temp-table-modal-edit-banner[hidden],
-  .agente-compara-temp-table-modal-error[hidden] {
+  .agente-compara-temp-table-modal-error[hidden],
+  .agente-compara-temp-table-modal-validation[hidden] {
     display: none !important;
   }
 
   .agente-compara-temp-table-modal-error {
-    margin: 0 1.15rem;
+    margin: 0.55rem 1.15rem 0;
     padding: 0.45rem 0.65rem;
     border-radius: 0.45rem;
     color: var(--af-danger, #FF4D6A);
     background: rgba(255, 77, 106, 0.1);
     border: 1px solid rgba(255, 77, 106, 0.25);
+    flex-shrink: 0;
+  }
+
+  .agente-compara-temp-table-modal-validation {
+    margin: 0.55rem 1.15rem 0.9rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 0.45rem;
+    color: var(--af-text-primary, #F0F0F5);
+    background: rgba(255, 193, 7, 0.08);
+    border: 1px solid rgba(255, 193, 7, 0.28);
+    flex-shrink: 0;
+  }
+
+  .agente-compara-temp-table-validation-summary {
+    margin: 0 0 0.35rem;
+    font-weight: 600;
+    color: #ffd966;
+  }
+
+  .agente-compara-temp-table-validation-list {
+    margin: 0;
+    padding-left: 1.15rem;
+  }
+
+  .agente-compara-temp-table-validation-list li {
+    margin-bottom: 0.2rem;
   }
 
   .agente-compara-carrier-identify-panel {
@@ -2414,11 +2775,11 @@
   }
 
   .agente-compara-analytics-grid {
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   }
 
   .agente-compara-analytics-tables {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   }
 
   .agente-compara-analytics-card,
@@ -2482,19 +2843,75 @@
   }
 
   .agente-compara-results-charts-grid {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    display: grid;
+    gap: 0.65rem;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  }
+
+  .agente-compara-dashboard-section-block {
+    width: 100%;
+    min-width: 0;
+    margin-top: 0.75rem;
+  }
+
+  .agente-compara-dashboard-section-block[hidden] {
+    display: none !important;
+  }
+
+  .agente-compara-section-grid--visible-1 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agente-compara-section-grid--visible-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agente-compara-section-grid--visible-3-plus {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .agente-compara-results-chart-card {
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   .agente-compara-results-chart-card canvas {
     width: 100% !important;
-    max-height: 220px;
+    max-height: 240px;
   }
 
-  @media (max-width: 768px) {
+  .agente-compara-section-grid--visible-1 .agente-compara-results-chart-card canvas {
+    max-height: min(320px, 42vh);
+  }
+
+  @media (min-width: 1200px) {
+    .agente-compara-analytics-grid {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 768px) and (max-width: 1199px) {
+    .agente-compara-section-grid--visible-3-plus {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .agente-compara-analytics-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 767px) {
     .agente-compara-analytics-grid,
     .agente-compara-analytics-tables,
     .agente-compara-results-filters-grid,
     .agente-compara-results-charts-grid,
+    .agente-compara-section-grid--visible-1,
+    .agente-compara-section-grid--visible-2,
+    .agente-compara-section-grid--visible-3-plus,
     .agente-compara-analytics-table-metrics {
       grid-template-columns: 1fr;
     }
@@ -3284,7 +3701,10 @@
 
   .agente-compara-temp-table-modal-freight-scroll {
     overflow-x: auto;
+    overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    max-height: none;
     margin: 0.25rem 0 0.5rem;
     border-radius: 0.45rem;
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -3299,9 +3719,7 @@
   }
 
   .agente-compara-temp-table-modal-freight-table thead th {
-    position: sticky;
-    top: 0;
-    z-index: 1;
+    position: static;
     background: rgba(30, 30, 46, 0.98);
     color: var(--af-cyan, #00BFFF);
     font-weight: 600;
@@ -3354,9 +3772,25 @@
     border-bottom: none;
   }
 
+  @media (max-width: 992px) {
+    .agente-compara-temp-table-modal-dialog,
+    body.agente-compara-temp-table-modal-editing .agente-compara-temp-table-modal-dialog {
+      width: min(100%, calc(100vw - 1.25rem));
+      max-height: min(92vh, 1000px);
+    }
+  }
+
   @media (max-width: 576px) {
     .agente-compara-temp-table-modal {
-      padding: 0.5rem;
+      padding: 0.35rem;
+      align-items: stretch;
+    }
+
+    .agente-compara-temp-table-modal-dialog,
+    body.agente-compara-temp-table-modal-editing .agente-compara-temp-table-modal-dialog {
+      width: 100%;
+      max-height: min(96vh, 100dvh);
+      border-radius: 0.7rem;
     }
 
     .agente-compara-temp-table-modal-header,
@@ -3364,6 +3798,22 @@
     .agente-compara-temp-table-modal-footer {
       padding-left: 0.85rem;
       padding-right: 0.85rem;
+    }
+
+    .agente-compara-temp-table-modal-edit-banner,
+    .agente-compara-temp-table-modal-error,
+    .agente-compara-temp-table-modal-validation,
+    .agente-compara-carrier-identify-panel {
+      margin-left: 0.85rem;
+      margin-right: 0.85rem;
+    }
+
+    .agente-compara-temp-table-modal-freight-table {
+      min-width: 720px;
+    }
+
+    .agente-compara-temp-table-modal-data-table-editable {
+      min-width: 860px;
     }
   }
 
@@ -3385,12 +3835,463 @@
 
   }
 
+  .agente-compara-comparison-dashboard-section,
   .agente-compara-bi-section {
     margin-top: 1rem;
-    padding: 0.85rem 0.95rem;
+    padding: 1rem clamp(0.85rem, 1.5vw, 1.35rem);
     border-radius: 0.65rem;
     border: 1px solid rgba(0, 191, 255, 0.18);
     background: rgba(0, 0, 0, 0.14);
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .agente-compara-comparison-dashboard-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 0.65rem;
+  }
+
+  .agente-compara-comparison-dashboard-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    align-items: flex-start;
+    justify-content: flex-end;
+    position: relative;
+  }
+
+  .agente-compara-comparison-dashboard-customize {
+    position: relative;
+    max-width: min(100%, 20rem);
+  }
+
+  .agente-compara-comparison-dashboard-customize-btn,
+  .agente-compara-comparison-dashboard-show-all-btn,
+  .agente-compara-comparison-dashboard-restore-charts-btn,
+  .agente-compara-comparison-dashboard-hide-widget-btn,
+  .agente-compara-comparison-dashboard-show-widget-btn {
+    border-color: rgba(0, 191, 255, 0.28);
+    color: var(--af-text-primary, #F0F0F5);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .agente-compara-comparison-dashboard-customize-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.35rem);
+    z-index: 20;
+    min-width: min(18rem, calc(100vw - 2rem));
+    max-width: min(22rem, calc(100vw - 1.5rem));
+    max-height: min(18rem, 50vh);
+    overflow: auto;
+    padding: 0.65rem;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(0, 191, 255, 0.22);
+    background: rgba(18, 18, 28, 0.98);
+    box-shadow: 0 0.55rem 1.4rem rgba(0, 0, 0, 0.35);
+  }
+
+  .agente-compara-comparison-dashboard-hidden-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-bottom: 0.55rem;
+  }
+
+  .agente-compara-comparison-dashboard-customize-empty {
+    margin: 0;
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .agente-compara-comparison-dashboard-all-hidden {
+    margin: 0.75rem 0;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.55rem;
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .agente-compara-dashboard-widget-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+    flex-wrap: wrap;
+  }
+
+  .agente-compara-dashboard-widget-header h4 {
+    margin: 0;
+    flex: 1 1 10rem;
+    min-width: 0;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  .agente-compara-comparison-dashboard-hide-widget-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .agente-compara-dashboard-widget.is-hidden,
+  .agente-compara-results-chart-card.is-hidden,
+  [data-comparison-dashboard-widget].is-hidden {
+    display: none !important;
+  }
+
+  .agente-compara-dashboard-widget--standard {
+    grid-column: auto;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .agente-compara-dashboard-widget--wide,
+  .agente-compara-dashboard-widget--full,
+  .agente-compara-dashboard-widget--solo {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .agente-compara-geo-layout {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1.45fr) minmax(280px, 1fr);
+    align-items: start;
+    margin-top: 0.65rem;
+    width: 100%;
+  }
+
+  .agente-compara-geo-layout.is-map-rank {
+    grid-template-columns: minmax(0, 1.55fr) minmax(260px, 1fr);
+  }
+
+  .agente-compara-geo-layout.is-map-only,
+  .agente-compara-geo-layout.is-rank-only,
+  .agente-compara-geo-layout.agente-compara-section-grid--visible-1 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agente-compara-geo-layout.is-geo-empty,
+  .agente-compara-geo-layout[hidden] {
+    display: none !important;
+  }
+
+  .agente-compara-geo-map-panel,
+  .agente-compara-geo-side-panel,
+  .agente-compara-geo-matrix-wrap {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .agente-compara-geo-matrix-wrap.agente-compara-dashboard-widget--solo {
+    margin-top: 0.65rem;
+  }
+
+  .agente-compara-comparison-dashboard-heading {
+    flex: 1 1 16rem;
+    min-width: 0;
+  }
+
+  .agente-compara-comparison-dashboard-title {
+    font-size: 1rem;
+    margin: 0 0 0.25rem;
+    color: var(--af-cyan, #00BFFF);
+  }
+
+  .agente-compara-comparison-dashboard-subtitle {
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .agente-compara-comparison-dashboard-details-btn {
+    border-color: rgba(0, 191, 255, 0.35);
+    color: var(--af-cyan, #00BFFF);
+    background: rgba(0, 191, 255, 0.08);
+    white-space: nowrap;
+  }
+
+  .agente-compara-comparison-dashboard-details-btn:hover,
+  .agente-compara-comparison-dashboard-details-btn:focus-visible {
+    background: rgba(0, 191, 255, 0.16);
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .agente-compara-comparison-dashboard-status,
+  .agente-compara-comparison-dashboard-idle,
+  .agente-compara-comparison-dashboard-unavailable {
+    margin: 0 0 0.65rem;
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .agente-compara-comparison-dashboard-status.is-loading,
+  .agente-compara-comparison-dashboard-status.is-error,
+  .agente-compara-comparison-dashboard-status.is-success {
+    font-weight: 600;
+  }
+
+  .agente-compara-comparison-dashboard-status.is-success {
+    color: var(--af-text-primary, #F0F0F5);
+  }
+
+  .agente-compara-comparison-dashboard-status.is-error,
+  .agente-compara-comparison-dashboard-unavailable {
+    color: #ff8f8f;
+  }
+
+  .agente-compara-comparison-dashboard-kpis,
+  .agente-compara-comparison-dashboard-charts {
+    margin-top: 0.75rem;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .agente-compara-comparison-dashboard-section .agente-compara-results-charts,
+  .agente-compara-comparison-dashboard-section .agente-compara-analytics-summary,
+  .agente-compara-comparison-dashboard-section .agente-compara-results-geography {
+    margin-top: 0;
+    width: 100%;
+  }
+
+  .agente-compara-analytics-note,
+  .agente-compara-chart-text-summary {
+    margin: 0.35rem 0 0.55rem;
+    font-size: 0.72rem;
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .agente-compara-charts-section-break {
+    grid-column: 1 / -1;
+    margin-top: 0.35rem;
+  }
+
+  .agente-compara-results-geography {
+    margin-top: 1.15rem;
+    width: 100%;
+  }
+
+  .agente-compara-geo-map-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    padding: 0.65rem;
+  }
+
+  .agente-compara-geo-map-wrap svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: min(520px, 70vh);
+  }
+
+  .agente-compara-geo-map-wrap path[id] {
+    stroke: rgba(255, 255, 255, 0.55);
+    stroke-width: 0.55;
+    cursor: pointer;
+    outline: none;
+    transition: filter 0.15s ease, stroke-width 0.15s ease;
+  }
+
+  .agente-compara-geo-map-wrap path[id]:hover,
+  .agente-compara-geo-map-wrap path[id]:focus-visible {
+    filter: brightness(1.12);
+    stroke: #fff;
+    stroke-width: 1.1;
+  }
+
+  .agente-compara-geo-map-wrap path[id].is-low-sample {
+    stroke-dasharray: 2 1.4;
+    stroke-width: 0.9;
+  }
+
+  .agente-compara-geo-map-wrap path[id].is-selected {
+    stroke: #fff;
+    stroke-width: 1.35;
+    filter: brightness(1.16);
+  }
+
+  .agente-compara-geo-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem 0.85rem;
+    margin-top: 0.65rem;
+    font-size: 0.72rem;
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .agente-compara-geo-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .agente-compara-geo-legend-swatch {
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    flex: 0 0 auto;
+  }
+
+  .agente-compara-geo-legend-swatch.is-low-sample {
+    background: repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.25),
+      rgba(255, 255, 255, 0.25) 2px,
+      transparent 2px,
+      transparent 4px
+    );
+  }
+
+  .agente-compara-geo-map-detail {
+    margin-top: 0.65rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.18);
+    font-size: 0.78rem;
+    color: var(--af-text-primary, #F0F0F5);
+    min-height: 3.2rem;
+  }
+
+  .agente-compara-geo-map-detail[hidden] {
+    display: none !important;
+  }
+
+  .agente-compara-geo-map-detail-title {
+    margin: 0 0 0.35rem;
+    font-size: 0.82rem;
+    color: var(--af-cyan, #00BFFF);
+  }
+
+  .agente-compara-geo-map-detail-list {
+    margin: 0;
+    padding-left: 1.05rem;
+  }
+
+  .agente-compara-geo-map-fallback {
+    margin-top: 0.45rem;
+    font-size: 0.72rem;
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .agente-compara-geo-matrix-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 0.85rem;
+    width: 100%;
+  }
+
+  .agente-compara-geo-matrix {
+    width: 100%;
+    min-width: 560px;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+
+  .agente-compara-geo-matrix th,
+  .agente-compara-geo-matrix td {
+    padding: 0.45rem 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .agente-compara-geo-matrix th {
+    color: var(--af-text-secondary, #A0A0B8);
+    font-weight: 600;
+  }
+
+  .agente-compara-geo-matrix tr.is-low-sample td {
+    opacity: 0.85;
+  }
+
+  .agente-compara-geo-matrix tr.is-no-base td {
+    color: var(--af-text-secondary, #A0A0B8);
+  }
+
+  .agente-compara-geo-ranking-list {
+    margin: 0.35rem 0 0;
+    padding-left: 1.15rem;
+    color: var(--af-text-primary, #F0F0F5);
+    font-size: 0.8rem;
+  }
+
+  .agente-compara-geo-ranking-list li.is-low-sample {
+    opacity: 0.85;
+  }
+
+  @media (max-width: 992px) {
+    .agente-compara-geo-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .agente-compara-geo-map-wrap svg {
+      max-height: min(420px, 58vh);
+    }
+  }
+
+  @media (max-width: 768px) {
+    .agente-compara-comparison-dashboard-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .agente-compara-comparison-dashboard-header-actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .agente-compara-comparison-dashboard-details-btn,
+    .agente-compara-comparison-dashboard-customize-btn,
+    .agente-compara-comparison-dashboard-restore-charts-btn {
+      width: 100%;
+    }
+
+    .agente-compara-comparison-dashboard-customize {
+      max-width: none;
+      width: 100%;
+    }
+
+    .agente-compara-comparison-dashboard-customize-menu {
+      left: 0;
+      right: 0;
+      min-width: 0;
+      max-width: none;
+      width: 100%;
+    }
+
+    .agente-compara-results-charts-grid,
+    .agente-compara-section-grid--visible-1,
+    .agente-compara-section-grid--visible-2,
+    .agente-compara-section-grid--visible-3-plus {
+      grid-template-columns: 1fr;
+    }
+
+    .agente-compara-dashboard-widget-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .agente-compara-comparison-dashboard-hide-widget-btn {
+      align-self: flex-start;
+    }
+
+    .agente-compara-geo-map-wrap svg {
+      max-height: min(360px, 52vh);
+    }
+  }
+
+  @media (max-width: 576px) {
+    .agente-compara-analytics-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   .agente-compara-bi-title {

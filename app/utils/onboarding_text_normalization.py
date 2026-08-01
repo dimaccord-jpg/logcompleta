@@ -26,9 +26,10 @@ WORD_CLOUD_TERM_MAX_LENGTH = 64
 
 _USEFUL_TERMS = frozenset({
     "frete", "custo", "cotacao", "previsao", "auditoria", "bi", "transportadora",
-    "estoque", "dolar", "euro", "cambio", "cambial", "inflacao", "juros", "selic",
-    "combustivel", "petroleo", "importacao", "exportacao", "internacional",
-    "prazo", "indicador", "planejamento", "logistica",
+    "transportadoras", "estoque", "dolar", "euro", "cambio", "cambial", "inflacao",
+    "juros", "selic", "combustivel", "petroleo", "importacao", "exportacao",
+    "internacional", "prazo", "indicador", "planejamento", "logistica",
+    "bid", "concorrencia", "propostas", "equalizacao", "tarifas", "comparativo",
 })
 
 _RE_EMAIL = re.compile(

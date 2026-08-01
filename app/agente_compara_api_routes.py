@@ -43,6 +43,7 @@ from app.agente_compara_comparison_state import (
 )
 from app.agente_compara_doc_service import (
     AGENTE_COMPARA_CHAT_FLOW_TYPE,
+    AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
     AGENTE_COMPARA_INSIGHTS_CHAT_FLOW_TYPE,
     AGENTE_COMPARA_TEMPLATE_FILENAME,
     AgenteComparaBatchError,
@@ -104,6 +105,14 @@ from app.run_agente_compara_chat import (
     sanitize_chat_history,
 )
 from app.run_agente_compara_insights_chat import chat_agente_compara_insights_reply
+from app.agente_compara_chat_context_service import (
+    CAPABILITY_LOCKED,
+    CHAT_NOT_READY_MESSAGE,
+    ERROR_COMPARISON_CHAT_NOT_READY,
+    AgenteComparaChatContextError,
+    evaluate_comparison_chat_availability,
+)
+from app.run_agente_compara_comparison_chat import chat_agente_compara_comparison_reply
 from app.agente_compara_insights_context import (
     ERROR_INSIGHTS_CHAT_LOCKED,
     load_audit_insights_bundle,
@@ -258,6 +267,75 @@ def _insights_chat_success_payload(result: dict, *, cached: bool = False) -> dic
     if cached:
         payload["cached"] = True
     return payload
+
+
+def _comparison_chat_success_payload(result: dict, *, cached: bool = False) -> dict:
+    payload = {
+        "ok": True,
+        "answer": result.get("answer") or "",
+        "flow_type": result.get("flow_type") or AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
+        "deterministic": bool(result.get("deterministic")),
+        "scope": result.get("scope"),
+        "basis": result.get("basis") if isinstance(result.get("basis"), dict) else {},
+        "warnings": list(result.get("warnings") or []),
+        "chat_available": bool(result.get("chat_available", True)),
+        "capability": result.get("capability") or "ready",
+    }
+    if cached:
+        payload["cached"] = True
+    return payload
+
+
+def _comparison_chat_error_payload(result: dict, *, request_id: str | None = None) -> dict:
+    error_code = result.get("error_code") or result.get("error") or "processing_failed"
+    payload = {
+        "ok": False,
+        "error": True,
+        "error_code": error_code,
+        "message": result.get("message") or "Não foi possível processar a mensagem.",
+        "retryable": bool(result.get("retryable", False)),
+        "chat_available": bool(result.get("chat_available", False)),
+        "capability": result.get("capability") or CAPABILITY_LOCKED,
+    }
+    if result.get("reason") is not None:
+        payload["reason"] = result.get("reason")
+    if request_id:
+        payload["request_id"] = request_id
+    return payload
+
+
+def _http_status_for_comparison_chat_error(error_code: str) -> int:
+    if error_code in {
+        "agente_compara_comparison_not_found",
+        "agente_compara_comparison_chat_context_exceeded",
+    }:
+        return 404 if error_code.endswith("not_found") else 413
+    if error_code in {
+        "agente_compara_comparison_scope_mismatch",
+        "COMPARISON_CHAT_NOT_READY",
+    }:
+        return 409
+    if error_code == "chat_disabled":
+        return 403
+    if error_code == "invalid_message":
+        return 400
+    if error_code in {
+        "service_unavailable",
+        "provider_not_configured",
+        "provider_initialization_failed",
+        "provider_request_failed",
+        "provider_timeout",
+        "provider_empty_response",
+        "provider_invalid_response",
+    }:
+        return 503
+    if error_code in {
+        "context_build_failed",
+        "prompt_build_failed",
+        "processing_failed",
+    }:
+        return 500
+    return 400
 
 
 def _http_status_for_insights_error(error_code: str) -> int:
@@ -1686,4 +1764,156 @@ def agente_compara_insights_chat():
         )
 
     payload = _insights_chat_success_payload(result, cached=bool(result.get("cached")))
+    return jsonify(payload)
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison-chat", methods=["POST"])
+def agente_compara_comparison_chat():
+    unauthorized = _authorize_agente_compara_api(
+        auth_message="Autenticação necessária para o chat inteligente da comparação.",
+    )
+    if unauthorized is not None:
+        return unauthorized
+
+    audit_cfg = get_agente_compara_config()
+    if not audit_cfg.chat_enabled:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "chat_disabled",
+                    "error_code": "chat_disabled",
+                    "message": CHAT_DISABLED_MESSAGE,
+                }
+            ),
+            403,
+        )
+
+    data = request.get_json(silent=True) or {}
+    raw_message = data.get("message")
+    if raw_message is None:
+        raw_message = data.get("question")
+    if raw_message is None:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "invalid_message",
+                    "message": "Campo 'message' ou 'question' é obrigatório.",
+                }
+            ),
+            400,
+        )
+    if not isinstance(raw_message, str) or not raw_message.strip():
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "invalid_message",
+                    "message": "Campo 'message' deve ser uma string não vazia.",
+                }
+            ),
+            400,
+        )
+
+    message_limit = int(
+        getattr(audit_cfg, "comparison_chat_question_max_chars", None) or audit_cfg.question_max_chars
+    )
+    message_text = raw_message.strip()
+    if len(message_text) > message_limit:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "invalid_message",
+                    "message": f"Mensagem excede o limite de {message_limit} caracteres.",
+                }
+            ),
+            400,
+        )
+
+    history_limit = int(
+        getattr(audit_cfg, "comparison_chat_history_max_items", None) or audit_cfg.chat_max_history
+    )
+    history = sanitize_chat_history(data.get("history"), max_history=history_limit)
+    request_id = normalize_chat_request_id(data.get("request_id"))
+    comparison_id = data.get("comparison_id")
+    if comparison_id is not None and not isinstance(comparison_id, str):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "invalid_comparison_id",
+                    "error_code": "invalid_comparison_id",
+                    "message": "Campo 'comparison_id' deve ser string.",
+                }
+            ),
+            400,
+        )
+    ui_context = data.get("ui_context") if isinstance(data.get("ui_context"), dict) else {}
+    visual_focus = data.get("visual_focus") if isinstance(data.get("visual_focus"), dict) else None
+    resolved_comparison_id = (comparison_id or "").strip() or None
+
+    # Gate pré-READY: bloqueia antes de context builder completo, Gemini, billing e cache analítico.
+    try:
+        availability = evaluate_comparison_chat_availability(
+            session_obj=session,
+            comparison_id=resolved_comparison_id,
+        )
+    except AgenteComparaChatContextError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": exc.error_code,
+                    "error_code": exc.error_code,
+                    "message": exc.message,
+                    "chat_available": False,
+                    "capability": CAPABILITY_LOCKED,
+                }
+            ),
+            int(exc.http_status or 409),
+        )
+    if not availability.get("chat_available"):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": ERROR_COMPARISON_CHAT_NOT_READY,
+                    "error_code": ERROR_COMPARISON_CHAT_NOT_READY,
+                    "message": CHAT_NOT_READY_MESSAGE,
+                    "chat_available": False,
+                    "capability": CAPABILITY_LOCKED,
+                    "reason": availability.get("reason") or "comparison_not_ready",
+                }
+            ),
+            409,
+        )
+
+    result = chat_agente_compara_comparison_reply(
+        message_text,
+        history,
+        session_obj=session,
+        comparison_id=resolved_comparison_id,
+        request_id=request_id,
+        ui_context=ui_context,
+        visual_focus=visual_focus,
+        max_history=history_limit,
+        question_max_chars=message_limit,
+        fallback_message=audit_cfg.fallback_message,
+        skip_availability_gate=True,
+    )
+
+    if result.get("error"):
+        error_code = result.get("error_code") or result.get("error") or "processing_failed"
+        status = int(result.get("http_status") or _http_status_for_comparison_chat_error(error_code))
+        if error_code == "invalid_message":
+            status = 400
+        if error_code == ERROR_COMPARISON_CHAT_NOT_READY:
+            status = 409
+        payload = _comparison_chat_error_payload(result, request_id=request_id)
+        return jsonify(payload), status
+
+    payload = _comparison_chat_success_payload(result, cached=bool(result.get("cached")))
+    payload["request_id"] = request_id
     return jsonify(payload)

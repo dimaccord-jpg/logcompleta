@@ -183,6 +183,43 @@ def test_cleide_auditoria_menu_tem_atalhos_esperados(monkeypatch):
     assert "Enviar arquivos" in menu_chunk
     assert "Home" in menu_chunk
     assert f'href="{home_href}"' in menu_chunk
+    assert "Compare Tabelas" in menu_chunk
+    assert "/agente-compara" in menu_chunk
+    assert "Previsibilidade Frete" not in menu_chunk
+    assert "BI Cleide" not in menu_chunk
+    assert "/cleide-bi-frete" not in menu_chunk
+    assert "Feed" not in menu_chunk
+    assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
+    assert menu_chunk.index("Home") < menu_chunk.index("Compare Tabelas")
+
+
+def test_cleide_auditoria_menu_admin_tem_atalhos_completos(monkeypatch):
+    from flask_login import UserMixin
+
+    class _AuthUser(UserMixin):
+        def __init__(self):
+            self.id = "admin-1"
+            self.is_admin = True
+            self.conta_id = 1
+            self.franquia_id = 1
+            self.email = "admin@example.com"
+            self.full_name = "Admin User"
+
+    web = _load_web_module()
+    user = _AuthUser()
+    monkeypatch.setattr(web, "get_user_by_id", lambda _user_id: user)
+    client = web.app.test_client()
+    with client.session_transaction() as sess:
+        sess["_user_id"] = user.get_id()
+        sess["_fresh"] = True
+    with web.app.test_request_context("/auditoria-frete"):
+        home_href = web.url_for("index")
+    html = client.get("/auditoria-frete").get_data(as_text=True)
+    menu_start = html.index('id="cleideAuditoriaActionsMenu"')
+    menu_chunk = html[menu_start:menu_start + 2800]
+    assert "Enviar arquivos" in menu_chunk
+    assert "Home" in menu_chunk
+    assert f'href="{home_href}"' in menu_chunk
     assert "Previsibilidade Frete" in menu_chunk
     assert "BI Cleide" in menu_chunk
     assert "/cleide-bi-frete" in menu_chunk

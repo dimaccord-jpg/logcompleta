@@ -98,6 +98,64 @@ def test_compare_tabelas_in_cleide_auditoria_actions_menu(monkeypatch):
     assert "/agente-compara" in menu_chunk
 
 
+def test_agente_compara_menu_comum_mostra_apenas_opcoes_aprovadas(monkeypatch):
+    web = _load_web_module()
+    with web.app.test_request_context("/agente-compara"):
+        home_href = web.url_for("index")
+    html = web.app.test_client().get("/agente-compara").get_data(as_text=True)
+    menu_start = html.index('id="agenteComparaActionsMenu"')
+    menu_chunk = html[menu_start : menu_start + 2200]
+    assert "Enviar arquivos" in menu_chunk
+    assert "Home" in menu_chunk
+    assert f'href="{home_href}"' in menu_chunk
+    assert "Auditoria de Frete" in menu_chunk
+    assert "/auditoria-frete" in menu_chunk
+    assert "Previsibilidade Frete" not in menu_chunk
+    assert "BI Gerencial" not in menu_chunk
+    assert "Feed" not in menu_chunk
+    assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
+    assert menu_chunk.index("Home") < menu_chunk.index("Auditoria de Frete")
+
+
+def test_agente_compara_menu_admin_mostra_atalhos_completos(monkeypatch):
+    from flask_login import UserMixin
+
+    class _AuthUser(UserMixin):
+        def __init__(self):
+            self.id = "admin-1"
+            self.is_admin = True
+            self.conta_id = 1
+            self.franquia_id = 1
+            self.email = "admin@example.com"
+            self.full_name = "Admin User"
+
+    web = _load_web_module()
+    user = _AuthUser()
+    monkeypatch.setattr(web, "get_user_by_id", lambda _user_id: user)
+    client = web.app.test_client()
+    with client.session_transaction() as sess:
+        sess["_user_id"] = user.get_id()
+        sess["_fresh"] = True
+    with web.app.test_request_context("/agente-compara"):
+        home_href = web.url_for("index")
+    html = client.get("/agente-compara").get_data(as_text=True)
+    menu_start = html.index('id="agenteComparaActionsMenu"')
+    menu_chunk = html[menu_start : menu_start + 2800]
+    assert "Enviar arquivos" in menu_chunk
+    assert "Home" in menu_chunk
+    assert f'href="{home_href}"' in menu_chunk
+    assert "Previsibilidade Frete" in menu_chunk
+    assert "BI Gerencial" in menu_chunk
+    assert "Auditoria de Frete" in menu_chunk
+    assert "/auditoria-frete" in menu_chunk
+    assert "Feed" in menu_chunk
+    assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
+    assert menu_chunk.index("Home") < menu_chunk.index("Previsibilidade Frete")
+    assert menu_chunk.index("Previsibilidade Frete") < menu_chunk.index("BI Gerencial")
+    assert menu_chunk.index("BI Gerencial") < menu_chunk.index("Auditoria de Frete")
+    assert menu_chunk.index("Auditoria de Frete") < menu_chunk.index("Feed")
+
+
 def test_agente_compara_not_in_base_html_main_nav():
     base = pathlib.Path("app/templates/base.html").read_text(encoding="utf-8")
     assert "Compare Tabelas" not in base
@@ -125,12 +183,18 @@ def test_agente_compara_page_initial_state_no_forced_wizard(monkeypatch):
     assert "comparisonWizardModalSuppressed" in auto_block
 
 
-def test_agente_compara_not_advertised_in_copilot_capabilities():
+def test_agente_compara_advertised_in_copilot_onboarding():
+    """Onboarding reconhece AgenteCompara como capability e destination oficiais."""
     caps = pathlib.Path("app/copilot_capabilities.md").read_text(encoding="utf-8")
     taxonomy = pathlib.Path("app/capability_taxonomy.py").read_text(encoding="utf-8")
-    for token in ("agente-compara", "Compare Tabelas", "agente_compara"):
-        assert token not in caps
-        assert token not in taxonomy
+    assert "AgenteCompara" in caps
+    assert "/agente-compara" in caps
+    assert "agente_compara" in caps
+    assert "freight_table_comparison" in caps
+    assert "agente_compara" in taxonomy
+    assert "freight_table_comparison" in taxonomy
+    assert "/agente-compara" in taxonomy
+    assert "Iniciar comparação de tabelas" in taxonomy
 
 
 def test_agente_compara_calculation_file_summary_ui_contract():
