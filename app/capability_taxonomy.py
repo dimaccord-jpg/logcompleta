@@ -15,6 +15,7 @@ CAPABILITY_DOMAINS_MVP = frozenset({
     "freight_bi",
     "operational_audit",
     "forecast_planning",
+    "freight_table_comparison",
 })
 
 CAPABILITY_DOMAINS_FUTURE = frozenset({
@@ -38,8 +39,9 @@ DOMAIN_LABELS: dict[str, str] = {
     "freight_bi": "BI de Fretes e indicadores (Roberto)",
     "operational_audit": "Auditoria de Fretes (Cleide)",
     "forecast_planning": "Previsibilidade e planejamento de frete",
+    "freight_table_comparison": "Comparação de tabelas de frete / BID comparativo",
     "future_quotation": "Cotação automatizada de frete",
-    "future_bid": "BID de frete",
+    "future_bid": "BID aberto / cotação no mercado",
     "future_supply_planning": "Planejamento de supply chain",
 }
 
@@ -49,15 +51,26 @@ CAPABILITY_AVAILABILITY: dict[str, dict[str, Any]] = {
     "freight_bi": {"available": True, "status": "available", "alternatives": []},
     "operational_audit": {"available": True, "status": "available", "alternatives": []},
     "forecast_planning": {"available": True, "status": "available", "alternatives": []},
+    "freight_table_comparison": {"available": True, "status": "available", "alternatives": []},
     "future_quotation": {
         "available": False,
         "status": "future",
-        "alternatives": ["freight_bi", "forecast_planning", "strategic_logistics"],
+        "alternatives": [
+            "freight_table_comparison",
+            "freight_bi",
+            "forecast_planning",
+            "strategic_logistics",
+        ],
     },
     "future_bid": {
         "available": False,
         "status": "future",
-        "alternatives": ["freight_bi", "forecast_planning", "strategic_logistics"],
+        "alternatives": [
+            "freight_table_comparison",
+            "freight_bi",
+            "forecast_planning",
+            "strategic_logistics",
+        ],
     },
     "future_supply_planning": {
         "available": False,
@@ -130,6 +143,14 @@ DESTINATIONS: dict[str, DestinationSpec] = {
         requires_dataset=True,
         agent="cleide",
     ),
+    "agente_compara": DestinationSpec(
+        id="agente_compara",
+        label="Iniciar comparação de tabelas",
+        url="/agente-compara",
+        requires_login=True,
+        requires_dataset=False,
+        agent="agente_compara",
+    ),
 }
 
 DOMAIN_DESTINATION_CANDIDATES: dict[str, list[str]] = {
@@ -138,13 +159,20 @@ DOMAIN_DESTINATION_CANDIDATES: dict[str, list[str]] = {
     "freight_bi": ["roberto_bi"],
     "operational_audit": ["cleide_freight_audit"],
     "forecast_planning": ["roberto_bi"],
+    "freight_table_comparison": ["agente_compara"],
 }
 
 ONBOARDING_CTAS: list[dict[str, Any]] = [
     {
         "id": "reduce_cost",
         "label": "📉 Reduzir custos e encontrar oportunidades",
-        "seed_domains": ["freight_bi", "operational_audit", "strategic_logistics", "forecast_planning"],
+        "seed_domains": [
+            "freight_bi",
+            "operational_audit",
+            "freight_table_comparison",
+            "strategic_logistics",
+            "forecast_planning",
+        ],
         "seed_message": "Quero reduzir custos e encontrar oportunidades na operação logística.",
     },
     {
@@ -164,6 +192,12 @@ ONBOARDING_CTAS: list[dict[str, Any]] = [
         "label": "📋 Auditoria de Fretes — cobrança e divergências",
         "seed_domains": ["operational_audit", "freight_bi"],
         "seed_message": "Quero auditar cobranças de frete e comparar valor cobrado com o esperado.",
+    },
+    {
+        "id": "freight_table_comparison",
+        "label": "⚖️ Comparar tabelas de frete / BID",
+        "seed_domains": ["freight_table_comparison", "strategic_logistics"],
+        "seed_message": "Quero comparar duas ou três tabelas de frete sobre o mesmo volume de embarques.",
     },
     {
         "id": "strategic_support",

@@ -1,6 +1,6 @@
-# Runtime IA e Observabilidade
+﻿# Runtime IA e Observabilidade
 
-Referência auditada em 2026-07-29. Estado funcional consolidado em `docs/estado_oficial_consolidado.md`.
+Referência auditada em 2026-07-31. Estado funcional consolidado em `docs/estado_oficial_consolidado.md`.
 
 ## Trilhas separadas
 
@@ -29,6 +29,12 @@ Leitura operacional correta:
 - isso não significa, por si só, duplicação automática de linhas faturadas;
 - o resultado comparativo só é liberado publicamente quando `billing_status=applied`;
 - o analytics comparativo retornado ao frontend é derivado do resultado já liberado e não executa billing nem Gemini.
+
+Observações do runtime atual:
+
+- validação de `temp_table`, memória pública e gate de completeza são determinísticos e não geram consumo de IA;
+- o cálculo comparativo pode terminar com células `incomplete` sem que isso represente falha de infraestrutura, desde que o motor tenha produzido valor parcial e issues bloqueantes rastreáveis;
+- replays idempotentes preservam observabilidade e billing sem duplicar indevidamente o resultado público.
 
 ## Cleide e Júlia
 

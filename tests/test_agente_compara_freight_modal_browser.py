@@ -1680,3 +1680,689 @@ def test_browser_real_calculate_route_incomplete_from_motor(live_base_url, monke
         assert "parcial" in after or "incompleto" in after
         browser.close()
 
+
+def _coverage_temp_table(comparison_id="cmp-coverage-1", table_id="tbl-1", temp_id="tt-cov-1"):
+    tt = _temp_table("needs_review", comparison_id=comparison_id, table_id=table_id, temp_id=temp_id)
+    tt["coverage_table"] = {"rows": []}
+    tt["comparison"] = {
+        "comparison_id": comparison_id,
+        "current_step": "COVERAGE",
+        "active_table_id": table_id,
+        "tables": [
+            {
+                "table_id": table_id,
+                "slot_number": 1,
+                "status": "ready",
+                "confirmed": True,
+                "carrier_name": "Transportadora Browser",
+            }
+        ],
+    }
+    return tt
+
+
+def _install_coverage_step_routes(page, state, *, fail_skip=False, skip_delay_ms=0):
+    """Mock mínimo para abrir o modal em Cidades atendidas e tratar skip/upload."""
+    import json
+
+    state.comparison = _comparison_payload(
+        comparison_id="cmp-coverage-1", table_id="tbl-1", step="COVERAGE"
+    )
+    state.comparison["tables"][0]["status"] = "ready"
+    state.comparison["tables"][0]["confirmed"] = True
+    state.comparison["tables"][0]["carrier_name"] = "Transportadora Browser"
+    state.phase = "coverage"
+    state.skip_posts = []
+    state.coverage_uploads = []
+    state.gemini_calls = []
+    state.calculate_calls = []
+    state.fail_skip = fail_skip
+    state.skip_delay_ms = skip_delay_ms
+    state.temp_table = _coverage_temp_table()
+
+    def handle_route(route):
+        req = route.request
+        url = req.url
+        method = req.method.upper()
+
+        if "/api/agente-compara/comparison/calculate" in url:
+            state.calculate_calls.append(method)
+            route.fulfill(status=500, content_type="application/json", body='{"ok":false}')
+            return
+
+        if "/gemini" in url.lower() or "/api/agente-compara/chat" in url:
+            state.gemini_calls.append(url)
+            route.fulfill(status=500, content_type="application/json", body='{"ok":false}')
+            return
+
+        if "/api/agente-compara/documents/status" in url and method == "GET":
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "ok": True,
+                        "documents": [],
+                        "temp_table": state.temp_table,
+                        "calculation_bases": [],
+                        "comparison": state.comparison,
+                        "has_active_comparison": True,
+                    }
+                ),
+            )
+            return
+
+        if "/api/agente-compara/temp-table/save" in url and method == "POST":
+            body = req.post_data_json or {}
+            state.skip_posts.append(body)
+            if state.skip_delay_ms:
+                time.sleep(state.skip_delay_ms / 1000.0)
+            if state.fail_skip and body.get("review_action") == "skip_coverage_and_advance":
+                # Falha apenas na primeira tentativa; depois permite sucesso.
+                state.fail_skip = False
+                route.fulfill(
+                    status=400,
+                    content_type="application/json",
+                    body=json.dumps(
+                        {
+                            "ok": False,
+                            "message": "Falha controlada no skip de cobertura.",
+                        }
+                    ),
+                )
+                return
+            if body.get("review_action") == "skip_coverage_and_advance":
+                state.comparison["current_step"] = "CALCULATION_FILE"
+                state.temp_table = _coverage_temp_table()
+                state.temp_table["comparison"] = dict(state.comparison)
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(
+                        {
+                            "ok": True,
+                            "temp_table": state.temp_table,
+                            "comparison": state.comparison,
+                        }
+                    ),
+                )
+                return
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {"ok": True, "temp_table": state.temp_table, "comparison": state.comparison}
+                ),
+            )
+            return
+
+        if "/api/agente-compara/coverage/upload" in url and method == "POST":
+            state.coverage_uploads.append(True)
+            state.comparison["current_step"] = "CALCULATION_FILE"
+            state.temp_table = _coverage_temp_table()
+            state.temp_table["coverage_table"] = {
+                "rows": [
+                    {
+                        "destination_uf": "PE",
+                        "destination_city": "Caruaru",
+                        "freight_region": "PE-Caruaru",
+                        "notes": "",
+                    }
+                ]
+            }
+            state.temp_table["comparison"] = dict(state.comparison)
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "ok": True,
+                        "temp_table": state.temp_table,
+                        "comparison": state.comparison,
+                    }
+                ),
+            )
+            return
+
+        if "/api/agente-compara/audit/template" in url:
+            route.fulfill(
+                status=200,
+                content_type="text/csv",
+                body="documento,cidade,uf,peso,valor_nf\n",
+            )
+            return
+
+        if "/api/agente-compara/" in url:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body='{"ok": true}',
+            )
+            return
+
+        route.continue_()
+
+    page.route("**/api/agente-compara/**", handle_route)
+    page.route("**/gemini**", handle_route)
+
+
+def _wait_coverage_decision(page, timeout: int = 15000):
+    page.wait_for_selector("#agenteComparaTempTableModal:not([hidden])", timeout=timeout)
+    page.wait_for_function(
+        """() => {
+          const modal = document.getElementById('agenteComparaTempTableModal');
+          if (!modal || modal.hidden) return false;
+          const title = document.getElementById('agenteComparaTempTableModalTitle')?.textContent || '';
+          const body = document.getElementById('agenteComparaTempTableModalBody')?.textContent || '';
+          return title.includes('Cidades atendidas')
+            && body.includes('Sim, enviar planilha')
+            && body.includes('Agora não');
+        }""",
+        timeout=timeout,
+    )
+
+
+def _wait_calculation_file_step(page, timeout: int = 15000):
+    page.wait_for_function(
+        """() => {
+          const modal = document.getElementById('agenteComparaTempTableModal');
+          if (!modal || modal.hidden) return false;
+          const title = document.getElementById('agenteComparaTempTableModalTitle')?.textContent || '';
+          const body = document.getElementById('agenteComparaTempTableModalBody')?.textContent || '';
+          return title.includes('Arquivo para Comparação')
+            && body.includes('Baixar modelo')
+            && body.includes('Enviar arquivo preenchido')
+            && !body.includes('Etapa ignorada')
+            && !body.includes('iniciar a auditoria');
+        }""",
+        timeout=timeout,
+    )
+
+
+def test_browser_coverage_agora_nao_advances_immediately(live_base_url):
+    state = _FlowState()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _install_coverage_step_routes(page, state)
+        page.goto(f"{live_base_url}/agente-compara", wait_until="domcontentloaded")
+        _wait_coverage_decision(page)
+
+        no_btn = page.locator("#agenteComparaTempTableModal .agente-compara-coverage-prompt-no")
+        assert no_btn.count() >= 1
+        assert "Etapa ignorada" not in _body(page).inner_text()
+
+        no_btn.first.click()
+
+        try:
+            _wait_calculation_file_step(page)
+        except Exception:
+            raise AssertionError(
+                "skip_posts=%r step=%r title=%r body=%r err=%r"
+                % (
+                    state.skip_posts,
+                    state.comparison.get("current_step"),
+                    _title(page).inner_text(),
+                    _body(page).inner_text()[:800],
+                    page.locator("#agenteComparaTempTableModalError").inner_text(),
+                )
+            )
+
+        skip_actions = [
+            b for b in state.skip_posts if b.get("review_action") == "skip_coverage_and_advance"
+        ]
+        assert len(skip_actions) == 1
+        assert skip_actions[0].get("temp_table_id") == "tt-cov-1"
+        assert state.comparison["current_step"] == "CALCULATION_FILE"
+        assert "Etapa ignorada" not in _body(page).inner_text()
+        assert "Arquivo para Comparação" in _title(page).inner_text()
+        assert page.locator(".agente-compara-audit-file-download-btn").count() == 1
+        assert page.locator(".agente-compara-audit-file-upload-btn").count() == 1
+        assert state.gemini_calls == []
+        assert state.calculate_calls == []
+
+        # Refresh: restaura CALCULATION_FILE
+        page.reload(wait_until="domcontentloaded")
+        _wait_calculation_file_step(page)
+        assert state.comparison["current_step"] == "CALCULATION_FILE"
+
+        # Fechar e reabrir
+        page.click("#agenteComparaTempTableModalClose")
+        _wait_modal_hidden(page)
+        page.click(".agente-compara-temp-table-open-btn")
+        _wait_calculation_file_step(page)
+        browser.close()
+
+
+def test_browser_coverage_agora_nao_error_stays_and_retries(live_base_url):
+    state = _FlowState()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _install_coverage_step_routes(page, state, fail_skip=True)
+        page.goto(f"{live_base_url}/agente-compara", wait_until="domcontentloaded")
+        _wait_coverage_decision(page)
+
+        page.locator("#agenteComparaTempTableModal .agente-compara-coverage-prompt-no").first.click()
+        try:
+            page.wait_for_function(
+                """() => {
+                  const err = document.getElementById('agenteComparaTempTableModalError')?.textContent || '';
+                  const body = document.getElementById('agenteComparaTempTableModalBody')?.textContent || '';
+                  const title = document.getElementById('agenteComparaTempTableModalTitle')?.textContent || '';
+                  return title.includes('Cidades atendidas')
+                    && body.includes('Agora não')
+                    && err.length > 0;
+                }""",
+                timeout=15000,
+            )
+        except Exception:
+            raise AssertionError(
+                "skip_posts=%r step=%r title=%r body=%r err=%r"
+                % (
+                    state.skip_posts,
+                    state.comparison.get("current_step"),
+                    _title(page).inner_text(),
+                    _body(page).inner_text()[:800],
+                    page.locator("#agenteComparaTempTableModalError").inner_text(),
+                )
+            )
+        assert state.comparison["current_step"] == "COVERAGE"
+        assert "Arquivo para Comparação" not in _title(page).inner_text()
+        assert "Etapa ignorada" not in _body(page).inner_text()
+
+        # Nova tentativa funciona
+        page.locator("#agenteComparaTempTableModal .agente-compara-coverage-prompt-no").first.click()
+        _wait_calculation_file_step(page)
+        skip_actions = [
+            b for b in state.skip_posts if b.get("review_action") == "skip_coverage_and_advance"
+        ]
+        assert len(skip_actions) == 2
+        assert state.comparison["current_step"] == "CALCULATION_FILE"
+        browser.close()
+
+
+def test_browser_coverage_sim_enviar_planilha_still_advances(live_base_url):
+    state = _FlowState()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _install_coverage_step_routes(page, state)
+        page.goto(f"{live_base_url}/agente-compara", wait_until="domcontentloaded")
+        _wait_coverage_decision(page)
+
+        page.locator("#agenteComparaTempTableModal .agente-compara-coverage-prompt-yes").first.click()
+        page.wait_for_selector("#agenteComparaTempTableModal .agente-compara-coverage-upload-input", timeout=10000)
+
+        page.set_input_files(
+            "#agenteComparaTempTableModal .agente-compara-coverage-upload-input",
+            {
+                "name": "cidades.csv",
+                "mimeType": "text/csv",
+                "buffer": b"UF,Cidade,Regiao\nPE,Caruaru,PE-Caruaru\n",
+            },
+        )
+        _wait_calculation_file_step(page)
+        assert len(state.coverage_uploads) == 1
+        assert state.comparison["current_step"] == "CALCULATION_FILE"
+        assert page.locator(".agente-compara-audit-file-download-btn").count() == 1
+        assert state.gemini_calls == []
+        assert state.calculate_calls == []
+        browser.close()
+
+
+def _comparison_analytics_fixture(result):
+    from app.agente_compara_comparison_analytics_service import build_comparison_analytics
+
+    return build_comparison_analytics(result)
+
+
+def test_browser_comparison_dashboard_outside_modal_and_chart_lifecycle(live_base_url):
+    """Dashboard gerencial na página; modal só com tabela; Chart.js sem acumulação."""
+    state = _FlowState(promote_after_status_calls=2)
+    result = _comparison_result_fixture()
+    analytics = _comparison_analytics_fixture(result)
+    stored = {"result": result, "analytics": analytics}
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _install_routes(page, state)
+
+        def _on_get_calculation(route):
+            body = {
+                "ok": True,
+                "status": "CALCULATION_READY",
+                "execution_id": "exec-dash-restore",
+                "fingerprint_short": "dashrestore01",
+                "billing_status": "applied",
+                "stale": False,
+                "result": stored["result"],
+                "analytics": stored["analytics"],
+                "current_step": "CALCULATION_READY",
+            }
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=__import__("json").dumps(body),
+            )
+
+        page.route("**/api/agente-compara/comparison/calculation**", _on_get_calculation)
+        page.goto(f"{live_base_url}/agente-compara", wait_until="domcontentloaded")
+        page.wait_for_selector("#agenteComparaComparisonDashboard", state="attached")
+        assert page.locator("#agenteComparaComparisonDashboard").get_attribute("hidden") is not None
+        assert page.locator("#agenteComparaComparisonDashboard:not([hidden])").count() == 0
+
+        page.evaluate(
+            """({ result, analytics }) => {
+              document.dispatchEvent(new CustomEvent('agente-compara:inject-comparison-result', {
+                detail: {
+                  status: 'CALCULATION_READY',
+                  billing_status: 'applied',
+                  current_step: 'CALCULATION_READY',
+                  stale: false,
+                  result,
+                  analytics
+                }
+              }));
+            }""",
+            {"result": result, "analytics": analytics},
+        )
+
+        page.wait_for_selector("#agenteComparaComparisonDashboard:not([hidden])")
+        page.wait_for_selector("#agenteComparaComparisonKpis:not([hidden])")
+        page.wait_for_selector("#agenteComparaComparisonCharts:not([hidden])")
+        page.wait_for_selector("#agenteComparaChart_coverage")
+        page.wait_for_selector("#agenteComparaChart_without_complete")
+        page.wait_for_selector("#agenteComparaChart_comparability")
+        page.wait_for_selector("#agenteComparaChart_wins")
+        page.wait_for_selector("#agenteComparaChart_avg_cost")
+        page.wait_for_selector("#agenteComparaChart_potential_savings")
+        page.wait_for_selector("#agenteComparaResultsGeography")
+        page.wait_for_selector("#agenteComparaComparisonDashboardOpenDetailsBtn:not([hidden])")
+
+        assert page.locator("#agenteComparaComparisonDashboard .agente-compara-analytics-summary").count() == 1
+        kpis_text = page.locator("#agenteComparaComparisonKpis").inner_text()
+        assert "Resumo executivo" in kpis_text
+        assert "Documentos comparáveis" in kpis_text
+        assert "Economia potencial" in kpis_text
+        assert page.locator("#agenteComparaTempTableModal #agenteComparaChart_coverage").count() == 0
+        assert page.locator("#agenteComparaTempTableModal .agente-compara-analytics-summary").count() == 0
+
+        chart_count_1 = page.evaluate(
+            """() => {
+              const root = document.getElementById('agenteComparaComparisonDashboard');
+              const outsideModal = !document.getElementById('agenteComparaTempTableModal').contains(root);
+              return {
+                outsideModal,
+                instances: (window.__agenteComparaChartCountProbe = (
+                  document.querySelectorAll('#agenteComparaComparisonCharts canvas').length
+                )),
+                canvasIds: Array.from(document.querySelectorAll('canvas[id^=\"agenteComparaChart_\"]'))
+                  .map((el) => el.id)
+              };
+            }"""
+        )
+        assert chart_count_1["outsideModal"] is True
+        assert chart_count_1["instances"] == 6
+        assert sorted(chart_count_1["canvasIds"]) == [
+            "agenteComparaChart_avg_cost",
+            "agenteComparaChart_comparability",
+            "agenteComparaChart_coverage",
+            "agenteComparaChart_potential_savings",
+            "agenteComparaChart_wins",
+            "agenteComparaChart_without_complete",
+        ]
+
+        instances_before_modal = page.evaluate(
+            """() => {
+              const mod = document.querySelector('.agente-compara-page');
+              // Proxy via canvas count + Chart registry if available
+              const canvases = document.querySelectorAll('#agenteComparaComparisonCharts canvas').length;
+              let chartJsCount = null;
+              if (window.Chart && Chart.getChart) {
+                chartJsCount = ['coverage','without_complete','comparability','wins','avg_cost','potential_savings']
+                  .map((k) => Chart.getChart('agenteComparaChart_' + k))
+                  .filter(Boolean).length;
+              }
+              return { canvases, chartJsCount };
+            }"""
+        )
+
+        page.click("#agenteComparaComparisonDashboardOpenDetailsBtn")
+        page.wait_for_selector("#agenteComparaTempTableModal:not([hidden])")
+        page.wait_for_selector("#agenteComparaComparisonResultsTable")
+        page.wait_for_selector("#agenteComparaResultsFilters")
+        page.wait_for_selector("#agenteComparaResultsPagination")
+
+        modal = page.locator("#agenteComparaTempTableModal")
+        assert modal.locator(".agente-compara-analytics-summary").count() == 0
+        assert modal.locator("canvas[id^='agenteComparaChart_']").count() == 0
+        assert modal.locator("#agenteComparaResultsFilters").count() == 1
+        assert modal.locator("#agenteComparaComparisonResultsTable").count() == 1
+
+        instances_after_open = page.evaluate(
+            """() => {
+              const canvases = document.querySelectorAll('#agenteComparaComparisonCharts canvas').length;
+              let chartJsCount = null;
+              if (window.Chart && Chart.getChart) {
+                chartJsCount = ['coverage','without_complete','comparability','wins','avg_cost','potential_savings']
+                  .map((k) => Chart.getChart('agenteComparaChart_' + k))
+                  .filter(Boolean).length;
+              }
+              return { canvases, chartJsCount };
+            }"""
+        )
+        assert instances_after_open["canvases"] == instances_before_modal["canvases"] == 6
+        if instances_before_modal["chartJsCount"] is not None:
+            assert instances_after_open["chartJsCount"] == instances_before_modal["chartJsCount"] == 6
+
+        page.fill("#agenteComparaFilterDocument", "DOC-REP")
+        page.click("#agenteComparaApplyFiltersButton")
+        page.wait_for_timeout(200)
+        after_filter = page.evaluate(
+            """() => {
+              let chartJsCount = null;
+              if (window.Chart && Chart.getChart) {
+                chartJsCount = ['coverage','without_complete','comparability','wins','avg_cost','potential_savings']
+                  .map((k) => Chart.getChart('agenteComparaChart_' + k))
+                  .filter(Boolean).length;
+              }
+              return {
+                canvases: document.querySelectorAll('#agenteComparaComparisonCharts canvas').length,
+                chartJsCount,
+                kpisVisible: !document.getElementById('agenteComparaComparisonKpis').hidden
+              };
+            }"""
+        )
+        assert after_filter["canvases"] == 6
+        assert after_filter["kpisVisible"] is True
+        if after_filter["chartJsCount"] is not None:
+            assert after_filter["chartJsCount"] == 6
+
+        memory_btn = page.locator(
+            "#agenteComparaComparisonResultsTable button.agente-compara-comparison-calc-memory-link"
+        ).first
+        memory_btn.click()
+        page.wait_for_selector("#agenteComparaComparisonCalculationMemoryModal:not([hidden])")
+        page.locator("#agenteComparaComparisonCalculationMemoryModalClose").click()
+        page.wait_for_function(
+            "() => document.getElementById('agenteComparaComparisonCalculationMemoryModal').hidden === true"
+        )
+
+        page.click("#agenteComparaTempTableModalClose")
+        _wait_modal_hidden(page)
+        assert page.locator("#agenteComparaComparisonKpis:not([hidden])").count() == 1
+        assert page.locator("#agenteComparaChart_coverage").count() == 1
+        assert page.locator("#agenteComparaResultsGeography").count() == 1
+
+        page.click("#agenteComparaComparisonDashboardOpenDetailsBtn")
+        page.wait_for_selector("#agenteComparaTempTableModal:not([hidden])")
+        page.wait_for_selector("#agenteComparaComparisonResultsTable")
+        assert page.locator("#agenteComparaTempTableModal canvas[id^='agenteComparaChart_']").count() == 0
+        reopen_charts = page.evaluate(
+            """() => {
+              let chartJsCount = null;
+              if (window.Chart && Chart.getChart) {
+                chartJsCount = ['coverage','without_complete','comparability','wins','avg_cost','potential_savings']
+                  .map((k) => Chart.getChart('agenteComparaChart_' + k))
+                  .filter(Boolean).length;
+              }
+              return {
+                canvases: document.querySelectorAll('#agenteComparaComparisonCharts canvas').length,
+                chartJsCount
+              };
+            }"""
+        )
+        assert reopen_charts["canvases"] == 6
+        if reopen_charts["chartJsCount"] is not None:
+            assert reopen_charts["chartJsCount"] == 6
+
+        page.click("#agenteComparaTempTableModalClose")
+        _wait_modal_hidden(page)
+
+        # Novo resultado substitui gráficos uma vez
+        result2 = __import__("copy").deepcopy(result)
+        result2["comparative_rows"][0]["document_number"] = "DOC-NEW"
+        analytics2 = _comparison_analytics_fixture(result2)
+        stored["result"] = result2
+        stored["analytics"] = analytics2
+        page.evaluate(
+            """({ result, analytics }) => {
+              document.dispatchEvent(new CustomEvent('agente-compara:inject-comparison-result', {
+                detail: {
+                  status: 'CALCULATION_READY',
+                  billing_status: 'applied',
+                  current_step: 'CALCULATION_READY',
+                  stale: false,
+                  result,
+                  analytics
+                }
+              }));
+            }""",
+            {"result": result2, "analytics": analytics2},
+        )
+        page.wait_for_selector("#agenteComparaComparisonKpis:not([hidden])")
+        after_new = page.evaluate(
+            """() => {
+              let chartJsCount = null;
+              if (window.Chart && Chart.getChart) {
+                chartJsCount = ['coverage','without_complete','comparability','wins','avg_cost','potential_savings']
+                  .map((k) => Chart.getChart('agenteComparaChart_' + k))
+                  .filter(Boolean).length;
+              }
+              return {
+                canvases: document.querySelectorAll('#agenteComparaComparisonCharts canvas').length,
+                chartJsCount,
+                canvasIds: Array.from(document.querySelectorAll('canvas[id^=\"agenteComparaChart_\"]')).map((e) => e.id)
+              };
+            }"""
+        )
+        assert after_new["canvases"] == 6
+        assert len(after_new["canvasIds"]) == 6
+        if after_new["chartJsCount"] is not None:
+            assert after_new["chartJsCount"] == 6
+
+        # Restore via GET calculation (refresh contract)
+        page.evaluate(
+            """async () => {
+              const resp = await fetch('/api/agente-compara/comparison/calculation?comparison_id=cmp-memory-browser', {
+                credentials: 'same-origin'
+              });
+              const data = await resp.json();
+              document.dispatchEvent(new CustomEvent('agente-compara:inject-comparison-result', {
+                detail: {
+                  status: data.status,
+                  billing_status: data.billing_status,
+                  current_step: 'CALCULATION_READY',
+                  stale: false,
+                  result: data.result,
+                  analytics: data.analytics
+                }
+              }));
+            }"""
+        )
+        page.wait_for_selector("#agenteComparaComparisonKpis:not([hidden])")
+        assert page.locator("#agenteComparaTempTableModal").get_attribute("hidden") is not None
+
+        # Reset oficial: confirmação → limpa dashboard e destrói Chart.js
+        page.evaluate(
+            """() => {
+              const btn = document.getElementById('agenteComparaClearDocuments');
+              if (btn) {
+                btn.style.display = 'inline-block';
+                btn.click();
+              }
+            }"""
+        )
+        page.wait_for_selector("#agenteComparaResetConfirmModal:not([hidden])", timeout=10000)
+        page.click("#agenteComparaResetConfirmSubmit")
+        page.wait_for_function(
+            """() => {
+              const root = document.getElementById('agenteComparaComparisonDashboard');
+              return !!(root && root.hidden);
+            }""",
+            timeout=15000,
+        )
+        zero_charts = page.evaluate(
+            """() => {
+              let chartJsCount = 0;
+              if (window.Chart && Chart.getChart) {
+                chartJsCount = ['coverage','without_complete','comparability','wins','avg_cost','potential_savings']
+                  .map((k) => Chart.getChart('agenteComparaChart_' + k))
+                  .filter(Boolean).length;
+              }
+              return {
+                canvases: document.querySelectorAll('#agenteComparaComparisonCharts canvas').length,
+                chartJsCount,
+                modalHidden: document.getElementById('agenteComparaTempTableModal').hidden === true,
+                dashboardHidden: document.getElementById('agenteComparaComparisonDashboard').hidden === true
+              };
+            }"""
+        )
+        assert zero_charts["canvases"] == 0
+        assert zero_charts["chartJsCount"] == 0
+        assert zero_charts["modalHidden"] is True
+        assert zero_charts["dashboardHidden"] is True
+
+        # Mobile viewport smoke
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.evaluate(
+            """({ result, analytics }) => {
+              document.dispatchEvent(new CustomEvent('agente-compara:inject-comparison-result', {
+                detail: {
+                  status: 'CALCULATION_READY',
+                  billing_status: 'applied',
+                  current_step: 'CALCULATION_READY',
+                  stale: false,
+                  result,
+                  analytics
+                }
+              }));
+            }""",
+            {"result": result, "analytics": analytics},
+        )
+        page.wait_for_selector("#agenteComparaComparisonKpis:not([hidden])")
+        overflow = page.evaluate(
+            """() => {
+              const doc = document.documentElement;
+              return {
+                overflowX: doc.scrollWidth > doc.clientWidth + 2,
+                kpisVisible: !document.getElementById('agenteComparaComparisonKpis').hidden,
+                chartsVisible: !document.getElementById('agenteComparaComparisonCharts').hidden,
+                ctaVisible: !document.getElementById('agenteComparaComparisonDashboardOpenDetailsBtn').hidden
+              };
+            }"""
+        )
+        assert overflow["kpisVisible"] is True
+        assert overflow["chartsVisible"] is True
+        assert overflow["ctaVisible"] is True
+        assert overflow["overflowX"] is False
+
+        page.click("#agenteComparaComparisonDashboardOpenDetailsBtn")
+        page.wait_for_selector("#agenteComparaTempTableModal:not([hidden])")
+        assert page.locator("#agenteComparaTempTableModal #agenteComparaComparisonResultsTable").count() == 1
+        assert page.locator("#agenteComparaTempTableModal canvas[id^='agenteComparaChart_']").count() == 0
+        assert page.locator("#agenteComparaTempTableModal .agente-compara-analytics-summary").count() == 0
+        browser.close()
+

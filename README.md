@@ -1,6 +1,6 @@
-# LogCompleta / AgenteFrete
+﻿# LogCompleta / AgenteFrete
 
-Referência principal auditada em 2026-07-29: `docs/estado_oficial_consolidado.md`.
+Referência principal auditada em 2026-07-31: `docs/estado_oficial_consolidado.md`.
 
 ## Visão do produto
 
@@ -15,7 +15,9 @@ A visão oficial do AgenteCompara no código atual é a de um fluxo multitabela 
 - configuração fiscal global;
 - coverage opcional;
 - arquivo operacional com template oficial;
-- cálculo comparativo com lock, fingerprint, idempotência e storage dedicado fora da sessão;
+- cálculo comparativo com lock, fingerprint, idempotência, gate de completude e storage dedicado fora da sessão;
+- memória pública determinística por linha, incluindo componentes aplicados/ignorados e diagnósticos de cálculo;
+- validação determinística de taxas acessórias antes do avanço da revisão;
 - analytics comparativo leve no resultado liberado e observabilidade/billing operacional próprios.
 
 ## Arquitetura resumida
@@ -37,15 +39,23 @@ A entrega recente do AgenteCompara não adicionou migration, tabela nem coluna n
 O código versionado comprova:
 
 - branch local auditada: `homolog`;
-- commit auditado na branch atual: `81d36aa` (`feat: aprimora jornada e analytics do AgenteCompara`);
+- commit auditado na branch atual: `29b8500` (`feat(agente-compara): consolida cálculo, validação e revisão multietapas`);
 - `origin/homolog` apontando para o mesmo conteúdo do checkout local auditado;
+- `origin/producao` apontando para o commit equivalente publicado `d20672a` (`feat(agente-compara): consolida cálculo, validação e revisão multietapas`);
 - homolog em `homolog` com `autoDeploy: true` no `render.yaml`;
 - produção em `main` com `autoDeploy: false` no `render.yaml`;
 - `start.sh` inferindo `APP_ENV=prod` para `main`, `master`, `producao` e `prod`;
 - health checks reais em `/health/liveness` e `/health/readiness`;
 - `healthCheckPath: /health` ainda declarado no YAML.
 
-O processo operacional informado para a última entrega registra homologação em `homolog`, promoção para produção por `cherry-pick` em `producao` e deploy manual no Render. Essa diferença entre processo operacional e arquivos versionados continua sendo uma divergência aberta.
+O processo operacional informado para a publicação validada em 2026-07-31 registra homologação em `29b8500`, promoção para produção por `cherry-pick` em `producao` e publicação equivalente em `d20672a`, com deploy manual no Render. Essa diferença entre processo operacional e arquivos versionados continua sendo uma divergência aberta.
+
+## Testes e dependências de desenvolvimento
+
+- a suíte direcionada validada do AgenteCompara registrou `612 passed, 1 skipped, 2 warnings`;
+- os warnings observados eram depreciações de bibliotecas externas, sem falha funcional atribuída ao fluxo publicado;
+- `playwright>=1.40.0` foi adicionado somente em `requirements-dev.txt`;
+- o Render instala apenas `requirements.txt` pelo `build.sh`, então Playwright não é dependência de produção nem etapa automática do deploy.
 
 ## Arquivos locais ignorados
 

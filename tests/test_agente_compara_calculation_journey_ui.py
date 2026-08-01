@@ -87,19 +87,26 @@ def test_pending_and_running_do_not_render_result_table():
 def test_analytics_summary_and_neutral_language():
     js = _js()
     assert "function renderComparisonAnalyticsSummary" in js
-    assert "Resumo Comparativo" in js
+    assert "Resumo executivo" in js
     analytics_fn = _fn(js, "renderComparisonAnalyticsSummary", "createFilterField")
+    assert "Documentos comparáveis" in analytics_fn
+    assert "Economia potencial" in analytics_fn
+    assert "segunda menor" in analytics_fn
     for forbidden in (
-        "vencedor",
-        "winner",
-        "ranking",
-        "economia",
         "recommendation",
+        "recommended_carrier",
         "melhor transportadora",
         "troféu",
         "medalha",
+        "economia realizada",
+        "saving contratado",
     ):
         assert forbidden not in analytics_fn.lower()
+    dash_fn = _fn(js, "renderComparisonResultsDashboard", "refreshComparisonDashboardView")
+    assert "renderComparisonAnalyticsSummary" in dash_fn
+    modal_fn = _fn(js, "renderComparisonCalculationResults", "applyComparisonCalculationPayload")
+    assert "renderComparisonAnalyticsSummary" not in modal_fn
+    assert "renderComparisonResultCharts" not in modal_fn
 
 
 def test_filters_pagination_and_charts_helpers_exist():
@@ -114,7 +121,9 @@ def test_filters_pagination_and_charts_helpers_exist():
     assert "50" in _fn(js, "renderComparisonResultsPagination", "renderComparisonResultCharts")
     assert "100" in _fn(js, "renderComparisonResultsPagination", "renderComparisonResultCharts")
     assert "Exibindo " in js
-    assert "window.Chart" in _fn(js, "renderComparisonResultCharts", "renderComparisonResultsTable")
+    assert "window.Chart" in _fn(js, "renderComparisonResultCharts", "comparisonMemoryDisplayText")
+    assert "agenteComparaComparisonCharts" in js
+    assert "renderComparisonResultCharts(chartsEl" in js or "renderComparisonResultCharts(chartsEl," in js
 
 
 def test_results_table_uses_text_content_and_no_storage_path():
@@ -167,7 +176,8 @@ def test_no_forbidden_comparative_fields_in_new_ui_helpers():
     chunk = js[
         js.index("function comparisonRowIssueDate") : js.index("function applyComparisonCalculationPayload")
     ]
-    forbidden = [
+    # Chaves proibidas exatas (não substrings de potential_savings / lead_display_name).
+    forbidden_tokens = [
         "valor_frete",
         "charged_freight",
         "expected_freight",
@@ -175,15 +185,24 @@ def test_no_forbidden_comparative_fields_in_new_ui_helpers():
         "undercharged",
         "winning_carrier",
         "cheapest_carrier",
-        "savings",
-        "economy",
-        "recommendation",
+        "recommended_carrier",
+        '"savings"',
+        "'savings'",
+        ".savings",
+        '"economy"',
+        "'economy'",
+        ".economy",
+        '"recommendation"',
+        "'recommendation'",
     ]
-    for key in forbidden:
-        assert key not in chunk
-    # "ranking" como conceito de vencedor continua proibido como identificador/campo.
+    for key in forbidden_tokens:
+        assert key not in chunk, f"Campo/token proibido encontrado: {key}"
+    assert "potential_savings" in chunk or "Economia potencial" in chunk
+    assert "melhor transportadora" not in chunk.lower()
     assert "winning_carrier" not in chunk
-    assert re.search(r"\branking\b", chunk) is None or "sem ordenação automática" in chunk
+    # Ranking geográfico de economia potencial é permitido; ranking contratual/recomendação não.
+    assert "recommended_carrier" not in chunk
+    assert "uf_potential_ranking" in chunk
 
 
 def test_same_carrier_disambiguation_preserved():

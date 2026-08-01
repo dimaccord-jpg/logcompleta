@@ -7,7 +7,13 @@ from typing import Any
 
 _CAPABILITIES_PATH = pathlib.Path(__file__).resolve().parent / "copilot_capabilities.md"
 
-VALID_RECOMMENDED_AGENTS = frozenset({"roberto", "cleide", "julia", "feed"})
+VALID_RECOMMENDED_AGENTS = frozenset({
+    "roberto",
+    "cleide",
+    "julia",
+    "feed",
+    "agente_compara",
+})
 
 # Cleide padrão = Auditoria de Fretes; BI Cleide anterior permanece como destino legado `cleide_audit`.
 AGENT_TO_DESTINATION: dict[str, str] = {
@@ -15,6 +21,7 @@ AGENT_TO_DESTINATION: dict[str, str] = {
     "cleide": "cleide_freight_audit",
     "julia": "julia_operational",
     "feed": "feed",
+    "agente_compara": "agente_compara",
 }
 
 AGENT_BLURBS: dict[str, str] = {
@@ -30,6 +37,11 @@ AGENT_BLURBS: dict[str, str] = {
         "Júlia é a consultoria operacional logada — estratégia, supply chain, "
         "planejamento e apoio com documentos no chat quando logado."
     ),
+    "agente_compara": (
+        "O AgenteCompara compara duas ou três tabelas de transportadoras sobre o "
+        "mesmo volume de embarques — custos, cobertura, diferenças, economia "
+        "potencial e resultados por UF. A decisão final permanece com você."
+    ),
     "feed": "O Feed reúne notícias e tendências do mercado logístico.",
 }
 
@@ -39,6 +51,8 @@ ACTIVITY_AMBIGUOUS_REPLY = (
     "Roberto é o melhor caminho. "
     "Se quer auditar cobrança, comparar cobrado com esperado ou validar tabela negociada, "
     "a Auditoria de Fretes da Cleide é mais indicada. "
+    "Se quer comparar propostas de transportadoras sobre o mesmo volume, "
+    "o AgenteCompara é o caminho. "
     "Se a ideia é decidir uma estratégia de redução ou negociação, Júlia pode ajudar. "
     "Qual é o seu objetivo principal?"
 )
@@ -47,16 +61,25 @@ BI_VS_AUDIT_TRIAGE_REPLY = (
     "Depende do objetivo: "
     "para indicadores, gráficos, análise gerencial e previsões de frete, use o BI do Roberto (/fretes); "
     "para conferir cobrança, comparar cobrado com esperado, validar tabela negociada ou ver "
-    "divergências e memória de cálculo, use a Auditoria de Fretes da Cleide (/auditoria-frete)."
+    "divergências e memória de cálculo, use a Auditoria de Fretes da Cleide (/auditoria-frete); "
+    "para comparar duas ou três tabelas/propostas sobre o mesmo volume, use o AgenteCompara (/agente-compara)."
 )
 
 SPREADSHEET_AMBIGUOUS_REPLY = ACTIVITY_AMBIGUOUS_REPLY
 DASHBOARD_AMBIGUOUS_REPLY = ACTIVITY_AMBIGUOUS_REPLY
 COST_AMBIGUOUS_REPLY = ACTIVITY_AMBIGUOUS_REPLY
 
+# Cotação/licitação automatizada no mercado — ainda indisponível.
+# BID comparativo interno NÃO entra aqui (vai para AgenteCompara).
 UNAVAILABLE_FEATURE_KEYWORDS: tuple[tuple[str, ...], ...] = (
     ("cotação automatizada", "cotacao automatizada", "cotar frete automaticamente"),
-    ("bid de frete", "licitação de frete", "licitacao de frete"),
+    (
+        "enviar o bid para transportadoras",
+        "enviar bid para transportadoras",
+        "coletar propostas no mercado",
+        "licitação aberta de frete",
+        "licitacao aberta de frete",
+    ),
 )
 
 _ROBERTO_PREDICTIVE_RE = re.compile(
@@ -91,7 +114,62 @@ _CLEIDE_FREIGHT_AUDIT_RE = re.compile(
     r"comparar\s+cobrado|validar\s+tabela\s+negociada|tabela\s+negociada|"
     r"diverg[eê]ncia(?:s)?\s+(?:de\s+)?frete|mem[oó]ria\s+de\s+c[aá]lculo|"
     r"documentos?\s+sem\s+c[aá]lculo|cidades?\s+sem\s+(?:frete\s+)?calculad|"
-    r"sem\s+frete\s+calculad|cobran[cç]as?\s+de\s+frete)",
+    r"sem\s+frete\s+calculad|cobran[cç]as?\s+de\s+frete|"
+    r"conferir\s+se\s+(?:fui\s+)?cobrad|"
+    r"ct-?e\s+com\s+(?:a\s+)?tabela|"
+    r"paguei\s+o\s+valor\s+correto)",
+    re.IGNORECASE,
+)
+
+# Comparação multitabela / BID comparativo interno → AgenteCompara.
+# Exige intenção composta; não dispara por palavra isolada (bid, tabela, proposta).
+_FREIGHT_TABLE_COMPARISON_RE = re.compile(
+    r"(?:"
+    r"comparar\s+(?:(?:duas|tr[e?]s|2|3)\s+)?tabelas(?:\s+de\s+frete)?|"
+    r"compar(?:ar|e)\s+(?:as\s+)?(?:(?:duas|tr[e?]s|2|3)\s+)?tabelas(?:\s+de\s+frete)?|"
+    r"comparar\s+propostas?\s+(?:de\s+|comerciais?\s+de\s+)?transportadoras|"
+    r"comparar\s+(?:as\s+)?propostas?(?!\s+para\s+decidir)(?=.{0,60}(?:transportadoras|tabelas|custos?|cobertura|frete|comerciais))|"
+    r"comparar\s+(?:custo|cobertura|custos|valores).{0,40}(?:cobertura|custo|transportadoras|tabelas)|"
+    r"comparar\s+cobertura\s+e\s+custo|"
+    r"fazer\s+(?:um\s+)?bid|"
+    r"\bbid\b\s+entre\s+(?:tr[eê]s\s+)?transportadoras|"
+    r"bid\s+comparativ|"
+    r"concorr[eê]ncia\s+comparativa|"
+    r"equalizar\s+(?:os\s+)?(?:valores|propostas|custos)|"
+    r"(?:(?:duas|tr[e?]s|2|3)\s+)?tabelas?.{0,30}lado\s+a\s+lado|"
+    r"propostas?.{0,40}lado\s+a\s+lado|"
+    r"lado\s+a\s+lado.{0,40}(?:tabelas?|propostas?)|"
+    r"aplicar\s+(?:os\s+|o\s+)?mesm|"
+    r"mesm[oa]\s+(?:base|volume|arquivo|embarques?).{0,50}(?:tabelas?|propostas?|diferentes)|"
+    r"simular\s+(?:meu\s+)?volume|"
+    r"economia\s+potencial|"
+    r"vencedoras?\s+por\s+(?:uf|estado|embarque)|"
+    r"mais\s+competitiva\s+por\s+uf|"
+    r"menor\s+custo\s+por\s+uf|"
+    r"qual\s+tabela\s+(?:[eé]\s+)?mais\s+competitiva|"
+    r"propostas?\s+comerciais?.{0,40}(?:compar|lado\s+a\s+lado|equaliz)|"
+    r"agente\s*compara|agentecompara"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Cotação/licitação automatizada ou contratação — honestidade, sem handoff operacional.
+_AUTOMATED_MARKET_BID_RE = re.compile(
+    r"(?:"
+    r"cota[cç][aã]o\s+automat|"
+    r"cotar\s+frete\s+automatic|"
+    r"envi(?:ar|e)\s+(?:o\s+)?bid\s+(?:para|ao|às|as)\s+transportadoras|"
+    r"sistema\s+envie\s+(?:o\s+)?bid|"
+    r"colet(?:ar|em)\s+propostas?\s+(?:no\s+)?mercado|"
+    r"dispara(?:r)?\s+(?:uma\s+)?concorr[eê]ncia|"
+    r"publicar\s+(?:uma\s+)?concorr[eê]ncia|"
+    r"contratar?\s+(?:a\s+)?(?:melhor\s+)?(?:empresa|transportadora)|"
+    r"escolh(?:a|er)\s+e\s+contrat|"
+    r"fech(?:e|ar)\s+automaticamente|"
+    r"decid(?:a|ir)\s+automaticamente|"
+    r"licita[cç][aã]o\s+(?:aberta|automat)|"
+    r"cota[cç][aã]o\s+(?:aberta|de\s+frete)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -101,9 +179,11 @@ _JULIA_STRATEGIC_RE = re.compile(
     r"\bc[aâ]mbio|\bcambial|\bimporta(?:[cç][aã]o|r)?|\bexporta(?:[cç][aã]o|r)?|\bmacroecon|"
     r"\binterpretar(?:\s+\w+){0,8}\s+(?:para\s+)?tomar\s+decis[aã]o|"
     r"\btomada\s+de\s+decis[aã]o|\bleitura\s+execut|"
-    r"\bcomparar\s+propostas|\bcomparar\s+alternativas|"
+    r"\bcomparar\s+propostas\s+para\s+decidir|"
+    r"\bcomparar\s+alternativas|"
     r"\bresumir(?:\s+(?:o\s+)?(?:documento|contrato|arquivo))?|"
     r"\bmontar\s+plano|planejamento\s+log[ií]stico|"
+    r"\bsourcing|"
     r"\bentender\s+(?:o\s+)?cen[aá]rio)",
     re.IGNORECASE,
 )
@@ -111,14 +191,15 @@ _JULIA_STRATEGIC_RE = re.compile(
 _ARTIFACT_OR_THEME_RE = re.compile(
     r"\b(?:planilha(?:s)?|dashboard(?:s)?|analytics|\bbi\b|dados|transportadoras?|"
     r"custos?(?:\s+(?:de\s+)?frete|\s+log[ií]stico)?|gr[aá]ficos?|indicadores?|frete|"
-    r"documento(?:s)?|\bpdf(?:s)?\b|\bxml\b|anexo(?:s)?|tabela(?:s)?)\b",
+    r"documento(?:s)?|\bpdf(?:s)?\b|\bxml\b|anexo(?:s)?|tabela(?:s)?|"
+    r"proposta(?:s)?|\bbid\b)\b",
     re.IGNORECASE,
 )
 
 _FORMAT_QUESTION_RE = re.compile(
     r"\b(?:aceita\s+planilha|aceitam\s+planilha|aceita\s+pdf|aceitam\s+pdf|"
     r"aceita\s+documento|subir|upload|enviar\s+(?:meus\s+)?dados|"
-    r"posso\s+subir|anexar\s+(?:arquivo|documento|pdf))\b",
+    r"enviar\s+arquivos?|posso\s+subir|anexar\s+(?:arquivo|documento|pdf))\b",
     re.IGNORECASE,
 )
 
@@ -154,6 +235,20 @@ def is_freight_audit_intent(message: str) -> bool:
     return bool(_CLEIDE_FREIGHT_AUDIT_RE.search(text))
 
 
+def is_freight_table_comparison_intent(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    return bool(_FREIGHT_TABLE_COMPARISON_RE.search(text))
+
+
+def is_automated_market_bid_intent(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    return bool(_AUTOMATED_MARKET_BID_RE.search(text))
+
+
 def is_roberto_bi_managerial_intent(message: str) -> bool:
     text = (message or "").strip().lower()
     if not text:
@@ -180,9 +275,17 @@ def resolve_activity_intent(message: str) -> str | None:
     if is_screen_triage_question(text):
         return "screen_triage"
 
-    # Auditoria de cobrança explícita tem prioridade sobre BI gerencial genérico.
+    # Cotação/licitação automatizada ou contratação — honestidade antes de handoffs.
+    if is_automated_market_bid_intent(text):
+        return "unavailable_feature"
+
+    # Auditoria de cobrança explícita tem prioridade sobre comparação multitabela genérica.
     if is_freight_audit_intent(text):
         return "cleide_freight_audit"
+
+    # Comparação multitabela / BID comparativo interno → AgenteCompara.
+    if is_freight_table_comparison_intent(text):
+        return "freight_table_comparison"
 
     if is_roberto_bi_managerial_intent(text):
         return "roberto_predictive"
@@ -216,7 +319,12 @@ def resolve_activity_intent(message: str) -> str | None:
 def should_suppress_handoff_for_unclear_activity(message: str) -> bool:
     """Guardrail: suprime handoff quando atividade fim não está clara."""
     intent = resolve_activity_intent(message)
-    return intent in ("ambiguous", "artifact_format_question", "screen_triage")
+    return intent in (
+        "ambiguous",
+        "artifact_format_question",
+        "screen_triage",
+        "unavailable_feature",
+    )
 
 
 def resolve_spreadsheet_context(message: str) -> str | None:
@@ -236,6 +344,8 @@ def resolve_spreadsheet_context(message: str) -> str | None:
         return "spreadsheet_audit"
     if intent == "roberto_predictive":
         return "spreadsheet_bi"
+    if intent == "freight_table_comparison":
+        return "spreadsheet_comparison"
     if intent == "julia_strategic":
         return "spreadsheet_strategic"
     return "spreadsheet_ambiguous"
@@ -252,6 +362,8 @@ def resolve_dashboard_context(message: str) -> str | None:
         return "dashboard_audit"
     if intent == "roberto_predictive":
         return "dashboard_bi"
+    if intent == "freight_table_comparison":
+        return "dashboard_comparison"
     return "dashboard_ambiguous"
 
 
@@ -268,6 +380,8 @@ def resolve_cost_context(message: str) -> str | None:
         return "cost_audit"
     if intent == "roberto_predictive":
         return "cost_bi"
+    if intent == "freight_table_comparison":
+        return "cost_comparison"
     if intent == "julia_strategic":
         return "cost_strategic"
     return "cost_ambiguous"
@@ -293,6 +407,8 @@ def preferred_destination_for_message(message: str) -> str | None:
         return "cleide_freight_audit"
     if intent == "cleide_retrospective":
         return "cleide_freight_audit"
+    if intent == "freight_table_comparison":
+        return "agente_compara"
     if intent == "roberto_predictive":
         return "roberto_bi"
     if intent == "julia_strategic":
@@ -324,8 +440,6 @@ def _classify_local_context(message: str) -> str:
         return "help"
     if re.search(r"\b(?:not[ií]cias?|tend[eê]ncias?|feed|mercado\s+log[ií]stico)\b", text):
         return "feed"
-    if re.search(r"\b(?:cota[cç][aã]o|cotar\s+frete|\bbid\b)\b", text):
-        return "unavailable_feature"
     return "general"
 
 
@@ -354,6 +468,38 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
             "handoffs": None,
             "confidence": "medium",
             "reason": f"local_{ctx}",
+        }
+
+    if ctx == "unavailable_feature":
+        return {
+            "reply": (
+                "O AgenteCompara pode comparar as tabelas e propostas que você já possui, "
+                "mas não envia a concorrência ao mercado nem contrata transportadoras. "
+                "A decisão final permanece com você. "
+                "Se quiser comparar tabelas fornecidas, posso te levar ao AgenteCompara."
+            ),
+            "recommended_agent": None,
+            "handoff": None,
+            "handoffs": None,
+            "confidence": "high",
+            "reason": "local_unavailable_feature",
+        }
+
+    if ctx == "freight_table_comparison":
+        return {
+            "reply": (
+                "Para comparar duas ou três tabelas de transportadoras sobre o mesmo "
+                "volume de embarques, use o AgenteCompara. Ele calcula os custos de cada "
+                "tabela e mostra cobertura, diferenças, economia potencial e resultados por UF."
+            ),
+            "recommended_agent": "agente_compara",
+            "handoff": {
+                "destination": "agente_compara",
+                "label": "Iniciar comparação de tabelas",
+            },
+            "handoffs": None,
+            "confidence": "high",
+            "reason": "local_freight_table_comparison",
         }
 
     if ctx == "roberto_predictive":
@@ -414,7 +560,8 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
             "reply": (
                 "Posso conversar sobre sua operação logística e, quando fizer sentido, "
                 "indicar o melhor caminho — BI e previsão com Roberto, Auditoria de Fretes "
-                "com Cleide, estratégia com Júlia ou notícias no Feed. O que você quer explorar?"
+                "com Cleide, comparação de tabelas com AgenteCompara, estratégia com Júlia "
+                "ou notícias no Feed. O que você quer explorar?"
             ),
             "recommended_agent": None,
             "handoff": None,
@@ -433,24 +580,12 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
             "reason": "local_feed_intent",
         }
 
-    if ctx == "unavailable_feature":
-        return {
-            "reply": (
-                "Ainda não temos cotação ou BID automatizado de frete no AgenteFrete. "
-                "Posso ajudar com previsão de custos, auditoria ou consultoria estratégica."
-            ),
-            "recommended_agent": None,
-            "handoff": None,
-            "handoffs": None,
-            "confidence": "high",
-            "reason": "local_unavailable_feature",
-        }
-
     return {
         "reply": (
             "Sou o Copilot do AgenteFrete. Posso ajudar com BI e previsão de fretes, "
-            "Auditoria de Fretes (cobrança e divergências), estratégia logística e "
-            "tendências de mercado. O que você precisa agora?"
+            "Auditoria de Fretes (cobrança e divergências), comparação de tabelas "
+            "(AgenteCompara), estratégia logística e tendências de mercado. "
+            "O que você precisa agora?"
         ),
         "recommended_agent": None,
         "handoff": None,

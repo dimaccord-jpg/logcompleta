@@ -7,6 +7,7 @@ import pathlib
 from types import SimpleNamespace
 
 import pytest
+from flask_login import UserMixin
 
 from app.cleiton_doc_contracts import ERROR_MAX_FILES, FIELD_PREPARED_CONTEXT
 
@@ -18,16 +19,43 @@ def _load_web_module():
     return importlib.import_module("app.web")
 
 
-def _operational_client(monkeypatch):
+class _AuthUser(UserMixin):
+    def __init__(self, user_id: str = "123", is_admin: bool = False):
+        self.id = user_id
+        self.is_admin = is_admin
+        self.conta_id = 1
+        self.franquia_id = 1
+        self.email = "tester@example.com"
+        self.full_name = "Tester User"
+
+
+def _force_login(client, web, *, is_admin: bool = False):
+    user = _AuthUser(is_admin=is_admin)
+    monkey_get = lambda _user_id: user
+    setattr(web, "get_user_by_id", monkey_get)
+    with client.session_transaction() as sess:
+        sess["_user_id"] = user.get_id()
+        sess["_fresh"] = True
+    return user
+
+
+def _operational_client(monkeypatch, *, is_admin: bool = False, force_login: bool = False):
     web = _load_web_module()
-    monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=True))
+    monkeypatch.setattr(
+        web,
+        "current_user",
+        SimpleNamespace(is_authenticated=True, is_admin=is_admin),
+    )
     monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
     monkeypatch.setattr(
         web,
         "avaliar_autorizacao_operacao_por_franquia",
         lambda _u: {"permitido": True},
     )
-    return web.app.test_client()
+    client = web.app.test_client()
+    if force_login:
+        _force_login(client, web, is_admin=is_admin)
+    return client
 
 
 @pytest.fixture
@@ -157,26 +185,43 @@ def test_operational_home_julia_welcome_typewriter_contract(monkeypatch):
 
 
 def test_authenticated_home_renders_actions_submenu(monkeypatch):
-    client = _operational_client(monkeypatch)
+    client = _operational_client(monkeypatch, force_login=True)
     html = client.get("/").get_data(as_text=True)
     assert 'id="juliaChatActionsMenu"' in html
     assert 'id="juliaChatUploadItem"' in html
     assert "Enviar arquivos" in html
     assert 'class="julia-actions-divider"' in html
-    assert "Previsibilidade Frete" in html
-    assert "BI Cleide" in html
     assert "Auditoria de Frete" in html
     assert "Compare Tabelas" in html
-    assert "Controle de Estoque" in html
-    assert "Feed" in html
     menu_start = html.index('id="juliaChatActionsMenu"')
     menu_chunk = html[menu_start:menu_start + 2800]
-    assert "/cleide-bi-frete" in menu_chunk
+    assert "Previsibilidade Frete" not in menu_chunk
+    assert "BI Cleide" not in menu_chunk
+    assert "Controle de Estoque" not in menu_chunk
+    assert "Feed" not in menu_chunk
+    assert "/cleide-bi-frete" not in menu_chunk
     assert "/auditoria-frete" in menu_chunk
     assert "/agente-compara" in menu_chunk
     assert "Área do Usuário" not in menu_chunk
     assert ">Sair<" not in menu_chunk.replace(" ", "")
     assert "Home / Notícias" not in menu_chunk
+
+
+def test_authenticated_home_admin_renders_full_actions_submenu(monkeypatch):
+    client = _operational_client(monkeypatch, is_admin=True, force_login=True)
+    html = client.get("/").get_data(as_text=True)
+    menu_start = html.index('id="juliaChatActionsMenu"')
+    menu_chunk = html[menu_start:menu_start + 2800]
+    assert "Enviar arquivos" in menu_chunk
+    assert "Previsibilidade Frete" in menu_chunk
+    assert "BI Cleide" in menu_chunk
+    assert "Auditoria de Frete" in menu_chunk
+    assert "Compare Tabelas" in menu_chunk
+    assert "Controle de Estoque" in menu_chunk
+    assert "Feed" in menu_chunk
+    assert "/cleide-bi-frete" in menu_chunk
+    assert "/auditoria-frete" in menu_chunk
+    assert "/agente-compara" in menu_chunk
 
 
 def test_composer_css_has_no_vertical_attach_divider():

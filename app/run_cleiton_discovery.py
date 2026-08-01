@@ -53,9 +53,9 @@ COPILOT_JSON_CONTRACT = """
 Responda SEMPRE com um único JSON válido (sem markdown, sem texto fora do JSON):
 {
   "reply": "resposta natural em português BR",
-  "recommended_agent": "roberto" | "cleide" | "julia" | "feed" | null,
+  "recommended_agent": "roberto" | "cleide" | "julia" | "feed" | "agente_compara" | null,
   "handoff": {
-    "destination": "roberto_bi" | "cleide_freight_audit" | "cleide_audit" | "julia_operational" | "feed",
+    "destination": "roberto_bi" | "cleide_freight_audit" | "cleide_audit" | "julia_operational" | "feed" | "agente_compara",
     "label": "rótulo curto do botão (opcional)"
   } | null,
   "handoffs": [
@@ -74,9 +74,17 @@ Regras do JSON:
   - cleide_freight_audit → /auditoria-frete (Auditoria de Fretes: cobrança, cobrado vs esperado, tabela negociada, divergências, memória de cálculo). Preferir este para auditoria.
   - cleide_audit → /cleide-bi-frete (BI Cleide anterior/legado). NÃO usar para auditoria de cobrança.
 - Roberto: roberto_bi → /fretes (indicadores, gráficos, BI gerencial, previsões).
-- handoffs: use para oferecer dois caminhos (ex.: Júlia + Roberto em tema macro+frete), no máximo 2.
+- AgenteCompara: agente_compara → /agente-compara (comparação de tabelas / BID comparativo interno). Label sugerido do CTA: "Iniciar comparação de tabelas".
+- Artefato não define destino: planilha, PDF, tabela, custo ou transportadora isolados → converse e peça objetivo; sem handoff.
+- Distinções:
+  - Comparar tabelas/propostas sobre o mesmo volume → agente_compara.
+  - Auditar cobrança / cobrado vs esperado → cleide_freight_audit.
+  - Previsão / evolução histórica → roberto_bi.
+  - Estratégia / negociação / sourcing sem cálculo multitabela → julia_operational.
+- handoffs: use para oferecer dois caminhos (ex.: AgenteCompara + Júlia; AgenteCompara + Cleide; AgenteCompara + Roberto; Júlia + Roberto), no máximo 2.
 - needs_login: true apenas para continuidade operacional real com Júlia; default false.
-- Não prometa cotação automatizada, BID ou funcionalidades inexistentes.
+- Pode encaminhar BID comparativo interno ao AgenteCompara.
+- Não prometa cotação automatizada, BID aberto no mercado, coleta externa de propostas, contratação ou decisão automática.
 """.strip()
 
 
@@ -275,6 +283,8 @@ def _build_handoff_payload(
     if dest_id not in VALID_DESTINATIONS:
         return None
     spec = DESTINATIONS[dest_id]
+    if not capability_domain and dest_id == "agente_compara":
+        capability_domain = "freight_table_comparison"
     payload: dict[str, Any] = {
         "destination": dest_id,
         "label": (label or spec.label).strip(),
@@ -312,13 +322,24 @@ def _remap_destination_for_message(dest_id: str, user_message: str) -> str:
     return dest_id
 
 
+def _normalize_destination_id(raw: Any) -> str:
+    """Normaliza id de destination (case, hífen) para bater com a taxonomy."""
+    value = str(raw or "").strip().lower().replace("-", "_")
+    aliases = {
+        "agentecompara": "agente_compara",
+        "compare_tabelas": "agente_compara",
+        "comparar_tabelas": "agente_compara",
+    }
+    return aliases.get(value, value)
+
+
 def _parse_handoff_entry(raw: Any, *, user_message: str = "") -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
-    dest_id = str(raw.get("destination") or "").strip()
+    dest_id = _normalize_destination_id(raw.get("destination"))
     if dest_id not in VALID_DESTINATIONS:
         mapped = agent_to_destination(str(raw.get("agent") or raw.get("recommended_agent") or ""))
-        dest_id = mapped or dest_id
+        dest_id = _normalize_destination_id(mapped or dest_id)
     if dest_id not in VALID_DESTINATIONS:
         return None
     dest_id = _remap_destination_for_message(dest_id, user_message)
@@ -410,7 +431,17 @@ def _apply_guardrails(
         if handoffs:
             guardrail_notes.append("handoff_suppressed")
         handoffs = []
-
+    elif not handoffs:
+        # Gemini às vezes explica o AgenteCompara no texto e omite handoff no JSON.
+        # Injeta só o destination de comparação multitabela (correção pontual do CTA).
+        preferred = preferred_destination_for_message(user_message)
+        if preferred == "agente_compara":
+            injected = _build_handoff_payload(preferred)
+            if injected:
+                handoffs = [injected]
+                guardrail_notes.append("preferred_destination_injected")
+                if not recommended_agent:
+                    recommended_agent = _normalize_recommended_agent(injected.get("agent"))
     # needs_login do modelo NÃO desprotege destino operacional; taxonomia é a fonte.
     needs_login = parsed.get("needs_login") is True
     for h in handoffs:
@@ -536,9 +567,12 @@ def _build_onboarding_audit_context(
     clean_message = (user_message or "").strip()
     next_action = str(discovery.get("next_action") or "converse")
     pipeline = discovery.get("pipeline") or {}
+    capability_top = discovery.get("recommended_agent")
+    if isinstance(handoff, dict) and handoff.get("capability_domain"):
+        capability_top = handoff.get("capability_domain")
     contexto: dict[str, Any] = {
         "cta_id": cta_id,
-        "capability_top": discovery.get("recommended_agent"),
+        "capability_top": capability_top,
         "capability_scores": {},
         "destination_top": handoff["destination"] if handoff else None,
         "handoff_status": next_action,

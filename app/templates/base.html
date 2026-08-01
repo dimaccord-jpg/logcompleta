@@ -97,8 +97,8 @@
             margin-bottom: 10px;
         }
 
-        /* MENU ITENS */
-        .nav-list { list-style: none; padding: 20px 0; flex-grow: 1; }
+        /* MENU ITENS (atalhos ocultos visualmente; HTML/rotas preservados) */
+        .nav-list { list-style: none; padding: 0; margin: 0; display: none; }
         .nav-item { 
             padding: 14px 25px; 
             display: flex; 
@@ -116,15 +116,22 @@
             border-left: 4px solid var(--laranja-log); 
         }
 
-        /* RODAPÉ */
+        /* RODAPÉ — única área visível do menu lateral */
         .sidebar-footer { 
             padding: 20px; 
+            margin-top: auto;
             border-top: 1px solid rgba(255,255,255,0.05); 
             background: rgba(0,0,0,0.2); 
         }
         .sidebar-footer-renovacao {
             font-size: 0.7rem;
             line-height: 1.25;
+        }
+
+        /* Mobile: ocultar atalhos; manter perfil / login */
+        #mobileMenu .offcanvas-body > .nav-item,
+        #mobileMenu .offcanvas-body > hr {
+            display: none !important;
         }
         
         #content {
@@ -139,19 +146,6 @@
         }
 
         #sidebar.active .menu-text { display: none; }
-
-        /* Home: rótulo visual apenas (HTML mantém "Home / Notícias") */
-        #sidebar .nav-list > .nav-item:first-child .menu-text,
-        #mobileMenu .offcanvas-body > .nav-item:first-child .menu-text {
-            font-size: 0;
-        }
-        #sidebar .nav-list > .nav-item:first-child .menu-text::after,
-        #mobileMenu .offcanvas-body > .nav-item:first-child .menu-text::after {
-            font-size: 1rem;
-            font-weight: 500;
-            content: "Home";
-            color: inherit;
-        }
 
         /* ALERTAS FLASH */
         .flash-messages {
