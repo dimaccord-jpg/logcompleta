@@ -14,7 +14,9 @@
 
 <div class="container mb-5">
 
-  <div class="cleide-auditoria-wrapper cleide-auditoria-embedded" id="cleideAuditoriaShell">
+  <div class="cleide-auditoria-page-shell">
+
+    <div class="cleide-auditoria-wrapper cleide-auditoria-embedded" id="cleideAuditoriaShell">
 
     <div class="cleide-auditoria-container">
 
@@ -172,6 +174,14 @@
 
               </a>
 
+              <a href="{{ url_for('cleide.cleide_auditoria') if has_endpoint('cleide.cleide_auditoria') else '/auditoria-frete' }}" class="cleide-actions-item" role="menuitem">
+
+                <i class="bi bi-clipboard-check" aria-hidden="true"></i>
+
+                <span>Auditoria de Frete</span>
+
+              </a>
+
               {% if _auditoria_actions_is_admin %}
 
               <a href="{{ url_for('fretes') }}" class="cleide-actions-item" role="menuitem">
@@ -200,8 +210,6 @@
 
               </a>
 
-              {% if _auditoria_actions_is_admin %}
-
               <a href="{{ cleide_feed_href }}" class="cleide-actions-item" role="menuitem">
 
                 <i class="bi bi-rss" aria-hidden="true"></i>
@@ -209,8 +217,6 @@
                 <span>Feed</span>
 
               </a>
-
-              {% endif %}
 
             </div>
 
@@ -426,6 +432,8 @@
 
     </div>
 
+    </div>
+
   </div>
 
 </div>
@@ -518,6 +526,16 @@
 
 <style>
 
+  .cleide-auditoria-page-shell {
+
+    max-width: 760px;
+
+    margin: 0 auto;
+
+    width: 100%;
+
+  }
+
   .cleide-auditoria-wrapper.cleide-auditoria-embedded {
 
     border: none;
@@ -542,6 +560,8 @@
 
     overflow: visible;
 
+    width: 100%;
+
   }
 
   .cleide-auditoria-embedded .cleide-auditoria-header {
@@ -565,6 +585,8 @@
     color: var(--af-text-muted, #5A5A72);
 
     max-width: 760px;
+
+    margin-left: 0;
 
   }
 
@@ -630,6 +652,10 @@
 
     line-height: 1.6;
 
+    padding-left: 0 !important;
+
+    padding-right: 0 !important;
+
   }
 
   .cleide-auditoria-embedded .cleide-auditoria-input-area {
@@ -655,6 +681,8 @@
     position: relative;
 
     width: 100%;
+
+    max-width: 760px;
 
     overflow: visible;
 
@@ -1063,6 +1091,10 @@
   }
 
   .cleide-audit-documents-area {
+
+    max-width: 760px;
+
+
 
     padding: 0.35rem 0 0.65rem;
 

@@ -188,9 +188,11 @@ def test_cleide_auditoria_menu_tem_atalhos_esperados(monkeypatch):
     assert "Previsibilidade Frete" not in menu_chunk
     assert "BI Cleide" not in menu_chunk
     assert "/cleide-bi-frete" not in menu_chunk
-    assert "Feed" not in menu_chunk
+    assert "Feed" in menu_chunk
     assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
-    assert menu_chunk.index("Home") < menu_chunk.index("Compare Tabelas")
+    assert menu_chunk.index("Home") < menu_chunk.index("Auditoria de Frete")
+    assert menu_chunk.index("Auditoria de Frete") < menu_chunk.index("Compare Tabelas")
+    assert menu_chunk.index("Compare Tabelas") < menu_chunk.index("Feed")
 
 
 def test_cleide_auditoria_menu_admin_tem_atalhos_completos(monkeypatch):
@@ -220,27 +222,30 @@ def test_cleide_auditoria_menu_admin_tem_atalhos_completos(monkeypatch):
     assert "Enviar arquivos" in menu_chunk
     assert "Home" in menu_chunk
     assert f'href="{home_href}"' in menu_chunk
-    assert "Previsibilidade Frete" in menu_chunk
-    assert "BI Cleide" in menu_chunk
-    assert "/cleide-bi-frete" in menu_chunk
+    assert "Auditoria de Frete" in menu_chunk
     assert "Compare Tabelas" in menu_chunk
     assert "/agente-compara" in menu_chunk
     assert "Feed" in menu_chunk
+    assert "Previsibilidade Frete" in menu_chunk
+    assert "BI Cleide" in menu_chunk
+    assert "/cleide-bi-frete" in menu_chunk
     assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
-    assert menu_chunk.index("Home") < menu_chunk.index("Previsibilidade Frete")
-    assert menu_chunk.index("Previsibilidade Frete") < menu_chunk.index("BI Cleide")
-    assert menu_chunk.index("BI Cleide") < menu_chunk.index("Compare Tabelas")
+    assert menu_chunk.index("Home") < menu_chunk.index("Auditoria de Frete")
+    assert menu_chunk.index("Auditoria de Frete") < menu_chunk.index("Compare Tabelas")
     assert menu_chunk.index("Compare Tabelas") < menu_chunk.index("Feed")
 
 
 def test_cleide_auditoria_layout_alinhado_julia_embedded():
     source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
     assert 'class="container mb-5"' in source
+    assert "cleide-auditoria-page-shell" in source
     assert "cleide-auditoria-embedded" in source
     assert "cleide-auditoria-form-with-attach" in source
     assert "cleide-auditoria-composer-wrap" in source
     assert "cleide-auditoria-shell" not in source
-    assert "cleide-auditoria-page" not in source
+    page_shell_block = source.split(".cleide-auditoria-page-shell {", 1)[1].split("}", 1)[0]
+    assert "max-width: 760px" in page_shell_block
+    assert "margin: 0 auto" in page_shell_block
     embedded_block = source.split(".cleide-auditoria-wrapper.cleide-auditoria-embedded {", 1)[1].split("}", 1)[0]
     assert "border: none" in embedded_block
     assert "box-shadow: none" in embedded_block
@@ -250,6 +255,9 @@ def test_cleide_auditoria_layout_alinhado_julia_embedded():
     assert "padding: 0 0 1rem" in messages_block
     welcome_block = source.split(".cleide-auditoria-welcome {", 1)[1].split("}", 1)[0]
     assert "max-width: 760px" in welcome_block
+    assert "padding-left: 0 !important" in welcome_block
+    composer_wrap_block = source.split(".cleide-auditoria-composer-wrap {", 1)[1].split("}", 1)[0]
+    assert "max-width: 760px" in composer_wrap_block
     composer_block = source.split(".cleide-auditoria-composer {", 1)[1].split("}", 1)[0]
     assert "border-radius: 1.75rem" in composer_block
     menu_block = source.split(".cleide-auditoria-actions-menu {", 1)[1].split("}", 1)[0]
