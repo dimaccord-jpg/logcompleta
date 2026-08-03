@@ -112,9 +112,11 @@ def test_agente_compara_menu_comum_mostra_apenas_opcoes_aprovadas(monkeypatch):
     assert "/auditoria-frete" in menu_chunk
     assert "Previsibilidade Frete" not in menu_chunk
     assert "BI Gerencial" not in menu_chunk
-    assert "Feed" not in menu_chunk
+    assert "Feed" in menu_chunk
     assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
     assert menu_chunk.index("Home") < menu_chunk.index("Auditoria de Frete")
+    assert menu_chunk.index("Auditoria de Frete") < menu_chunk.index("Compare Tabelas")
+    assert menu_chunk.index("Compare Tabelas") < menu_chunk.index("Feed")
 
 
 def test_agente_compara_menu_admin_mostra_atalhos_completos(monkeypatch):
@@ -144,23 +146,25 @@ def test_agente_compara_menu_admin_mostra_atalhos_completos(monkeypatch):
     assert "Enviar arquivos" in menu_chunk
     assert "Home" in menu_chunk
     assert f'href="{home_href}"' in menu_chunk
-    assert "Previsibilidade Frete" in menu_chunk
-    assert "BI Gerencial" in menu_chunk
     assert "Auditoria de Frete" in menu_chunk
     assert "/auditoria-frete" in menu_chunk
+    assert "Compare Tabelas" in menu_chunk
     assert "Feed" in menu_chunk
+    assert "Previsibilidade Frete" in menu_chunk
+    assert "BI Gerencial" in menu_chunk
     assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
-    assert menu_chunk.index("Home") < menu_chunk.index("Previsibilidade Frete")
-    assert menu_chunk.index("Previsibilidade Frete") < menu_chunk.index("BI Gerencial")
-    assert menu_chunk.index("BI Gerencial") < menu_chunk.index("Auditoria de Frete")
-    assert menu_chunk.index("Auditoria de Frete") < menu_chunk.index("Feed")
+    assert menu_chunk.index("Home") < menu_chunk.index("Auditoria de Frete")
+    assert menu_chunk.index("Auditoria de Frete") < menu_chunk.index("Compare Tabelas")
+    assert menu_chunk.index("Compare Tabelas") < menu_chunk.index("Feed")
 
 
 def test_agente_compara_not_in_base_html_main_nav():
     base = pathlib.Path("app/templates/base.html").read_text(encoding="utf-8")
-    assert "Compare Tabelas" not in base
-    assert "agente-compara" not in base
-    assert "agente_compara" not in base
+    source = pathlib.Path("app/templates/agente_compara.html").read_text(encoding="utf-8")
+    assert "Compare Tabelas" in base
+    assert "agente-compara" in base
+    assert "agente_compara" in base
+    assert 'class="container mb-5 agente-compara-layout"' in source
 
 
 def test_agente_compara_page_initial_state_no_forced_wizard(monkeypatch):

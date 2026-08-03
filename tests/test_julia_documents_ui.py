@@ -198,7 +198,7 @@ def test_authenticated_home_renders_actions_submenu(monkeypatch):
     assert "Previsibilidade Frete" not in menu_chunk
     assert "BI Cleide" not in menu_chunk
     assert "Controle de Estoque" not in menu_chunk
-    assert "Feed" not in menu_chunk
+    assert "Feed" in menu_chunk
     assert "/cleide-bi-frete" not in menu_chunk
     assert "/auditoria-frete" in menu_chunk
     assert "/agente-compara" in menu_chunk
@@ -213,13 +213,14 @@ def test_authenticated_home_admin_renders_full_actions_submenu(monkeypatch):
     menu_start = html.index('id="juliaChatActionsMenu"')
     menu_chunk = html[menu_start:menu_start + 2800]
     assert "Enviar arquivos" in menu_chunk
-    assert "Previsibilidade Frete" in menu_chunk
-    assert "BI Cleide" in menu_chunk
+    assert "Home" in menu_chunk
     assert "Auditoria de Frete" in menu_chunk
     assert "Compare Tabelas" in menu_chunk
-    assert "Controle de Estoque" in menu_chunk
     assert "Feed" in menu_chunk
-    assert "/cleide-bi-frete" in menu_chunk
+    assert "Previsibilidade Frete" not in menu_chunk
+    assert "BI Cleide" not in menu_chunk
+    assert "Controle de Estoque" not in menu_chunk
+    assert "/cleide-bi-frete" not in menu_chunk
     assert "/auditoria-frete" in menu_chunk
     assert "/agente-compara" in menu_chunk
 
@@ -271,7 +272,7 @@ def test_actions_submenu_excludes_home_link(monkeypatch):
     menu_end = html.index("</div>", menu_start)
     menu_chunk = html[menu_start:menu_start + 2200]
     assert "Home / Notícias" not in menu_chunk
-    assert 'bi-house-door' not in menu_chunk
+    assert 'bi-house-door' in menu_chunk
 
 
 def test_js_actions_menu_toggle(js_source):
@@ -289,8 +290,32 @@ def test_sidebar_still_renders_on_authenticated_home(monkeypatch):
     client = _operational_client(monkeypatch)
     html = client.get("/").get_data(as_text=True)
     assert 'id="sidebar"' in html
-    assert "Home / Notícias" in html
-    assert "Previsibilidade Frete" in html
+    assert "Home" in html
+    assert "Auditoria de Frete" in html
+    assert "Compare Tabelas" in html
+    assert "Feed" in html
+    assert "Previsibilidade Frete" not in html
+
+
+def test_sidebar_guest_private_links_point_to_login_with_next(monkeypatch):
+    web = _load_web_module()
+    monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+    monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
+    monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", lambda _u: {"permitido": True})
+    html = web.app.test_client().get("/").get_data(as_text=True)
+    assert 'href="/login?next=/auditoria-frete"' in html
+    assert 'href="/login?next=/agente-compara"' in html
+    assert 'href="/feed"' in html
+
+
+
+def test_sidebar_authenticated_private_links_remain_direct(monkeypatch):
+    client = _operational_client(monkeypatch, force_login=True)
+    html = client.get("/").get_data(as_text=True)
+    assert 'href="/auditoria-frete"' in html
+    assert 'href="/agente-compara"' in html
+    assert 'href="/login?next=/auditoria-frete"' not in html
+    assert 'href="/login?next=/agente-compara"' not in html
 
 
 def test_js_upload_calls_correct_endpoint(js_source):
