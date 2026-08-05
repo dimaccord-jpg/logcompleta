@@ -43,15 +43,15 @@ _BENIGN_REASON_CODES = frozenset(
 _WARNING_REASON_CODES = frozenset(
     {
         "classification_warning_present",
+        "unsupported_accessorial_condition",
+        "conditions_present",
+        "unsupported_reason_present",
     }
 )
 
 # Reason codes que tornam o cálculo incompleto (potencialmente aplicável, não resolvido).
 _CRITICAL_REASON_CODES = frozenset(
     {
-        "unsupported_accessorial_condition",
-        "conditions_present",
-        "unsupported_reason_present",
         "unsupported_operation",
         "unsupported_calculation_type",
         "missing_audit_variable",
@@ -180,6 +180,43 @@ def _explicit_applicability(item: dict) -> str | None:
     return None
 
 
+def _explicit_required(item: dict) -> bool:
+    if item.get("required") is True:
+        return True
+    if item.get("optional") is True or item.get("required") is False:
+        return False
+    return False
+
+
+def _explicitly_applicable(item: dict) -> bool:
+    applicability = _explicit_applicability(item)
+    if applicability in {APPLICABILITY_NOT_APPLICABLE, APPLICABILITY_OPTIONAL_NOT_APPLIED}:
+        return False
+    if item.get("applicable") is True:
+        return True
+    return False
+
+
+def _reason_requires_proven_obligation(reason: str) -> bool:
+    return reason in {
+        "unsupported_accessorial_condition",
+        "conditions_present",
+        "unsupported_reason_present",
+    }
+
+
+def _is_blocking_ignored_component(item: dict, reason: str, applicability: str) -> bool:
+    if reason in _CRITICAL_REASON_CODES:
+        return True
+    if not _reason_requires_proven_obligation(reason):
+        return False
+    if applicability in {APPLICABILITY_NOT_APPLICABLE, APPLICABILITY_OPTIONAL_NOT_APPLIED}:
+        return False
+    if not _explicit_required(item):
+        return False
+    return _explicitly_applicable(item)
+
+
 def classify_ignored_component(item: dict, *, index: int = 0) -> dict:
     """Classifica um componente ignorado sem mutar a entrada."""
     if not isinstance(item, dict):
@@ -205,6 +242,8 @@ def classify_ignored_component(item: dict, *, index: int = 0) -> dict:
         "duplicate_invoice_percentage_fee_ignored",
     }:
         severity = "benign"
+    elif _is_blocking_ignored_component(item, reason, applicability):
+        severity = "blocking"
     elif applicability == APPLICABILITY_OPTIONAL_NOT_APPLIED or reason in _WARNING_REASON_CODES or reason in {
         "optional_not_applied",
         "accessorial_fee_not_applied",
@@ -212,16 +251,13 @@ def classify_ignored_component(item: dict, *, index: int = 0) -> dict:
         "classification_warning_present",
     }:
         severity = "warning"
-    elif reason in _CRITICAL_REASON_CODES or reason in _BENIGN_REASON_CODES:
-        # _BENIGN already handled above; remaining critical → blocking
-        severity = "blocking" if reason in _CRITICAL_REASON_CODES else "benign"
+    elif reason in _BENIGN_REASON_CODES:
+        severity = "benign"
     elif not reason:
-        # Sem reason code conhecido: conservador — crítico.
-        severity = "blocking"
+        severity = "warning"
         applicability = APPLICABILITY_INDETERMINATE
     else:
-        # Reason desconhecido: conservador.
-        severity = "blocking"
+        severity = "warning"
         applicability = APPLICABILITY_INDETERMINATE
 
     message = _PUBLIC_MESSAGES.get(applicability) or (
@@ -381,6 +417,15 @@ def classify_accessorial_execution_support(fee: dict | None) -> dict:
 
     optional = fee.get("optional") is True or fee.get("required") is False
 
+    base_id = str(fee.get("calculation_base_id") or "").strip().lower()
+    operation = str(fee.get("operation") or "").strip()
+    simple_fixed_bases = {"por_cte", "por_conhecimento", "por_documento"}
+    ignore_textual_conditions = (
+        operation == "fixed_amount"
+        and base_id in simple_fixed_bases
+        and fee.get("unsupported_reason") in (None, "", False)
+    )
+
     conditions = fee.get("conditions")
     has_conditions = False
     if isinstance(conditions, str):
@@ -390,7 +435,7 @@ def classify_accessorial_execution_support(fee: dict | None) -> dict:
     elif conditions:
         has_conditions = True
 
-    if has_conditions:
+    if has_conditions and not ignore_textual_conditions:
         return _json_safe(
             {
                 "supported": False,

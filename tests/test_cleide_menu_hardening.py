@@ -85,10 +85,12 @@ def _render_base(app: Flask) -> str:
 def test_base_render_nao_quebra_sem_blueprint_cleide():
     app = _build_base_render_app(register_cleide=False)
     html = _render_base(app)
-    assert "BI Cleide" in html
+    assert "Auditoria de Frete" in html
+    assert 'href="/login?next=/auditoria-frete"' in html
 
 
 def test_base_render_com_blueprint_cleide():
     app = _build_base_render_app(register_cleide=True)
     html = _render_base(app)
-    assert "/cleide-bi-frete" in html
+    assert "Auditoria de Frete" in html
+    assert 'href="/login?next=/auditoria-frete"' in html

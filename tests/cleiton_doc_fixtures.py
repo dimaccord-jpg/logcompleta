@@ -1,4 +1,4 @@
-"""Fixtures compartilhadas para testes documentais do Cleiton (Fase 3)."""
+﻿"""Fixtures compartilhadas para testes documentais do Cleiton (Fase 3)."""
 from __future__ import annotations
 
 import io
@@ -12,7 +12,9 @@ from app.services import cleiton_doc_config_service as doc_cfg_svc
 
 
 def patch_cleiton_doc_store(tmp_path, monkeypatch):
-    monkeypatch.setattr(store, "get_cleiton_doc_tmp_dir", lambda: str(tmp_path))
+    shared_tmp_dir = lambda: str(tmp_path)
+    monkeypatch.setattr(store, "get_cleiton_doc_tmp_dir", shared_tmp_dir)
+    monkeypatch.setattr("app.agente_compara_doc_service.get_cleiton_doc_tmp_dir", shared_tmp_dir)
 
 
 def patch_cleiton_doc_cfg(monkeypatch, **overrides):

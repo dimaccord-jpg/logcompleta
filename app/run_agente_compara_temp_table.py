@@ -1,4 +1,4 @@
-"""
+﻿"""
 Extração técnica da tabela temporária da Agente Compara (Fase 1).
 
 Pipeline pós-upload governado por Cleiton; separado do chat conversacional.
@@ -59,7 +59,71 @@ READING_ALERT_PARTIAL_EXTRACTION = (
     "A extração encontrou dados parciais e precisa de validação humana."
 )
 
+def _is_eligible_free_technical_retry(
+    record: dict | None,
+    *,
+    comparison_id: str | None,
+    slot_number: int | None,
+) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if not record.get("retry_of"):
+        return False
+    if not bool(record.get("is_technical_retry")):
+        return False
+    if not bool(record.get("retryable")):
+        return False
+    if (record.get("retry_failure_origin") or "").strip() != "platform":
+        return False
+    if (record.get(FIELD_COMPARISON_ID) or "").strip() != (comparison_id or "").strip():
+        return False
+    try:
+        record_slot = int(record.get(FIELD_SLOT_NUMBER)) if record.get(FIELD_SLOT_NUMBER) is not None else None
+    except (TypeError, ValueError):
+        record_slot = None
+    return record_slot == slot_number
 
+
+def _register_nonbillable_processing_event(
+    record: dict | None,
+    *,
+    source_doc_ids: list[str],
+    comparison_id: str | None,
+    slot_number: int | None,
+) -> None:
+    if not isinstance(record, dict):
+        return
+    status = (record.get("status") or "").strip().lower()
+    is_platform_failure = (
+        status == TEMP_TABLE_STATUS_FAILED
+        and (record.get("failure_origin") or "").strip() == "platform"
+        and bool(record.get("retryable"))
+    )
+    is_free_retry = _is_eligible_free_technical_retry(
+        record,
+        comparison_id=comparison_id,
+        slot_number=slot_number,
+    )
+    if not is_platform_failure and not is_free_retry:
+        return
+    from app.run_cleiton_processing_governance import cleiton_register_processing_event
+
+    error_summary = None
+    if is_platform_failure:
+        error_summary = (record.get("failure_code") or "platform_processing_failed")[:2000]
+    elif is_free_retry:
+        error_summary = f"free_technical_retry retry_of={record.get('retry_of') or ''}"[:2000]
+    cleiton_register_processing_event(
+        agent="agente_compara",
+        flow_type=AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
+        processing_type="non_llm",
+        rows_processed=len(source_doc_ids or []),
+        processing_time_ms=0,
+        status="failure" if is_platform_failure else "success",
+        error_summary=error_summary,
+        execution_id=str(record.get("temp_table_id") or "") or None,
+        apply_operational_motor=False,
+    )
 def _api_key_label() -> str:
     if os.getenv("GEMINI_API_KEY_1"):
         return "GEMINI_API_KEY_1"
@@ -353,13 +417,20 @@ def run_agente_compara_temp_table_extraction(
 
     doc_ctx = build_agente_compara_document_context_for_chat(sess, table_id=table_id)
     if not doc_ctx.get("has_documents"):
-        return apply_temp_table_extraction_from_model_payload(
+        record = apply_temp_table_extraction_from_model_payload(
             _failed_extraction_payload(reading_alerts=READING_ALERT_PARSER_NO_JSON),
             source_doc_ids=normalized,
             comparison_id=comparison_id,
             table_id=table_id,
             slot_number=slot_number,
         )
+        _register_nonbillable_processing_event(
+            record,
+            source_doc_ids=normalized,
+            comparison_id=comparison_id,
+            slot_number=slot_number,
+        )
+        return record
 
     effective_timeout_ms = get_extraction_timeout_ms()
     logger.info(
@@ -377,6 +448,12 @@ def run_agente_compara_temp_table_extraction(
             source_doc_ids=normalized,
             comparison_id=comparison_id,
             table_id=table_id,
+            slot_number=slot_number,
+        )
+        _register_nonbillable_processing_event(
+            record,
+            source_doc_ids=normalized,
+            comparison_id=comparison_id,
             slot_number=slot_number,
         )
         _cache_extraction_result(
@@ -417,6 +494,12 @@ def run_agente_compara_temp_table_extraction(
                     table_id=table_id,
                     slot_number=slot_number,
                 )
+                _register_nonbillable_processing_event(
+                    record,
+                    source_doc_ids=normalized,
+                    comparison_id=comparison_id,
+                    slot_number=slot_number,
+                )
                 _cache_extraction_result(
                     sess,
                     normalized,
@@ -434,6 +517,12 @@ def run_agente_compara_temp_table_extraction(
                 source_doc_ids=normalized,
                 comparison_id=comparison_id,
                 table_id=table_id,
+                slot_number=slot_number,
+            )
+            _register_nonbillable_processing_event(
+                record,
+                source_doc_ids=normalized,
+                comparison_id=comparison_id,
                 slot_number=slot_number,
             )
             _cache_extraction_result(
@@ -474,6 +563,12 @@ def run_agente_compara_temp_table_extraction(
         source_doc_ids=normalized,
         comparison_id=comparison_id,
         table_id=table_id,
+        slot_number=slot_number,
+    )
+    _register_nonbillable_processing_event(
+        record,
+        source_doc_ids=normalized,
+        comparison_id=comparison_id,
         slot_number=slot_number,
     )
     _cache_extraction_result(

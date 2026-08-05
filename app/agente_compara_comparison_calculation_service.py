@@ -1,4 +1,4 @@
-"""
+﻿"""
 Orquestrador multitabela em memória do AgenteCompara (Etapa 4).
 
 Coordena o cálculo isolado de 2 tabelas obrigatórias e, quando confirmada,
@@ -10,6 +10,7 @@ sem ranking e sem máquina de estados de cálculo.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import math
@@ -46,6 +47,7 @@ from app.agente_compara_comparison_state import (
 logger = logging.getLogger(__name__)
 
 MULTI_TABLE_CALCULATION_SCHEMA_VERSION = 1
+COMPACT_COMPARISON_RESULT_SCHEMA_VERSION = 2
 
 ERROR_COMPARISON_NOT_FOUND = "agente_compara_multi_table_comparison_not_found"
 ERROR_IDENTITY_MISMATCH = "agente_compara_multi_table_identity_mismatch"
@@ -965,6 +967,490 @@ def consolidate_results_by_row_index(
             row_payload["invoice_value"] = invoice_value
         comparative_rows.append(row_payload)
     return comparative_rows
+
+
+def _build_memory_ref(*, table_id: str, row_index: int) -> str:
+    safe_table = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(table_id or "").strip())
+    if not safe_table:
+        safe_table = "table"
+    return f"{safe_table}:{int(row_index)}"
+
+
+class _CanonicalSerializer:
+    def __init__(self, stats: dict[str, int] | None = None, *, use_identity_cache: bool = True) -> None:
+        self.stats = stats
+        self.use_identity_cache = use_identity_cache
+        self.identity_cache: dict[int, str] = {}
+
+    def _bump(self, metric: str, prefix: str | None = None) -> None:
+        if self.stats is None:
+            return
+        self.stats[metric] = self.stats.get(metric, 0) + 1
+        if prefix:
+            scoped = f"{prefix}_{metric}"
+            self.stats[scoped] = self.stats.get(scoped, 0) + 1
+
+    def render(self, payload: Any, *, prefix: str | None = None) -> str:
+        if isinstance(payload, dict):
+            payload_id = id(payload)
+            if self.use_identity_cache:
+                cached = self.identity_cache.get(payload_id)
+                if cached is not None:
+                    self._bump("identity_hits", prefix)
+                    return cached
+            self._bump("normalize_calls", prefix)
+            rendered = "{" + ",".join(
+                f"{json.dumps(str(key), ensure_ascii=False, allow_nan=False)}:{self.render(value, prefix=prefix)}"
+                for key, value in sorted(payload.items(), key=lambda item: str(item[0]))
+            ) + "}"
+            if self.use_identity_cache:
+                self.identity_cache[payload_id] = rendered
+            return rendered
+        if isinstance(payload, (list, tuple)):
+            payload_id = id(payload)
+            if self.use_identity_cache:
+                cached = self.identity_cache.get(payload_id)
+                if cached is not None:
+                    self._bump("identity_hits", prefix)
+                    return cached
+            self._bump("normalize_calls", prefix)
+            rendered = "[" + ",".join(self.render(value, prefix=prefix) for value in payload) + "]"
+            if self.use_identity_cache:
+                self.identity_cache[payload_id] = rendered
+            return rendered
+        self._bump("json_dumps", prefix)
+        return json.dumps(payload, ensure_ascii=False, allow_nan=False, default=str)
+
+
+def _canonical_catalog_json(payload: Any, *, serializer: _CanonicalSerializer, prefix: str | None = None) -> str:
+    return serializer.render(payload, prefix=prefix)
+
+
+def _catalog_hash_from_json(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _stable_catalog_key(prefix: str, payload: Any) -> str:
+    return f"{prefix}:{_catalog_hash_from_json(_canonical_catalog_json(payload))}"
+
+
+def _sanitize_calculation_memory(memory: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(memory, dict):
+        return None
+    sanitized = {
+        key: value
+        for key, value in memory.items()
+        if key not in {"components", "warnings", "blocking_issues", "evidence"}
+    }
+    return sanitized
+
+
+def _drop_empty_values(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        cleaned: dict[str, Any] = {}
+        for key, value in payload.items():
+            normalized = _drop_empty_values(value)
+            if normalized in (None, "", [], {}):
+                continue
+            cleaned[key] = normalized
+        return cleaned
+    if isinstance(payload, list):
+        cleaned_list = [_drop_empty_values(value) for value in payload]
+        return [value for value in cleaned_list if value not in (None, "", [], {})]
+    return payload
+
+
+def _sorted_unique_list(values: list[Any]) -> list[Any]:
+    unique: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        key = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(value)
+    return sorted(
+        unique,
+        key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, allow_nan=False, default=str),
+    )
+
+
+def _normalize_evidence_for_catalog(
+    evidence: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not isinstance(evidence, dict):
+        return None, None
+
+    common_fields = {
+        "source",
+        "table",
+        "rule",
+        "page",
+        "snippet",
+        "excerpt",
+        "trecho",
+        "quote",
+        "pricing_type",
+        "calculation_basis",
+        "weight_band",
+        "weight_basis",
+        "taxes_applied",
+        "accessorials_applied",
+        "freight_region",
+        "coverage_table",
+        "coverage_source_ref",
+        "coverage_classification",
+        "coverage_reference",
+        "coverage_rule_ref",
+        "region",
+        "city_uf_match",
+    }
+    item_fields = {
+        "row_index",
+        "document_number",
+        "destination_city",
+        "destination_uf",
+        "pricing_lookup_key",
+        "pricing_lookup_kind",
+        "matched_key",
+        "matched_rule",
+        "status",
+        "total",
+        "calculated_freight",
+        "reason_code",
+        "calculation_details",
+        "diagnostic",
+    }
+
+    common_payload: dict[str, Any] = {}
+    item_payload: dict[str, Any] = {}
+
+    for key, value in evidence.items():
+        if key in item_fields:
+            item_payload[key] = copy.deepcopy(value)
+            continue
+        if key == "coverage_table":
+            if isinstance(value, dict):
+                coverage_meta = {k: copy.deepcopy(v) for k, v in value.items() if k != "rows"}
+                coverage_meta = _drop_empty_values(coverage_meta)
+                if coverage_meta:
+                    common_payload[key] = coverage_meta
+            continue
+        target = common_payload if key in common_fields else item_payload
+        target[key] = copy.deepcopy(value)
+
+    common_payload = _drop_empty_values(common_payload) or {}
+    item_payload = _drop_empty_values(item_payload) or {}
+
+    for list_key in ("taxes_applied", "accessorials_applied"):
+        if isinstance(common_payload.get(list_key), list):
+            common_payload[list_key] = _sorted_unique_list(common_payload[list_key])
+
+    return (common_payload or None), (item_payload or None)
+
+
+class _CatalogBuilder:
+    def __init__(self, *, prefix: str, serializer: _CanonicalSerializer, stats: dict[str, int] | None = None, use_identity_cache: bool = True) -> None:
+        self.prefix = prefix
+        self.serializer = serializer
+        self.stats = stats
+        self.use_identity_cache = use_identity_cache
+        self.catalog: dict[str, dict[str, Any]] = {}
+        self.content_index: dict[str, str] = {}
+        self.identity_index: dict[int, str] = {}
+
+    def _bump(self, metric: str) -> None:
+        if self.stats is None:
+            return
+        self.stats[metric] = self.stats.get(metric, 0) + 1
+        scoped = f"{self.prefix}_{metric}"
+        self.stats[scoped] = self.stats.get(scoped, 0) + 1
+
+    def ref(self, payload: dict[str, Any] | None) -> str | None:
+        if not isinstance(payload, dict) or not payload:
+            return None
+        identity_key = id(payload)
+        if self.use_identity_cache:
+            existing = self.identity_index.get(identity_key)
+            if existing:
+                self._bump("identity_hits")
+                return existing
+        stable_json = _canonical_catalog_json(payload, serializer=self.serializer, prefix=self.prefix)
+        existing = self.content_index.get(stable_json)
+        if existing:
+            if self.use_identity_cache:
+                self.identity_index[identity_key] = existing
+            self._bump("content_hits")
+            return existing
+        digest = _catalog_hash_from_json(stable_json)
+        self._bump("hash_calls")
+        base_ref = f"{self.prefix}:{digest}"
+        ref = base_ref
+        suffix = 2
+        while ref in self.catalog and self.catalog[ref] != payload:
+            ref = f"{base_ref}:{suffix}"
+            suffix += 1
+        self.catalog[ref] = payload
+        self.content_index[stable_json] = ref
+        if self.use_identity_cache:
+            self.identity_index[identity_key] = ref
+        return ref
+
+
+def _catalog_ref(
+    builder: _CatalogBuilder,
+    *,
+    payload: dict[str, Any] | None,
+) -> str | None:
+    return builder.ref(payload)
+
+
+def _catalog_message_payload(message: Any, *, severity: str) -> dict[str, Any] | None:
+    if isinstance(message, dict):
+        code = message.get("code") or message.get("reason_code") or message.get("message")
+        text = message.get("message") or message.get("text") or message.get("label") or code
+        guidance = message.get("guidance") or message.get("orientation")
+    else:
+        code = message
+        text = message
+        guidance = None
+    if code is None and text is None:
+        return None
+    return {
+        "code": str(code or text),
+        "text": str(text or code),
+        "severity": severity,
+        "guidance": guidance,
+    }
+
+
+def hydrate_memory_item(item: dict[str, Any], memory_payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    if not isinstance(memory_payload, dict) or int(memory_payload.get("schema_version") or 0) < 3:
+        return copy.deepcopy(item)
+
+    tables = memory_payload.get("tables") if isinstance(memory_payload.get("tables"), dict) else {}
+    rules = memory_payload.get("rules") if isinstance(memory_payload.get("rules"), dict) else {}
+    components = memory_payload.get("components") if isinstance(memory_payload.get("components"), dict) else {}
+    evidence_catalog = memory_payload.get("evidence_catalog") if isinstance(memory_payload.get("evidence_catalog"), dict) else {}
+    messages = memory_payload.get("messages") if isinstance(memory_payload.get("messages"), dict) else {}
+
+    hydrated = copy.deepcopy(item)
+    rule_ref = hydrated.pop("rule_ref", None)
+    component_ref = hydrated.pop("component_ref", None)
+    component_refs = hydrated.pop("component_refs", None)
+    evidence_refs = hydrated.pop("evidence_refs", None)
+    item_evidence = hydrated.pop("item_evidence", None)
+    warning_codes = hydrated.pop("warning_codes", None)
+    blocking_codes = hydrated.pop("blocking_codes", None)
+    table_ref = hydrated.get("table_id")
+
+    if isinstance(rule_ref, str) and isinstance(rules.get(rule_ref), dict):
+        hydrated["rule"] = copy.deepcopy(rules[rule_ref])
+    if isinstance(component_ref, str) and isinstance(components.get(component_ref), dict):
+        hydrated["components"] = copy.deepcopy(components[component_ref])
+    elif isinstance(component_refs, list):
+        hydrated["components"] = [copy.deepcopy(components[ref]) for ref in component_refs if isinstance(components.get(ref), dict)]
+    if isinstance(evidence_refs, list):
+        merged_evidence: dict[str, Any] = {}
+        for ref in evidence_refs:
+            payload = evidence_catalog.get(ref)
+            if isinstance(payload, dict):
+                merged_evidence.update(copy.deepcopy(payload))
+        if isinstance(item_evidence, dict):
+            merged_evidence.update(copy.deepcopy(item_evidence))
+        hydrated["evidence"] = merged_evidence
+    elif isinstance(item_evidence, dict):
+        hydrated["evidence"] = copy.deepcopy(item_evidence)
+    if isinstance(warning_codes, list):
+        hydrated["warnings"] = [copy.deepcopy(messages[code]) for code in warning_codes if isinstance(messages.get(code), dict)]
+    if isinstance(blocking_codes, list):
+        hydrated["blocking_issues"] = [copy.deepcopy(messages[code]) for code in blocking_codes if isinstance(messages.get(code), dict)]
+    if isinstance(table_ref, str) and isinstance(tables.get(table_ref), dict):
+        hydrated.setdefault("table", copy.deepcopy(tables[table_ref]))
+    calculation_memory = hydrated.get("calculation_memory")
+    if isinstance(calculation_memory, dict):
+        if "components" not in calculation_memory and "components" in hydrated:
+            calculation_memory["components"] = copy.deepcopy(hydrated.get("components") or [])
+        if "warnings" not in calculation_memory and "warnings" in hydrated:
+            calculation_memory["warnings"] = copy.deepcopy(hydrated.get("warnings") or [])
+        if "blocking_issues" not in calculation_memory and "blocking_issues" in hydrated:
+            calculation_memory["blocking_issues"] = copy.deepcopy(hydrated.get("blocking_issues") or [])
+        if "evidence" not in calculation_memory and "evidence" in hydrated:
+            calculation_memory["evidence"] = copy.deepcopy(hydrated.get("evidence") or {})
+    return hydrated
+
+
+def compact_comparison_result_for_storage(result: dict, *, _debug_stats: dict[str, int] | None = None) -> dict:
+    """Separa mem?rias detalhadas do resultado comparativo para persist?ncia compacta."""
+    if not isinstance(result, dict):
+        raise MultiTableCalculationInvariantError("Resultado comparativo inv?lido para compacta??o.")
+
+    comparison_id = str(result.get("comparison_id") or "").strip()
+    comparative_rows_in = result.get("comparative_rows") if isinstance(result.get("comparative_rows"), list) else []
+    results_by_table_in = result.get("results_by_table") if isinstance(result.get("results_by_table"), dict) else {}
+
+    compact_rows = []
+    memory_items = {}
+    table_builder = _CatalogBuilder(prefix="tbl", serializer=_CanonicalSerializer(_debug_stats), stats=_debug_stats)
+    rule_builder = _CatalogBuilder(prefix="rule", serializer=_CanonicalSerializer(_debug_stats), stats=_debug_stats)
+    component_builder = _CatalogBuilder(prefix="cmp", serializer=_CanonicalSerializer(_debug_stats), stats=_debug_stats)
+    evidence_builder = _CatalogBuilder(prefix="evd", serializer=_CanonicalSerializer(_debug_stats), stats=_debug_stats)
+    message_builder = _CatalogBuilder(prefix="msg", serializer=_CanonicalSerializer(_debug_stats, use_identity_cache=False), stats=_debug_stats, use_identity_cache=False)
+    per_table_counts = {}
+
+    for row in comparative_rows_in:
+        if not isinstance(row, dict):
+            continue
+        row_index = int(row.get("row_index") or 0)
+        compact_table_results = {}
+        raw_table_results = row.get("table_results") if isinstance(row.get("table_results"), dict) else {}
+        for table_id, cell in raw_table_results.items():
+            if not isinstance(cell, dict):
+                continue
+            memory_ref = _build_memory_ref(table_id=str(table_id), row_index=row_index)
+            compact_table_results[str(table_id)] = {
+                "table_id": cell.get("table_id") or table_id,
+                "carrier_name": cell.get("carrier_name"),
+                "slot_number": cell.get("slot_number"),
+                "calculated_freight": cell.get("calculated_freight"),
+                "status": cell.get("status"),
+                "raw_status": cell.get("raw_status"),
+                "final_status": cell.get("final_status") or cell.get("status"),
+                "completeness_status": cell.get("completeness_status"),
+                "is_partial_value": bool(cell.get("is_partial_value")),
+                "error": copy.deepcopy(cell.get("error")),
+                "memory_ref": memory_ref,
+            }
+            calculation_memory = _sanitize_calculation_memory(cell.get("calculation_memory"))
+            table_ref = _catalog_ref(
+                table_builder,
+                payload={
+                    "table_id": cell.get("table_id") or table_id,
+                    "carrier_name": cell.get("carrier_name"),
+                    "slot_number": cell.get("slot_number"),
+                    "source_table_id": cell.get("table_id") or table_id,
+                    "coverage_scope": row.get("destination_uf"),
+                },
+            )
+            rule_ref = _catalog_ref(
+                rule_builder,
+                payload={
+                    "selected_rule": (calculation_memory or {}).get("selected_rule"),
+                    "pricing": (calculation_memory or {}).get("pricing"),
+                    "rule_source": ((cell.get("evidence") or {}) if isinstance(cell.get("evidence"), dict) else {}).get("source"),
+                },
+            )
+            component_ref = None
+            component_refs = []
+            components_payload = cell.get("components")
+            if isinstance(components_payload, dict):
+                component_ref = _catalog_ref(component_builder, payload=components_payload)
+            elif isinstance(components_payload, list):
+                for component in components_payload:
+                    ref = _catalog_ref(component_builder, payload=component if isinstance(component, dict) else None)
+                    if ref:
+                        component_refs.append(ref)
+            evidence_refs = []
+            evidence_payload, item_evidence = _normalize_evidence_for_catalog(
+                cell.get("evidence") if isinstance(cell.get("evidence"), dict) else None
+            )
+            if isinstance(evidence_payload, dict):
+                ref = _catalog_ref(evidence_builder, payload=evidence_payload)
+                if ref:
+                    evidence_refs.append(ref)
+            warning_codes = []
+            for warning in cell.get("warnings") or []:
+                ref = _catalog_ref(message_builder, payload=_catalog_message_payload(warning, severity="warning"))
+                if ref:
+                    warning_codes.append(ref)
+            blocking_codes = []
+            for blocking in cell.get("blocking_issues") or []:
+                ref = _catalog_ref(message_builder, payload=_catalog_message_payload(blocking, severity="blocking"))
+                if ref:
+                    blocking_codes.append(ref)
+            memory_items[memory_ref] = {
+                "memory_ref": memory_ref,
+                "comparison_id": comparison_id,
+                "table_id": table_ref or (cell.get("table_id") or table_id),
+                "row_index": row_index,
+                "document_number": row.get("document_number"),
+                "carrier_name": cell.get("carrier_name"),
+                "slot_number": cell.get("slot_number"),
+                "status": (calculation_memory or {}).get("status") or cell.get("status"),
+                "total": (calculation_memory or {}).get("total", cell.get("calculated_freight")),
+                "calculation_memory": calculation_memory,
+                "item_evidence": item_evidence or None,
+                "rule_ref": rule_ref,
+                "component_ref": component_ref,
+                "component_refs": component_refs,
+                "evidence_refs": evidence_refs,
+                "warning_codes": warning_codes,
+                "blocking_codes": blocking_codes,
+                "reason_code": (cell.get("error") or {}).get("code") if isinstance(cell.get("error"), dict) else None,
+            }
+        compact_row = {
+            "row_index": row_index,
+            "document_number": row.get("document_number"),
+            "destination_city": row.get("destination_city"),
+            "destination_uf": row.get("destination_uf"),
+            "weight": row.get("weight"),
+            "table_results": compact_table_results,
+        }
+        if "invoice_value" in row:
+            compact_row["invoice_value"] = row.get("invoice_value")
+        compact_rows.append(compact_row)
+
+    compact_results_by_table = {}
+    for table_id, table_result in results_by_table_in.items():
+        if not isinstance(table_result, dict):
+            continue
+        counts = {
+            "calculated_count": int(table_result.get("calculated_count") or 0),
+            "calculated_with_warnings_count": int(table_result.get("calculated_with_warnings_count") or 0),
+            "incomplete_count": int(table_result.get("incomplete_count") or 0),
+            "error_count": int(table_result.get("error_count") or 0),
+        }
+        per_table_counts[str(table_id)] = counts
+        compact_results_by_table[str(table_id)] = {
+            "comparison_id": table_result.get("comparison_id"),
+            "table_id": table_result.get("table_id") or table_id,
+            "temp_table_id": table_result.get("temp_table_id"),
+            "slot_number": table_result.get("slot_number"),
+            "carrier_name": table_result.get("carrier_name"),
+            "row_count": table_result.get("row_count"),
+            "calculated_count": counts["calculated_count"],
+            "calculated_with_warnings_count": counts["calculated_with_warnings_count"],
+            "incomplete_count": counts["incomplete_count"],
+            "error_count": counts["error_count"],
+            "summary": copy.deepcopy(table_result.get("summary") or {}),
+            "duration_ms": table_result.get("duration_ms", 0),
+            "schema_version": table_result.get("schema_version"),
+        }
+
+    compact_result = dict(result)
+    compact_result["schema_version"] = COMPACT_COMPARISON_RESULT_SCHEMA_VERSION
+    compact_result["comparative_rows"] = compact_rows
+    compact_result["results_by_table"] = compact_results_by_table
+    memory_payload = {
+        "schema_version": 3,
+        "comparison_id": comparison_id,
+        "execution_id": result.get("execution_id"),
+        "tables": table_builder.catalog,
+        "rules": rule_builder.catalog,
+        "components": component_builder.catalog,
+        "evidence_catalog": evidence_builder.catalog,
+        "messages": message_builder.catalog,
+        "items": memory_items,
+    }
+    return {
+        "compact_result": compact_result,
+        "memory_payload": memory_payload,
+        "schema_version": COMPACT_COMPARISON_RESULT_SCHEMA_VERSION,
+        "memory_ref_count": len(memory_items),
+        "table_counts": per_table_counts,
+    }
 
 
 def calculate_comparison_in_memory(context: MultiTableCalculationContext) -> dict:

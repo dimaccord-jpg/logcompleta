@@ -12,7 +12,7 @@
 
 {% include 'partials/app_global_header.html' %}
 
-<div class="container mb-5">
+<div class="container-fluid cleide-auditoria-layout mb-5">
 
   <div class="cleide-auditoria-page-shell">
 
@@ -526,13 +526,28 @@
 
 <style>
 
+  .cleide-auditoria-layout {
+    width: 100%;
+    max-width: 1600px;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: clamp(0.75rem, 2vw, 1.75rem);
+    padding-right: clamp(0.75rem, 2vw, 1.75rem);
+  }
+
   .cleide-auditoria-page-shell {
 
-    max-width: 760px;
+    --cleide-auditoria-shell-max: 1320px;
+
+    --cleide-auditoria-text-max: 880px;
+
+    max-width: var(--cleide-auditoria-shell-max);
 
     margin: 0 auto;
 
     width: 100%;
+
+    min-width: 0;
 
   }
 
@@ -584,7 +599,7 @@
 
     color: var(--af-text-muted, #5A5A72);
 
-    max-width: 760px;
+    max-width: var(--cleide-auditoria-text-max);
 
     margin-left: 0;
 
@@ -646,7 +661,7 @@
 
     border-radius: 0.5rem;
 
-    max-width: 760px;
+    max-width: var(--cleide-auditoria-text-max);
 
     font-size: 0.98rem;
 
@@ -682,7 +697,7 @@
 
     width: 100%;
 
-    max-width: 760px;
+    max-width: var(--cleide-auditoria-text-max);
 
     overflow: visible;
 
@@ -930,7 +945,7 @@
 
     text-decoration: underline;
 
-    word-break: break-word;
+    overflow-wrap: break-word;
 
   }
 
@@ -1092,7 +1107,7 @@
 
   .cleide-audit-documents-area {
 
-    max-width: 760px;
+    max-width: 100%;
 
 
 
@@ -1218,7 +1233,7 @@
 
     font-weight: 600;
 
-    word-break: break-word;
+    overflow-wrap: anywhere;
 
   }
 
@@ -1802,7 +1817,7 @@
     .cleide-audit-coverage-upload-file-name {
       text-align: center;
       white-space: normal;
-      word-break: break-word;
+      overflow-wrap: anywhere;
     }
   }
 
@@ -2555,7 +2570,8 @@
 
   .cleide-audit-temp-table-modal-meta-value {
     color: var(--af-text-primary, #F0F0F5);
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .cleide-audit-temp-table-modal-section-title {
@@ -2599,7 +2615,8 @@
 
   .cleide-audit-temp-table-modal-detail-value {
     color: var(--af-text-primary, #F0F0F5);
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .cleide-audit-temp-table-modal-list {
@@ -2672,7 +2689,10 @@
   }
 
   .cleide-audit-temp-table-modal-freight-scroll {
+    width: 100%;
+    min-width: 0;
     overflow-x: auto;
+    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
     margin: 0.25rem 0 0.5rem;
     border-radius: 0.45rem;
@@ -2705,7 +2725,8 @@
     padding: 0.4rem 0.55rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     vertical-align: top;
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .cleide-audit-temp-table-modal-freight-table tbody tr:last-child td {
@@ -2714,13 +2735,14 @@
 
   .cleide-audit-temp-table-modal-data-table {
     width: 100%;
+    min-width: 0;
     border-collapse: collapse;
     font-size: 0.76rem;
     margin: 0.25rem 0 0.5rem;
   }
 
   .cleide-audit-temp-table-modal-data-table-editable {
-    min-width: 1120px;
+    min-width: min(1120px, 100%);
   }
 
   .cleide-audit-temp-table-modal-data-table thead th {
@@ -2736,7 +2758,8 @@
     padding: 0.38rem 0.55rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     vertical-align: top;
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .cleide-audit-temp-table-modal-data-table tbody tr:last-child td {

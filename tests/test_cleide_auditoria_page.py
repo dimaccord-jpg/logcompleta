@@ -218,7 +218,8 @@ def test_cleide_auditoria_menu_admin_tem_atalhos_completos(monkeypatch):
         home_href = web.url_for("index")
     html = client.get("/auditoria-frete").get_data(as_text=True)
     menu_start = html.index('id="cleideAuditoriaActionsMenu"')
-    menu_chunk = html[menu_start:menu_start + 2800]
+    menu_end = html.index('id="cleideAuditBiSection"', menu_start)
+    menu_chunk = html[menu_start:menu_end]
     assert "Enviar arquivos" in menu_chunk
     assert "Home" in menu_chunk
     assert f'href="{home_href}"' in menu_chunk
@@ -237,15 +238,20 @@ def test_cleide_auditoria_menu_admin_tem_atalhos_completos(monkeypatch):
 
 def test_cleide_auditoria_layout_alinhado_julia_embedded():
     source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
-    assert 'class="container mb-5"' in source
+    assert 'class="container-fluid cleide-auditoria-layout mb-5"' in source
     assert "cleide-auditoria-page-shell" in source
     assert "cleide-auditoria-embedded" in source
     assert "cleide-auditoria-form-with-attach" in source
     assert "cleide-auditoria-composer-wrap" in source
-    assert "cleide-auditoria-shell" not in source
+    assert 'cleide-auditoria-shell"' not in source
+    layout_block = source.split(".cleide-auditoria-layout {", 1)[1].split("}", 1)[0]
+    assert "max-width: 1600px" in layout_block
+    assert "padding-left: clamp(0.75rem, 2vw, 1.75rem)" in layout_block
     page_shell_block = source.split(".cleide-auditoria-page-shell {", 1)[1].split("}", 1)[0]
-    assert "max-width: 760px" in page_shell_block
-    assert "margin: 0 auto" in page_shell_block
+    assert "--cleide-auditoria-shell-max: 1320px" in page_shell_block
+    assert "--cleide-auditoria-text-max: 880px" in page_shell_block
+    assert "max-width: var(--cleide-auditoria-shell-max)" in page_shell_block
+    assert "min-width: 0" in page_shell_block
     embedded_block = source.split(".cleide-auditoria-wrapper.cleide-auditoria-embedded {", 1)[1].split("}", 1)[0]
     assert "border: none" in embedded_block
     assert "box-shadow: none" in embedded_block
@@ -254,10 +260,10 @@ def test_cleide_auditoria_layout_alinhado_julia_embedded():
     assert "min-height: 0" in messages_block
     assert "padding: 0 0 1rem" in messages_block
     welcome_block = source.split(".cleide-auditoria-welcome {", 1)[1].split("}", 1)[0]
-    assert "max-width: 760px" in welcome_block
+    assert "max-width: var(--cleide-auditoria-text-max)" in welcome_block
     assert "padding-left: 0 !important" in welcome_block
     composer_wrap_block = source.split(".cleide-auditoria-composer-wrap {", 1)[1].split("}", 1)[0]
-    assert "max-width: 760px" in composer_wrap_block
+    assert "max-width: var(--cleide-auditoria-text-max)" in composer_wrap_block
     composer_block = source.split(".cleide-auditoria-composer {", 1)[1].split("}", 1)[0]
     assert "border-radius: 1.75rem" in composer_block
     menu_block = source.split(".cleide-auditoria-actions-menu {", 1)[1].split("}", 1)[0]
@@ -917,7 +923,7 @@ def test_cleide_auditoria_js_temp_table_modal_edita_accessorial_fees():
     assert "Adicionar item" in js
     assert "currentTempTable.accessorial_fees.push" in js
     assert "cleide-audit-temp-table-modal-add-btn" in source
-    assert "min-width: 1120px" in source
+    assert "min-width: min(1120px, 100%)" in source
 
 
 def test_cleide_auditoria_js_freight_table_open_state_variables():
@@ -1854,3 +1860,37 @@ def test_cleide_auditoria_chat_copy_button_contract():
     assert "buildCleideCopyAction" not in chat_behavior_js
     assert "/api/chat_julia" in chat_behavior_js
     assert "/api/chat_julia" not in js
+
+
+def test_cleide_auditoria_template_layout_allows_wide_temp_table_surfaces():
+    source = pathlib.Path("app/templates/cleide_auditoria.html").read_text(encoding="utf-8")
+    docs_start = source.index('.cleide-audit-documents-area {')
+    docs_block = source[docs_start: docs_start + 140]
+    assert 'max-width: 100%;' in docs_block
+
+    chat_link_start = source.index('.cleide-auditoria-chat-msg-inner a {')
+    chat_link_block = source[chat_link_start: chat_link_start + 180]
+    assert 'overflow-wrap: break-word;' in chat_link_block
+    assert 'word-break: break-word;' not in chat_link_block
+
+    table_start = source.index('.cleide-audit-temp-table-modal-data-table {')
+    table_block = source[table_start: table_start + 440]
+    assert 'min-width: 0;' in table_block
+    assert 'min-width: min(1120px, 100%);' in table_block
+
+    scroll_start = source.index('.cleide-audit-temp-table-modal-freight-scroll {')
+    scroll_block = source[scroll_start: scroll_start + 260]
+    assert 'width: 100%;' in scroll_block
+    assert 'min-width: 0;' in scroll_block
+    assert 'overflow-x: auto;' in scroll_block
+    assert 'overflow-y: visible;' in scroll_block
+
+    freight_td_start = source.index('.cleide-audit-temp-table-modal-freight-table tbody td {')
+    freight_td_block = source[freight_td_start: freight_td_start + 320]
+    assert 'word-break: normal;' in freight_td_block
+    assert 'overflow-wrap: break-word;' in freight_td_block
+
+    data_td_start = source.index('.cleide-audit-temp-table-modal-data-table tbody td {')
+    data_td_block = source[data_td_start: data_td_start + 320]
+    assert 'word-break: normal;' in data_td_block
+    assert 'overflow-wrap: break-word;' in data_td_block

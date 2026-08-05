@@ -10,6 +10,7 @@ import pytest
 
 from app.agente_compara_doc_service import AGENTE_COMPARA_DOC_IDS_SESSION_KEY
 from app.cleide_audit_doc_service import CLEIDE_AUDIT_DOC_IDS_SESSION_KEY
+from app.models import CleitonBillingApropriacao, ProcessingEvent
 from app.services.agente_compara_config_service import (
     AgenteComparaConfig,
     DEFAULT_FALLBACK_MESSAGE,
@@ -98,10 +99,21 @@ def _upload(client, filename: str, content: bytes, mime: str = "text/csv", *, ca
 def web_client(app, tmp_path, monkeypatch, ctx):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
-    _authorized(monkeypatch, web)
-    web.app.config["TESTING"] = True
-    return web.app.test_client()
+        from app.agente_compara_api_routes import agente_compara_api_bp
+
+        app.config["TESTING"] = True
+        app.config["SECRET_KEY"] = "test-secret"
+        if "agente_compara_api" not in app.blueprints:
+            app.register_blueprint(agente_compara_api_bp)
+    _authorized(
+        monkeypatch,
+        SimpleNamespace(
+            app=app,
+            current_user=None,
+            avaliar_autorizacao_operacao_por_franquia=None,
+        ),
+    )
+    return app.test_client()
 
 
 def test_csv_upload_lands_in_agente_compara_session_key(web_client, app):
@@ -184,6 +196,7 @@ def test_upload_same_carrier_name_on_two_slots_allowed(web_client, monkeypatch):
     table2_id = r1.get_json()["comparison"]["tables"][1]["table_id"]
     with web_client.session_transaction() as sess:
         from app.agente_compara_comparison_state import AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY, get_comparison_state
+        from app.agente_compara_doc_service import get_temp_table_id
 
         state = get_comparison_state(sess)
         t1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
@@ -226,7 +239,7 @@ def test_detected_carrier_does_not_overwrite_manual_name(app, tmp_path, monkeypa
         get_table_by_slot,
         persist_comparison_state,
     )
-    from app.agente_compara_doc_service import save_temp_table_record
+    from app.agente_compara_doc_service import get_temp_table_id, save_temp_table_record
 
     app.config["SECRET_KEY"] = "test-secret"
     with app.test_request_context():
@@ -342,3 +355,399 @@ def test_carrier_integration_two_tables_independent_names(web_client, monkeypatc
     assert names[1] == "Transportadora A"
     assert names[2] == "Transportadora B"
     assert calls.get("count") == 2
+
+
+def test_new_upload_replaces_previous_slot_document_and_marks_retry_metadata(web_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+    monkeypatch.setattr(
+        "app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+    first = _upload(web_client, "t1.csv", make_csv([["a"], ["1"]]), carrier_name="Carrier A", slot="1")
+    assert first.status_code == 200
+    first_body = first.get_json()
+    first_doc_id = first_body["document"]["doc_id"]
+
+    from app.agente_compara_doc_service import get_temp_table_id, save_temp_table_record
+    from app.cleiton_doc_store import load_document_record
+
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_comparison_state import AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY, get_comparison_state
+
+        state = get_comparison_state(sess)
+        table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        active_temp_table_id_before_save = table_1["temp_table_id"]
+        state_payload = dict(sess)
+        with web_client.application.test_request_context():
+            from flask import session
+
+            session.update(state_payload)
+            failed_temp_table = save_temp_table_record(
+                {
+                    "temp_table_id": active_temp_table_id_before_save,
+                    "status": "failed",
+                    "source_documents": [first_doc_id],
+                    "reading_alerts": ["Gemini retornou timeout durante a extração técnica."],
+                    "comparison_id": state["comparison_id"],
+                    "table_id": table_1["table_id"],
+                    "slot_number": 1,
+                },
+                table_id=table_1["table_id"],
+            )
+            failed_temp_table_id = failed_temp_table["temp_table_id"]
+            for key, value in session.items():
+                sess[key] = value
+            for key in list(sess.keys()):
+                if key not in session:
+                    sess.pop(key, None)
+
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_doc_service import load_temp_table_record
+        from app.agente_compara_comparison_state import get_comparison_state
+
+        state = get_comparison_state(sess)
+        table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        assert table_1["temp_table_id"] == failed_temp_table_id
+        persisted = load_temp_table_record(failed_temp_table_id, ttl_hours=24)
+        assert persisted is not None
+        assert persisted["status"] == "failed"
+        assert persisted["failure_origin"] == "platform"
+        assert persisted["failure_code"] == "platform_temporary_failure"
+        assert persisted["retryable"] is True
+
+    second = _upload(web_client, "t2.csv", make_csv([["a"], ["2"]]), carrier_name="Carrier A", slot="1")
+    assert second.status_code == 200
+    second_body = second.get_json()
+    second_doc_id = second_body["document"]["doc_id"]
+
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_comparison_state import get_comparison_state
+
+        state = get_comparison_state(sess)
+        table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        assert table_1["doc_ids"] == [second_doc_id]
+        replaced = load_document_record(first_doc_id, ttl_hours=24)
+        current = load_document_record(second_doc_id, ttl_hours=24)
+        assert replaced["status"] == "replaced"
+        assert replaced["error_code"] is None
+        assert current["retry_of"] == first_doc_id
+        assert current["original_document_id"] == first_doc_id
+        assert current["retry_failure_code"] == "platform_temporary_failure"
+        assert current["retry_failure_origin"] == "platform"
+        assert current["is_technical_retry"] is True
+        assert current["credit_disposition"] == "preserved"
+        assert current["retryable"] is True
+        assert current.get("error_code") is None
+        assert current.get("prepared_context") is not replaced.get("prepared_context")
+
+def test_technical_retry_eligible_does_not_consume_again(web_client, monkeypatch):
+    from app.run_agente_compara_temp_table import trigger_temp_table_extraction_for_session
+
+    motor_calls = []
+    provider_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        "app.services.cleiton_franquia_operacional_service.aplicar_motor_apos_processing_event",
+        lambda evento_id: motor_calls.append(evento_id),
+    )
+    monkeypatch.setattr("app.run_agente_compara_temp_table._get_client", lambda: object())
+    monkeypatch.setattr("app.run_agente_compara_temp_table._get_model_candidates", lambda: ["model-test"])
+
+    def _fake_generate(*_args, **_kwargs):
+        provider_calls["count"] += 1
+        if provider_calls["count"] == 1:
+            raise TimeoutError("provider timeout")
+        return SimpleNamespace(
+            text='{"status":"needs_review","freight_tables":[{"table_title":"Tabela A","columns":["origem"],"rows":[{"origem":"SP"}]}]}'
+        )
+
+    monkeypatch.setattr(
+        "app.run_agente_compara_temp_table.cleiton_governed_generate_content",
+        _fake_generate,
+    )
+    monkeypatch.setattr(
+        "app.run_agente_compara_temp_table.build_agente_compara_document_context_for_chat",
+        lambda *_a, **_k: {
+            "has_documents": True,
+            "context_block": "ctx",
+            "gemini_file_parts": None,
+        },
+    )
+
+    def _run_trigger_with_request_context(*, comparison_id: str, table_id: str, slot: int) -> None:
+        with web_client.session_transaction() as sess:
+            state_payload = dict(sess)
+            with web_client.application.test_request_context("/api/agente-compara/audit/upload", method="POST"):
+                from flask import session
+
+                session.update(state_payload)
+                trigger_temp_table_extraction_for_session(
+                    session_obj=session,
+                    comparison_id=comparison_id,
+                    table_id=table_id,
+                    slot=slot,
+                )
+                for key, value in session.items():
+                    sess[key] = value
+                for key in list(sess.keys()):
+                    if key not in session:
+                        sess.pop(key, None)
+
+    first = _upload(web_client, "t1.csv", make_csv([["a"], ["1"]]), carrier_name="Carrier A", slot="1")
+    assert first.status_code == 200
+    first_doc_id = first.get_json()["document"]["doc_id"]
+    comparison_id = first.get_json()["comparison"]["comparison_id"]
+    table_id = first.get_json()["comparison"]["tables"][0]["table_id"]
+
+    with web_client.application.app_context():
+        first_phase_events = ProcessingEvent.query.filter_by(
+            agent="agente_compara",
+            flow_type="agente_compara_temp_table_extraction",
+        ).order_by(ProcessingEvent.id.asc()).all()
+        assert motor_calls == []
+        assert CleitonBillingApropriacao.query.count() == 0
+        assert len(first_phase_events) == 1
+
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_doc_service import load_document_record, load_temp_table_record
+        from app.agente_compara_comparison_state import get_comparison_state
+
+        state = get_comparison_state(sess)
+        table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        failed_doc = load_document_record(first_doc_id, ttl_hours=24)
+        failed_temp_table = load_temp_table_record(table_1["temp_table_id"], ttl_hours=24)
+
+        assert table_1["doc_ids"] == [first_doc_id]
+        assert failed_doc["credit_disposition"] == "preserved"
+        assert failed_temp_table is not None
+        assert failed_temp_table["status"] == "failed"
+        assert failed_temp_table["credit_disposition"] == "preserved"
+
+    second = _upload(
+        web_client,
+        "t2.csv",
+        make_csv([["a"], ["2"]]),
+        carrier_name="Carrier A",
+        slot="1",
+        comparison_id=comparison_id,
+        table_id=table_id,
+    )
+    assert second.status_code == 200
+    second_doc_id = second.get_json()["document"]["doc_id"]
+
+    with web_client.application.app_context():
+        retry_phase_events = ProcessingEvent.query.filter_by(
+            agent="agente_compara",
+            flow_type="agente_compara_temp_table_extraction",
+        ).order_by(ProcessingEvent.id.asc()).all()
+        assert motor_calls == []
+        assert provider_calls["count"] == 2
+        assert CleitonBillingApropriacao.query.count() == 0
+        assert len(retry_phase_events) == 2
+
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_doc_service import get_temp_table_id, load_document_record, load_temp_table_record
+        from app.agente_compara_comparison_state import get_comparison_state
+
+        state = get_comparison_state(sess)
+        table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        current = load_document_record(second_doc_id, ttl_hours=24)
+        replaced = load_document_record(first_doc_id, ttl_hours=24)
+        temp_table = load_temp_table_record(get_temp_table_id(sess, table_id=table_id), ttl_hours=24)
+
+        assert table_1["doc_ids"] == [second_doc_id]
+        assert replaced["status"] == "replaced"
+        assert current["retry_of"] == first_doc_id
+        assert current["is_technical_retry"] is True
+        assert current["is_free_retry"] is True
+        # Original technical failure preserved the credit; the free retry starts no new consumption.
+        assert current["credit_disposition"] == "not_consumed"
+        assert temp_table["status"] == "needs_review"
+        assert temp_table["retry_of"] == first_doc_id
+        assert temp_table["credit_disposition"] == "not_consumed"
+        assert temp_table["comparison_id"] == comparison_id
+        assert temp_table["slot_number"] == 1
+
+    _run_trigger_with_request_context(
+        comparison_id=comparison_id,
+        table_id=table_id,
+        slot=1,
+    )
+
+    with web_client.application.app_context():
+        replay_phase_events = ProcessingEvent.query.filter_by(
+            agent="agente_compara",
+            flow_type="agente_compara_temp_table_extraction",
+        ).order_by(ProcessingEvent.id.asc()).all()
+        assert len(replay_phase_events) == 2
+        assert motor_calls == []
+        assert provider_calls["count"] == 2
+        assert CleitonBillingApropriacao.query.count() == 0
+
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_doc_service import get_temp_table_id, load_document_record, load_temp_table_record
+        from app.agente_compara_comparison_state import get_comparison_state
+
+        state = get_comparison_state(sess)
+        table_1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        current = load_document_record(second_doc_id, ttl_hours=24)
+        temp_table = load_temp_table_record(get_temp_table_id(sess, table_id=table_id), ttl_hours=24)
+
+        assert table_1["doc_ids"] == [second_doc_id]
+        assert current["retry_of"] == first_doc_id
+        assert current["is_free_retry"] is True
+        assert current["credit_disposition"] == "not_consumed"
+        assert temp_table is not None
+        assert temp_table["retry_of"] == first_doc_id
+        assert temp_table["credit_disposition"] == "not_consumed"
+
+def _store_failed_temp_table_for_retry(web_client, *, doc_id: str, slot: int, comparison_id: str, table_id: str, reading_alerts: list[str] | None = None):
+    from app.agente_compara_doc_service import get_temp_table_id, save_temp_table_record
+    from app.agente_compara_comparison_state import AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY
+
+    with web_client.session_transaction() as sess:
+        state_payload = dict(sess)
+        with web_client.application.test_request_context():
+            from flask import session
+
+            session.update(state_payload)
+            save_temp_table_record(
+                {
+                    "temp_table_id": f"tt-failed-retry-{slot}",
+                    "status": "failed",
+                    "source_documents": [doc_id],
+                    "reading_alerts": reading_alerts or ["Gemini retornou timeout durante a extração técnica."],
+                    "comparison_id": comparison_id,
+                    "table_id": table_id,
+                    "slot_number": slot,
+                },
+                table_id=table_id,
+            )
+            for key, value in session.items():
+                sess[key] = value
+            for key in list(sess.keys()):
+                if key not in session:
+                    sess.pop(key, None)
+
+
+def test_new_upload_does_not_mark_retry_when_previous_document_succeeded(web_client, monkeypatch):
+    monkeypatch.setattr("app.agente_compara_api_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    monkeypatch.setattr("app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    first = _upload(web_client, "ok.csv", make_csv([["a"], ["1"]]), carrier_name="Carrier A", slot="1")
+    assert first.status_code == 200
+    first_doc_id = first.get_json()["document"]["doc_id"]
+    second = _upload(web_client, "novo.csv", make_csv([["a"], ["2"]]), carrier_name="Carrier A", slot="1")
+    assert second.status_code == 200
+    second_doc_id = second.get_json()["document"]["doc_id"]
+
+    from app.cleiton_doc_store import load_document_record
+
+    current = load_document_record(second_doc_id, ttl_hours=24)
+    replaced = load_document_record(first_doc_id, ttl_hours=24)
+    assert replaced["status"] == "replaced"
+    assert current.get("retry_of") is None
+    assert current.get("is_technical_retry") in (None, False)
+
+
+def test_new_upload_does_not_mark_retry_for_non_retryable_document_failure(web_client, monkeypatch):
+    monkeypatch.setattr("app.agente_compara_api_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    monkeypatch.setattr("app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    first = _upload(web_client, "doc.csv", make_csv([["a"], ["1"]]), carrier_name="Carrier A", slot="1")
+    assert first.status_code == 200
+    body = first.get_json()
+    first_doc_id = body["document"]["doc_id"]
+    table_1 = body["comparison"]["tables"][0]
+    _store_failed_temp_table_for_retry(
+        web_client,
+        doc_id=first_doc_id,
+        slot=1,
+        comparison_id=body["comparison"]["comparison_id"],
+        table_id=table_1["table_id"],
+        reading_alerts=["Arquivo vazio e formato incompatível para extração."],
+    )
+    second = _upload(web_client, "novo.csv", make_csv([["a"], ["2"]]), carrier_name="Carrier A", slot="1")
+    assert second.status_code == 200
+
+    from app.cleiton_doc_store import load_document_record
+
+    current = load_document_record(second.get_json()["document"]["doc_id"], ttl_hours=24)
+    assert current.get("retry_of") is None
+    assert current.get("retry_failure_code") is None
+
+
+def test_new_upload_does_not_mark_retry_for_different_slot(web_client, monkeypatch):
+    monkeypatch.setattr("app.agente_compara_api_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    monkeypatch.setattr("app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    first = _upload(web_client, "slot1.csv", make_csv([["a"], ["1"]]), carrier_name="Carrier A", slot="1")
+    assert first.status_code == 200
+    body = first.get_json()
+    table_1 = body["comparison"]["tables"][0]
+    first_doc_id = body["document"]["doc_id"]
+    _store_failed_temp_table_for_retry(
+        web_client,
+        doc_id=first_doc_id,
+        slot=1,
+        comparison_id=body["comparison"]["comparison_id"],
+        table_id=table_1["table_id"],
+    )
+    table2_id = body["comparison"]["tables"][1]["table_id"]
+    with web_client.session_transaction() as sess:
+        from app.agente_compara_comparison_state import AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY, get_comparison_state
+
+        state = get_comparison_state(sess)
+        t1 = next(t for t in state["tables"].values() if t["slot_number"] == 1)
+        t1["confirmed"] = True
+        t1["status"] = "confirmed"
+        t2 = next(t for t in state["tables"].values() if t["slot_number"] == 2)
+        t2["status"] = "empty"
+        state["current_step"] = "PREPARE_TABLE_2"
+        state["active_table_id"] = table2_id
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+
+    second = _upload(web_client, "slot2.csv", make_csv([["a"], ["2"]]), carrier_name="Carrier B", slot="2", table_id=table2_id)
+    assert second.status_code == 200
+
+    from app.cleiton_doc_store import load_document_record
+
+    current = load_document_record(second.get_json()["document"]["doc_id"], ttl_hours=24)
+    assert current.get("retry_of") is None
+    assert current.get("original_document_id") is None
+
+
+def test_new_upload_does_not_mark_retry_for_different_comparison(web_client, monkeypatch):
+    monkeypatch.setattr("app.agente_compara_api_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    monkeypatch.setattr("app.run_agente_compara_temp_table.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    first = _upload(web_client, "base.csv", make_csv([["a"], ["1"]]), carrier_name="Carrier A", slot="1")
+    assert first.status_code == 200
+    body = first.get_json()
+    table_1 = body["comparison"]["tables"][0]
+    first_doc_id = body["document"]["doc_id"]
+    _store_failed_temp_table_for_retry(
+        web_client,
+        doc_id=first_doc_id,
+        slot=1,
+        comparison_id=body["comparison"]["comparison_id"],
+        table_id=table_1["table_id"],
+    )
+
+    from app.agente_compara_comparison_state import clear_comparison_state, create_comparison
+
+    with web_client.session_transaction() as sess:
+        sess["agente_compara_doc_ids"] = []
+        sess["agente_compara_temp_table_id"] = None
+        sess["agente_compara_temp_table_ids_by_table"] = {}
+        sess["agente_compara_temp_table_source_docs_by_table"] = {}
+        clear_comparison_state(session_obj=sess)
+        create_comparison(session_obj=sess)
+
+    second = _upload(web_client, "nova.csv", make_csv([["a"], ["2"]]), carrier_name="Carrier A", slot="1")
+    assert second.status_code == 200
+
+    from app.cleiton_doc_store import load_document_record
+
+    current = load_document_record(second.get_json()["document"]["doc_id"], ttl_hours=24)
+    assert current.get("retry_of") is None
+    assert current.get("retry_failure_code") is None
