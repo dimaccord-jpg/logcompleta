@@ -88,6 +88,61 @@ def _comparison_payload(comparison_id="cmp-browser-1", table_id="tbl-1", step="P
     }
 
 
+def _calculation_bases():
+    return [
+        {
+            "id": "pct_nota_fiscal",
+            "label": "% por nota fiscal",
+            "aliases": ["valor da nf", "sobre o valor da nf", "nota fiscal"],
+            "unit": "%",
+            "calculation_type": "invoice_percentage",
+            "audit_variable": "valor_nf",
+            "operation": "percentage_of_variable",
+            "parameters": {},
+        },
+        {
+            "id": "por_cte",
+            "label": "por CTe",
+            "aliases": ["cte", "documento"],
+            "unit": "R$",
+            "calculation_type": "fixed_amount",
+            "audit_variable": None,
+            "operation": "fixed_amount",
+            "parameters": {},
+        },
+        {
+            "id": "por_conhecimento",
+            "label": "por conhecimento",
+            "aliases": ["conhecimento"],
+            "unit": "R$",
+            "calculation_type": "fixed_amount",
+            "audit_variable": None,
+            "operation": "fixed_amount",
+            "parameters": {},
+        },
+        {
+            "id": "por_kg",
+            "label": "por kg",
+            "aliases": ["kg", "peso"],
+            "unit": "R$",
+            "calculation_type": "weight",
+            "audit_variable": "peso",
+            "operation": "multiply_by_variable",
+            "parameters": {},
+        },
+        {
+            "id": "fracao_100kg",
+            "label": "por fra??o de 100kg",
+            "aliases": ["100kg ou fra??o"],
+            "unit": "R$",
+            "calculation_type": "weight_fraction",
+            "audit_variable": "peso",
+            "operation": "ceil_fraction",
+            "parameters": {"fraction_size": 100},
+        },
+    ]
+
+
 def _temp_table(
     status,
     comparison_id="cmp-browser-1",
@@ -168,8 +223,13 @@ def _temp_table(
                 "calculation_base_id": None,
                 "calculation_basis": "",
                 "calculation_type": "invoice_percentage",
+                "audit_variable": "valor_nf",
+                "operation": "percentage_of_variable",
                 "classification_source": "legacy_classifier",
                 "status": "calculable",
+                "canonical_component": "risk_management",
+                "component_group": "risk_management",
+                "modifier_type": "base_fee",
                 "notes": "",
                 "review_presentation": {
                     "state": "resolved",
@@ -179,6 +239,32 @@ def _temp_table(
                     "is_blocking": False,
                     "severity": "info",
                     "source": "legacy_classifier",
+                },
+            },
+            {
+                "name": "GRIS M?nimo",
+                "item_id": "fee-gris-min",
+                "value": "5,00",
+                "unit": "R$",
+                "minimum_amount": 5.0,
+                "calculation_base_id": None,
+                "calculation_basis": "",
+                "calculation_type": "minimum_amount",
+                "modifier_type": "minimum_amount",
+                "classification_source": "legacy_classifier",
+                "status": "calculable",
+                "related_to": "risk_management",
+                "component_group": "risk_management",
+                "notes": "",
+                "review_presentation": {
+                    "state": "resolved",
+                    "basis_label": "M?nimo aplic?vel a GRIS",
+                    "secondary_text": None,
+                    "requires_action": False,
+                    "is_blocking": False,
+                    "severity": "info",
+                    "source": "legacy_classifier",
+                    "related_to_label": "GRIS",
                 },
             }
         ]
@@ -218,6 +304,7 @@ class _FlowState:
         self.review_with_blocking = review_with_blocking
         self.review_with_recognized_gris = review_with_recognized_gris
         self.save_calls = 0
+        self.saved_payloads = []
 
 
 def _install_routes(page, state: _FlowState, *, fail_upload=False):
@@ -285,7 +372,7 @@ def _install_routes(page, state: _FlowState, *, fail_upload=False):
                         "ok": True,
                         "comparison": state.comparison,
                         "temp_table": tt,
-                        "calculation_bases": [],
+                        "calculation_bases": _calculation_bases(),
                     }
                 ),
             )
@@ -331,7 +418,7 @@ def _install_routes(page, state: _FlowState, *, fail_upload=False):
                         "ok": True,
                         "documents": [],
                         "temp_table": tt,
-                        "calculation_bases": [],
+                        "calculation_bases": _calculation_bases(),
                         "comparison": state.comparison,
                         "has_active_comparison": True,
                     }
@@ -341,6 +428,8 @@ def _install_routes(page, state: _FlowState, *, fail_upload=False):
 
         if "/api/agente-compara/temp-table/save" in url and method == "POST":
             state.save_calls += 1
+            payload = __import__("json").loads(req.post_data or "{}")
+            state.saved_payloads.append(payload)
             if state.review_with_blocking and state.save_calls == 1:
                 route.fulfill(
                     status=400,
@@ -392,7 +481,10 @@ def _install_routes(page, state: _FlowState, *, fail_upload=False):
                 comparison_id=state.comparison["comparison_id"],
                 table_id=state.comparison["active_table_id"],
                 with_blocking_validation=False,
+                with_recognized_gris=bool(state.review_with_recognized_gris),
             )
+            if payload.get("edit_target") and payload["edit_target"].get("accessorial_fees"):
+                tt["accessorial_fees"] = payload["edit_target"]["accessorial_fees"]
             state.comparison["current_step"] = "PREPARE_TABLE_2"
             state.comparison["tables"][0]["confirmed"] = True
             route.fulfill(
@@ -522,6 +614,50 @@ def test_browser_blocking_validation_disables_save_and_keeps_edit(live_base_url)
         save_btn.click(force=True)
         page.wait_for_timeout(300)
         assert state.save_calls == 0
+        browser.close()
+
+
+def test_browser_edit_mode_hydrates_recognized_gris_and_preserves_save_payload(live_base_url):
+    state = _FlowState(promote_after_status_calls=2, review_with_recognized_gris=True)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        _install_routes(page, state)
+        page.goto(f"{live_base_url}/agente-compara", wait_until="domcontentloaded")
+        _start_file_upload(page)
+        page.wait_for_selector("#agenteComparaTempTableModal:not([hidden])")
+        page.fill("#agenteComparaCarrierNameInput", "Transportadora Browser")
+        page.click("#agenteComparaCarrierIdentifyContinue")
+        _wait_title(page, "Revis?o", timeout=45000)
+
+        page.click("#agenteComparaTempTableModalEdit")
+        gris_select = page.locator('tr[data-accessorial-fee-index="0"] select[data-field="calculation_base_id"]')
+        assert gris_select.input_value() == "pct_nota_fiscal"
+        minimum_row = page.locator('tr[data-accessorial-fee-index="1"]')
+        assert "M?nimo aplic?vel a GRIS" in minimum_row.inner_text()
+        assert "n?o mapeado / revisar" not in minimum_row.inner_text()
+
+        page.click("#agenteComparaTempTableModalClose")
+        _wait_modal_hidden(page)
+        assert state.save_calls == 0
+
+        page.click(".agente-compara-temp-table-open-btn")
+        page.wait_for_selector("#agenteComparaTempTableModal:not([hidden])")
+        _wait_title(page, "Revis?o", timeout=15000)
+        page.click("#agenteComparaTempTableModalEdit")
+        gris_select = page.locator('tr[data-accessorial-fee-index="0"] select[data-field="calculation_base_id"]')
+        assert gris_select.input_value() == "pct_nota_fiscal"
+
+        page.click("#agenteComparaTempTableModalSave")
+        page.wait_for_timeout(500)
+        assert state.save_calls == 1
+        payload = state.saved_payloads[-1]
+        fees = payload["edit_target"]["accessorial_fees"]
+        assert fees[0]["calculation_base_id"] == "pct_nota_fiscal"
+        assert fees[0]["operation"] == "percentage_of_variable"
+        assert fees[0]["calculation_type"] == "invoice_percentage"
+        assert fees[1]["related_to"] == "risk_management"
+        assert fees[1]["modifier_type"] == "minimum_amount"
         browser.close()
 
 
@@ -1744,7 +1880,7 @@ def _install_coverage_step_routes(page, state, *, fail_skip=False, skip_delay_ms
                         "ok": True,
                         "documents": [],
                         "temp_table": state.temp_table,
-                        "calculation_bases": [],
+                        "calculation_bases": _calculation_bases(),
                         "comparison": state.comparison,
                         "has_active_comparison": True,
                     }

@@ -60,3 +60,5 @@ app/cleiton_doc_tmp/
 
 # Artefatos temporários de diagnóstico e testes
 .tmp_*
+
+.codex_micro_tmp/

@@ -1827,7 +1827,7 @@
       'Não foi possível processar a tabela. Tente novamente.';
     comparisonFlowFailedMessage = message;
     titleEl.textContent = 'Não foi possível processar a tabela';
-    subtitleEl.textContent = 'Revise o arquivo enviado e tente novamente.';
+    subtitleEl.textContent = options.subtitle || 'Revise o arquivo enviado e tente novamente.';
     body.hidden = false;
     if (footer) footer.hidden = false;
     body.replaceChildren();
@@ -2164,7 +2164,7 @@
     }
     if (view === 'failed') {
       titleEl.textContent = 'Não foi possível processar a tabela';
-      subtitleEl.textContent = 'Revise o arquivo enviado e tente novamente.';
+      subtitleEl.textContent = options.subtitle || 'Revise o arquivo enviado e tente novamente.';
       return;
     }
     if (view === 'upload') {
@@ -2227,8 +2227,8 @@
       return;
     }
     if (step === 'CALCULATION_RUNNING') {
-      titleEl.textContent = 'Processando cálculos';
-      subtitleEl.textContent = 'Processando cálculos comparativos...';
+      titleEl.textContent = 'Processando cÃ¡lculos';
+      subtitleEl.textContent = 'Processando cÃ¡lculos comparativos...';
       return;
     }
     if (step === 'CALCULATION_READY') {
@@ -2239,8 +2239,9 @@
       return;
     }
     if (step === 'CALCULATION_FAILED') {
-      titleEl.textContent = 'Falha no cálculo';
-      subtitleEl.textContent = 'Não foi possível concluir o cálculo comparativo.';
+      var failureUi = resolveCalculationStorageFailureUi(comparisonCalculationState.error || {});
+      titleEl.textContent = failureUi.title;
+      subtitleEl.textContent = failureUi.message;
     }
   }
 
@@ -2792,6 +2793,196 @@
     return null;
   }
 
+
+  function getCalculationBasesByOperation(operation) {
+    var wanted = String(operation || '').trim();
+    if (!wanted) return [];
+    return currentCalculationBases.filter(function (base) {
+      return base && String(base.operation || '').trim() === wanted;
+    });
+  }
+
+  function normalizeAccessorialSemanticText(value) {
+    return normalizeTextKey(value).replace(/\s+/g, ' ').trim();
+  }
+
+  function calculationBaseSemanticTokens(base) {
+    if (!base || typeof base !== 'object') return [];
+    var tokens = [];
+    var values = []
+      .concat(base.id || [])
+      .concat(base.label || [])
+      .concat(Array.isArray(base.aliases) ? base.aliases : []);
+    values.forEach(function (value) {
+      var normalized = normalizeAccessorialSemanticText(value);
+      if (normalized && tokens.indexOf(normalized) === -1) tokens.push(normalized);
+    });
+    return tokens;
+  }
+
+  function matchCalculationBaseBySemanticText(text) {
+    var normalizedText = normalizeAccessorialSemanticText(text);
+    if (!normalizedText) return null;
+    for (var i = 0; i < currentCalculationBases.length; i += 1) {
+      var base = currentCalculationBases[i];
+      var tokens = calculationBaseSemanticTokens(base);
+      for (var j = 0; j < tokens.length; j += 1) {
+        var token = tokens[j];
+        if (!token) continue;
+        if (
+          normalizedText === token
+          || normalizedText.indexOf(token) !== -1
+          || token.indexOf(normalizedText) !== -1
+        ) {
+          return base;
+        }
+      }
+    }
+    return null;
+  }
+
+  function findCalculationBaseByDomainSemantics(item) {
+    if (!item || typeof item !== 'object') return null;
+    var explicitBase = getCalculationBaseById(item.calculation_base_id || item.editable_calculation_base_id);
+    if (explicitBase) return explicitBase;
+
+    var explicitEditableBase = getCalculationBaseById(
+      item.edit_resolution && item.edit_resolution.calculation_base_id
+    );
+    if (explicitEditableBase) return explicitEditableBase;
+
+    var presentation = item.review_presentation && typeof item.review_presentation === 'object'
+      ? item.review_presentation
+      : null;
+    var semanticCandidates = [];
+    if (item.calculation_base_label) semanticCandidates.push(item.calculation_base_label);
+    if (item.calculation_basis) semanticCandidates.push(item.calculation_basis);
+    if (item.raw_calculation_basis) semanticCandidates.push(item.raw_calculation_basis);
+    if (presentation && presentation.basis_label) semanticCandidates.push(presentation.basis_label);
+
+    for (var i = 0; i < semanticCandidates.length; i += 1) {
+      var matchedBase = matchCalculationBaseBySemanticText(semanticCandidates[i]);
+      if (matchedBase) return matchedBase;
+    }
+
+    var calculationType = String(item.calculation_type || '').trim();
+    var operation = String(item.operation || '').trim();
+    var auditVariable = String(item.audit_variable || '').trim();
+    var normalizedUnit = normalizeCalculationUnit(item.unit);
+
+    if (
+      (calculationType === 'invoice_percentage' || operation === 'percentage_of_variable')
+      && normalizedUnit === '%'
+      && auditVariable === 'valor_nf'
+    ) {
+      return getCalculationBaseById('pct_nota_fiscal');
+    }
+
+    if (calculationType === 'weight_fraction' || operation === 'ceil_fraction') {
+      var fractionBases = getCalculationBasesByOperation('ceil_fraction');
+      if (fractionBases.length === 1) return fractionBases[0];
+    }
+
+    if (
+      (calculationType === 'weight' || calculationType === 'weight_rate' || operation === 'multiply_by_variable')
+      && auditVariable === 'peso'
+    ) {
+      var weightBase = getCalculationBaseById('por_kg');
+      if (weightBase) return weightBase;
+    }
+
+    if (calculationType === 'fixed_amount' || operation === 'fixed_amount') {
+      for (var k = 0; k < semanticCandidates.length; k += 1) {
+        var fixedBase = matchCalculationBaseBySemanticText(semanticCandidates[k]);
+        if (fixedBase) return fixedBase;
+      }
+    }
+
+    return null;
+  }
+
+  function accessorialMinimumLinkLabel(item, fees, feeIndex) {
+    var presentation = item && item.review_presentation && typeof item.review_presentation === 'object'
+      ? item.review_presentation
+      : null;
+    if (presentation && hasFieldValue(presentation.basis_label)) {
+      return String(presentation.basis_label);
+    }
+    var linkedBaseFee = findLinkedAccessorialBaseFee(item, fees || [], feeIndex);
+    if (linkedBaseFee && hasFieldValue(linkedBaseFee.name)) {
+      return 'Mínimo aplicável a ' + String(linkedBaseFee.name);
+    }
+    var relatedLabel = '';
+    if (presentation && hasFieldValue(presentation.related_to_label)) {
+      relatedLabel = String(presentation.related_to_label);
+    } else if (hasFieldValue(item && item.related_to)) {
+      relatedLabel = String(item.related_to);
+    }
+    return relatedLabel ? 'Mínimo aplicável a ' + relatedLabel : 'Mínimo sem vínculo válido';
+  }
+
+  function resolveAccessorialEditMode(item, fees, feeIndex) {
+    if (accessorialFeeIsMinimumAmount(item)) {
+      return {
+        mode: 'minimum_link',
+        label: accessorialMinimumLinkLabel(item, fees, feeIndex)
+      };
+    }
+    var base = findCalculationBaseByDomainSemantics(item);
+    if (base) {
+      return {
+        mode: 'base_select',
+        base: base
+      };
+    }
+    return {
+      mode: 'unmapped',
+      base: null
+    };
+  }
+
+  function hydrateAccessorialFeesForEditing(fees) {
+    if (!Array.isArray(fees)) return;
+    fees.forEach(function (fee, feeIndex) {
+      if (!fee || typeof fee !== 'object') return;
+      var editMode = resolveAccessorialEditMode(fee, fees, feeIndex);
+      fee.edit_mode = editMode.mode;
+      fee.edit_display_label = editMode.label || '';
+      fee.editable_calculation_base_id = editMode.base ? String(editMode.base.id || '') : '';
+    });
+  }
+
+  function applyResolvedCalculationBaseForSave(fee) {
+    if (!fee || typeof fee !== 'object' || accessorialFeeIsMinimumAmount(fee)) return;
+    var existingBase = getCalculationBaseById(fee.calculation_base_id);
+    if (existingBase) return;
+    var resolvedBase = findCalculationBaseByDomainSemantics(fee);
+    if (!resolvedBase) return;
+    fee.calculation_base_id = resolvedBase.id || null;
+    fee.calculation_base_label = resolvedBase.label || '';
+    if (
+      !hasFieldValue(fee.calculation_basis)
+      || normalizeTextKey(fee.calculation_basis) === normalizeTextKey('não mapeado / revisar')
+    ) {
+      fee.calculation_basis = resolvedBase.label || '';
+    }
+    if (!hasFieldValue(fee.calculation_type) || String(fee.calculation_type).trim() === 'unknown') {
+      fee.calculation_type = resolvedBase.calculation_type || 'unknown';
+    }
+    if (!hasFieldValue(fee.operation)) {
+      fee.operation = resolvedBase.operation || null;
+    }
+    if (!hasFieldValue(fee.audit_variable) && hasFieldValue(resolvedBase.audit_variable)) {
+      fee.audit_variable = resolvedBase.audit_variable;
+    }
+    if (
+      (!fee.operation_parameters || typeof fee.operation_parameters !== 'object')
+      && resolvedBase.parameters
+    ) {
+      fee.operation_parameters = deepCloneValue(resolvedBase.parameters);
+    }
+  }
+
   function setTempTableModalError(messageOrPayload) {
     var el = byId('agenteComparaTempTableModalError');
     if (!el) return;
@@ -2953,8 +3144,8 @@
     var billing = comparisonCalculationState.billingStatus || '';
     if (loading) {
       button.classList.add('is-loading');
-      button.textContent = 'Processando cálculos...';
-      button.setAttribute('title', 'Processando cálculos comparativos...');
+      button.textContent = 'Processando cÃ¡lculos...';
+      button.setAttribute('title', 'Processando cÃ¡lculos comparativos...');
     } else if (step === 'CALCULATION_READY' && comparisonCalculationState.stale) {
       button.classList.remove('is-loading');
       button.textContent = 'Processar Cálculos';
@@ -2979,15 +3170,15 @@
     } else if (step === 'CALCULATION_FAILED') {
       button.classList.remove('is-loading');
       button.textContent = 'Processar novamente';
-      button.setAttribute('title', 'Tentar processar os cálculos novamente.');
+      button.setAttribute('title', 'Tentar processar os cÃ¡lculos novamente.');
     } else {
       button.classList.remove('is-loading');
       button.textContent = 'Processar Cálculos';
       button.setAttribute(
         'title',
         enable
-          ? 'Processar cálculos comparativos das transportadoras confirmadas.'
-          : 'Conclua a configuração para processar os cálculos.'
+          ? 'Processar cÃ¡lculos comparativos das transportadoras confirmadas.'
+          : 'Conclua a configuração para processar os cÃ¡lculos.'
       );
     }
 
@@ -4414,7 +4605,7 @@
             widgetKey: 'coverage_by_carrier',
             canvasKey: 'coverage',
             chartTitle: 'Cobertura por transportadora',
-            chartDesc: 'Cobertura considera cálculos completos por tabela no universo total.',
+            chartDesc: 'Cobertura considera cÃ¡lculos completos por tabela no universo total.',
             sectionKey: 'reliability'
           },
           {
@@ -4619,6 +4810,9 @@
     }
     var memory = tableResult.calculation_memory;
     if (memory && typeof memory === 'object') return memory;
+    if (comparisonMemoryHasValue(tableResult.memory_ref)) {
+      return { memory_ref: String(tableResult.memory_ref), status: tableResult.status || tableResult.final_status || 'not_loaded' };
+    }
     var fallbackStatus = 'not_calculated';
     if (isComparisonCellIncomplete(tableResult)) fallbackStatus = 'incomplete';
     else if (isComparisonCellCalculated(tableResult)) {
@@ -4654,6 +4848,28 @@
           }
         : null
     };
+  }
+
+  function fetchComparisonCalculationMemory(row, tableResult) {
+    var resolved = resolveComparisonCalculationMemory(row, tableResult);
+    if (resolved && !resolved.memory_ref) return Promise.resolve(resolved);
+    if (!resolved || !resolved.memory_ref || !comparisonState.comparisonId) return Promise.resolve(resolved);
+    var url = API_BASE + '/comparison/calculation-memory?comparison_id=' + encodeURIComponent(comparisonState.comparisonId)
+      + '&memory_ref=' + encodeURIComponent(resolved.memory_ref)
+      + '&table_id=' + encodeURIComponent(String(tableResult.table_id || ''))
+      + '&row_index=' + encodeURIComponent(String(row.row_index));
+    return fetch(url, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok || !data || data.ok === false || !data.memory) {
+          throw new Error((data && data.message) || 'N?o foi poss?vel carregar a mem?ria de c?lculo.');
+        }
+        return data.memory.calculation_memory || data.memory;
+      });
+    });
   }
 
   function ensureComparisonCalculationMemoryModal() {
@@ -4793,300 +5009,313 @@
 
   function renderComparisonCalculationMemoryContent(row, tableResult) {
     var body = byId('agenteComparaComparisonCalculationMemoryModalBody');
+    var incompleteDisclaimerText = 'não é um frete definitivo';
     if (!body) return;
     while (body.firstChild) body.removeChild(body.firstChild);
 
-    var memory = resolveComparisonCalculationMemory(row, tableResult) || {};
-    var isIncomplete = isComparisonCellIncomplete(tableResult) || memory.status === 'incomplete';
-    var isCalculated =
-      !isIncomplete &&
-      isComparisonCellCalculated(tableResult) &&
-      memory.status !== 'not_calculated';
-    var carrier = comparisonMemoryDisplayText(tableResult.carrier_name) || 'Transportadora';
-    var slot = comparisonMemoryHasValue(tableResult.slot_number) ? String(tableResult.slot_number) : '—';
+    body.textContent = 'Carregando mem?ria de c?lculo...';
+    fetchComparisonCalculationMemory(row, tableResult)
+      .then(function (memory) {
+        memory = memory || {};
+        while (body.firstChild) body.removeChild(body.firstChild);
+        var isIncomplete = isComparisonCellIncomplete(tableResult) || memory.status === 'incomplete';
+        var isCalculated =
+          !isIncomplete &&
+          isComparisonCellCalculated(tableResult) &&
+          memory.status !== 'not_calculated';
+        var carrier = comparisonMemoryDisplayText(tableResult.carrier_name) || 'Transportadora';
+        var slot = comparisonMemoryHasValue(tableResult.slot_number) ? String(tableResult.slot_number) : '?';
 
-    var summary = document.createElement('div');
-    summary.className = 'agente-compara-calculation-memory-summary';
-    appendComparisonMemoryDetail(summary, 'Documento', row.document_number);
-    var destParts = [];
-    if (comparisonMemoryDisplayText(row.destination_city)) destParts.push(comparisonMemoryDisplayText(row.destination_city));
-    if (comparisonMemoryDisplayText(row.destination_uf)) destParts.push(comparisonMemoryDisplayText(row.destination_uf));
-    appendComparisonMemoryDetail(summary, 'Destino', destParts.length ? destParts.join(' / ') : null);
-    appendComparisonMemoryDetail(summary, 'Peso', comparisonMemoryHasValue(row.weight) ? formatComparisonWeight(row.weight) : null);
-    appendComparisonMemoryDetail(summary, 'Valor da NF', comparisonMemoryHasValue(row.invoice_value) ? formatComparisonMoney(row.invoice_value) : null);
-    appendComparisonMemoryDetail(summary, 'Transportadora', carrier + ' — Tabela ' + slot);
-    appendComparisonMemoryDetail(summary, 'Status', comparisonCellStatusLabel(tableResult, memory));
-    body.appendChild(summary);
+        var summary = document.createElement('div');
+        summary.className = 'agente-compara-calculation-memory-summary';
+        appendComparisonMemoryDetail(summary, 'Documento', row.document_number);
+        var destParts = [];
+        if (comparisonMemoryDisplayText(row.destination_city)) destParts.push(comparisonMemoryDisplayText(row.destination_city));
+        if (comparisonMemoryDisplayText(row.destination_uf)) destParts.push(comparisonMemoryDisplayText(row.destination_uf));
+        appendComparisonMemoryDetail(summary, 'Destino', destParts.length ? destParts.join(' / ') : null);
+        appendComparisonMemoryDetail(summary, 'Peso', comparisonMemoryHasValue(row.weight) ? formatComparisonWeight(row.weight) : null);
+        appendComparisonMemoryDetail(summary, 'Valor da NF', comparisonMemoryHasValue(row.invoice_value) ? formatComparisonMoney(row.invoice_value) : null);
+        appendComparisonMemoryDetail(summary, 'Transportadora', carrier + ' ? Tabela ' + slot);
+        appendComparisonMemoryDetail(summary, 'Status', comparisonCellStatusLabel(tableResult, memory));
+        body.appendChild(summary);
 
-    if (isIncomplete) {
-      var incompleteSection = document.createElement('div');
-      incompleteSection.className = 'agente-compara-calculation-memory-diagnostic';
-      appendComparisonMemoryDetail(
-        incompleteSection,
-        memory.total_label || 'Valor parcial calculado',
-        formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight)
-      );
-      var blocking = memory.blocking_issues || tableResult.blocking_issues || [];
-      if (Array.isArray(blocking) && blocking.length) {
-        blocking.forEach(function (issue, idx) {
-          if (!issue || typeof issue !== 'object') return;
-          var label = comparisonMemoryDisplayText(issue.label) || comparisonMemoryDisplayText(issue.component_code) || ('Componente ' + String(idx + 1));
+        if (isIncomplete) {
+          var incompleteSection = document.createElement('div');
+          incompleteSection.className = 'agente-compara-calculation-memory-diagnostic';
           appendComparisonMemoryDetail(
             incompleteSection,
-            'Não avaliado: ' + label,
-            comparisonMemoryDisplayText(issue.message) || comparisonMemoryDisplayText(issue.reason_code) || 'Componente crítico não resolvido'
+            memory.total_label || 'Valor parcial calculado',
+            formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight)
           );
-        });
-      } else {
-        appendComparisonMemoryDetail(
-          incompleteSection,
-          'Motivo',
-          (tableResult.error && tableResult.error.message) || 'Há componentes potencialmente aplicáveis não avaliados.'
-        );
-      }
-      body.appendChild(incompleteSection);
+          var blocking = memory.blocking_issues || tableResult.blocking_issues || [];
+          if (Array.isArray(blocking) && blocking.length) {
+            blocking.forEach(function (issue, idx) {
+              if (!issue || typeof issue !== 'object') return;
+              var label = comparisonMemoryDisplayText(issue.label) || comparisonMemoryDisplayText(issue.component_code) || ('Componente ' + String(idx + 1));
+              appendComparisonMemoryDetail(
+                incompleteSection,
+                'N?o avaliado: ' + label,
+                comparisonMemoryDisplayText(issue.message) || comparisonMemoryDisplayText(issue.reason_code) || 'Componente cr?tico n?o resolvido'
+              );
+            });
+          } else {
+            appendComparisonMemoryDetail(
+              incompleteSection,
+              'Motivo',
+              (tableResult.error && tableResult.error.message) || 'H? componentes potencialmente aplic?veis n?o avaliados.'
+            );
+          }
+          body.appendChild(incompleteSection);
 
-      var incompleteNote = document.createElement('p');
-      incompleteNote.className = 'agente-compara-temp-table-modal-empty';
-      incompleteNote.textContent = 'Este valor parcial não é um frete definitivo e não entra na comparação como cálculo completo.';
-      body.appendChild(incompleteNote);
+          var incompleteNote = document.createElement('p');
+          incompleteNote.className = 'agente-compara-temp-table-modal-empty';
+          incompleteNote.textContent = 'Este valor parcial ' + incompleteDisclaimerText + ' e não entra na comparação como cálculo completo.';
+          body.appendChild(incompleteNote);
 
-      var incompleteComponents = Array.isArray(memory.components) ? memory.components : [];
-      if (incompleteComponents.length) {
-        var incTitle = document.createElement('h3');
-        incTitle.className = 'agente-compara-temp-table-modal-section-title';
-        incTitle.textContent = 'Componentes';
-        body.appendChild(incTitle);
-        incompleteComponents.forEach(function (item) {
-          if (!item || typeof item !== 'object') return;
-          var note = item.ignored
-            ? (comparisonMemoryDisplayText(item.reason) || 'Ignorado')
-            : (item.amount != null ? formatComparisonMoney(item.amount) : '');
-          appendComparisonMemoryDetail(
-            body,
-            comparisonMemoryDisplayText(item.label) || comparisonMemoryDisplayText(item.code) || 'Componente',
-            note
-          );
-        });
-      }
-      return;
-    }
+          var incompleteComponents = Array.isArray(memory.components) ? memory.components : [];
+          if (incompleteComponents.length) {
+            var incTitle = document.createElement('h3');
+            incTitle.className = 'agente-compara-temp-table-modal-section-title';
+            incTitle.textContent = 'Componentes';
+            body.appendChild(incTitle);
+            incompleteComponents.forEach(function (item) {
+              if (!item || typeof item !== 'object') return;
+              var note = item.ignored
+                ? (comparisonMemoryDisplayText(item.reason) || 'Ignorado')
+                : (item.amount != null ? formatComparisonMoney(item.amount) : '');
+              appendComparisonMemoryDetail(
+                body,
+                comparisonMemoryDisplayText(item.label) || comparisonMemoryDisplayText(item.code) || 'Componente',
+                note
+              );
+            });
+          }
+          return;
+        }
 
-    if (!isCalculated) {
-      var diagnostic = memory.diagnostic || {};
-      var diagSection = document.createElement('div');
-      diagSection.className = 'agente-compara-calculation-memory-diagnostic';
-      appendComparisonMemoryDetail(diagSection, 'Motivo', diagnostic.message || (tableResult.error && tableResult.error.message) || 'Não foi possível calcular esta linha.');
-      appendComparisonMemoryDetail(diagSection, 'Código', diagnostic.code || (tableResult.error && tableResult.error.code) || tableResult.status);
-      appendComparisonMemoryDetail(diagSection, 'Componente/regra', diagnostic.component || diagnostic.reason);
-      body.appendChild(diagSection);
+        if (!isCalculated) {
+          var diagnostic = memory.diagnostic || {};
+          var diagSection = document.createElement('div');
+          diagSection.className = 'agente-compara-calculation-memory-diagnostic';
+          appendComparisonMemoryDetail(diagSection, 'Motivo', diagnostic.message || (tableResult.error && tableResult.error.message) || 'N?o foi poss?vel calcular esta linha.');
+          appendComparisonMemoryDetail(diagSection, 'C?digo', diagnostic.code || (tableResult.error && tableResult.error.code) || tableResult.status);
+          appendComparisonMemoryDetail(diagSection, 'Componente/regra', diagnostic.component || diagnostic.reason);
+          body.appendChild(diagSection);
 
-      var orientation = document.createElement('p');
-      orientation.className = 'agente-compara-temp-table-modal-empty';
-      var code = String(diagnostic.code || tableResult.status || '');
-      if (code.indexOf('missing_coverage') >= 0) {
-        orientation.textContent = 'Orientação: destino não atendido ou sem mapeamento de cobertura.';
-      } else if (code.indexOf('missing_freight_rule') >= 0) {
-        orientation.textContent = 'Orientação: nenhuma faixa ou regra de frete aplicável para os dados informados.';
-      } else if (code.indexOf('unsupported_pricing') >= 0) {
-        orientation.textContent = 'Orientação: regra incompatível com o modelo de precificação suportado.';
-      } else if (code.indexOf('invalid_') >= 0) {
-        orientation.textContent = 'Orientação: valor obrigatório ausente ou inválido para o cálculo.';
-      } else {
-        orientation.textContent = 'Orientação: revise os dados operacionais e a tabela preparada para esta célula.';
-      }
-      body.appendChild(orientation);
+          var orientation = document.createElement('p');
+          orientation.className = 'agente-compara-temp-table-modal-empty';
+          var code = String(diagnostic.code || tableResult.status || '');
+          if (code.indexOf('missing_coverage') >= 0) {
+            orientation.textContent = 'Orienta??o: destino n?o atendido ou sem mapeamento de cobertura.';
+          } else if (code.indexOf('missing_freight_rule') >= 0) {
+            orientation.textContent = 'Orienta??o: nenhuma faixa ou regra de frete aplic?vel para os dados informados.';
+          } else if (code.indexOf('unsupported_pricing') >= 0) {
+            orientation.textContent = 'Orienta??o: regra incompat?vel com o modelo de precifica??o suportado.';
+          } else if (code.indexOf('invalid_') >= 0) {
+            orientation.textContent = 'Orienta??o: valor obrigat?rio ausente ou inv?lido para o c?lculo.';
+          } else {
+            orientation.textContent = 'Orienta??o: revise os dados operacionais e a tabela preparada para esta c?lula.';
+          }
+          body.appendChild(orientation);
 
-      var evidence = (diagnostic && diagnostic.evidence) || memory.evidence || {};
-      var evidenceKeys = Object.keys(evidence || {});
-      if (evidenceKeys.length) {
-        var evidenceTitle = document.createElement('h3');
-        evidenceTitle.className = 'agente-compara-temp-table-modal-section-title';
-        evidenceTitle.textContent = 'Evidências';
-        body.appendChild(evidenceTitle);
-        evidenceKeys.forEach(function (key) {
-          var value = evidence[key];
-          if (Array.isArray(value)) value = value.join(', ');
-          else if (value && typeof value === 'object') return;
-          appendComparisonMemoryDetail(body, key, value);
-        });
-      }
-      return;
-    }
+          var diagnosticEvidence = (diagnostic && diagnostic.evidence) || memory.evidence || {};
+          var evidenceKeys = Object.keys(diagnosticEvidence || {});
+          if (evidenceKeys.length) {
+            var evidenceTitle = document.createElement('h3');
+            evidenceTitle.className = 'agente-compara-temp-table-modal-section-title';
+            evidenceTitle.textContent = 'Evid?ncias';
+            body.appendChild(evidenceTitle);
+            evidenceKeys.forEach(function (key) {
+              var value = diagnosticEvidence[key];
+              if (Array.isArray(value)) value = value.join(', ');
+              else if (value && typeof value === 'object') return;
+              appendComparisonMemoryDetail(body, key, value);
+            });
+          }
+          return;
+        }
 
-    var pricing = memory.pricing || {};
-    var evidence = memory.evidence || tableResult.evidence || {};
-    appendComparisonMemoryDetail(
-      body,
-      memory.total_label || 'Total calculado',
-      formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight)
-    );
-    if (memory.status === 'calculated_with_warnings' || (Array.isArray(memory.warnings) && memory.warnings.length)) {
-      (memory.warnings || []).forEach(function (warning, idx) {
-        if (!warning || typeof warning !== 'object') return;
+        var pricing = memory.pricing || {};
+        var evidence = memory.evidence || tableResult.evidence || {};
         appendComparisonMemoryDetail(
           body,
-          'Ressalva ' + String(idx + 1),
-          comparisonMemoryDisplayText(warning.message) || comparisonMemoryDisplayText(warning.reason_code) || 'Ressalva não bloqueante'
+          memory.total_label || 'Total calculado',
+          formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight)
         );
-      });
-    }
-    appendComparisonMemoryDetail(body, 'Região', pricing.freight_region || evidence.freight_region);
-    appendComparisonMemoryDetail(body, 'Faixa', pricing.weight_band || evidence.weight_band);
-    appendComparisonMemoryDetail(body, 'Base', pricing.weight_basis || evidence.weight_basis || evidence.calculation_basis);
-    appendComparisonMemoryDetail(body, 'Precificação', pricing.pricing_type || evidence.pricing_type);
+        if (memory.status === 'calculated_with_warnings' || (Array.isArray(memory.warnings) && memory.warnings.length)) {
+          (memory.warnings || []).forEach(function (warning, idx) {
+            if (!warning || typeof warning !== 'object') return;
+            appendComparisonMemoryDetail(
+              body,
+              'Ressalva ' + String(idx + 1),
+              comparisonMemoryDisplayText(warning.message) || comparisonMemoryDisplayText(warning.reason_code) || 'Ressalva n?o bloqueante'
+            );
+          });
+        }
+        appendComparisonMemoryDetail(body, 'Regi?o', pricing.freight_region || evidence.freight_region);
+        appendComparisonMemoryDetail(body, 'Faixa', pricing.weight_band || evidence.weight_band);
+        appendComparisonMemoryDetail(body, 'Base', pricing.weight_basis || evidence.weight_basis || evidence.calculation_basis);
+        appendComparisonMemoryDetail(body, 'Precifica??o', pricing.pricing_type || evidence.pricing_type);
 
-    var componentRows = [];
-    if (Array.isArray(memory.components) && memory.components.length) {
-      memory.components.forEach(function (item) {
-        if (!item || typeof item !== 'object') return;
-        var noteParts = [];
-        if (item.ignored) noteParts.push('Ignorado');
-        if (item.minimum_applied) noteParts.push('Mínimo aplicado');
-        if (comparisonMemoryDisplayText(item.reason)) noteParts.push(comparisonMemoryDisplayText(item.reason));
-        componentRows.push({
-          label: comparisonMemoryDisplayText(item.label) || comparisonMemoryDisplayText(item.code) || 'Componente',
-          basis: comparisonMemoryDisplayText(item.basis) || comparisonMemoryDisplayText(item.operation),
-          rate: comparisonMemoryHasValue(item.rate) ? String(item.rate) : '',
-          quantity: comparisonMemoryHasValue(item.quantity) ? String(item.quantity) : '',
-          minimum: comparisonMemoryHasValue(item.minimum_amount) ? formatComparisonMoney(item.minimum_amount) : '',
-          amount: item.ignored ? null : item.amount,
-          note: noteParts.join(' · '),
-          ignored: !!item.ignored
-        });
-      });
-    } else {
-      componentRows = buildLegacyComparisonMemoryRows(tableResult);
-    }
+        var componentRows = [];
+        if (Array.isArray(memory.components) && memory.components.length) {
+          memory.components.forEach(function (item) {
+            if (!item || typeof item !== 'object') return;
+            var noteParts = [];
+            if (item.ignored) noteParts.push('Ignorado');
+            if (item.minimum_applied) noteParts.push('M?nimo aplicado');
+            if (comparisonMemoryDisplayText(item.reason)) noteParts.push(comparisonMemoryDisplayText(item.reason));
+            componentRows.push({
+              label: comparisonMemoryDisplayText(item.label) || comparisonMemoryDisplayText(item.code) || 'Componente',
+              basis: comparisonMemoryDisplayText(item.basis) || comparisonMemoryDisplayText(item.operation),
+              rate: comparisonMemoryHasValue(item.rate) ? String(item.rate) : '',
+              quantity: comparisonMemoryHasValue(item.quantity) ? String(item.quantity) : '',
+              minimum: comparisonMemoryHasValue(item.minimum_amount) ? formatComparisonMoney(item.minimum_amount) : '',
+              amount: item.ignored ? null : item.amount,
+              note: noteParts.join(' ? '),
+              ignored: !!item.ignored
+            });
+          });
+        } else {
+          componentRows = buildLegacyComparisonMemoryRows(tableResult);
+        }
 
-    if (componentRows.length) {
-      var sectionTitle = document.createElement('h3');
-      sectionTitle.className = 'agente-compara-temp-table-modal-section-title';
-      sectionTitle.textContent = 'Componentes';
-      body.appendChild(sectionTitle);
+        if (componentRows.length) {
+          var sectionTitle = document.createElement('h3');
+          sectionTitle.className = 'agente-compara-temp-table-modal-section-title';
+          sectionTitle.textContent = 'Componentes';
+          body.appendChild(sectionTitle);
 
-      var scrollWrap = document.createElement('div');
-      scrollWrap.className = 'agente-compara-temp-table-modal-freight-scroll agente-compara-calculation-memory-table-scroll';
-      var table = document.createElement('table');
-      table.className = 'agente-compara-temp-table-modal-freight-table agente-compara-calculation-memory-table';
-      var thead = document.createElement('thead');
-      var headerRow = document.createElement('tr');
-      ['Componente', 'Base/regra', 'Taxa', 'Qtd.', 'Mínimo', 'Valor', 'Observação'].forEach(function (label) {
-        appendTableCell(headerRow, label, true, false);
-      });
-      thead.appendChild(headerRow);
-      table.appendChild(thead);
-      var tbody = document.createElement('tbody');
-      componentRows.forEach(function (memoryRow) {
-        var tr = document.createElement('tr');
-        appendTableCell(tr, memoryRow.label, false, true);
-        appendTableCell(tr, memoryRow.basis || '', false, true);
-        appendTableCell(tr, memoryRow.rate || '', false, true);
-        appendTableCell(tr, memoryRow.quantity || '', false, true);
-        appendTableCell(tr, memoryRow.minimum || '', false, true);
-        appendTableCell(
-          tr,
-          memoryRow.ignored ? 'Ignorado' : formatComparisonMoney(memoryRow.amount),
-          false,
-          true
-        );
-        appendTableCell(tr, memoryRow.note || '', false, true);
-        tbody.appendChild(tr);
-      });
-      table.appendChild(tbody);
-      scrollWrap.appendChild(table);
-      body.appendChild(scrollWrap);
-    }
+          var scrollWrap = document.createElement('div');
+          scrollWrap.className = 'agente-compara-temp-table-modal-freight-scroll agente-compara-calculation-memory-table-scroll';
+          var table = document.createElement('table');
+          table.className = 'agente-compara-temp-table-modal-freight-table agente-compara-calculation-memory-table';
+          var thead = document.createElement('thead');
+          var headerRow = document.createElement('tr');
+          ['Componente', 'Base/regra', 'Taxa', 'Qtd.', 'M?nimo', 'Valor', 'Observa??o'].forEach(function (label) {
+            appendTableCell(headerRow, label, true, false);
+          });
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+          var tbody = document.createElement('tbody');
+          componentRows.forEach(function (memoryRow) {
+            var tr = document.createElement('tr');
+            appendTableCell(tr, memoryRow.label, false, true);
+            appendTableCell(tr, memoryRow.basis || '', false, true);
+            appendTableCell(tr, memoryRow.rate || '', false, true);
+            appendTableCell(tr, memoryRow.quantity || '', false, true);
+            appendTableCell(tr, memoryRow.minimum || '', false, true);
+            appendTableCell(
+              tr,
+              memoryRow.ignored ? 'Ignorado' : formatComparisonMoney(memoryRow.amount),
+              false,
+              true
+            );
+            appendTableCell(tr, memoryRow.note || '', false, true);
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          scrollWrap.appendChild(table);
+          body.appendChild(scrollWrap);
+        }
 
-    var taxes = Array.isArray(memory.taxes) ? memory.taxes : [];
-    if (!taxes.length && tableResult.components && comparisonMemoryHasValue(tableResult.components.taxes)) {
-      if (comparisonMemoryHasValue(tableResult.components.icms)) {
-        taxes.push({ label: 'ICMS', amount: tableResult.components.icms, applied: true });
-      }
-      if (comparisonMemoryHasValue(tableResult.components.iss)) {
-        taxes.push({ label: 'ISS', amount: tableResult.components.iss, applied: true });
-      }
-    }
-    if (taxes.length) {
-      var taxTitle = document.createElement('h3');
-      taxTitle.className = 'agente-compara-temp-table-modal-section-title';
-      taxTitle.textContent = 'Impostos';
-      body.appendChild(taxTitle);
-      var taxScroll = document.createElement('div');
-      taxScroll.className = 'agente-compara-temp-table-modal-freight-scroll agente-compara-calculation-memory-table-scroll';
-      var taxTable = document.createElement('table');
-      taxTable.className = 'agente-compara-temp-table-modal-freight-table agente-compara-calculation-memory-table';
-      var taxHead = document.createElement('thead');
-      var taxHeadRow = document.createElement('tr');
-      ['Imposto', 'Base', 'Alíquota', 'Valor'].forEach(function (label) {
-        appendTableCell(taxHeadRow, label, true, false);
-      });
-      taxHead.appendChild(taxHeadRow);
-      taxTable.appendChild(taxHead);
-      var taxBody = document.createElement('tbody');
-      taxes.forEach(function (tax) {
-        if (!tax || typeof tax !== 'object') return;
-        var tr = document.createElement('tr');
-        appendTableCell(tr, comparisonMemoryDisplayText(tax.label || tax.tax_type) || 'Imposto', false, true);
-        appendTableCell(tr, comparisonMemoryHasValue(tax.basis) ? formatComparisonMoney(tax.basis) : '', false, true);
-        appendTableCell(tr, comparisonMemoryHasValue(tax.rate) ? String(tax.rate) : '', false, true);
-        appendTableCell(
-          tr,
-          tax.ignored || tax.applied === false
-            ? (comparisonMemoryDisplayText(tax.reason) || 'Não aplicado')
-            : formatComparisonMoney(tax.amount),
-          false,
-          true
-        );
-        taxBody.appendChild(tr);
-      });
-      taxTable.appendChild(taxBody);
-      taxScroll.appendChild(taxTable);
-      body.appendChild(taxScroll);
-    }
+        var taxes = Array.isArray(memory.taxes) ? memory.taxes : [];
+        if (!taxes.length && tableResult.components && comparisonMemoryHasValue(tableResult.components.taxes)) {
+          if (comparisonMemoryHasValue(tableResult.components.icms)) {
+            taxes.push({ label: 'ICMS', amount: tableResult.components.icms, applied: true });
+          }
+          if (comparisonMemoryHasValue(tableResult.components.iss)) {
+            taxes.push({ label: 'ISS', amount: tableResult.components.iss, applied: true });
+          }
+        }
+        if (taxes.length) {
+          var taxTitle = document.createElement('h3');
+          taxTitle.className = 'agente-compara-temp-table-modal-section-title';
+          taxTitle.textContent = 'Impostos';
+          body.appendChild(taxTitle);
+          var taxScroll = document.createElement('div');
+          taxScroll.className = 'agente-compara-temp-table-modal-freight-scroll agente-compara-calculation-memory-table-scroll';
+          var taxTable = document.createElement('table');
+          taxTable.className = 'agente-compara-temp-table-modal-freight-table agente-compara-calculation-memory-table';
+          var taxHead = document.createElement('thead');
+          var taxHeadRow = document.createElement('tr');
+          ['Imposto', 'Base', 'Al?quota', 'Valor'].forEach(function (label) {
+            appendTableCell(taxHeadRow, label, true, false);
+          });
+          taxHead.appendChild(taxHeadRow);
+          taxTable.appendChild(taxHead);
+          var taxBody = document.createElement('tbody');
+          taxes.forEach(function (tax) {
+            if (!tax || typeof tax !== 'object') return;
+            var tr = document.createElement('tr');
+            appendTableCell(tr, comparisonMemoryDisplayText(tax.label || tax.tax_type) || 'Imposto', false, true);
+            appendTableCell(tr, comparisonMemoryHasValue(tax.basis) ? formatComparisonMoney(tax.basis) : '', false, true);
+            appendTableCell(tr, comparisonMemoryHasValue(tax.rate) ? String(tax.rate) : '', false, true);
+            appendTableCell(
+              tr,
+              tax.ignored || tax.applied === false
+                ? (comparisonMemoryDisplayText(tax.reason) || 'N?o aplicado')
+                : formatComparisonMoney(tax.amount),
+              false,
+              true
+            );
+            taxBody.appendChild(tr);
+          });
+          taxTable.appendChild(taxBody);
+          taxScroll.appendChild(taxTable);
+          body.appendChild(taxScroll);
+        }
 
-    var totals = document.createElement('div');
-    totals.className = 'agente-compara-calculation-memory-total';
-    var subtotalLabel = document.createElement('span');
-    subtotalLabel.className = 'agente-compara-calculation-memory-total-label';
-    var subtotalValue = memory.subtotal_before_taxes;
-    if (!comparisonMemoryHasValue(subtotalValue) && tableResult.components) {
-      subtotalValue = tableResult.components.subtotal;
-    }
-    subtotalLabel.textContent = comparisonMemoryHasValue(subtotalValue)
-      ? ('Subtotal: ' + formatComparisonMoney(subtotalValue))
-      : 'Subtotal: —';
-    var totalLabel = document.createElement('strong');
-    totalLabel.className = 'agente-compara-calculation-memory-total-value';
-    totalLabel.textContent = 'Total: ' + formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight);
-    totals.appendChild(subtotalLabel);
-    totals.appendChild(totalLabel);
-    body.appendChild(totals);
+        var totals = document.createElement('div');
+        totals.className = 'agente-compara-calculation-memory-total';
+        var subtotalLabel = document.createElement('span');
+        subtotalLabel.className = 'agente-compara-calculation-memory-total-label';
+        var subtotalValue = memory.subtotal_before_taxes;
+        if (!comparisonMemoryHasValue(subtotalValue) && tableResult.components) {
+          subtotalValue = tableResult.components.subtotal;
+        }
+        subtotalLabel.textContent = comparisonMemoryHasValue(subtotalValue)
+          ? ('Subtotal: ' + formatComparisonMoney(subtotalValue))
+          : 'Subtotal: ?';
+        var totalLabel = document.createElement('strong');
+        totalLabel.className = 'agente-compara-calculation-memory-total-value';
+        totalLabel.textContent = 'Total: ' + formatComparisonMoney(memory.total != null ? memory.total : tableResult.calculated_freight);
+        totals.appendChild(subtotalLabel);
+        totals.appendChild(totalLabel);
+        body.appendChild(totals);
 
-    if (evidence && typeof evidence === 'object') {
-      var safeEvidenceKeys = [
-        'freight_region',
-        'calculation_basis',
-        'calculation_details',
-        'pricing_type',
-        'pricing_lookup_key',
-        'pricing_lookup_kind',
-        'weight_band',
-        'weight_basis'
-      ];
-      var hasEvidence = safeEvidenceKeys.some(function (key) {
-        return comparisonMemoryHasValue(evidence[key]);
+        if (evidence && typeof evidence === 'object') {
+          var safeEvidenceKeys = [
+            'freight_region',
+            'calculation_basis',
+            'calculation_details',
+            'pricing_type',
+            'pricing_lookup_key',
+            'pricing_lookup_kind',
+            'weight_band',
+            'weight_basis'
+          ];
+          var hasEvidence = safeEvidenceKeys.some(function (key) {
+            return comparisonMemoryHasValue(evidence[key]);
+          });
+          if (hasEvidence) {
+            var evidenceTitle = document.createElement('h3');
+            evidenceTitle.className = 'agente-compara-temp-table-modal-section-title';
+            evidenceTitle.textContent = 'Evid?ncias';
+            body.appendChild(evidenceTitle);
+            safeEvidenceKeys.forEach(function (key) {
+              appendComparisonMemoryDetail(body, key, evidence[key]);
+            });
+          }
+        }
+      })
+      .catch(function () {
+        while (body.firstChild) body.removeChild(body.firstChild);
+        var failure = document.createElement('div');
+        failure.className = 'agente-compara-calculation-memory-diagnostic';
+        appendComparisonMemoryDetail(failure, 'Mem?ria', 'N?o foi poss?vel carregar a mem?ria de c?lculo.');
+        body.appendChild(failure);
       });
-      if (hasEvidence) {
-        var evidenceTitle = document.createElement('h3');
-        evidenceTitle.className = 'agente-compara-temp-table-modal-section-title';
-        evidenceTitle.textContent = 'Evidências';
-        body.appendChild(evidenceTitle);
-        safeEvidenceKeys.forEach(function (key) {
-          appendComparisonMemoryDetail(body, key, evidence[key]);
-        });
-      }
-    }
   }
 
   function openComparisonCalculationMemory(row, tableResult, openerEl) {
@@ -5399,7 +5628,19 @@
     } else if (payload.error_code || payload.message) {
       comparisonCalculationState.error = {
         code: payload.error_code || null,
-        message: payload.message || null
+        message: payload.message || null,
+        stage: payload.error_stage || null,
+        artifact_type: payload.artifact_type || null,
+        retryable: payload.retryable === true,
+        table_id: payload.table_id || payload.failed_table_id || null,
+        slot_number: payload.slot_number || payload.failed_slot || null,
+        carrier_name: payload.carrier_name || payload.failed_table_name || null,
+        failure_origin: payload.failure_origin || null,
+        failure_code: payload.failure_code || null,
+        credit_disposition: payload.credit_disposition || null,
+        retry_of: payload.retry_of || null,
+        is_free_retry: payload.is_free_retry === true,
+        safe_message: payload.safe_message || payload.message || null
       };
     } else {
       comparisonCalculationState.error = null;
@@ -5433,6 +5674,70 @@
     if (typeof syncProgressiveChatUnlock === 'function') {
       syncProgressiveChatUnlock();
     }
+  }
+
+  function resolveCalculationStorageFailureUi(error) {
+    var code = (error && error.code) || '';
+    var artifact = (error && error.artifact_type) || '';
+    if (code === 'comparison_table_preparation_failed') {
+      return resolveComparisonPreparationFailureUi(error);
+    }
+    if (code === 'calculation_memory_too_large' || code === 'calculation_result_too_large') {
+      return {
+        title: artifact === 'memory' ? 'Detalhes do c?lculo excederam o limite' : 'Resultado excedeu o limite',
+        message: error.message || 'Os cálculos foram processados, mas o armazenamento excedeu o limite técnico.'
+      };
+    }
+    if (artifact === 'memory') {
+      return {
+        title: 'Falha ao armazenar detalhes do cálculo',
+        message: error.message || 'Os cálculos foram processados, mas os detalhes não puderam ser salvos.'
+      };
+    }
+    if (artifact === 'result') {
+      return {
+        title: 'Falha ao armazenar o resultado',
+        message: error.message || 'Os cálculos foram processados, mas o resultado comparativo não pôde ser salvo.'
+      };
+    }
+    return {
+      title: 'Falha no c?lculo',
+      message: error.message || 'N?o foi poss?vel concluir o c?lculo comparativo.'
+    };
+  }
+
+  function resolveComparisonPreparationFailureUi(error) {
+    var carrierName = String((error && error.carrier_name) || '').trim();
+    var slotNumber = error && error.slot_number != null ? String(error.slot_number) : '';
+    var tableName = carrierName || (slotNumber ? ('Tabela ' + slotNumber) : 'esta tabela');
+    var safeMessage = (error && error.safe_message) || (error && error.message) || 'Não foi possível preparar a tabela neste momento.';
+    if (
+      error &&
+      error.failure_origin === 'platform' &&
+      error.retryable === true &&
+      error.credit_disposition === 'preserved'
+    ) {
+      return {
+        title: 'Falha temporária ao preparar a tabela',
+        subtitle: 'Somente a tabela afetada precisa de uma nova tentativa.',
+        message: 'Não foi possível concluir a preparação da tabela ' + tableName + '. Nenhum crédito foi consumido por esta tentativa.',
+        retryLabel: 'Tentar novamente'
+      };
+    }
+    if (error && error.retry_of && error.is_free_retry === true && error.credit_disposition === 'not_consumed') {
+      return {
+        title: 'Nova tentativa da tabela',
+        subtitle: 'Somente a tabela afetada precisa de uma nova tentativa.',
+        message: safeMessage + ' Esta nova tentativa não consumirá outro crédito.',
+        retryLabel: 'Tentar novamente'
+      };
+    }
+    return {
+      title: 'Tabela pendente de correção',
+      subtitle: 'Corrija o arquivo desta tabela para continuar.',
+      message: safeMessage,
+      retryLabel: 'Tentar novamente'
+    };
   }
 
   function restoreComparisonCalculationFromStatus() {
@@ -5535,7 +5840,7 @@
             status: r.status,
             data: {
               ok: false,
-              message: 'Não foi possível processar os cálculos comparativos.'
+              message: 'Não foi possível processar os cÃ¡lculos comparativos.'
             }
           };
         });
@@ -5546,7 +5851,18 @@
         if (res.status === 409) {
           comparisonCalculationState.error = {
             code: data.error_code || 'conflict',
-            message: data.message || 'Conflito ao processar os cálculos.'
+            message: data.message || 'Conflito ao processar os cÃ¡lculos.',
+            stage: data.error_stage || ((data.error && data.error.stage) || ''),
+            retryable: data.retryable === true,
+            table_id: data.table_id || data.failed_table_id || null,
+            slot_number: data.slot_number || data.failed_slot || null,
+            carrier_name: data.carrier_name || data.failed_table_name || null,
+            failure_origin: data.failure_origin || null,
+            failure_code: data.failure_code || null,
+            credit_disposition: data.credit_disposition || null,
+            retry_of: data.retry_of || null,
+            is_free_retry: data.is_free_retry === true,
+            safe_message: data.safe_message || data.message || null
           };
           if (data.status) applyComparisonCalculationPayload(data);
           else comparisonCalculationState.status = 'CALCULATION_FAILED';
@@ -6242,6 +6558,10 @@
       editTarget.freight_routes = deepCloneTempTable(tempTable.freight_routes) || [];
     }
     editTarget.accessorial_fees = deepCloneTempTable(tempTable.accessorial_fees) || [];
+    hydrateAccessorialFeesForEditing(editTarget.accessorial_fees);
+    editTarget.accessorial_fees.forEach(function (fee) {
+      applyResolvedCalculationBaseForSave(fee);
+    });
     syncAccessorialMinimumAmountFields(editTarget.accessorial_fees);
   }
 
@@ -9857,13 +10177,13 @@ function renderDocumentItem(doc) {
           } else {
             appendChatBubble('assistant', chatErrorMessage(res.data, res.status));
           }
-          // Erro técnico: não entra no histórico enviado ao Gemini.
+          // Erro tÃ©cnico: não entra no histórico enviado ao Gemini.
           return;
         }
         if (!res.data || res.data.ok !== true) {
           applyComparisonChatAvailabilityFromError(res.data, res.status);
           if (isComparisonChatNotReadyError(res.data, res.status)) {
-            // Corrida de estado: orientação fixa local, sem erro técnico de provider.
+            // Corrida de estado: orientação fixa local, sem erro tÃ©cnico de provider.
             markLastUserBubbleAsFlowGuidance();
             appendBlockedChatGuidance();
             return;
@@ -11086,7 +11406,7 @@ function renderDocumentItem(doc) {
     }
     var placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = 'não mapeado / revisar';
+    placeholder.textContent = 'n\u00e3o mapeado / revisar';
     select.appendChild(placeholder);
     currentCalculationBases.forEach(function (base) {
       if (!base || !base.id) return;
@@ -11095,7 +11415,10 @@ function renderDocumentItem(doc) {
       option.textContent = calculationBaseOptionLabel(base);
       select.appendChild(option);
     });
-    select.value = item && item.calculation_base_id ? String(item.calculation_base_id) : '';
+    var selectedBaseId = item && item.editable_calculation_base_id
+      ? String(item.editable_calculation_base_id)
+      : (item && item.calculation_base_id ? String(item.calculation_base_id) : '');
+    select.value = selectedBaseId;
     select.addEventListener('change', function () {
       if (typeof onChange === 'function') onChange(select.value);
     });
@@ -11104,7 +11427,34 @@ function renderDocumentItem(doc) {
       var icon = document.createElement('span');
       icon.className = 'accessorial-field-error-icon';
       icon.setAttribute('aria-hidden', 'true');
-      icon.textContent = 'âš ';
+      icon.textContent = '!';
+      td.appendChild(icon);
+      var hint = document.createElement('div');
+      hint.className = 'accessorial-field-error';
+      hint.setAttribute('role', 'note');
+      hint.textContent = accessorialFieldErrorMessage(validationError);
+      td.appendChild(hint);
+    }
+    tr.appendChild(td);
+  }
+
+  function appendMinimumLinkCell(tr, item, fees, feeIndex, validationError) {
+    var td = document.createElement('td');
+    td.className = validationError ? 'calculation-base-cell calculation-base-cell--invalid' : 'calculation-base-cell';
+    var wrapper = document.createElement('div');
+    wrapper.className = 'accessorial-basis-review accessorial-basis-review--info';
+    var label = document.createElement('div');
+    label.className = 'accessorial-basis-review__label';
+    label.textContent = item && item.edit_display_label
+      ? String(item.edit_display_label)
+      : accessorialMinimumLinkLabel(item, fees, feeIndex);
+    wrapper.appendChild(label);
+    td.appendChild(wrapper);
+    if (validationError) {
+      var icon = document.createElement('span');
+      icon.className = 'accessorial-field-error-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = 'â ';
       td.appendChild(icon);
       var hint = document.createElement('div');
       hint.className = 'accessorial-field-error';
@@ -11116,6 +11466,7 @@ function renderDocumentItem(doc) {
   }
 
   function renderEditableAccessorialFeesSection(container, list) {
+    hydrateAccessorialFeesForEditing(currentTempTable.accessorial_fees || []);
     var section = document.createElement('div');
     section.className = 'agente-compara-temp-table-modal-section agente-compara-temp-table-modal-accessorial-section';
 
@@ -11176,18 +11527,34 @@ function renderDocumentItem(doc) {
         field: 'unit',
         validationError: getAccessorialFeeValidationError(feeIndex, 'unit')
       });
-      appendCalculationBaseSelectCell(tr, item, function (baseId) {
-        var fee = currentTempTable.accessorial_fees[feeIndex];
-        if (!fee) return;
-        var base = getCalculationBaseById(baseId);
-        if (base) {
-          applyCalculationBaseToAccessorialFee(fee, base);
-        } else {
-          markAccessorialFeeAsUnmapped(fee);
-        }
-        refreshTempTableValidationErrorsAfterAccessorialEdit();
-        renderTempTableModalContent(currentTempTable);
-      }, getAccessorialFeeValidationError(feeIndex, 'calculation_base_id'));
+      if (item.edit_mode === 'minimum_link') {
+        appendMinimumLinkCell(
+          tr,
+          item,
+          currentTempTable.accessorial_fees || [],
+          feeIndex,
+          getAccessorialFeeValidationError(feeIndex, 'calculation_base_id')
+        );
+      } else {
+        appendCalculationBaseSelectCell(tr, item, function (baseId) {
+          var fee = currentTempTable.accessorial_fees[feeIndex];
+          if (!fee) return;
+          var base = getCalculationBaseById(baseId);
+          if (base) {
+            applyCalculationBaseToAccessorialFee(fee, base);
+            fee.editable_calculation_base_id = String(base.id || '');
+            fee.edit_mode = 'base_select';
+            fee.edit_display_label = '';
+          } else {
+            markAccessorialFeeAsUnmapped(fee);
+            fee.editable_calculation_base_id = '';
+            fee.edit_mode = 'unmapped';
+            fee.edit_display_label = '';
+          }
+          refreshTempTableValidationErrorsAfterAccessorialEdit();
+          renderTempTableModalContent(currentTempTable);
+        }, getAccessorialFeeValidationError(feeIndex, 'calculation_base_id'));
+      }
       appendAccessorialFieldCell(tr, item.notes, function (newValue) {
         if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].notes = newValue;
         refreshTempTableValidationErrorsAfterAccessorialEdit();
@@ -11388,7 +11755,7 @@ function renderDocumentItem(doc) {
     panel.className = 'agente-compara-configuration-ready-confirmation';
     panel.id = 'agenteComparaConfigurationReadyConfirmation';
     panel.setAttribute('role', 'region');
-    panel.setAttribute('aria-label', 'Confirmação para processar cálculos');
+    panel.setAttribute('aria-label', 'Confirmação para processar cÃ¡lculos');
 
     var title = document.createElement('h3');
     title.className = 'agente-compara-configuration-ready-title';
@@ -11472,7 +11839,7 @@ function renderDocumentItem(doc) {
     if (!shouldEnableResultsReviewTab()) {
       var waiting = document.createElement('p');
       waiting.className = 'agente-compara-temp-table-modal-empty';
-      waiting.textContent = 'Os resultados aparecerão aqui após o processamento dos cálculos.';
+      waiting.textContent = 'Os resultados aparecerão aqui após o processamento dos cÃ¡lculos.';
       host.appendChild(waiting);
       return;
     }
@@ -11666,7 +12033,7 @@ function renderDocumentItem(doc) {
     if (!resultsEnabled) {
       resultsTab.disabled = true;
       resultsTab.setAttribute('aria-disabled', 'true');
-      resultsTab.title = 'Disponível após iniciar o processamento dos cálculos.';
+      resultsTab.title = 'Disponível após iniciar o processamento dos cÃ¡lculos.';
     } else {
       resultsTab.setAttribute('aria-disabled', 'false');
       resultsTab.addEventListener('click', function () {

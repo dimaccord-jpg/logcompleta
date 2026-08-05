@@ -596,6 +596,8 @@ def _compact_cell(cell: dict | None, *, include_memory: bool = False) -> dict | 
         memory = cell.get("calculation_memory")
         if isinstance(memory, dict):
             payload["calculation_memory"] = _json_safe(_compact_memory(memory))
+        elif isinstance(cell.get("memory_ref"), str) and cell.get("memory_ref").strip():
+            payload["memory_ref"] = cell.get("memory_ref").strip()
     return _json_safe(payload)
 
 

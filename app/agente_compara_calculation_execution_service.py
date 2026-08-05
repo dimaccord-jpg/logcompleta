@@ -20,6 +20,7 @@ from uuid import uuid4
 from flask import has_request_context, session
 
 from app.agente_compara_comparison_calculation_service import (
+    compact_comparison_result_for_storage,
     MULTI_TABLE_CALCULATION_SCHEMA_VERSION,
     AgenteComparaMultiTableCalculationError,
     InvalidMultiTableCalculationContextError,
@@ -27,6 +28,7 @@ from app.agente_compara_comparison_calculation_service import (
     UnexpectedMultiTableCalculationError,
     build_multi_table_calculation_context,
     calculate_comparison_in_memory,
+    hydrate_memory_item,
     validate_comparison_result_serializable,
 )
 from app.agente_compara_calculation_lock import (
@@ -39,7 +41,13 @@ from app.agente_compara_calculation_result_storage import (
     ERROR_RESULT_MISSING,
     delete_comparison_calculation_result,
     load_comparison_calculation_result,
+    load_comparison_calculation_memory_payload,
+    save_comparison_calculation_memory_payload,
     save_comparison_calculation_result,
+    delete_comparison_calculation_memories,
+    ERROR_MEMORY_MISSING,
+    ERROR_MEMORY_TOO_LARGE,
+    ERROR_RESULT_TOO_LARGE,
 )
 from app.agente_compara_comparison_state import (
     COMPARISON_STATUS_CALCULATION_FAILED,
@@ -113,11 +121,41 @@ _FORBIDDEN_PUBLIC_RESULT_FIELDS = frozenset(
 
 
 class AgenteComparaCalculationExecutionError(Exception):
-    def __init__(self, error_code: str, message: str, *, http_status: int = 400):
+    def __init__(
+        self,
+        error_code: str,
+        message: str,
+        *,
+        http_status: int = 400,
+        error_stage: str | None = None,
+        retryable: bool = False,
+        artifact_type: str | None = None,
+        failed_table_name: str | None = None,
+        failed_table_id: str | None = None,
+        failed_slot: int | None = None,
+        failure_origin: str | None = None,
+        failure_code: str | None = None,
+        credit_disposition: str | None = None,
+        retry_of: str | None = None,
+        is_free_retry: bool = False,
+        safe_message: str | None = None,
+    ):
         super().__init__(message)
         self.error_code = error_code
         self.message = message
         self.http_status = http_status
+        self.error_stage = error_stage
+        self.retryable = bool(retryable)
+        self.artifact_type = artifact_type
+        self.failed_table_name = failed_table_name
+        self.failed_table_id = failed_table_id
+        self.failed_slot = failed_slot
+        self.failure_origin = failure_origin
+        self.failure_code = failure_code
+        self.credit_disposition = credit_disposition
+        self.retry_of = retry_of
+        self.is_free_retry = bool(is_free_retry)
+        self.safe_message = safe_message or message
 
 
 def _utcnow_iso() -> str:
@@ -193,8 +231,27 @@ def _empty_calculation_object() -> dict:
         "error_cell_count": 0,
         "result_storage_key": None,
         "result_size_bytes": None,
+        "result_envelope_size_bytes": None,
         "result_checksum": None,
         "result_schema_version": None,
+        "memory_storage_key": None,
+        "memory_size_bytes": None,
+        "memory_envelope_size_bytes": None,
+        "memory_checksum": None,
+        "raw_result_size_bytes": None,
+        "compact_result_size_bytes": None,
+        "memory_payload_size_bytes": None,
+        "compaction_ratio": None,
+        "serialization_duration_ms": None,
+        "memory_save_duration_ms": None,
+        "result_save_duration_ms": None,
+        "table_count": 0,
+        "cell_count": 0,
+        "last_completed_stage": None,
+        "failed_stage": None,
+        "failed_artifact": None,
+        "retryable": False,
+        "safe_message": None,
         "error": None,
         "billing_status": BILLING_STATUS_NOT_STARTED,
         "billing_idempotency_key": None,
@@ -245,7 +302,10 @@ def cleanup_comparison_calculation_storage(state: dict | None) -> bool:
     if not isinstance(calc, dict):
         return False
     key = calc.get("result_storage_key")
-    return delete_comparison_calculation_result(key if isinstance(key, str) else None)
+    mem_key = calc.get("memory_storage_key")
+    removed_result = delete_comparison_calculation_result(key if isinstance(key, str) else None)
+    removed_memory = delete_comparison_calculation_memories(mem_key if isinstance(mem_key, str) else None)
+    return removed_result or removed_memory
 
 
 def _billing_allows_result_release(calc: dict | None) -> bool:
@@ -270,14 +330,54 @@ def _load_stored_result_or_raise(calc: dict, *, comparison_id: str) -> dict:
             fingerprint=fingerprint,
             expected_checksum=(calc.get("result_checksum") or None),
         )
+        memory_payload = None
+        memory_key = (calc.get("memory_storage_key") or "").strip()
+        if memory_key:
+            memory_payload = load_comparison_calculation_memory_payload(
+                storage_key=memory_key,
+                comparison_id=comparison_id,
+                fingerprint=fingerprint,
+                expected_checksum=(calc.get("memory_checksum") or None),
+            )
+        result = _rehydrate_compact_result(result, memory_payload)
     except AgenteComparaCalculationResultStorageError as exc:
-        code = ERROR_RESULT_MISSING if exc.error_code == ERROR_RESULT_MISSING else ERROR_RESULT_CORRUPT_PUBLIC
+        code = ERROR_RESULT_MISSING if exc.error_code in {ERROR_RESULT_MISSING, ERROR_MEMORY_MISSING} else ERROR_RESULT_CORRUPT_PUBLIC
         raise AgenteComparaCalculationExecutionError(
             code,
             "Não foi possível recuperar o resultado comparativo.",
             http_status=409,
         ) from exc
     return _public_result(result) or {}
+
+
+def _rehydrate_compact_result(result: dict | None, memory_payload: dict | None) -> dict | None:
+    if not isinstance(result, dict):
+        return None
+    if not isinstance(memory_payload, dict):
+        return copy.deepcopy(result)
+    items = memory_payload.get("items") if isinstance(memory_payload.get("items"), dict) else {}
+    hydrated = copy.deepcopy(result)
+    for row in hydrated.get("comparative_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        table_results = row.get("table_results") if isinstance(row.get("table_results"), dict) else {}
+        for cell in table_results.values():
+            if not isinstance(cell, dict):
+                continue
+            memory_ref = (cell.get("memory_ref") or "").strip() if isinstance(cell.get("memory_ref"), str) else ""
+            item = items.get(memory_ref) if memory_ref else None
+            if not isinstance(item, dict):
+                continue
+            resolved_item = hydrate_memory_item(item, memory_payload)
+            if isinstance(resolved_item.get("calculation_memory"), dict):
+                cell["calculation_memory"] = copy.deepcopy(resolved_item.get("calculation_memory"))
+            cell["components"] = copy.deepcopy(resolved_item.get("components") or {})
+            cell["evidence"] = copy.deepcopy(resolved_item.get("evidence") or {})
+            cell["warnings"] = copy.deepcopy(resolved_item.get("warnings") or [])
+            cell["blocking_issues"] = copy.deepcopy(resolved_item.get("blocking_issues") or [])
+    if int(hydrated.get("schema_version") or 0) == 2:
+        hydrated["schema_version"] = 1
+    return hydrated
 
 
 def _build_analytics_for_released_result(result: dict | None) -> dict | None:
@@ -447,6 +547,66 @@ def _load_primary_operational_inputs(
         "temp_table_id": primary_tt,
     }
     return record, list(rows), coverage, source_identity
+
+
+def _validate_confirmed_table_record(entry: dict, record: dict, *, comparison_id: str) -> dict | None:
+    temp_table_id = (entry.get("temp_table_id") or "").strip()
+    slot_number = int(entry.get("slot_number") or 0)
+    table_id = (entry.get("table_id") or "").strip()
+    source_documents = [doc for doc in (record.get("source_documents") or []) if isinstance(doc, str) and doc.strip()]
+    status = (record.get("status") or "").strip().lower()
+    base = {
+        "error_code": "comparison_table_preparation_failed",
+        "error_stage": "table_preflight_validated",
+        "retryable": bool(record.get("retryable")),
+        "failed_table_id": table_id,
+        "failed_table_name": entry.get("carrier_name"),
+        "failed_slot": slot_number,
+        "failed_document_id": record.get("active_document_id") or (source_documents[0] if source_documents else None),
+        "failure_origin": record.get("failure_origin"),
+        "failure_code": record.get("failure_code"),
+        "credit_disposition": record.get("credit_disposition") or "preserved",
+        "retry_of": record.get("retry_of"),
+        "is_free_retry": bool(record.get("is_free_retry")),
+    }
+    if status != "needs_review":
+        return {
+            **base,
+            "source_error_code": record.get("failure_code") or status or "table_not_ready",
+            "safe_message": record.get("safe_message") or f"A tabela {entry.get('carrier_name') or slot_number} ainda n?o est? pronta. Processe novamente essa tabela antes de iniciar a compara??o.",
+        }
+    if record.get("failure_origin") or record.get("failure_code"):
+        return {
+            **base,
+            "source_error_code": record.get("failure_code") or "table_has_residual_failure",
+            "safe_message": record.get("safe_message") or f"A tabela {entry.get('carrier_name') or slot_number} ainda n?o est? pronta. Processe novamente essa tabela antes de iniciar a compara??o.",
+        }
+    if (record.get("comparison_id") or "").strip() not in {"", comparison_id}:
+        return {**base, "retryable": False, "source_error_code": "comparison_scope_mismatch", "safe_message": "A tabela confirmada n?o pertence mais ? compara??o ativa."}
+    if (record.get("table_id") or "").strip() not in {"", table_id}:
+        return {**base, "retryable": False, "source_error_code": "table_identity_mismatch", "safe_message": "A tabela confirmada ficou inconsistente e precisa ser preparada novamente."}
+    if not temp_table_id or not source_documents:
+        return {**base, "source_error_code": "active_document_missing", "safe_message": f"A tabela {entry.get('carrier_name') or slot_number} ainda n?o est? pronta. Processe novamente essa tabela antes de iniciar a compara??o."}
+    return None
+
+
+def _raise_preflight_failure(metadata: dict) -> None:
+    raise AgenteComparaCalculationExecutionError(
+        metadata.get("error_code") or ERROR_CALCULATION_NOT_READY,
+        metadata.get("safe_message") or "A compara??o n?o pode ser iniciada porque existe tabela inv?lida.",
+        http_status=409,
+        error_stage=metadata.get("error_stage"),
+        retryable=bool(metadata.get("retryable")),
+        failed_table_name=metadata.get("failed_table_name"),
+        failed_table_id=metadata.get("failed_table_id"),
+        failed_slot=metadata.get("failed_slot"),
+        failure_origin=metadata.get("failure_origin"),
+        failure_code=metadata.get("failure_code") or metadata.get("source_error_code"),
+        credit_disposition=metadata.get("credit_disposition"),
+        retry_of=metadata.get("retry_of"),
+        is_free_retry=bool(metadata.get("is_free_retry")),
+        safe_message=metadata.get("safe_message"),
+    )
 
 
 def _load_table_records(
@@ -907,6 +1067,17 @@ def execute_comparison_calculation(
             table_records = _load_table_records(
                 entries, ttl_hours=effective_ttl, load_temp_table_record=loader
             )
+            for entry in entries:
+                temp_id = (entry.get("temp_table_id") or "").strip()
+                record = table_records.get(temp_id) or table_records.get((entry.get("table_id") or "").strip())
+                if not isinstance(record, dict):
+                    _raise_preflight_failure({
+                        "error_code": "comparison_table_preparation_failed",
+                        "safe_message": f"A tabela {entry.get('carrier_name') or entry.get('slot_number')} ainda n?o est? pronta. Processe novamente essa tabela antes de iniciar a compara??o.",
+                    })
+                preflight_error = _validate_confirmed_table_record(entry, record, comparison_id=cmp_id)
+                if preflight_error is not None:
+                    _raise_preflight_failure(preflight_error)
             tax_config = get_comparison_tax_config(state)
             fp_payload = build_calculation_fingerprint_payload(
                 comparison_id=cmp_id,
@@ -1078,6 +1249,7 @@ def execute_comparison_calculation(
 
             motor = calculate_fn or calculate_comparison_in_memory
             saved_storage_key: str | None = None
+            saved_memory_key: str | None = None
             try:
                 context = build_multi_table_calculation_context(
                     comparison_id=cmp_id,
@@ -1098,6 +1270,16 @@ def execute_comparison_calculation(
                     result, comparison_id=cmp_id, execution_id=exec_id
                 )
                 public_result = _public_result(result)
+                raw_result_size_bytes = len(
+                    json.dumps(
+                        result,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                        default=str,
+                    ).encode("utf-8")
+                )
 
                 # Post-check fingerprint BEFORE save — fail without writing storage.
                 live_state = get_comparison_state(sess) or state
@@ -1114,28 +1296,53 @@ def execute_comparison_calculation(
                         http_status=409,
                     )
 
+                compacted = compact_comparison_result_for_storage(result)
+                compact_result = compacted["compact_result"]
+                memory_payload = compacted["memory_payload"]
+                public_result = _public_result(_rehydrate_compact_result(compact_result, memory_payload))
                 try:
+                    memory_storage_meta = save_comparison_calculation_memory_payload(
+                        comparison_id=cmp_id,
+                        fingerprint=fingerprint,
+                        memory_payload=memory_payload,
+                    )
+                    saved_memory_key = (memory_storage_meta.get("memory_storage_key") or "").strip() or None
                     storage_meta = save_comparison_calculation_result(
                         comparison_id=cmp_id,
                         fingerprint=fingerprint,
-                        result=result,
+                        result=compact_result,
+                        memory_storage_meta=memory_storage_meta,
                     )
                 except AgenteComparaCalculationResultStorageError as exc:
                     logger.exception(
                         "agente_compara_comparison_calc storage_save_failed "
-                        "comparison_id=%s execution_id=%s fingerprint=%s",
+                        "comparison_id=%s execution_id=%s fingerprint=%s artifact=%s stage=%s operation=%s exc_class=%s",
                         cmp_id,
                         exec_id,
                         fingerprint_short,
+                        exc.artifact_type,
+                        exc.error_stage,
+                        exc.operation,
+                        exc.exc_class,
                     )
+                    cleanup = {}
+                    if saved_storage_key:
+                        cleanup["result_cleanup_ok"] = delete_comparison_calculation_result(saved_storage_key)
+                    if saved_memory_key and (exc.artifact_type == "result" or saved_storage_key):
+                        cleanup["memory_cleanup_ok"] = delete_comparison_calculation_memories(saved_memory_key)
                     return _persist_failure(
                         session_obj=sess,
                         state=state,
                         running_calc=running_calc,
-                        error_code=ERROR_CALCULATION_FAILED,
-                        message="Não foi possível gravar o resultado comparativo.",
+                        error_code=exc.error_code,
+                        message=exc.safe_message,
                         started_perf=started_perf,
                         fingerprint_short=fingerprint_short,
+                        error_stage=exc.error_stage,
+                        artifact_type=exc.artifact_type,
+                        retryable=exc.retryable,
+                        failed_artifact=exc.artifact_type,
+                        failure_metrics={**dict(exc.metrics or {}), **cleanup},
                     )
 
                 saved_storage_key = (storage_meta.get("result_storage_key") or "").strip() or None
@@ -1143,6 +1350,8 @@ def execute_comparison_calculation(
             except AgenteComparaCalculationExecutionError as exc:
                 if saved_storage_key:
                     delete_comparison_calculation_result(saved_storage_key)
+                if saved_memory_key:
+                    delete_comparison_calculation_memories(saved_memory_key)
                 return _persist_failure(
                     session_obj=sess,
                     state=state,
@@ -1155,6 +1364,8 @@ def execute_comparison_calculation(
             except (InvalidMultiTableCalculationContextError, MultiTableCalculationInvariantError) as exc:
                 if saved_storage_key:
                     delete_comparison_calculation_result(saved_storage_key)
+                if saved_memory_key:
+                    delete_comparison_calculation_memories(saved_memory_key)
                 return _persist_failure(
                     session_obj=sess,
                     state=state,
@@ -1167,6 +1378,8 @@ def execute_comparison_calculation(
             except UnexpectedMultiTableCalculationError as exc:
                 if saved_storage_key:
                     delete_comparison_calculation_result(saved_storage_key)
+                if saved_memory_key:
+                    delete_comparison_calculation_memories(saved_memory_key)
                 logger.exception(
                     "agente_compara_comparison_calc systemic_error comparison_id=%s execution_id=%s fingerprint=%s",
                     cmp_id,
@@ -1186,6 +1399,8 @@ def execute_comparison_calculation(
             except AgenteComparaMultiTableCalculationError as exc:
                 if saved_storage_key:
                     delete_comparison_calculation_result(saved_storage_key)
+                if saved_memory_key:
+                    delete_comparison_calculation_memories(saved_memory_key)
                 return _persist_failure(
                     session_obj=sess,
                     state=state,
@@ -1198,6 +1413,8 @@ def execute_comparison_calculation(
             except Exception:
                 if saved_storage_key:
                     delete_comparison_calculation_result(saved_storage_key)
+                if saved_memory_key:
+                    delete_comparison_calculation_memories(saved_memory_key)
                 logger.exception(
                     "agente_compara_comparison_calc unexpected comparison_id=%s execution_id=%s fingerprint=%s",
                     cmp_id,
@@ -1227,6 +1444,25 @@ def execute_comparison_calculation(
                     "result_checksum": storage_meta.get("result_checksum"),
                     "result_size_bytes": storage_meta.get("result_size_bytes"),
                     "result_schema_version": storage_meta.get("result_schema_version"),
+                    "memory_storage_key": storage_meta.get("memory_storage_key"),
+                    "memory_checksum": storage_meta.get("memory_checksum"),
+                    "memory_size_bytes": storage_meta.get("memory_size_bytes"),
+                    "result_envelope_size_bytes": storage_meta.get("result_envelope_size_bytes"),
+                    "memory_envelope_size_bytes": storage_meta.get("memory_envelope_size_bytes"),
+                    "raw_result_size_bytes": raw_result_size_bytes,
+                    "compact_result_size_bytes": storage_meta.get("result_size_bytes"),
+                    "memory_payload_size_bytes": storage_meta.get("memory_size_bytes"),
+                    "compaction_ratio": round(float(storage_meta.get("result_size_bytes") or 0) / float(raw_result_size_bytes or 1), 6),
+                    "serialization_duration_ms": int((memory_storage_meta.get("memory_serialization_duration_ms") or 0) + (storage_meta.get("result_serialization_duration_ms") or 0)) or None,
+                    "memory_save_duration_ms": memory_storage_meta.get("memory_save_duration_ms"),
+                    "result_save_duration_ms": storage_meta.get("result_save_duration_ms"),
+                    "table_count": int(result.get("table_count") or len(entries)),
+                    "cell_count": int(summary.get("total_calculation_cells") or 0),
+                    "last_completed_stage": "session_pointer_updated",
+                    "failed_stage": None,
+                    "failed_artifact": None,
+                    "retryable": False,
+                    "safe_message": None,
                     "calculated_table_count": int(result.get("table_count") or len(entries)),
                     "calculated_cell_count": int(summary.get("calculated_cell_count") or 0),
                     "error_cell_count": int(summary.get("error_cell_count") or 0),
@@ -1251,6 +1487,8 @@ def execute_comparison_calculation(
             ):
                 if saved_storage_key:
                     delete_comparison_calculation_result(saved_storage_key)
+                if saved_memory_key:
+                    delete_comparison_calculation_memories(saved_memory_key)
                 raise AgenteComparaCalculationExecutionError(
                     ERROR_EXECUTION_CONFLICT,
                     "Resultado mais recente já foi persistido para outra configuração.",
@@ -1265,6 +1503,8 @@ def execute_comparison_calculation(
             except Exception:
                 if saved_storage_key:
                     delete_comparison_calculation_result(saved_storage_key)
+                if saved_memory_key:
+                    delete_comparison_calculation_memories(saved_memory_key)
                 logger.exception(
                     "agente_compara_comparison_calc ready_persist_failed "
                     "comparison_id=%s execution_id=%s fingerprint=%s",
@@ -1340,8 +1580,14 @@ def _persist_failure(
     started_perf: float,
     fingerprint_short: str,
     raise_as_http: bool = False,
+    error_stage: str | None = None,
+    artifact_type: str | None = None,
+    retryable: bool = False,
+    failed_artifact: str | None = None,
+    failure_metrics: dict | None = None,
 ) -> dict:
     failed = dict(running_calc)
+    failure_metrics = dict(failure_metrics or {})
     failed.update(
         {
             "status": STEP_CALCULATION_FAILED,
@@ -1350,16 +1596,38 @@ def _persist_failure(
             "error": {
                 "code": error_code,
                 "message": message,
+                "stage": error_stage,
+                "artifact_type": artifact_type,
+                "retryable": bool(retryable),
             },
             "billing_status": BILLING_STATUS_NOT_STARTED,
-            "calculated_table_count": 0,
-            "calculated_cell_count": 0,
-            "error_cell_count": 0,
             "stale": False,
             "result_storage_key": None,
             "result_checksum": None,
-            "result_size_bytes": None,
             "result_schema_version": None,
+            "memory_storage_key": None,
+            "memory_checksum": None,
+            "failed_artifact": failed_artifact or artifact_type,
+            "failed_stage": error_stage,
+            "retryable": bool(retryable),
+            "safe_message": message,
+            "last_completed_stage": failure_metrics.get("last_completed_stage"),
+            "raw_result_size_bytes": failure_metrics.get("raw_result_size_bytes", failed.get("raw_result_size_bytes")),
+            "compact_result_size_bytes": failure_metrics.get("compact_result_size_bytes", failed.get("compact_result_size_bytes")),
+            "memory_payload_size_bytes": failure_metrics.get("memory_payload_size_bytes", failed.get("memory_payload_size_bytes")),
+            "result_envelope_size_bytes": failure_metrics.get("result_envelope_size_bytes", failed.get("result_envelope_size_bytes")),
+            "memory_envelope_size_bytes": failure_metrics.get("memory_envelope_size_bytes", failed.get("memory_envelope_size_bytes")),
+            "compaction_ratio": failure_metrics.get("compaction_ratio", failed.get("compaction_ratio")),
+            "serialization_duration_ms": failure_metrics.get("serialization_duration_ms", failed.get("serialization_duration_ms")),
+            "memory_save_duration_ms": failure_metrics.get("memory_save_duration_ms", failed.get("memory_save_duration_ms")),
+            "result_save_duration_ms": failure_metrics.get("result_save_duration_ms", failed.get("result_save_duration_ms")),
+            "table_count": failure_metrics.get("table_count", failed.get("table_count") or failed.get("calculated_table_count") or 0),
+            "cell_count": failure_metrics.get("cell_count", failed.get("cell_count") or 0),
+            "result_size_bytes": failure_metrics.get("result_size_bytes", failed.get("result_size_bytes")),
+            "memory_size_bytes": failure_metrics.get("memory_size_bytes", failed.get("memory_size_bytes")),
+            "calculated_table_count": failure_metrics.get("table_count", failed.get("calculated_table_count") or 0),
+            "calculated_cell_count": failure_metrics.get("cell_count", failed.get("calculated_cell_count") or 0),
+            "error_cell_count": failed.get("error_cell_count") or 0,
         }
     )
     failed.pop("result", None)
@@ -1389,9 +1657,13 @@ def _persist_failure(
         "fingerprint_short": fingerprint_short,
         "idempotent_replay": False,
         "error_code": error_code,
+        "error_stage": error_stage,
+        "artifact_type": artifact_type,
+        "retryable": bool(retryable),
         "message": message,
         "result": None,
         "billing_status": BILLING_STATUS_NOT_STARTED,
+        "failed_artifact": failed.get("failed_artifact"),
     }
     if raise_as_http:
         raise AgenteComparaCalculationExecutionError(error_code, message, http_status=500)

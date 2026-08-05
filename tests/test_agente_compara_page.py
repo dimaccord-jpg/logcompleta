@@ -80,6 +80,19 @@ def test_agente_compara_js_has_no_cleide_auditoria_api():
     assert "agenteComparaShell" in js or "agenteComparaActionsMenu" in js
 
 
+
+
+def test_agente_compara_preparation_failure_ui_contract():
+    js = pathlib.Path("app/static/js/agente_compara.js").read_text(encoding="utf-8")
+
+    assert "function resolveComparisonPreparationFailureUi" in js
+    assert "Falha temporária ao preparar a tabela" in js
+    assert "Nenhum crédito foi consumido por esta tentativa." in js
+    assert "Esta nova tentativa não consumirá outro crédito." in js
+    assert "failure_origin === 'platform'" in js
+    assert "error.credit_disposition === 'preserved'" in js
+    assert "error.is_free_retry === true" in js
+
 def test_compare_tabelas_in_julia_plus_menu_on_operational_home(monkeypatch):
     client = _operational_client(monkeypatch)
     html = client.get("/").get_data(as_text=True)
@@ -142,7 +155,8 @@ def test_agente_compara_menu_admin_mostra_atalhos_completos(monkeypatch):
         home_href = web.url_for("index")
     html = client.get("/agente-compara").get_data(as_text=True)
     menu_start = html.index('id="agenteComparaActionsMenu"')
-    menu_chunk = html[menu_start : menu_start + 2800]
+    menu_end = html.index('id="agenteComparaComparisonDashboard"', menu_start)
+    menu_chunk = html[menu_start:menu_end]
     assert "Enviar arquivos" in menu_chunk
     assert "Home" in menu_chunk
     assert f'href="{home_href}"' in menu_chunk
@@ -164,7 +178,7 @@ def test_agente_compara_not_in_base_html_main_nav():
     assert "Compare Tabelas" in base
     assert "agente-compara" in base
     assert "agente_compara" in base
-    assert 'class="container mb-5 agente-compara-layout"' in source
+    assert 'class="container-fluid agente-compara-layout mb-5"' in source
 
 
 def test_agente_compara_page_initial_state_no_forced_wizard(monkeypatch):
@@ -232,3 +246,29 @@ def test_agente_compara_calculation_file_summary_ui_contract():
     ]
     assert "API_AUDIT_RUN" not in process_fn
     assert "runAuditProcessing" not in process_fn
+
+
+def test_agente_compara_template_layout_allows_wide_data_surfaces():
+    source = pathlib.Path("app/templates/agente_compara.html").read_text(encoding="utf-8")
+    shell_start = source.index('.agente-compara-page-shell {')
+    shell_block = source[shell_start: shell_start + 260]
+    assert '--agente-compara-shell-max: 1320px' in shell_block
+    assert '--agente-compara-text-max: 880px' in shell_block
+    assert 'max-width: var(--agente-compara-shell-max);' in shell_block
+    assert 'min-width: 0;' in shell_block
+
+    docs_start = source.index('.agente-compara-documents-area {')
+    docs_block = source[docs_start: docs_start + 120]
+    assert 'max-width: 100%;' in docs_block
+
+    table_start = source.index('.agente-compara-temp-table-modal-data-table {')
+    table_block = source[table_start: table_start + 420]
+    assert 'min-width: 0;' in table_block
+    assert '.agente-compara-temp-table-modal-freight-scroll {' in table_block
+    assert 'overflow-x: auto;' in table_block
+
+    td_start = source.index('.agente-compara-temp-table-modal-data-table tbody td {')
+    td_block = source[td_start: td_start + 320]
+    assert 'word-break: normal;' in td_block
+    assert 'overflow-wrap: break-word;' in td_block
+    assert 'word-break: break-word;' not in td_block

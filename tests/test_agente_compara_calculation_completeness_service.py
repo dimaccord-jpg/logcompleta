@@ -103,7 +103,7 @@ def test_completeness_optional_benign_warning():
     assert len(result["warnings"]) == 1
 
 
-def test_completeness_unsupported_condition_incomplete():
+def test_completeness_unsupported_condition_becomes_warning_without_proven_obligation():
     raw = _raw_with_ignored(
         {
             "label": "TAS",
@@ -117,12 +117,12 @@ def test_completeness_unsupported_condition_incomplete():
         },
     )
     result = evaluate_calculation_completeness(raw, calculated_freight=94.79)
-    assert result["status"] == STATUS_INCOMPLETE
-    assert result["is_complete"] is False
-    assert result["has_partial_value"] is True
-    assert result["partial_value"] == 94.79
-    assert result["critical_ignored_component_count"] == 2
-    codes = {item["reason_code"] for item in result["blocking_issues"]}
+    assert result["status"] == STATUS_CALCULATED_WITH_WARNINGS
+    assert result["is_complete"] is True
+    assert result["has_partial_value"] is False
+    assert result["partial_value"] is None
+    assert result["critical_ignored_component_count"] == 0
+    codes = {item["reason_code"] for item in result["warnings"]}
     assert "unsupported_accessorial_condition" in codes
     assert "conditions_present" in codes
 
@@ -193,18 +193,19 @@ def test_completeness_no_gemini_billing_cleide_imports():
     assert "flask" not in body.lower()
 
 
-def test_classify_support_blocks_unsupported_condition():
+def test_classify_support_accepts_simple_fixed_amount_condition_for_supported_base():
     support = classify_accessorial_execution_support(
         {
             "name": "TAS",
             "operation": "fixed_amount",
             "conditions": "somente para carga fracionada especial",
             "classification_source": "manual_configured_calculation_base",
+            "calculation_base_id": "por_cte",
         }
     )
-    assert support["supported"] is False
-    assert support["blocking"] is True
-    assert support["reason_code"] == "unsupported_accessorial_condition"
+    assert support["supported"] is True
+    assert support["blocking"] is False
+    assert support["reason_code"] is None
 
 
 def test_classify_support_blocks_multiply_by_variable():
@@ -233,7 +234,7 @@ def test_classify_support_not_applicable_not_blocking():
     assert support["reason_code"] == "not_applicable"
 
 
-def test_validator_blocks_unsupported_condition(app, monkeypatch):
+def test_validator_allows_simple_fixed_amount_condition_for_supported_base(app, monkeypatch):
     from app.services.agente_compara_config_service import (
         AgenteComparaConfig,
         DEFAULT_FALLBACK_MESSAGE,
@@ -279,8 +280,8 @@ def test_validator_blocks_unsupported_condition(app, monkeypatch):
             ]
         }
         result = validate_temp_table_for_confirmation(table)
-        assert result["can_confirm"] is False
-        assert result["blocking_issues"][0]["code"] == CODE_UNSUPPORTED_CONDITION
+        assert result["can_confirm"] is True
+        assert result["blocking_issues"] == []
 
 
 def test_validator_blocks_unsupported_operation(app, monkeypatch):
@@ -333,7 +334,7 @@ def test_validator_blocks_unsupported_operation(app, monkeypatch):
         assert result["blocking_issues"][0]["code"] == CODE_UNSUPPORTED_OPERATION
 
 
-def test_normalize_row_critical_ignored_is_incomplete_not_calculated():
+def test_normalize_row_ignored_condition_preserves_calculated_with_warnings():
     raw = _raw_with_ignored(
         {
             "label": "TAS",
@@ -353,16 +354,16 @@ def test_normalize_row_critical_ignored_is_incomplete_not_calculated():
         invoice_value=1500.0,
     )
     result = _normalize_row_result(raw, source, table_id="t1", slot_number=1, carrier_name="Gbex")
-    assert result["status"] == ROW_STATUS_INCOMPLETE
-    assert result["final_status"] == ROW_STATUS_INCOMPLETE
-    assert result["is_partial_value"] is True
+    assert result["status"] == STATUS_CALCULATED_WITH_WARNINGS
+    assert result["final_status"] == STATUS_CALCULATED_WITH_WARNINGS
+    assert result["is_partial_value"] is False
     assert result["calculated_freight"] == 94.79
-    assert result["completeness"]["critical_ignored_component_count"] == 2
+    assert result["completeness"]["critical_ignored_component_count"] == 0
     memory = result["calculation_memory"]
-    assert memory["status"] == "incomplete"
-    assert memory["status_label"] == "Cálculo incompleto"
-    assert memory["total_label"] == "Valor parcial calculado"
-    assert memory["is_partial_value"] is True
+    assert memory["status"] == "calculated_with_warnings"
+    assert memory["status_label"] == "Calculado com ressalvas"
+    assert memory["total_label"] == "Total calculado"
+    assert memory["is_partial_value"] is False
     assert memory["total"] == 94.79
 
 
@@ -425,7 +426,7 @@ def _conditional_ignored_fee(*, name: str, value: str = "10,00", unit: str = "R$
     }
 
 
-def test_gbex_equivalent_incomplete_with_tas_and_pedagio():
+def test_gbex_equivalent_calculated_with_warnings_with_tas_and_pedagio():
     """Cenário sintético equivalente ao Gbex: TAS/Pedágio com condição não suportada."""
     record = _pricing_record(
         region="PE-Caruaru",
@@ -465,9 +466,9 @@ def test_gbex_equivalent_incomplete_with_tas_and_pedagio():
     )
     result = calculate_single_table(ctx)
     row = result["results"][0]
-    assert row["status"] == ROW_STATUS_INCOMPLETE
-    assert row["final_status"] == ROW_STATUS_INCOMPLETE
-    assert row["is_partial_value"] is True
+    assert row["status"] == STATUS_CALCULATED_WITH_WARNINGS
+    assert row["final_status"] == STATUS_CALCULATED_WITH_WARNINGS
+    assert row["is_partial_value"] is False
     assert row["calculated_freight"] is not None
     ignored = (row.get("components") or {}).get("ignored_accessorial_fees") or []
     labels = {str(item.get("label") or "") for item in ignored}
@@ -476,11 +477,11 @@ def test_gbex_equivalent_incomplete_with_tas_and_pedagio():
     assert "Pedágio" in labels
     assert "conditions_present" in reasons or "unsupported_accessorial_condition" in reasons
     memory = row["calculation_memory"]
-    assert memory["status"] == "incomplete"
-    assert memory["status_label"] == "Cálculo incompleto"
-    assert memory["total_label"] == "Valor parcial calculado"
-    assert result["incomplete_count"] == 1
-    assert result["calculated_count"] == 0
+    assert memory["status"] == "calculated_with_warnings"
+    assert memory["status_label"] == "Calculado com ressalvas"
+    assert memory["total_label"] == "Total calculado"
+    assert result["incomplete_count"] == 0
+    assert result["calculated_with_warnings_count"] == 1
 
 
 def test_supported_pedagio_configured_remains_calculated(monkeypatch):
@@ -546,6 +547,21 @@ def test_memory_incomplete_does_not_call_partial_total_completo():
     )
 
 
-def test_classify_ignored_unknown_reason_is_blocking():
+def test_classify_ignored_unknown_reason_is_warning():
     classified = classify_ignored_component({"label": "X", "reason_code": "algo_novo_desconhecido"})
-    assert classified["severity"] == "blocking"
+    assert classified["severity"] == "warning"
+
+
+def test_completeness_required_applicable_unsupported_condition_stays_incomplete():
+    raw = _raw_with_ignored(
+        {
+            "label": "TAS obrigat?ria",
+            "reason_code": "unsupported_accessorial_condition",
+            "required": True,
+            "applicable": True,
+        }
+    )
+    result = evaluate_calculation_completeness(raw, calculated_freight=94.79)
+    assert result["status"] == STATUS_INCOMPLETE
+    assert result["critical_ignored_component_count"] == 1
+    assert result["blocking_issues"][0]["reason_code"] == "unsupported_accessorial_condition"

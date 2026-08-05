@@ -14,6 +14,8 @@ from app.agente_compara_calculation_result_storage import (
     ERROR_RESULT_MISSING,
     ERROR_RESULT_STORAGE_KEY_INVALID,
     ERROR_RESULT_TOO_LARGE,
+    ERROR_MEMORY_TOO_LARGE,
+    ERROR_MEMORY_SERIALIZATION_FAILED,
     AgenteComparaCalculationResultStorageError,
     build_result_storage_key,
     delete_comparison_calculation_result,
@@ -162,7 +164,7 @@ def test_schema_mismatch(storage_env):
     assert storage_env["tmp_path"] in path.parents
 
     envelope = json.loads(path.read_text(encoding="utf-8"))
-    assert envelope.get("schema_version") == 1
+    assert envelope.get("schema_version") == 2
     envelope["schema_version"] = 999
     path.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
 
@@ -277,3 +279,54 @@ def test_key_stable_for_same_identity(storage_env):
     k2 = build_result_storage_key(comparison_id=cmp_id, fingerprint=fp)
     assert k1 == k2
     assert k1.startswith("cc_result_")
+
+
+def test_memory_payload_roundtrip(storage_env):
+    cmp_id, fp = _unique_identity("memory")
+    payload = {
+        "schema_version": 2,
+        "comparison_id": cmp_id,
+        "items": {"t1:1": {"memory_ref": "t1:1", "table_id": "t1", "row_index": 1, "calculation_memory": {"status": "calculated"}}},
+    }
+    from app.agente_compara_calculation_result_storage import save_comparison_calculation_memory_payload, load_comparison_calculation_memory_payload, resolve_memory_storage_path
+    meta = save_comparison_calculation_memory_payload(comparison_id=cmp_id, fingerprint=fp, memory_payload=payload)
+    assert resolve_memory_storage_path(meta["memory_storage_key"]).is_file()
+    loaded = load_comparison_calculation_memory_payload(
+        storage_key=meta["memory_storage_key"],
+        comparison_id=cmp_id,
+        fingerprint=fp,
+        expected_checksum=meta["memory_checksum"],
+    )
+    assert loaded["items"]["t1:1"]["table_id"] == "t1"
+
+
+def test_memory_payload_oversize_rejected(storage_env, monkeypatch):
+    from app.agente_compara_calculation_result_storage import save_comparison_calculation_memory_payload
+    cmp_id, fp = _unique_identity("mem-oversize")
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_result_storage.MEMORY_MAX_BYTES",
+        200,
+    )
+    payload = {
+        "schema_version": 2,
+        "comparison_id": cmp_id,
+        "items": {"t1:1": {"memory_ref": "t1:1", "table_id": "t1", "row_index": 1, "calculation_memory": {"payload": "x" * 500}}},
+    }
+    with pytest.raises(AgenteComparaCalculationResultStorageError) as exc:
+        save_comparison_calculation_memory_payload(comparison_id=cmp_id, fingerprint=fp, memory_payload=payload)
+    assert exc.value.error_code == ERROR_MEMORY_TOO_LARGE
+    assert exc.value.artifact_type == "memory"
+
+
+def test_memory_payload_non_serializable_reports_specific_error(storage_env):
+    from app.agente_compara_calculation_result_storage import save_comparison_calculation_memory_payload
+    cmp_id, fp = _unique_identity("mem-serialize")
+    payload = {
+        "schema_version": 2,
+        "comparison_id": cmp_id,
+        "items": {"t1:1": {"memory_ref": "t1:1", "table_id": "t1", "row_index": 1, "calculation_memory": {"bad": float("nan")}}},
+    }
+    with pytest.raises(AgenteComparaCalculationResultStorageError) as exc:
+        save_comparison_calculation_memory_payload(comparison_id=cmp_id, fingerprint=fp, memory_payload=payload)
+    assert exc.value.error_code == ERROR_MEMORY_SERIALIZATION_FAILED
+    assert exc.value.artifact_type == "memory"

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Wrapper documental fino do domínio Agente Compara (Fase 1).
 
 Reaproveita preparação, store e configuração governados do Cleiton.
@@ -180,6 +180,12 @@ TEMP_TABLE_STATUS_NEEDS_REVIEW = "needs_review"
 TEMP_TABLE_STATUS_FAILED = "failed"
 TEMP_TABLE_STATUS_EXPIRED = "expired"
 TEMP_TABLE_STATUS_DISCARDED = "discarded"
+TEMP_TABLE_FAILURE_ORIGIN_PLATFORM = "platform"
+TEMP_TABLE_FAILURE_ORIGIN_DOCUMENT = "document"
+TEMP_TABLE_CREDIT_PRESERVED = "preserved"
+TEMP_TABLE_CREDIT_NOT_CONSUMED = "not_consumed"
+TEMP_TABLE_CREDIT_RESTORED = "restored"
+TEMP_TABLE_CREDIT_NOT_APPLICABLE = "not_applicable"
 
 TEMP_TABLE_VERSION_MARKER = "agente_compara_temp_table_v1"
 TEMP_TABLE_OPERATIONAL_OWNER = "cleiton"
@@ -948,6 +954,124 @@ def _emit_agente_compara_operational_billing(
             )
 
 
+def _classify_temp_table_failure(*, reading_alerts: list[str] | None = None, error_code: str | None = None) -> dict:
+    alerts = [
+        str(item).strip().lower()
+        for item in (reading_alerts or [])
+        if isinstance(item, str) and str(item).strip()
+    ]
+    code = (error_code or "").strip().lower()
+    joined = " ".join(alerts)
+    retryable_platform_markers = ("timeout", "rate limit", "indispon", "infra", "rede", "storage", "tempor", "gemini", "provider")
+    document_markers = ("arquivo vazio", "formato", "corrompido", "incompat", "dados mínimos")
+    if code == ERROR_GEMINI_FILE_UPLOAD or any(marker in joined for marker in retryable_platform_markers):
+        return {"failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM, "failure_code": code or "platform_temporary_failure", "retryable": True, "credit_disposition": TEMP_TABLE_CREDIT_PRESERVED, "safe_message": "Não foi possível preparar a tabela por uma falha temporária. Nenhum crédito foi consumido por esta tentativa."}
+    if any(marker in joined for marker in document_markers):
+        return {"failure_origin": TEMP_TABLE_FAILURE_ORIGIN_DOCUMENT, "failure_code": code or "document_invalid", "retryable": False, "credit_disposition": TEMP_TABLE_CREDIT_NOT_APPLICABLE, "safe_message": "Não foi possível preparar a tabela com o documento enviado."}
+    return {"failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM, "failure_code": code or "platform_processing_failed", "retryable": False, "credit_disposition": TEMP_TABLE_CREDIT_PRESERVED, "safe_message": "N\u00e3o foi poss\u00edvel preparar a tabela neste momento."}
+
+
+def _load_previous_slot_document_record(*, table_entry: dict | None) -> dict | None:
+    if not isinstance(table_entry, dict):
+        return None
+    cfg = get_cleiton_doc_config()
+    for doc_id in _normalize_source_doc_ids(list(table_entry.get("doc_ids") or [])):
+        record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
+        if isinstance(record, dict):
+            return record
+    return None
+
+
+def _build_retry_metadata(*, existing_record: dict | None, previous_document_record: dict | None) -> dict:
+    metadata: dict = {}
+    if not isinstance(existing_record, dict) or not isinstance(previous_document_record, dict):
+        return metadata
+    previous_doc_id = (previous_document_record.get(FIELD_DOC_ID) or "").strip()
+    previous_source_agent = (previous_document_record.get(FIELD_SOURCE_AGENT) or "").strip()
+    previous_session_key = (previous_document_record.get(FIELD_SESSION_KEY) or "").strip()
+    previous_comparison_id = (
+        previous_document_record.get(FIELD_COMPARISON_ID)
+        or existing_record.get(FIELD_COMPARISON_ID)
+        or ""
+    ).strip()
+    previous_table_id = (
+        previous_document_record.get(FIELD_TABLE_ID)
+        or existing_record.get(FIELD_TABLE_ID)
+        or ""
+    ).strip()
+    previous_slot = previous_document_record.get(FIELD_SLOT_NUMBER)
+    if previous_slot is None:
+        previous_slot = existing_record.get(FIELD_SLOT_NUMBER)
+    previous_status = (existing_record.get("status") or "").strip().lower()
+    previous_failure_origin = (existing_record.get("failure_origin") or "").strip()
+    previous_failure_code = (existing_record.get("failure_code") or "").strip()
+    previous_retryable = bool(existing_record.get("retryable"))
+    previous_sources = _normalize_source_doc_ids(list(existing_record.get("source_documents") or []))
+    previous_execution_id = (
+        previous_document_record.get("original_execution_id")
+        or previous_document_record.get("execution_id")
+        or existing_record.get("original_execution_id")
+        or existing_record.get("execution_id")
+    )
+    valid_delivery = bool(
+        previous_status in {
+            TEMP_TABLE_STATUS_AWAITING_VALIDATION,
+            TEMP_TABLE_STATUS_NEEDS_REVIEW,
+            TEMP_TABLE_STATUS_VALIDATED,
+        }
+        and _has_useful_partial_extraction_data(existing_record)
+    )
+    if (
+        previous_status == TEMP_TABLE_STATUS_FAILED
+        and previous_failure_origin == TEMP_TABLE_FAILURE_ORIGIN_PLATFORM
+        and previous_retryable
+        and not valid_delivery
+        and previous_doc_id
+        and previous_comparison_id
+        and previous_table_id
+        and (not previous_sources or previous_doc_id in previous_sources)
+        and previous_source_agent == SOURCE_AGENT_AGENTE_COMPARA
+        and previous_session_key == AGENTE_COMPARA_DOC_IDS_SESSION_KEY
+    ):
+        metadata["retry_of"] = previous_doc_id
+        metadata["original_document_id"] = previous_document_record.get("original_document_id") or previous_doc_id
+        metadata["original_execution_id"] = previous_execution_id
+        metadata["original_table_id"] = existing_record.get("original_table_id") or previous_table_id
+        metadata["retry_reason"] = "technical_retry_same_slot"
+        metadata["retry_failure_code"] = previous_failure_code or "platform_processing_failed"
+        metadata["retry_failure_origin"] = previous_failure_origin or TEMP_TABLE_FAILURE_ORIGIN_PLATFORM
+        metadata["retry_credit_disposition"] = existing_record.get("credit_disposition") or TEMP_TABLE_CREDIT_PRESERVED
+        metadata["is_technical_retry"] = True
+        metadata["is_free_retry"] = True
+        metadata["retryable"] = True
+        metadata["credit_disposition"] = existing_record.get("credit_disposition") or TEMP_TABLE_CREDIT_PRESERVED
+        if previous_comparison_id:
+            metadata[FIELD_COMPARISON_ID] = previous_comparison_id
+        if previous_table_id:
+            metadata[FIELD_TABLE_ID] = previous_table_id
+        if previous_slot is not None:
+            metadata[FIELD_SLOT_NUMBER] = previous_slot
+    return metadata
+
+def _replace_table_documents_for_new_upload(*, table_id: str, comparison_id: str) -> None:
+    state = get_comparison_state(session)
+    entry = get_table_by_id(state, table_id) if state is not None else None
+    if entry is None:
+        return
+    for doc_id in list(entry.get("doc_ids") or []):
+        record = peek_document_record(doc_id)
+        if not isinstance(record, dict):
+            continue
+        record[FIELD_STATUS] = "replaced"
+        record["replaced_at"] = _utcnow().isoformat()
+        record["replaced_by_table_id"] = table_id
+        record[FIELD_COMPARISON_ID] = comparison_id
+        record[FIELD_TABLE_ID] = table_id
+        save_document_record(record)
+    entry["doc_ids"] = []
+    persist_comparison_state(state)
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -1181,9 +1305,19 @@ def _public_record(record: dict) -> dict:
         FIELD_WARNINGS: record.get(FIELD_WARNINGS) or [],
         FIELD_SESSION_KEY: record.get(FIELD_SESSION_KEY),
         FIELD_ERROR_CODE: record.get(FIELD_ERROR_CODE),
+        "retry_of": record.get("retry_of"),
+        "original_document_id": record.get("original_document_id"),
+        "original_execution_id": record.get("original_execution_id"),
+        "original_table_id": record.get("original_table_id"),
+        "retry_reason": record.get("retry_reason"),
+        "retry_failure_code": record.get("retry_failure_code"),
+        "retry_failure_origin": record.get("retry_failure_origin"),
+        "retry_credit_disposition": record.get("retry_credit_disposition"),
+        "credit_disposition": record.get("credit_disposition"),
+        "is_technical_retry": bool(record.get("is_technical_retry")),
+        "is_free_retry": bool(record.get("is_free_retry")),
         FIELD_PDF_CONTEXT_READY: pdf_ready,
     }
-
 
 def get_allowed_document_formats() -> list[dict]:
     """Retorna formatos habilitados a partir da config central do Cleiton."""
@@ -1353,12 +1487,12 @@ def _register_document_record(
     comparison_id: str | None = None,
     table_id: str | None = None,
     slot_number: int | None = None,
+    retry_metadata: dict | None = None,
 ) -> dict:
     _require_session()
     cfg = get_cleiton_doc_config()
     validated_size = _parse_size_bytes(size_bytes)
     assert_session_can_accept_document(validated_size)
-
     doc_id = uuid4().hex
     display, safe_name = _build_safe_display_name(display_name, extension)
     ext = _normalize_extension(extension) or (
@@ -1367,7 +1501,6 @@ def _register_document_record(
     created_at = _utcnow()
     expires_at = created_at + timedelta(hours=max(1, int(cfg.upload_ttl_hours)))
     resolved_kind = (context_kind or CONTEXT_KIND_PLACEHOLDER).strip() or CONTEXT_KIND_PLACEHOLDER
-
     record = {
         FIELD_DOC_ID: doc_id,
         FIELD_DOC_TYPE: doc_type,
@@ -1405,13 +1538,15 @@ def _register_document_record(
         record[FIELD_TABLE_ID] = table_id.strip()
     if slot_number is not None:
         record[FIELD_SLOT_NUMBER] = int(slot_number)
-
+    if isinstance(retry_metadata, dict):
+        for key, value in retry_metadata.items():
+            if value is not None:
+                record[key] = value
     save_document_record(record)
     append_agente_compara_doc_id(session, doc_id, table_id=table_id)
     _sync_legacy_doc_ids_mirror(session)
     _mark_session_modified()
     return _public_record(record)
-
 
 def _sync_legacy_doc_ids_mirror(session_obj) -> None:
     """Espelha documentos da tabela ativa na chave legada agente_compara_doc_ids."""
@@ -1459,6 +1594,37 @@ def prepare_and_register_document(
     resolved_table_id = table_entry["table_id"]
     resolved_slot = int(table_entry.get("slot_number") or 1)
     normalized_carrier = normalize_carrier_name(carrier_name) if carrier_name is not None else None
+    previous_document_record = _load_previous_slot_document_record(table_entry=table_entry)
+    existing_temp_table_id = get_temp_table_id(session, table_id=resolved_table_id)
+    if not existing_temp_table_id:
+        fallback_temp_table_id = get_temp_table_id(session)
+        if fallback_temp_table_id:
+            fallback_temp_table = load_temp_table_record(
+                fallback_temp_table_id,
+                ttl_hours=get_cleiton_doc_config().upload_ttl_hours,
+            )
+            if isinstance(fallback_temp_table, dict):
+                fallback_table_id = (fallback_temp_table.get(FIELD_TABLE_ID) or "").strip()
+                fallback_comparison_id = (fallback_temp_table.get(FIELD_COMPARISON_ID) or "").strip()
+                if fallback_table_id == resolved_table_id and fallback_comparison_id == resolved_comparison_id:
+                    existing_temp_table_id = fallback_temp_table_id
+    existing_temp_table = (
+        load_temp_table_record(
+            existing_temp_table_id,
+            ttl_hours=get_cleiton_doc_config().upload_ttl_hours,
+        )
+        if existing_temp_table_id
+        else None
+    )
+    retry_metadata = _build_retry_metadata(
+        existing_record=existing_temp_table,
+        previous_document_record=previous_document_record,
+    )
+    _replace_table_documents_for_new_upload(
+        table_id=resolved_table_id,
+        comparison_id=resolved_comparison_id,
+    )
+    invalidate_table_preparation(cmp_state, resolved_table_id)
     prepared = prepare_document(
         display_name=display_name,
         file_bytes=file_bytes,
@@ -1527,7 +1693,17 @@ def prepare_and_register_document(
         comparison_id=resolved_comparison_id,
         table_id=resolved_table_id,
         slot_number=resolved_slot,
+        retry_metadata=retry_metadata or None,
     )
+    if retry_metadata:
+        persisted_document = load_document_record(
+            document["doc_id"],
+            ttl_hours=get_cleiton_doc_config().upload_ttl_hours,
+        )
+        if isinstance(persisted_document, dict):
+            persisted_document.update({k: v for k, v in retry_metadata.items() if v is not None})
+            save_document_record(persisted_document)
+            document = _public_record(persisted_document)
     if normalized_carrier:
         refreshed_state = get_comparison_state(session)
         entry = get_table_by_id(refreshed_state, resolved_table_id) if refreshed_state else None
@@ -10157,6 +10333,41 @@ def save_temp_table_record(record: dict, *, table_id: str | None = None) -> dict
     record = _sync_outdated_fiscal_stale(dict(record))
     record = _sync_outdated_pricing_rule_stale(record)
     record["temp_table_id"] = temp_table_id
+    now = _utcnow()
+    storage_config = get_cleiton_doc_config()
+    record.setdefault(FIELD_CREATED_AT, now.isoformat())
+    record["updated_at"] = now.isoformat()
+    record.setdefault(
+        FIELD_EXPIRES_AT,
+        (now + timedelta(hours=max(1, int(storage_config.upload_ttl_hours)))).isoformat(),
+    )
+    record.setdefault("active_document_id", (list(record.get("source_documents") or []) or [None])[0])
+    if (record.get("status") or "").strip().lower() == TEMP_TABLE_STATUS_FAILED:
+        record.update(
+            _classify_temp_table_failure(
+                reading_alerts=list(record.get("reading_alerts") or []),
+                error_code=record.get("error_code"),
+            )
+        )
+        record["confirmed"] = False
+    else:
+        record["failure_origin"] = None
+        record["failure_code"] = None
+        record["retryable"] = bool(record.get("retry_of"))
+        record.setdefault("credit_disposition", TEMP_TABLE_CREDIT_NOT_CONSUMED)
+    active_document_id = (record.get("active_document_id") or "").strip()
+    if active_document_id:
+        cfg = get_cleiton_doc_config()
+        persisted_document = load_document_record(active_document_id, ttl_hours=cfg.upload_ttl_hours)
+        if isinstance(persisted_document, dict):
+            persisted_document["status"] = record.get("status")
+            persisted_document["error_code"] = record.get("error_code")
+            persisted_document["failure_origin"] = record.get("failure_origin")
+            persisted_document["failure_code"] = record.get("failure_code")
+            persisted_document["retryable"] = bool(record.get("retryable"))
+            if "credit_disposition" in record:
+                persisted_document["credit_disposition"] = record.get("credit_disposition")
+            save_document_record(persisted_document)
     path = _temp_table_path(temp_table_id)
     _write_temp_table_atomic(path, record)
     set_temp_table_id(session, temp_table_id, table_id=table_id or record.get(FIELD_TABLE_ID))
@@ -10175,11 +10386,14 @@ def save_temp_table_record(record: dict, *, table_id: str | None = None) -> dict
             status = (record.get("status") or "").strip().lower()
             if status == TEMP_TABLE_STATUS_FAILED:
                 entry["status"] = TABLE_STATUS_FAILED
-                entry["error"] = (record.get("reading_alerts") or ["Extração falhou"])[0]
+                entry["error"] = record.get("safe_message") or (record.get("reading_alerts") or ["Extra??o falhou"])[0]
+                entry["confirmed"] = False
             elif status in {TEMP_TABLE_STATUS_NEEDS_REVIEW, TEMP_TABLE_STATUS_AWAITING_VALIDATION, TEMP_TABLE_STATUS_VALIDATED}:
                 entry["status"] = TABLE_STATUS_NEEDS_REVIEW
+                entry["error"] = None
             elif status == TEMP_TABLE_STATUS_PROCESSING:
                 entry["status"] = TABLE_STATUS_PROCESSING
+                entry["confirmed"] = False
             persist_comparison_state(state)
     _mark_session_modified()
     return record
@@ -10366,6 +10580,7 @@ def mark_temp_table_processing(
     comparison_id: str | None = None,
     table_id: str | None = None,
     slot_number: int | None = None,
+    retry_metadata: dict | None = None,
 ) -> dict:
     _require_session()
     normalized = _normalize_source_doc_ids(source_doc_ids)
@@ -11150,6 +11365,28 @@ def _coerce_temp_table_payload(
     temp_table_id = get_temp_table_id(session, table_id=table_id) or uuid4().hex
     existing = load_temp_table_record(temp_table_id, ttl_hours=get_cleiton_doc_config().upload_ttl_hours)
     created_at = (existing or {}).get("created_at") or now
+    active_retry_metadata = None
+    active_doc_id = source_doc_ids[0] if source_doc_ids else None
+    if active_doc_id:
+        active_doc_record = load_document_record(
+            active_doc_id,
+            ttl_hours=get_cleiton_doc_config().upload_ttl_hours,
+        )
+        if isinstance(active_doc_record, dict) and active_doc_record.get("retry_of"):
+            active_retry_metadata = {
+                "retry_of": active_doc_record.get("retry_of"),
+                "original_document_id": active_doc_record.get("original_document_id"),
+                "original_execution_id": active_doc_record.get("original_execution_id"),
+                "original_table_id": active_doc_record.get("original_table_id") or table_id,
+                "retry_reason": active_doc_record.get("retry_reason"),
+                "retry_failure_code": active_doc_record.get("retry_failure_code"),
+                "retry_failure_origin": active_doc_record.get("retry_failure_origin"),
+                "retry_credit_disposition": active_doc_record.get("retry_credit_disposition")
+                or active_doc_record.get("credit_disposition"),
+                "is_technical_retry": bool(active_doc_record.get("is_technical_retry")),
+                "is_free_retry": bool(active_doc_record.get("is_free_retry")),
+                "credit_disposition": active_doc_record.get("credit_disposition"),
+            }
     preserved_coverage = None
     if existing and isinstance(existing.get("coverage_table"), dict):
         preserved_coverage = existing.get("coverage_table")
@@ -11187,6 +11424,10 @@ def _coerce_temp_table_payload(
         },
         "version_marker": TEMP_TABLE_VERSION_MARKER,
     }
+    if isinstance(active_retry_metadata, dict):
+        for key, value in active_retry_metadata.items():
+            if value is not None:
+                record[key] = value
     if preserved_coverage is not None:
         record["coverage_table"] = preserved_coverage
     if preserved_audit_batch is not None:

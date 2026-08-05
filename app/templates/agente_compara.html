@@ -12,7 +12,7 @@
 
 {% include 'partials/app_global_header.html' %}
 
-<div class="container mb-5 agente-compara-layout">
+<div class="container-fluid agente-compara-layout mb-5">
 
   <div class="agente-compara-page-shell">
 
@@ -856,11 +856,17 @@
 
   .agente-compara-page-shell {
 
-    max-width: 760px;
+    --agente-compara-shell-max: 1320px;
+
+    --agente-compara-text-max: 880px;
+
+    max-width: var(--agente-compara-shell-max);
 
     margin: 0 auto;
 
     width: 100%;
+
+    min-width: 0;
 
   }
 
@@ -914,7 +920,7 @@
 
     color: var(--af-text-muted, #5A5A72);
 
-    max-width: 760px;
+    max-width: var(--agente-compara-text-max);
 
     margin-left: 0;
 
@@ -976,7 +982,7 @@
 
     border-radius: 0.5rem;
 
-    max-width: 760px;
+    max-width: var(--agente-compara-text-max);
 
     font-size: 0.98rem;
 
@@ -1012,7 +1018,7 @@
 
     width: 100%;
 
-    max-width: 760px;
+    max-width: var(--agente-compara-text-max);
 
     overflow: visible;
 
@@ -1314,7 +1320,7 @@
 
     text-decoration: underline;
 
-    word-break: break-word;
+    overflow-wrap: break-word;
 
   }
 
@@ -1519,7 +1525,7 @@
 
   .agente-compara-documents-area {
 
-    max-width: 760px;
+    max-width: 100%;
 
 
 
@@ -1645,7 +1651,7 @@
 
     font-weight: 600;
 
-    word-break: break-word;
+    overflow-wrap: anywhere;
 
   }
 
@@ -2476,7 +2482,7 @@
     .agente-compara-coverage-upload-file-name {
       text-align: center;
       white-space: normal;
-      word-break: break-word;
+      overflow-wrap: anywhere;
     }
   }
 
@@ -2675,7 +2681,7 @@
   .agente-compara-audit-file-name {
     font-size: 0.76rem;
     color: var(--af-text-muted, #5A5A72);
-    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   .agente-compara-audit-file-status {
@@ -3613,7 +3619,8 @@
 
   .agente-compara-temp-table-modal-meta-value {
     color: var(--af-text-primary, #F0F0F5);
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .agente-compara-temp-table-modal-section-title {
@@ -3657,7 +3664,8 @@
 
   .agente-compara-temp-table-modal-detail-value {
     color: var(--af-text-primary, #F0F0F5);
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .agente-compara-temp-table-modal-list {
@@ -3773,13 +3781,21 @@
 
   .agente-compara-temp-table-modal-data-table {
     width: 100%;
+    min-width: 0;
     border-collapse: collapse;
     font-size: 0.76rem;
     margin: 0.25rem 0 0.5rem;
   }
 
   .agente-compara-temp-table-modal-data-table-editable {
-    min-width: 1120px;
+    min-width: min(1120px, 100%);
+  }
+
+  .agente-compara-temp-table-modal-freight-scroll {
+    width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: visible;
   }
 
   .agente-compara-temp-table-modal-data-table thead th {
@@ -3795,7 +3811,8 @@
     padding: 0.38rem 0.55rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     vertical-align: top;
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .agente-compara-temp-table-modal-data-table tbody tr:last-child td {

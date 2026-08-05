@@ -931,6 +931,15 @@ def _http_status_for_calculation_error(error_code: str) -> int:
         "agente_compara_calculation_execution_id_invalid",
     }:
         return 400
+    if error_code in {
+        "calculation_result_too_large",
+        "calculation_memory_too_large",
+    }:
+        return 413
+    if error_code.endswith("serialization_failed") or error_code.endswith("validation_failed"):
+        return 422
+    if error_code.endswith("write_failed") or error_code.endswith("checksum_failed"):
+        return 500
     return 400
 
 
@@ -979,6 +988,18 @@ def agente_compara_comparison_calculate():
                     "message": exc.message,
                     "status": None,
                     "result": None,
+                    "error_stage": getattr(exc, "error_stage", None),
+                    "artifact_type": getattr(exc, "artifact_type", None),
+                    "retryable": bool(getattr(exc, "retryable", False)),
+                    "failed_table_name": getattr(exc, "failed_table_name", None),
+                    "failed_table_id": getattr(exc, "failed_table_id", None),
+                    "failed_slot": getattr(exc, "failed_slot", None),
+                    "failure_origin": getattr(exc, "failure_origin", None),
+                    "failure_code": getattr(exc, "failure_code", None),
+                    "credit_disposition": getattr(exc, "credit_disposition", None),
+                    "retry_of": getattr(exc, "retry_of", None),
+                    "is_free_retry": bool(getattr(exc, "is_free_retry", False)),
+                    "safe_message": getattr(exc, "safe_message", exc.message),
                 }
             ),
             int(exc.http_status or _http_status_for_calculation_error(exc.error_code)),
@@ -1004,6 +1025,45 @@ def agente_compara_comparison_calculate():
             status_code = 500
         return jsonify(result), status_code
     return jsonify(result)
+
+
+@agente_compara_api_bp.route("/api/agente-compara/comparison/calculation-memory", methods=["GET"])
+def agente_compara_comparison_calculation_memory_get():
+    unauthorized = _authorize_agente_compara_documents_api()
+    if unauthorized is not None:
+        return unauthorized
+
+    comparison_id = (request.args.get("comparison_id") or "").strip() or None
+    memory_ref = (request.args.get("memory_ref") or "").strip() or None
+    table_id = (request.args.get("table_id") or "").strip() or None
+    row_index = request.args.get("row_index", type=int)
+    if not comparison_id or not memory_ref:
+        return jsonify({"ok": False, "message": "Par?metros obrigat?rios ausentes."}), 400
+
+    from app.agente_compara_calculation_execution_service import get_comparison_calculation_status
+    from app.agente_compara_comparison_calculation_service import hydrate_memory_item
+    from app.agente_compara_calculation_result_storage import load_comparison_calculation_memory_payload
+
+    status = get_comparison_calculation_status(comparison_id=comparison_id)
+    calc = status.get("calculation") or {}
+    try:
+        payload = load_comparison_calculation_memory_payload(
+            storage_key=(calc.get("memory_storage_key") or "").strip(),
+            comparison_id=comparison_id,
+            fingerprint=(calc.get("request_fingerprint") or "").strip(),
+            expected_checksum=(calc.get("memory_checksum") or None),
+        )
+    except Exception:
+        return jsonify({"ok": False, "message": "N?o foi poss?vel carregar a mem?ria de c?lculo."}), 409
+    item = ((payload.get("items") or {}) if isinstance(payload, dict) else {}).get(memory_ref)
+    if not isinstance(item, dict):
+        return jsonify({"ok": False, "message": "Mem?ria de c?lculo n?o encontrada."}), 404
+    item = hydrate_memory_item(item, payload)
+    if table_id and str(item.get("table_id") or "") != table_id:
+        return jsonify({"ok": False, "message": "Mem?ria de c?lculo inv?lida."}), 409
+    if row_index is not None and int(item.get("row_index") or -1) != int(row_index):
+        return jsonify({"ok": False, "message": "Mem?ria de c?lculo inv?lida."}), 409
+    return jsonify({"ok": True, "memory_ref": memory_ref, "memory": item})
 
 
 @agente_compara_api_bp.route("/api/agente-compara/comparison/calculation", methods=["GET"])

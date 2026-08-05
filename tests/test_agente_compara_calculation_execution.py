@@ -22,6 +22,7 @@ from app.agente_compara_calculation_execution_service import (
     ERROR_EXECUTION_IN_PROGRESS,
     FLOW_TYPE_COMPARISON_CALCULATION,
     compute_calculation_fingerprint,
+    ERROR_CALCULATION_FAILED,
     execute_comparison_calculation,
     get_comparison_calculation_status,
     build_calculation_fingerprint_payload,
@@ -193,6 +194,8 @@ def _pricing_record(*, temp_table_id: str, region: str = "SP-Interior 1") -> dic
             ],
         },
         "audit_batch": None,
+        "source_documents": [f"doc-{temp_table_id}"],
+        "active_document_id": f"doc-{temp_table_id}",
     }
 
 
@@ -1594,7 +1597,7 @@ def test_legacy_calculated_ready_not_replayed_after_version_bump(app, tmp_path, 
         assert build_result_storage_key(comparison_id=cmp_id, fingerprint=legacy_fp) == meta["result_storage_key"]
 
 
-def test_api_post_get_gbex_incomplete_preserves_status(web_client, app, tmp_path, monkeypatch):
+def test_api_post_get_gbex_preserves_calculated_with_warnings_status(web_client, app, tmp_path, monkeypatch):
     """POST/GET real: incomplete sem injeção de payload no frontend."""
     with app.app_context():
         _setup_env(monkeypatch, tmp_path)
@@ -1622,23 +1625,23 @@ def test_api_post_get_gbex_incomplete_preserves_status(web_client, app, tmp_path
     assert body["idempotent_replay"] is False
     result = body["result"]
     assert result["calculation_algorithm_version"] == AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION
-    assert int(result["summary"].get("incomplete_cell_count") or 0) >= 1
+    assert int(result["summary"].get("calculated_with_warnings_cell_count") or 0) >= 1
 
     rows = result["comparative_rows"]
     assert len(rows) == 1
     table_results = rows[0]["table_results"]
-    incomplete_cells = [
-        c for c in table_results.values() if (c.get("final_status") or c.get("status")) == "incomplete"
+    warning_cells = [
+        c for c in table_results.values() if (c.get("final_status") or c.get("status")) == "calculated_with_warnings"
     ]
-    assert incomplete_cells, "esperado ao menos um incomplete (TAS/Pedágio)"
-    cell = incomplete_cells[0]
-    assert cell["status"] == "incomplete"
-    assert cell["final_status"] == "incomplete"
-    assert cell.get("is_partial_value") is True
+    assert warning_cells, "esperado ao menos um calculated_with_warnings (TAS/Ped?gio)"
+    cell = warning_cells[0]
+    assert cell["status"] == "calculated_with_warnings"
+    assert cell["final_status"] == "calculated_with_warnings"
+    assert cell.get("is_partial_value") is False
     assert cell.get("calculated_freight") is not None
     memory = cell.get("calculation_memory") or {}
-    assert memory.get("status") == "incomplete"
-    assert "incompleto" in str(memory.get("status_label") or "").lower()
+    assert memory.get("status") == "calculated_with_warnings"
+    assert "ressalvas" in str(memory.get("status_label") or "").lower()
     labels = " ".join(
         str(i.get("label") or "") for i in (cell.get("blocking_issues") or [])
     ) + " " + str((cell.get("components") or {}).get("ignored_accessorial_fees") or [])
@@ -1656,10 +1659,158 @@ def test_api_post_get_gbex_incomplete_preserves_status(web_client, app, tmp_path
     get_cell = None
     for row in get_result["comparative_rows"]:
         for c in (row.get("table_results") or {}).values():
-            if (c.get("final_status") or c.get("status")) == "incomplete":
+            if (c.get("final_status") or c.get("status")) == "calculated_with_warnings":
                 get_cell = c
                 break
     assert get_cell is not None
-    assert get_cell["status"] == "incomplete"
-    assert get_cell["final_status"] == "incomplete"
-    assert (get_cell.get("calculation_memory") or {}).get("status") == "incomplete"
+    assert get_cell["status"] == "calculated_with_warnings"
+    assert get_cell["final_status"] == "calculated_with_warnings"
+    assert (get_cell.get("calculation_memory") or {}).get("status") == "calculated_with_warnings"
+
+
+def test_storage_failure_preserves_stage_and_metrics(app, tmp_path, monkeypatch):
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state(three_tables=True)
+        sess = _session_dict_from_state(state)
+        import app.agente_compara_calculation_execution_service as exec_mod
+        import app.agente_compara_calculation_result_storage as storage_mod
+
+        def fail_memory(**kwargs):
+            raise storage_mod.AgenteComparaCalculationResultStorageError(
+                storage_mod.ERROR_MEMORY_WRITE_FAILED,
+                'memory write failed',
+                safe_message='Os c?lculos foram processados, mas os detalhes n?o puderam ser salvos.',
+                error_stage='memory_replaced',
+                artifact_type='memory',
+                retryable=True,
+                metrics={
+                    'last_completed_stage': 'memory_checksum_validated',
+                    'raw_result_size_bytes': 999,
+                    'compact_result_size_bytes': 555,
+                    'memory_payload_size_bytes': 444,
+                    'memory_envelope_size_bytes': 500,
+                    'table_count': 3,
+                    'cell_count': 6000,
+                },
+                operation='memory.write_atomic',
+            )
+
+        monkeypatch.setattr(storage_mod, 'save_comparison_calculation_memory_payload', fail_memory)
+        monkeypatch.setattr(exec_mod, 'save_comparison_calculation_memory_payload', fail_memory)
+        result = _exec(
+            app,
+            sess,
+            comparison_id=state['comparison_id'],
+            execution_id='exec-storage-failure',
+            calculate_fn=lambda _context: copy.deepcopy(__import__('tests.test_agente_compara_calculation_storage_integration', fromlist=['_big_result'])._big_result(50, 3, comparison_id=state['comparison_id'])),
+            emit_billing=lambda **kwargs: (_ for _ in ()).throw(AssertionError('billing')),
+        )
+        assert result['ok'] is False
+        assert result['error_code'] == storage_mod.ERROR_MEMORY_WRITE_FAILED
+        assert result['error_stage'] == 'memory_replaced'
+        assert result['artifact_type'] == 'memory'
+        assert result['retryable'] is True
+        calc = _persisted(sess)['comparison_calculation']
+        assert calc['failed_stage'] == 'memory_replaced'
+        assert calc['failed_artifact'] == 'memory'
+        assert calc['raw_result_size_bytes'] == 999
+        assert calc['compact_result_size_bytes'] == 555
+        assert calc['memory_payload_size_bytes'] == 444
+        assert calc['memory_envelope_size_bytes'] == 500
+        assert calc['billing_status'] == BILLING_STATUS_NOT_STARTED
+        assert calc['result_storage_key'] is None
+        assert calc['memory_storage_key'] is None
+
+
+def test_preflight_blocks_residual_failed_table_before_calculation(app, tmp_path, monkeypatch):
+    billing_calls = []
+
+    def _emit(**kwargs):
+        billing_calls.append(kwargs)
+
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        from app.agente_compara_doc_service import load_temp_table_record
+        from app.services.cleiton_doc_config_service import get_cleiton_doc_config
+
+        ttl = get_cleiton_doc_config().upload_ttl_hours
+        table_2 = get_table_by_slot(state, 2)
+        record = load_temp_table_record(table_2["temp_table_id"], ttl_hours=ttl)
+        record["status"] = "failed"
+        record["reading_alerts"] = ["Gemini retornou timeout durante a extra??o t?cnica."]
+        record["failure_origin"] = "platform"
+        record["failure_code"] = "provider_timeout"
+        record["retryable"] = True
+        record["credit_disposition"] = "preserved"
+        _write_record(record)
+        sess = _session_dict_from_state(state)
+
+        from app.agente_compara_calculation_execution_service import AgenteComparaCalculationExecutionError
+
+        with pytest.raises(AgenteComparaCalculationExecutionError) as exc:
+            _exec(
+                app,
+                sess,
+                comparison_id=state["comparison_id"],
+                execution_id="exec-preflight-block",
+                emit_billing=_emit,
+            )
+        assert exc.value.error_code == "comparison_table_preparation_failed"
+        assert exc.value.error_stage == "table_preflight_validated"
+        assert exc.value.failed_table_name == table_2["carrier_name"]
+        assert exc.value.failed_table_id == table_2["table_id"]
+        assert exc.value.failed_slot == 2
+        assert exc.value.retryable is True
+        assert exc.value.credit_disposition == "preserved"
+        assert exc.value.safe_message == (
+            f"A tabela {table_2['carrier_name']} ainda n?o est? pronta. "
+            "Processe novamente essa tabela antes de iniciar a compara??o."
+        )
+        assert billing_calls == []
+        persisted = _persisted(sess)
+        assert persisted.get("comparison_calculation") is None
+
+
+def test_api_preflight_failure_returns_public_payload(web_client, app, tmp_path, monkeypatch):
+    with app.app_context():
+        _setup_env(monkeypatch, tmp_path)
+        state = _ready_comparison_state()
+        from app.agente_compara_doc_service import load_temp_table_record
+        from app.services.cleiton_doc_config_service import get_cleiton_doc_config
+
+        ttl = get_cleiton_doc_config().upload_ttl_hours
+        table_2 = get_table_by_slot(state, 2)
+        record = load_temp_table_record(table_2["temp_table_id"], ttl_hours=ttl)
+        record["status"] = "failed"
+        record["reading_alerts"] = ["Gemini retornou timeout durante a extra??o t?cnica."]
+        record["failure_origin"] = "platform"
+        record["failure_code"] = "provider_timeout"
+        record["retryable"] = True
+        record["credit_disposition"] = "preserved"
+        _write_record(record)
+    with web_client.session_transaction() as sess:
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+        sess[AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY] = state["primary_temp_table_id"]
+
+    resp = web_client.post(
+        "/api/agente-compara/comparison/calculate",
+        json={
+            "comparison_id": state["comparison_id"],
+            "execution_id": "api-preflight-block",
+            "schema_version": 1,
+        },
+    )
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["ok"] is False
+    assert body["error_code"] == "comparison_table_preparation_failed"
+    assert body["error_stage"] == "table_preflight_validated"
+    assert body["failed_table_name"] == table_2["carrier_name"]
+    assert body["failed_table_id"] == table_2["table_id"]
+    assert body["failed_slot"] == 2
+    assert body["retryable"] is True
+    assert body["credit_disposition"] == "preserved"
+    assert body["safe_message"] == body["message"]
+    assert "ainda" in body["message"].lower()
