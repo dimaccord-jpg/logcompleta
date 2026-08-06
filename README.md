@@ -1,6 +1,6 @@
-﻿# LogCompleta / AgenteFrete
+# LogCompleta / AgenteFrete
 
-Referência principal auditada em 2026-07-31: `docs/estado_oficial_consolidado.md`.
+Referência principal auditada em 2026-08-05: `docs/estado_oficial_consolidado.md`.
 
 ## Visão do produto
 
@@ -18,7 +18,7 @@ A visão oficial do AgenteCompara no código atual é a de um fluxo multitabela 
 - cálculo comparativo com lock, fingerprint, idempotência, gate de completude e storage dedicado fora da sessão;
 - memória pública determinística por linha, incluindo componentes aplicados/ignorados e diagnósticos de cálculo;
 - validação determinística de taxas acessórias antes do avanço da revisão;
-- analytics comparativo leve no resultado liberado e observabilidade/billing operacional próprios.
+- analytics comparativo leve no resultado liberado, chat contextual comparativo pós-READY e observabilidade/billing operacional próprios.
 
 ## Arquitetura resumida
 
@@ -39,16 +39,16 @@ A entrega recente do AgenteCompara não adicionou migration, tabela nem coluna n
 O código versionado comprova:
 
 - branch local auditada: `homolog`;
-- commit auditado na branch atual: `29b8500` (`feat(agente-compara): consolida cálculo, validação e revisão multietapas`);
+- commit auditado na branch atual: `939b73e` (`feat: consolida fluxo e calculos do AgenteCompara`);
 - `origin/homolog` apontando para o mesmo conteúdo do checkout local auditado;
-- `origin/producao` apontando para o commit equivalente publicado `d20672a` (`feat(agente-compara): consolida cálculo, validação e revisão multietapas`);
+- `origin/producao` apontando para o commit promovido `fdec64a` (`feat: consolida fluxo e calculos do AgenteCompara`);
 - homolog em `homolog` com `autoDeploy: true` no `render.yaml`;
 - produção em `main` com `autoDeploy: false` no `render.yaml`;
 - `start.sh` inferindo `APP_ENV=prod` para `main`, `master`, `producao` e `prod`;
 - health checks reais em `/health/liveness` e `/health/readiness`;
 - `healthCheckPath: /health` ainda declarado no YAML.
 
-O processo operacional informado para a publicação validada em 2026-07-31 registra homologação em `29b8500`, promoção para produção por `cherry-pick` em `producao` e publicação equivalente em `d20672a`, com deploy manual no Render. Essa diferença entre processo operacional e arquivos versionados continua sendo uma divergência aberta.
+O processo operacional informado para a publicação validada em 2026-08-05 registra homologação em `939b73e`, promoção para produção na branch `producao` pelos commits `fdec64a`, `db72007` e `f9591dc`, com deploy manual no Render. A divergência entre a branch operacional informada (`producao`) e a branch versionada no `render.yaml` (`main`) continua aberta.
 
 ## Testes e dependências de desenvolvimento
 

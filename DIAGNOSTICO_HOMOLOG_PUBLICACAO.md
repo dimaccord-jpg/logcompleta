@@ -1,22 +1,24 @@
-﻿# Diagnóstico de Homologação e Publicação
+# Diagnóstico de Homologação e Publicação
 
-Referência auditada em 2026-07-31.
+Referência auditada em 2026-08-05.
 
 ## Estado consolidado
 
 - branch local auditada: `homolog`;
-- working tree auditado no início da revisão documental: com alterações locais pré-existentes fora deste diagnóstico; o estado funcional auditado do AgenteCompara foi conferido pelo commit `29b8500`;
-- commit atual auditado: `29b8500` - `feat(agente-compara): consolida cálculo, validação e revisão multietapas`;
+- working tree auditado no início da revisão documental: limpo;
+- commit atual auditado: `939b73e` - `feat: consolida fluxo e calculos do AgenteCompara`;
 - upstream auditado: `origin/homolog`;
 - relação local x upstream auditada: `0  0` em `git rev-list --left-right --count HEAD...origin/homolog`;
-- commit equivalente informado em produção por `cherry-pick`: `d20672a` - `feat(agente-compara): consolida cálculo, validação e revisão multietapas`;
+- branch de produção local/remota auditada: `producao` / `origin/producao`;
+- commit de produção auditado: `fdec64a` - `feat: consolida fluxo e calculos do AgenteCompara`;
+- commits promovidos adicionais informados para produção: `db72007` - `fix: ajusta menus laterais e atalhos visuais` e `f9591dc` - `feat: consolida melhorias do AgenteCompara`;
 - nenhuma migration nova na entrega recente do AgenteCompara;
 - cadeia Alembic versionada mantida até `r2s3t4u5v6w7`.
 
 ## Validação registrada da publicação
 
-- homologação aprovada em `29b8500`;
-- publicação equivalente em produção na branch operacional `producao`, commit `d20672a`;
+- homologação aprovada em `939b73e`;
+- publicação aprovada em produção na branch operacional `producao`, com `fdec64a`, `db72007` e `f9591dc`;
 - suíte direcionada do AgenteCompara: `612 passed, 1 skipped, 2 warnings`;
 - warnings restritos a depreciações externas, sem evidência de regressão funcional do fluxo publicado.
 
@@ -36,4 +38,4 @@ Go somente após:
 - conferência de `/health/liveness` e `/health/readiness`;
 - validação de logs e fluxos críticos pós-deploy;
 - confirmação da estratégia de branch usada pelo serviço de produção no Render;
-- confirmação de que o conteúdo promovido para produção corresponde funcionalmente ao commit `29b8500`, ainda que o hash publicado em produção seja `d20672a`.
+- confirmação de que o conteúdo promovido para produção corresponde ao conjunto aprovado entre `939b73e` em homolog e `fdec64a` + `db72007` + `f9591dc` em `producao`.

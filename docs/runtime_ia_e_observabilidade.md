@@ -1,6 +1,6 @@
-﻿# Runtime IA e Observabilidade
+# Runtime IA e Observabilidade
 
-Referência auditada em 2026-07-31. Estado funcional consolidado em `docs/estado_oficial_consolidado.md`.
+Referência auditada em 2026-08-05. Estado funcional consolidado em `docs/estado_oficial_consolidado.md`.
 
 ## Trilhas separadas
 
@@ -34,7 +34,8 @@ Observações do runtime atual:
 
 - validação de `temp_table`, memória pública e gate de completeza são determinísticos e não geram consumo de IA;
 - o cálculo comparativo pode terminar com células `incomplete` sem que isso represente falha de infraestrutura, desde que o motor tenha produzido valor parcial e issues bloqueantes rastreáveis;
-- replays idempotentes preservam observabilidade e billing sem duplicar indevidamente o resultado público.
+- replays idempotentes preservam observabilidade e billing sem duplicar indevidamente o resultado público;
+- o chat contextual da comparação usa `flow_type` próprio (`agente_compara_comparison_chat`) e só fica disponível quando há `result` liberado e `analytics` válidos em estado READY.
 
 ## Cleide e Júlia
 
