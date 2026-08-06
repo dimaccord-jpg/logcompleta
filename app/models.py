@@ -70,6 +70,7 @@ class User(db.Model, UserMixin):
     last_login_at = db.Column(db.DateTime, nullable=True)
     subscribes_to_newsletter = db.Column(db.Boolean, default=False)
     accepted_terms_at = db.Column(db.DateTime, nullable=True)
+    first_audit_completed_at = db.Column(db.DateTime, nullable=True)
     usage_purpose = db.Column(db.String(50), nullable=True)
     job_role = db.Column(db.String(100), nullable=True)
     oauth_provider = db.Column(db.String(50), nullable=True)
