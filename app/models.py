@@ -478,6 +478,45 @@ class ProcessingEvent(db.Model):
     origem_sistema = db.Column(db.Boolean, nullable=True, index=True)
 
 
+class FunnelEvent(db.Model):
+    """Evento append-only do funil de produto/vendas para analytics e conversao."""
+
+    __tablename__ = "funnel_event"
+    __table_args__ = (
+        db.Index(
+            "ix_funnel_event_event_source_occurred_at",
+            "event_name",
+            "source",
+            "occurred_at",
+        ),
+        db.Index(
+            "ix_funnel_event_user_event_source",
+            "user_id",
+            "event_name",
+            "source",
+        ),
+        db.Index("ix_funnel_event_conta_occurred_at", "conta_id", "occurred_at"),
+        db.Index("ix_funnel_event_franquia_occurred_at", "franquia_id", "occurred_at"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False)
+    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=False)
+
+    event_name = db.Column(db.String(40), nullable=False)
+    source = db.Column(db.String(40), nullable=False)
+    occurred_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    idempotency_key = db.Column(db.String(160), nullable=False, unique=True)
+
+    correlation_id = db.Column(db.String(200), nullable=True)
+    document_id = db.Column(db.String(120), nullable=True)
+    audit_batch_id = db.Column(db.String(120), nullable=True)
+    comparison_id = db.Column(db.String(120), nullable=True)
+    execution_id = db.Column(db.String(120), nullable=True)
+    metadata_json = db.Column(db.JSON, nullable=True)
+
+
 class CleitonBillingApropriacao(db.Model):
     """
     Apropriação idempotente de billing operacional (ex.: upload Roberto).
