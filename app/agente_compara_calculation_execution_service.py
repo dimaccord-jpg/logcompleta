@@ -18,6 +18,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from flask import has_request_context, session
+from flask_login import current_user
 
 from app.agente_compara_comparison_calculation_service import (
     compact_comparison_result_for_storage,
@@ -68,6 +69,13 @@ from app.agente_compara_comparison_state import (
     persist_comparison_state,
     public_comparison_calculation_summary,
 )
+from app.extensions import db
+from app.funnel_event_service import (
+    FUNNEL_EVENT_FREIGHT_CALCULATED,
+    FUNNEL_SOURCE_AGENTE_COMPARA,
+    record_funnel_event,
+)
+from app.models import User, utcnow_naive
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +176,99 @@ def _canonical_json(value: Any) -> str:
 
 def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _build_calculation_funnel_idempotency_key(*, user_id: int, comparison_id: str, execution_id: str) -> str:
+    payload = {
+        "source": FUNNEL_SOURCE_AGENTE_COMPARA,
+        "event_name": FUNNEL_EVENT_FREIGHT_CALCULATED,
+        "user_id": int(user_id),
+        "comparison_id": (comparison_id or "").strip(),
+        "execution_id": (execution_id or "").strip(),
+    }
+    return f"funnel:ac:calculation:{_sha256_hex(_canonical_json(payload))}"
+
+
+def _record_calculation_funnel_event(
+    *,
+    comparison_id: str,
+    execution_id: str,
+    idempotent_replay: bool,
+    calc: dict,
+) -> tuple[dict | None, bool]:
+    payload = {"is_first_audit": False}
+    if idempotent_replay:
+        return payload, False
+    if calc.get("status") != STEP_CALCULATION_READY:
+        return payload, False
+    if calc.get("billing_status") != BILLING_STATUS_APPLIED:
+        return payload, False
+    if calc.get("stale"):
+        return payload, False
+    user_id = getattr(current_user, "id", None)
+    conta_id = getattr(current_user, "conta_id", None)
+    franquia_id = getattr(current_user, "franquia_id", None)
+    if user_id is None or conta_id is None or franquia_id is None:
+        return payload, False
+    started_funnel_tx = False
+    try:
+        orm_session = db.session()
+        if not orm_session.in_transaction():
+            orm_session.begin()
+            started_funnel_tx = True
+        with db.session.begin_nested():
+            user = (
+                db.session.query(User)
+                .filter(User.id == int(user_id))
+                .with_for_update()
+                .one()
+            )
+            funnel_result = record_funnel_event(
+                event_name=FUNNEL_EVENT_FREIGHT_CALCULATED,
+                source=FUNNEL_SOURCE_AGENTE_COMPARA,
+                user_id=int(user_id),
+                conta_id=int(conta_id),
+                franquia_id=int(franquia_id),
+                idempotency_key=_build_calculation_funnel_idempotency_key(
+                    user_id=int(user_id),
+                    comparison_id=comparison_id,
+                    execution_id=execution_id,
+                ),
+                comparison_id=comparison_id,
+                execution_id=execution_id,
+                correlation_id=None,
+                metadata_json=None,
+            )
+            is_first_audit = False
+            if funnel_result.get("created") is True and user.first_audit_completed_at is None:
+                user.first_audit_completed_at = utcnow_naive()
+                is_first_audit = True
+            db.session.flush()
+        if funnel_result.get("created") is not True:
+            if started_funnel_tx:
+                db.session.rollback()
+            return payload, False
+        db.session.commit()
+        payload["is_first_audit"] = is_first_audit
+        payload["funnel_event"] = {
+            "event_name": FUNNEL_EVENT_FREIGHT_CALCULATED,
+            "source": FUNNEL_SOURCE_AGENTE_COMPARA,
+            "allow_meta_pixel": True,
+            "is_first_audit": is_first_audit,
+        }
+        return payload, True
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception(
+            "agente_compara_funnel_calculation_failed event=%s source=%s user_id=%s comparison_id=%s execution_id=%s failure_type=%s",
+            FUNNEL_EVENT_FREIGHT_CALCULATED,
+            FUNNEL_SOURCE_AGENTE_COMPARA,
+            user_id,
+            comparison_id,
+            execution_id,
+            exc.__class__.__name__,
+        )
+    return payload, False
 
 
 def _short_fingerprint(fingerprint: str) -> str:
@@ -426,6 +527,7 @@ def _build_ready_response(
             "status": state.get("status"),
             "comparison_calculation": public_comparison_calculation_summary(calc, include_result=False),
         },
+        "is_first_audit": False,
     }
     if billing == BILLING_STATUS_PENDING:
         payload["error_code"] = ERROR_BILLING_PENDING
@@ -433,6 +535,15 @@ def _build_ready_response(
     elif billing == BILLING_STATUS_FAILED:
         payload["error_code"] = ERROR_BILLING_FAILED
         payload["message"] = "Cálculo concluído, mas a regularização da execução falhou. Tente novamente."
+    if release and not stale:
+        funnel_payload, _created = _record_calculation_funnel_event(
+            comparison_id=str(state.get("comparison_id") or ""),
+            execution_id=str(calc.get("execution_id") or ""),
+            idempotent_replay=bool(idempotent_replay),
+            calc=calc,
+        )
+        if funnel_payload:
+            payload.update(funnel_payload)
     return payload
 
 

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 
 from app.agente_compara_calculation_execution_service import (
     AGENTE_COMPARA_CALCULATION_ALGORITHM_VERSION,
@@ -54,7 +55,10 @@ from app.services.agente_compara_config_service import (
     DEFAULT_CALCULATION_BASES,
     DEFAULT_FALLBACK_MESSAGE,
 )
+from app.extensions import db
+from app.models import FunnelEvent, User
 from tests.cleiton_doc_fixtures import patch_cleiton_doc_cfg, patch_cleiton_doc_store
+from tests.conftest import seed_conta_franquia_cliente, seed_usuario
 
 FORBIDDEN_PUBLIC_FIELDS = {
     "valor_frete",
@@ -124,6 +128,31 @@ def _setup_env(monkeypatch, tmp_path):
         lambda: SimpleNamespace(calculation_bases=copy.deepcopy(DEFAULT_CALCULATION_BASES), upload_ttl_hours=24),
     )
     return cfg
+
+
+def _authorized_funnel_user(monkeypatch, web, *, user_id: int = 101, conta_id: int = 201, franquia_id: int = 301):
+    fake_user = SimpleNamespace(
+        is_authenticated=True,
+        conta_id=conta_id,
+        franquia_id=franquia_id,
+        id=user_id,
+    )
+    monkeypatch.setattr(web, "current_user", fake_user)
+    monkeypatch.setattr("app.agente_compara_api_routes.current_user", fake_user)
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_execution_service.current_user",
+        fake_user,
+    )
+    monkeypatch.setattr(
+        web,
+        "avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: {"permitido": True, "modo_operacao": "normal"},
+    )
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: {"permitido": True, "modo_operacao": "normal"},
+    )
+    return fake_user
 
 
 def _authorized(monkeypatch, web):
@@ -1814,3 +1843,263 @@ def test_api_preflight_failure_returns_public_payload(web_client, app, tmp_path,
     assert body["credit_disposition"] == "preserved"
     assert body["safe_message"] == body["message"]
     assert "ainda" in body["message"].lower()
+
+
+def test_api_calculate_success_creates_funnel_event_and_first_audit(web_client, app, monkeypatch):
+    web = _load_web_module()
+    _authorized_funnel_user(monkeypatch, web)
+    _patch_billing_success(monkeypatch)
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_execution_service._record_calculation_funnel_event",
+        lambda **_kwargs: ({"is_first_audit": True, "funnel_event": {"event_name": "freight_calculated", "source": "agente_compara", "allow_meta_pixel": True, "is_first_audit": True}}, True),
+    )
+
+    state = _ready_comparison_state()
+    _persist_ready_fixture_state(web_client, state)
+
+    resp = web_client.post(
+        "/api/agente-compara/comparison/calculate",
+        json={"comparison_id": state["comparison_id"], "execution_id": "exec-funnel-1"},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["billing_status"] == BILLING_STATUS_APPLIED
+    assert body["is_first_audit"] is True
+    assert body["funnel_event"]["event_name"] == "freight_calculated"
+    assert body["funnel_event"]["allow_meta_pixel"] is True
+    assert body["funnel_event"]["is_first_audit"] is True
+
+
+
+def test_api_calculate_replay_omits_funnel_event_and_first_audit_false(web_client, app, monkeypatch):
+    web = _load_web_module()
+    _authorized_funnel_user(monkeypatch, web)
+    _patch_billing_success(monkeypatch)
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_execution_service._record_calculation_funnel_event",
+        lambda **_kwargs: ({"is_first_audit": False}, False),
+    )
+    state = _ready_comparison_state()
+    _persist_ready_fixture_state(web_client, state)
+
+    first = web_client.post(
+        "/api/agente-compara/comparison/calculate",
+        json={"comparison_id": state["comparison_id"], "execution_id": "exec-funnel-replay"},
+    )
+    replay = web_client.post(
+        "/api/agente-compara/comparison/calculate",
+        json={"comparison_id": state["comparison_id"], "execution_id": "exec-funnel-replay"},
+    )
+    assert first.status_code == 200
+    body = replay.get_json()
+    assert body["idempotent_replay"] is True
+    assert body["is_first_audit"] is False
+    assert "funnel_event" not in body
+
+
+def test_api_calculate_analytics_failure_preserves_success_and_billing(web_client, app, monkeypatch):
+    web = _load_web_module()
+    _authorized_funnel_user(monkeypatch, web)
+    _patch_billing_success(monkeypatch)
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_execution_service._record_calculation_funnel_event",
+        lambda **_kwargs: ({"is_first_audit": False}, False),
+    )
+    state = _ready_comparison_state()
+    _persist_ready_fixture_state(web_client, state)
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_execution_service.record_funnel_event",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("boom")),
+    )
+
+    resp = web_client.post(
+        "/api/agente-compara/comparison/calculate",
+        json={"comparison_id": state["comparison_id"], "execution_id": "exec-funnel-fail"},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == STEP_CALCULATION_READY
+    assert body["billing_status"] == BILLING_STATUS_APPLIED
+    assert body["is_first_audit"] is False
+    assert "funnel_event" not in body
+
+
+
+
+
+def _patch_billing_success(monkeypatch):
+    def _fake_apply_billing(*, calc, rows_processed, started_perf, execution_id, emit_billing):
+        updated = dict(calc)
+        updated["billing_status"] = BILLING_STATUS_APPLIED
+        updated["billing_applied_at"] = "2026-08-06T00:00:00Z"
+        return updated, True
+
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_execution_service._apply_billing",
+        _fake_apply_billing,
+    )
+
+def _persist_ready_fixture_state(web_client, state: dict) -> None:
+    with web_client.session_transaction() as sess:
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+
+
+def test_record_calculation_funnel_event_persists_and_marks_first_audit(app, monkeypatch):
+    from app.agente_compara_calculation_execution_service import _record_calculation_funnel_event
+
+    with app.app_context():
+        conta, franquia = seed_conta_franquia_cliente(slug="conta-funnel-helper")
+        user = seed_usuario(franquia.id, conta.id, email="calc-helper@test.com")
+        user_id = user.id
+        fake_user = SimpleNamespace(
+            is_authenticated=True,
+            id=user.id,
+            conta_id=user.conta_id,
+            franquia_id=user.franquia_id,
+        )
+        monkeypatch.setattr("app.agente_compara_calculation_execution_service.current_user", fake_user)
+
+        payload, created = _record_calculation_funnel_event(
+            comparison_id="cmp-helper-1",
+            execution_id="exec-helper-1",
+            idempotent_replay=False,
+            calc={"status": STEP_CALCULATION_READY, "billing_status": BILLING_STATUS_APPLIED, "stale": False},
+        )
+
+        assert created is True
+        assert payload["is_first_audit"] is True
+        assert payload["funnel_event"]["allow_meta_pixel"] is True
+        db.session.remove()
+        refreshed = db.session.get(User, user_id)
+        event = FunnelEvent.query.order_by(FunnelEvent.id.desc()).first()
+        assert refreshed.first_audit_completed_at is not None
+        assert refreshed.first_audit_completed_at.tzinfo is None
+        assert event.comparison_id == "cmp-helper-1"
+        assert event.execution_id == "exec-helper-1"
+
+
+
+def test_record_calculation_funnel_event_replay_omits_pixel_and_first_audit_false(app, monkeypatch):
+    from app.agente_compara_calculation_execution_service import _record_calculation_funnel_event
+
+    with app.app_context():
+        conta, franquia = seed_conta_franquia_cliente(slug="conta-funnel-helper-replay")
+        user = seed_usuario(franquia.id, conta.id, email="calc-helper-replay@test.com")
+        fake_user = SimpleNamespace(
+            is_authenticated=True,
+            id=user.id,
+            conta_id=user.conta_id,
+            franquia_id=user.franquia_id,
+        )
+        monkeypatch.setattr("app.agente_compara_calculation_execution_service.current_user", fake_user)
+
+        first_payload, first_created = _record_calculation_funnel_event(
+            comparison_id="cmp-helper-replay",
+            execution_id="exec-helper-replay",
+            idempotent_replay=False,
+            calc={"status": STEP_CALCULATION_READY, "billing_status": BILLING_STATUS_APPLIED, "stale": False},
+        )
+        replay_payload, replay_created = _record_calculation_funnel_event(
+            comparison_id="cmp-helper-replay",
+            execution_id="exec-helper-replay",
+            idempotent_replay=True,
+            calc={"status": STEP_CALCULATION_READY, "billing_status": BILLING_STATUS_APPLIED, "stale": False},
+        )
+
+        assert first_created is True
+        assert replay_created is False
+        assert first_payload["is_first_audit"] is True
+        assert replay_payload == {"is_first_audit": False}
+        db.session.remove()
+        assert FunnelEvent.query.count() == 1
+
+
+def test_record_calculation_funnel_event_does_not_overwrite_first_audit_timestamp(app, monkeypatch):
+    from app.agente_compara_calculation_execution_service import _record_calculation_funnel_event
+
+    with app.app_context():
+        conta, franquia = seed_conta_franquia_cliente(slug="conta-funnel-helper-repeat")
+        user = seed_usuario(franquia.id, conta.id, email="calc-helper-repeat@test.com")
+        user_id = user.id
+        fake_user = SimpleNamespace(
+            is_authenticated=True,
+            id=user.id,
+            conta_id=user.conta_id,
+            franquia_id=user.franquia_id,
+        )
+        monkeypatch.setattr("app.agente_compara_calculation_execution_service.current_user", fake_user)
+
+        first_payload, first_created = _record_calculation_funnel_event(
+            comparison_id="cmp-helper-repeat",
+            execution_id="exec-helper-repeat-1",
+            idempotent_replay=False,
+            calc={"status": STEP_CALCULATION_READY, "billing_status": BILLING_STATUS_APPLIED, "stale": False},
+        )
+        db.session.remove()
+        first_timestamp = db.session.get(User, user_id).first_audit_completed_at
+
+        second_payload, second_created = _record_calculation_funnel_event(
+            comparison_id="cmp-helper-repeat",
+            execution_id="exec-helper-repeat-2",
+            idempotent_replay=False,
+            calc={"status": STEP_CALCULATION_READY, "billing_status": BILLING_STATUS_APPLIED, "stale": False},
+        )
+
+        assert first_created is True
+        assert second_created is True
+        assert first_payload["is_first_audit"] is True
+        assert second_payload["is_first_audit"] is False
+        db.session.remove()
+        refreshed = db.session.get(User, user_id)
+        assert refreshed.first_audit_completed_at == first_timestamp
+        assert FunnelEvent.query.count() == 2
+
+
+def test_record_calculation_funnel_event_commit_failure_rolls_back_without_undoing_billing(app, monkeypatch):
+    from app.agente_compara_calculation_execution_service import _record_calculation_funnel_event
+
+    with app.app_context():
+        conta, franquia = seed_conta_franquia_cliente(slug="conta-funnel-helper-commit-fail")
+        user = seed_usuario(franquia.id, conta.id, email="calc-helper-commit-fail@test.com")
+        user_id = user.id
+        fake_user = SimpleNamespace(
+            is_authenticated=True,
+            id=user.id,
+            conta_id=user.conta_id,
+            franquia_id=user.franquia_id,
+        )
+        monkeypatch.setattr("app.agente_compara_calculation_execution_service.current_user", fake_user)
+
+        calls = {"commit": 0, "rollback": 0}
+        real_rollback = db.session.rollback
+        orm_session = db.session()
+
+        def fail_before_commit(_session):
+            calls["commit"] += 1
+            real_rollback()
+            raise RuntimeError("commit failed")
+
+        def tracked_rollback():
+            calls["rollback"] += 1
+            return real_rollback()
+
+        monkeypatch.setattr("app.agente_compara_calculation_execution_service.record_funnel_event", lambda **_kwargs: {"created": True})
+        event.listen(orm_session, "before_commit", fail_before_commit)
+        monkeypatch.setattr(db.session, "rollback", tracked_rollback)
+
+        payload, created = _record_calculation_funnel_event(
+            comparison_id="cmp-helper-commit-fail",
+            execution_id="exec-helper-commit-fail",
+            idempotent_replay=False,
+            calc={"status": STEP_CALCULATION_READY, "billing_status": BILLING_STATUS_APPLIED, "stale": False},
+        )
+
+        assert created is False
+        assert payload == {"is_first_audit": False}
+        assert calls["commit"] == 1
+        assert calls["rollback"] == 1
+        event.remove(orm_session, "before_commit", fail_before_commit)
+        db.session.remove()
+        refreshed = db.session.get(User, user_id)
+        assert refreshed.first_audit_completed_at is None
+        assert FunnelEvent.query.count() == 0

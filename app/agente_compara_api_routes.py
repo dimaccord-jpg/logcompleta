@@ -6,6 +6,8 @@ Chat documental usa prompt/contexto próprios e governança Cleiton.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from pathlib import Path
 from flask import Blueprint, jsonify, request, send_file, session
@@ -129,14 +131,81 @@ from app.cleiton_doc_contracts import (
 )
 from app.cleiton_doc_prepare import CleitonDocSecurityError
 from app.cleiton_doc_service import CleitonDocSessionError
+from app.funnel_event_service import (
+    FUNNEL_EVENT_FILE_UPLOADED,
+    FUNNEL_SOURCE_AGENTE_COMPARA,
+    record_funnel_event,
+)
 from app.services.agente_compara_config_service import get_agente_compara_config
 from app.services.agente_compara_config_service import get_active_calculation_bases_for_runtime
+from app.extensions import db
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
 from app.services.cleiton_operacao_autorizacao_service import (
     avaliar_autorizacao_operacao_por_franquia,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_funnel_key(prefix: str, payload: dict) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"{prefix}:{digest}"
+
+
+def _build_upload_funnel_idempotency_key(
+    *,
+    user_id: int,
+    comparison_id: str | None,
+    table_id: str | None,
+    slot: int | None,
+    document_id: str,
+) -> str:
+    return _canonical_funnel_key(
+        "funnel:ac:upload",
+        {
+            "source": FUNNEL_SOURCE_AGENTE_COMPARA,
+            "event_name": FUNNEL_EVENT_FILE_UPLOADED,
+            "user_id": int(user_id),
+            "comparison_id": (comparison_id or "").strip() or None,
+            "table_id": (table_id or "").strip() or None,
+            "slot": int(slot) if slot is not None else None,
+            "document_id": (document_id or "").strip(),
+        },
+    )
+
+
+def _maybe_build_upload_funnel_payload(*, document: dict, identity: dict) -> dict | None:
+    doc_id = str(document.get("doc_id") or "").strip()
+    if not doc_id:
+        return None
+    user_id = getattr(current_user, "id", None)
+    conta_id = getattr(current_user, "conta_id", None)
+    franquia_id = getattr(current_user, "franquia_id", None)
+    if user_id is None or conta_id is None or franquia_id is None:
+        return None
+    return {
+        "event_name": FUNNEL_EVENT_FILE_UPLOADED,
+        "source": FUNNEL_SOURCE_AGENTE_COMPARA,
+        "user_id": int(user_id),
+        "conta_id": int(conta_id),
+        "franquia_id": int(franquia_id),
+        "idempotency_key": _build_upload_funnel_idempotency_key(
+            user_id=int(user_id),
+            comparison_id=identity.get("comparison_id"),
+            table_id=identity.get("table_id"),
+            slot=identity.get("slot"),
+            document_id=doc_id,
+        ),
+        "document_id": doc_id,
+        "comparison_id": (identity.get("comparison_id") or "").strip() or None,
+        "execution_id": (request.headers.get("X-Execution-ID") or request.form.get("execution_id") or "").strip() or None,
+        "correlation_id": (request.headers.get("X-Correlation-ID") or "").strip() or None,
+        "metadata_json": {
+            "table_id": (identity.get("table_id") or "").strip() or None,
+            "slot": int(identity.get("slot")) if identity.get("slot") is not None else None,
+        },
+    }
 
 agente_compara_api_bp = Blueprint("agente_compara_api", __name__)
 
@@ -573,19 +642,52 @@ def agente_compara_documents_upload():
     except Exception:
         logger.exception("Agente Compara temp_table: falha ao ler temp_table após upload.")
 
-    return jsonify(
-        {
-            "ok": True,
-            "document": document,
-            "session": _session_payload(),
-            "allowed_formats": get_allowed_document_formats(),
-            "calculation_bases": get_active_calculation_bases_for_runtime(
-                audit_cfg.calculation_bases
-            ),
-            "temp_table": temp_table,
-            "comparison": comparison,
-        }
-    )
+    payload = {
+        "ok": True,
+        "document": document,
+        "session": _session_payload(),
+        "allowed_formats": get_allowed_document_formats(),
+        "calculation_bases": get_active_calculation_bases_for_runtime(
+            audit_cfg.calculation_bases
+        ),
+        "temp_table": temp_table,
+        "comparison": comparison,
+    }
+    funnel_identity = dict(identity)
+    if not funnel_identity.get("comparison_id") and isinstance(comparison, dict):
+        funnel_identity["comparison_id"] = comparison.get("comparison_id")
+    funnel_payload = _maybe_build_upload_funnel_payload(document=document, identity=funnel_identity)
+    if funnel_payload is not None:
+        started_funnel_tx = False
+        try:
+            orm_session = db.session()
+            if not orm_session.in_transaction():
+                orm_session.begin()
+                started_funnel_tx = True
+            funnel_result = record_funnel_event(**funnel_payload)
+            if funnel_result.get("created") is True:
+                db.session.commit()
+                payload["funnel_event"] = {
+                    "event_name": FUNNEL_EVENT_FILE_UPLOADED,
+                    "source": FUNNEL_SOURCE_AGENTE_COMPARA,
+                    "allow_meta_pixel": True,
+                    "is_first_audit": False,
+                }
+            elif started_funnel_tx:
+                db.session.rollback()
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception(
+                "agente_compara_funnel_upload_failed event=%s source=%s user_id=%s comparison_id=%s document_id=%s failure_type=%s",
+                FUNNEL_EVENT_FILE_UPLOADED,
+                FUNNEL_SOURCE_AGENTE_COMPARA,
+                getattr(current_user, "id", None),
+                identity.get("comparison_id"),
+                document.get("doc_id"),
+                exc.__class__.__name__,
+            )
+
+    return jsonify(payload)
 
 
 @agente_compara_api_bp.route("/api/agente-compara/documents/status", methods=["GET"])

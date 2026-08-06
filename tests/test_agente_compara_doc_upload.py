@@ -8,9 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.extensions import db
+from sqlalchemy.exc import SQLAlchemyError
 from app.agente_compara_doc_service import AGENTE_COMPARA_DOC_IDS_SESSION_KEY
 from app.cleide_audit_doc_service import CLEIDE_AUDIT_DOC_IDS_SESSION_KEY
-from app.models import CleitonBillingApropriacao, ProcessingEvent
+from app.models import CleitonBillingApropriacao, FunnelEvent, ProcessingEvent
+from tests.conftest import seed_conta_franquia_cliente, seed_usuario
 from app.services.agente_compara_config_service import (
     AgenteComparaConfig,
     DEFAULT_FALLBACK_MESSAGE,
@@ -80,6 +83,29 @@ def _authorized(monkeypatch, web, *, authz=None):
 
 
 DEFAULT_CARRIER_NAME = "Transportadora Teste"
+
+
+def _authorized_db_user(monkeypatch, web, *, email: str = "ac-upload-funnel@test.com"):
+    conta, franquia = seed_conta_franquia_cliente(slug=f"conta-{email.split('@')[0]}")
+    user = seed_usuario(franquia.id, conta.id, email=email)
+    fake_user = SimpleNamespace(
+        is_authenticated=True,
+        id=user.id,
+        conta_id=user.conta_id,
+        franquia_id=user.franquia_id,
+    )
+    monkeypatch.setattr(web, "current_user", fake_user)
+    monkeypatch.setattr("app.agente_compara_api_routes.current_user", fake_user)
+    monkeypatch.setattr(
+        web,
+        "avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: {"permitido": True, "modo_operacao": "normal"},
+    )
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: {"permitido": True, "modo_operacao": "normal"},
+    )
+    return user
 
 
 def _upload(client, filename: str, content: bytes, mime: str = "text/csv", *, carrier_name: str = DEFAULT_CARRIER_NAME, **form_fields):
@@ -751,3 +777,176 @@ def test_new_upload_does_not_mark_retry_for_different_comparison(web_client, mon
     current = load_document_record(second.get_json()["document"]["doc_id"], ttl_hours=24)
     assert current.get("retry_of") is None
     assert current.get("retry_failure_code") is None
+
+
+def test_upload_success_creates_funnel_event_and_response_flag(web_client, app, monkeypatch):
+    web = _load_web_module()
+    with app.app_context():
+        user = _authorized_db_user(monkeypatch, web, email="ac-upload-created@test.com")
+        before = FunnelEvent.query.count()
+    content = make_csv([["col_a", "col_b"], ["1", "2"]])
+    resp = _upload(web_client, "dados.csv", content, slot="1")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["funnel_event"]["allow_meta_pixel"] is True
+    assert body["funnel_event"]["event_name"] == "file_uploaded"
+
+    with app.app_context():
+        db.session.remove()
+        assert FunnelEvent.query.count() == before + 1
+        event = FunnelEvent.query.order_by(FunnelEvent.id.desc()).first()
+        assert event.source == "agente_compara"
+        assert event.user_id == user.id
+        assert event.conta_id == user.conta_id
+        assert event.franquia_id == user.franquia_id
+        assert event.document_id == body["document"]["doc_id"]
+        assert event.comparison_id == body["comparison"]["comparison_id"]
+
+
+def test_upload_replay_omits_funnel_event_and_does_not_duplicate_row(web_client, app, monkeypatch):
+    web = _load_web_module()
+    with app.app_context():
+        _authorized_db_user(monkeypatch, web, email="ac-upload-replay@test.com")
+        before = FunnelEvent.query.count()
+
+    monkeypatch.setattr("app.agente_compara_api_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    content = make_csv([["col_a", "col_b"], ["1", "2"]])
+
+    first = _upload(web_client, "dados.csv", content, slot="1")
+    assert first.status_code == 200
+    first_body = first.get_json()
+    assert first_body["funnel_event"]["allow_meta_pixel"] is True
+
+    with app.app_context():
+        db.session.remove()
+        persisted = FunnelEvent.query.order_by(FunnelEvent.id.desc()).first()
+        assert persisted is not None
+        assert persisted.idempotency_key
+
+        from app.agente_compara_api_routes import record_funnel_event
+
+        replay_result = record_funnel_event(
+            event_name=persisted.event_name,
+            source=persisted.source,
+            user_id=persisted.user_id,
+            conta_id=persisted.conta_id,
+            franquia_id=persisted.franquia_id,
+            idempotency_key=persisted.idempotency_key,
+            document_id=persisted.document_id,
+            comparison_id=persisted.comparison_id,
+            execution_id=persisted.execution_id,
+            correlation_id=persisted.correlation_id,
+            metadata_json=persisted.metadata_json,
+        )
+
+        replay_payload = {
+            "ok": True,
+            "document": first_body["document"],
+            "comparison": first_body["comparison"],
+        }
+        if replay_result.get("created") is True:
+            replay_payload["funnel_event"] = {
+                "event_name": "file_uploaded",
+                "source": "agente_compara",
+                "allow_meta_pixel": True,
+                "is_first_audit": False,
+            }
+
+        assert replay_result["created"] is False
+        db.session.remove()
+        same_key_rows = FunnelEvent.query.filter_by(idempotency_key=persisted.idempotency_key).count()
+        assert FunnelEvent.query.count() == before + 1
+        assert same_key_rows == 1
+        assert "funnel_event" not in replay_payload
+
+
+def test_upload_funnel_failure_does_not_break_success_response(web_client, app, monkeypatch):
+    web = _load_web_module()
+    with app.app_context():
+        _authorized_db_user(monkeypatch, web, email="ac-upload-analytics-fail@test.com")
+        before = FunnelEvent.query.count()
+    monkeypatch.setattr("app.agente_compara_api_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.record_funnel_event",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("boom")),
+    )
+    content = make_csv([["col_a", "col_b"], ["1", "2"]])
+    resp = _upload(web_client, "dados.csv", content, slot="1")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert "funnel_event" not in body
+
+    with app.app_context():
+        assert FunnelEvent.query.count() == before
+
+
+def test_upload_unexpected_funnel_failure_rolls_back_and_preserves_success_response(web_client, app, monkeypatch):
+    web = _load_web_module()
+    with app.app_context():
+        _authorized_db_user(monkeypatch, web, email="ac-upload-runtime-fail@test.com")
+        before = FunnelEvent.query.count()
+
+    calls = {"rollback": 0}
+    real_rollback = db.session.rollback
+
+    def tracked_rollback():
+        calls["rollback"] += 1
+        return real_rollback()
+
+    monkeypatch.setattr("app.agente_compara_api_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.record_funnel_event",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected analytics failure")),
+    )
+    monkeypatch.setattr(db.session, "rollback", tracked_rollback)
+
+    resp = _upload(web_client, "dados.csv", make_csv([["col_a", "col_b"], ["1", "2"]]), slot="1")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert "funnel_event" not in body
+    assert "allow_meta_pixel" not in body
+    assert calls["rollback"] == 1
+
+    with app.app_context():
+        db.session.remove()
+        assert FunnelEvent.query.count() == before
+
+
+def test_upload_commit_failure_rolls_back_and_omits_pixel_authorization(web_client, app, monkeypatch):
+    web = _load_web_module()
+    with app.app_context():
+        _authorized_db_user(monkeypatch, web, email="ac-upload-commit-fail@test.com")
+        before = FunnelEvent.query.count()
+
+    calls = {"commit": 0, "rollback": 0}
+    real_rollback = db.session.rollback
+
+    def fail_commit():
+        calls["commit"] += 1
+        real_rollback()
+        raise SQLAlchemyError("commit failed")
+
+    def tracked_rollback():
+        calls["rollback"] += 1
+        return real_rollback()
+
+    monkeypatch.setattr("app.agente_compara_api_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    monkeypatch.setattr("app.agente_compara_api_routes.record_funnel_event", lambda **_kwargs: {"created": True})
+    monkeypatch.setattr(db.session, "commit", fail_commit)
+    monkeypatch.setattr(db.session, "rollback", tracked_rollback)
+
+    resp = _upload(web_client, "dados.csv", make_csv([["col_a", "col_b"], ["1", "2"]]), slot="1")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert "funnel_event" not in body
+    assert calls["commit"] == 1
+    assert calls["rollback"] == 1
+
+    with app.app_context():
+        db.session.remove()
+        assert FunnelEvent.query.count() == before
