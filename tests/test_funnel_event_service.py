@@ -7,9 +7,11 @@ import pytest
 from app.extensions import db
 from app.funnel_event_service import (
     FUNNEL_EVENT_FILE_UPLOADED,
+    FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
     FUNNEL_EVENT_FREIGHT_CALCULATED,
     FUNNEL_SOURCE_AGENTE_COMPARA,
     FUNNEL_SOURCE_CLEIDE_AUDIT,
+    record_completion_with_first_audit,
     record_funnel_event,
 )
 from app.models import CleitonBillingApropriacao, FunnelEvent, IaConsumoEvento, MonetizacaoFato, User
@@ -93,6 +95,21 @@ def test_create_freight_calculated_agente_compara(app):
 
         assert result["created"] is True
         assert result["event"].event_name == FUNNEL_EVENT_FREIGHT_CALCULATED
+
+
+def test_create_first_audit_completed_is_allowed(app):
+    with app.app_context():
+        _, _, user = _seed_identity("first-audit-event@test.com")
+        result = _record_for(
+            user,
+            event_name=FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+            source=FUNNEL_SOURCE_CLEIDE_AUDIT,
+            key="funnel-first-audit-1",
+        )
+        db.session.commit()
+
+        assert result["created"] is True
+        assert result["event"].event_name == FUNNEL_EVENT_FIRST_AUDIT_COMPLETED
 
 
 def test_timestamp_automatic_is_utc_naive(app):
@@ -358,6 +375,53 @@ def test_duplicate_does_not_create_second_row(app):
         db.session.commit()
 
         assert FunnelEvent.query.filter_by(idempotency_key="dup-row-1").count() == 1
+
+
+def test_first_audit_idempotency_replay_returns_existing_row(app):
+    with app.app_context():
+        _, _, user = _seed_identity("first-audit-replay@test.com")
+        first = _record_for(
+            user,
+            event_name=FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+            source=FUNNEL_SOURCE_AGENTE_COMPARA,
+            key="first-audit-replay-1",
+        )
+        second = _record_for(
+            user,
+            event_name=FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+            source=FUNNEL_SOURCE_AGENTE_COMPARA,
+            key="first-audit-replay-1",
+        )
+        first_id = first["event"].id
+        second_id = second["event"].id
+        db.session.commit()
+        db.session.remove()
+
+        assert first["created"] is True
+        assert second["created"] is False
+        assert second_id == first_id
+        assert FunnelEvent.query.filter_by(idempotency_key="first-audit-replay-1").count() == 1
+
+
+def test_first_audit_global_key_rejects_cross_product_divergence(app):
+    with app.app_context():
+        _, _, user = _seed_identity("first-audit-global@test.com")
+        _record_for(
+            user,
+            event_name=FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+            source=FUNNEL_SOURCE_CLEIDE_AUDIT,
+            key="funnel:first-audit:global-user-1",
+        )
+
+        with pytest.raises(ValueError, match="idempotency_key reutilizada com dados divergentes"):
+            _record_for(
+                user,
+                event_name=FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+                source=FUNNEL_SOURCE_AGENTE_COMPARA,
+                key="funnel:first-audit:global-user-1",
+            )
+
+
 
 
 def test_optional_fields_can_be_null(app):

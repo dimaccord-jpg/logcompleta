@@ -7,10 +7,11 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
-from app.models import FunnelEvent, utcnow_naive
+from app.models import FunnelEvent, User, utcnow_naive
 
 FUNNEL_EVENT_FILE_UPLOADED = "file_uploaded"
 FUNNEL_EVENT_FREIGHT_CALCULATED = "freight_calculated"
+FUNNEL_EVENT_FIRST_AUDIT_COMPLETED = "first_audit_completed"
 
 FUNNEL_SOURCE_CLEIDE_AUDIT = "cleide_audit"
 FUNNEL_SOURCE_AGENTE_COMPARA = "agente_compara"
@@ -18,6 +19,7 @@ FUNNEL_SOURCE_AGENTE_COMPARA = "agente_compara"
 ALLOWED_FUNNEL_EVENTS = {
     FUNNEL_EVENT_FILE_UPLOADED,
     FUNNEL_EVENT_FREIGHT_CALCULATED,
+    FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
 }
 ALLOWED_FUNNEL_SOURCES = {
     FUNNEL_SOURCE_CLEIDE_AUDIT,
@@ -122,7 +124,12 @@ def record_funnel_event(
         raise ValueError("franquia_id e obrigatorio") from exc
 
     row: FunnelEvent | None = None
+    orm_session = db.session()
+    started_outer_tx = False
     try:
+        if not orm_session.in_transaction():
+            orm_session.begin()
+            started_outer_tx = True
         with db.session.begin_nested():
             row = FunnelEvent(
                 user_id=user_id_i,
@@ -161,3 +168,71 @@ def record_funnel_event(
     if row is None:
         raise ValueError("Nao foi possivel registrar evento de funil.")
     return {"created": True, "event": row}
+
+
+def record_completion_with_first_audit(
+    *,
+    source: str,
+    user_id: int,
+    conta_id: int,
+    franquia_id: int,
+    freight_idempotency_key: str,
+    first_audit_idempotency_key: str,
+    occurred_at: datetime | None = None,
+    correlation_id: str | None = None,
+    document_id: str | None = None,
+    audit_batch_id: str | None = None,
+    comparison_id: str | None = None,
+    execution_id: str | None = None,
+    metadata_json: Any = None,
+) -> dict[str, Any]:
+    """Registra conclusao e primeira auditoria global de forma atomica."""
+    current_occurred_at = occurred_at or utcnow_naive()
+    user = (
+        db.session.query(User)
+        .filter(User.id == int(user_id))
+        .with_for_update()
+        .one()
+    )
+    freight_result = record_funnel_event(
+        event_name=FUNNEL_EVENT_FREIGHT_CALCULATED,
+        source=source,
+        user_id=int(user_id),
+        conta_id=int(conta_id),
+        franquia_id=int(franquia_id),
+        idempotency_key=freight_idempotency_key,
+        occurred_at=current_occurred_at,
+        correlation_id=correlation_id,
+        document_id=document_id,
+        audit_batch_id=audit_batch_id,
+        comparison_id=comparison_id,
+        execution_id=execution_id,
+        metadata_json=metadata_json,
+    )
+
+    first_audit_result: dict[str, Any] | None = None
+    if user.first_audit_completed_at is None:
+        first_audit_result = record_funnel_event(
+            event_name=FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+            source=source,
+            user_id=int(user_id),
+            conta_id=int(conta_id),
+            franquia_id=int(franquia_id),
+            idempotency_key=first_audit_idempotency_key,
+            occurred_at=current_occurred_at,
+            correlation_id=correlation_id,
+            document_id=document_id,
+            audit_batch_id=audit_batch_id,
+            comparison_id=comparison_id,
+            execution_id=execution_id,
+            metadata_json=metadata_json,
+        )
+        if first_audit_result.get("created") is True:
+            user.first_audit_completed_at = current_occurred_at
+
+    db.session.flush()
+    return {
+        "freight_calculated": freight_result,
+        "first_audit_completed": first_audit_result,
+        "is_first_audit": bool(first_audit_result and first_audit_result.get("created") is True),
+    }

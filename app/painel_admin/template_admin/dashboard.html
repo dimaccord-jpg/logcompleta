@@ -61,6 +61,102 @@
         </div>
     </div>
 
+    {% set conv = conversion_metrics or {} %}
+    {% set conv_filters = conv.get('filters') or {} %}
+    {% set conv_kpis = conv.get('kpis') or {} %}
+    {% set conv_funnel = conv.get('funnel') or [] %}
+    {% set conv_series = conv.get('series') or [] %}
+    {% set conv_quality = conv.get('data_quality') or {} %}
+    <h5 class="mt-4 mb-3">Conversões</h5>
+    <form method="get" action="{{ url_for('admin.admin_dashboard') }}" class="card border-0 shadow-sm p-3 mb-4">
+        <input type="hidden" name="categoria" value="{{ filtro_categoria }}">
+        <input type="hidden" name="franquia_status" value="{{ filtro_franquia_status }}">
+        <input type="hidden" name="cancelado" value="{{ filtro_cancelado }}">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label small text-muted mb-0">Produto</label>
+                <select name="conversion_source" class="form-select form-select-sm">
+                    {% for opt in conv_filters.get('source_options') or [] %}
+                    <option value="{{ opt.value }}" {% if conv_filters.get('source') == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small text-muted mb-0">Período</label>
+                <select name="conversion_days" class="form-select form-select-sm">
+                    {% for opt in conv_filters.get('period_options') or [] %}
+                    <option value="{{ opt.value }}" {% if conv_filters.get('days') == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-primary btn-sm">Aplicar conversões</button>
+            </div>
+        </div>
+        {% if conv_quality.get('warnings') %}
+        <div class="mt-3">
+            {% for warning in conv_quality.get('warnings') %}
+            <div class="alert {% if conv_quality.get('service_failed') %}alert-warning{% else %}alert-secondary{% endif %} py-2 mb-2 small">{{ warning }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </form>
+    <div class="row g-3 mb-3">
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm p-3 h-100">
+                <small class="text-muted fw-bold">Usuários com upload</small>
+                <h3 class="text-primary mb-0">{{ '{:,}'.format((conv_kpis.get('uploaded_users') or 0)|int) }}</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm p-3 h-100">
+                <small class="text-muted fw-bold">Usuários com conclusão</small>
+                <h3 class="text-success mb-0">{{ '{:,}'.format((conv_kpis.get('completed_users') or 0)|int) }}</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm p-3 h-100">
+                <small class="text-muted fw-bold">Primeiras auditorias</small>
+                <h3 class="text-dark mb-0">{{ '{:,}'.format((conv_kpis.get('first_audit_users') or 0)|int) }}</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card border-0 shadow-sm p-3 h-100">
+                <small class="text-muted fw-bold">Taxa de conclusão</small>
+                <h3 class="text-info mb-0">{{ '%.1f'|format((conv_kpis.get('completion_rate') or 0) * 100) }}%</h3>
+            </div>
+        </div>
+    </div>
+    <div class="card border-0 shadow-sm p-3 mb-4">
+        <p class="small text-muted mb-3">Taxa de primeira auditoria: <strong>{{ '%.1f'|format((conv_kpis.get('first_audit_rate') or 0) * 100) }}%</strong> | Abandono: <strong>{{ (conv_kpis.get('abandoned_users') or 0)|int }}</strong> | Uploads: <strong>{{ (conv_kpis.get('upload_events') or 0)|int }}</strong> | Conclusões: <strong>{{ (conv_kpis.get('completion_events') or 0)|int }}</strong></p>
+        <div class="row g-3">
+            {% for step in conv_funnel %}
+            <div class="col-md-4">
+                <div class="border rounded p-3 h-100">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <small class="text-muted d-block">{{ step.label }}</small>
+                            <strong class="fs-4">{{ (step.users or 0)|int }}</strong>
+                        </div>
+                        <span class="badge bg-light text-dark">{{ '%.1f'|format((step.rate or 0) * 100) }}%</span>
+                    </div>
+                    {% if step.dropoff_users %}
+                    <small class="text-muted d-block mt-2">Abandono até a próxima etapa: {{ (step.dropoff_users or 0)|int }}</small>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% if conv_quality.get('has_data') %}
+        <div class="mt-4">
+            <canvas id="conversionSeriesChart" height="110"></canvas>
+            <noscript>Série temporal indisponível sem JavaScript.</noscript>
+        </div>
+        {% else %}
+        <p class="text-muted small mt-3 mb-0">Nenhum dado de conversão encontrado para o período selecionado.</p>
+        {% endif %}
+    </div>
+
     {# Fase 1: Consumo de IA - dados reais (Cleiton / governanca) #}
     {% set ia = ia_metrics or {} %}
     <h5 class="mt-4 mb-3">Consumo de IA (Cleiton)</h5>
@@ -479,4 +575,33 @@
     {% endif %}
 
 </div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  var series = {{ conv_series|tojson }};
+  var canvas = document.getElementById('conversionSeriesChart');
+  if (!canvas || !window.Chart || !series.length) {
+    return;
+  }
+  var labels = series.map(function (item) { return item.label; });
+  var uploaded = series.map(function (item) { return item.uploaded_users; });
+  var completed = series.map(function (item) { return item.completed_users; });
+  var firstAudit = series.map(function (item) { return item.first_audit_users; });
+  if (window.__conversionSeriesChart) {
+    window.__conversionSeriesChart.destroy();
+  }
+  window.__conversionSeriesChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: 'Uploads', data: uploaded, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.12)', tension: 0.25 },
+        { label: 'Conclusoes', data: completed, borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.12)', tension: 0.25 },
+        { label: 'Primeiras auditorias', data: firstAudit, borderColor: '#212529', backgroundColor: 'rgba(33,37,41,0.12)', tension: 0.25 }
+      ]
+    },
+    options: { responsive: true, maintainAspectRatio: false }
+  });
+})();
+</script>
 {% endblock %}

@@ -2011,7 +2011,7 @@ def test_record_calculation_funnel_event_replay_omits_pixel_and_first_audit_fals
         assert first_payload["is_first_audit"] is True
         assert replay_payload == {"is_first_audit": False}
         db.session.remove()
-        assert FunnelEvent.query.count() == 1
+        assert FunnelEvent.query.count() == 2
 
 
 def test_record_calculation_funnel_event_does_not_overwrite_first_audit_timestamp(app, monkeypatch):
@@ -2052,7 +2052,7 @@ def test_record_calculation_funnel_event_does_not_overwrite_first_audit_timestam
         db.session.remove()
         refreshed = db.session.get(User, user_id)
         assert refreshed.first_audit_completed_at == first_timestamp
-        assert FunnelEvent.query.count() == 2
+        assert FunnelEvent.query.count() == 3
 
 
 def test_record_calculation_funnel_event_commit_failure_rolls_back_without_undoing_billing(app, monkeypatch):

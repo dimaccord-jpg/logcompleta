@@ -103,3 +103,85 @@ def test_admin_pautas_permanece_acessivel(monkeypatch):
 
     assert isinstance(html, str)
     assert "Pautas editoriais" in html
+
+
+def test_dashboard_renderiza_bloco_de_conversoes_com_filtros_preservados(monkeypatch):
+    web = _load_web_module()
+    from app.painel_admin import admin_routes
+
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+    monkeypatch.setattr(
+        "app.services.admin_dashboard_service.get_dashboard_metrics",
+        lambda **_kwargs: {"total_usuarios": 1, "total_usuarios_pagantes": 1, "total_leads": 1},
+    )
+    monkeypatch.setattr("app.services.admin_dashboard_service.list_categorias_distintas", lambda: [])
+    monkeypatch.setattr("app.services.admin_dashboard_service.list_franquia_status_distintos", lambda: [])
+    monkeypatch.setattr("app.services.agent_service.obter_kpis_insight", lambda: {"recomendacoes_pendentes": 0})
+    monkeypatch.setattr("app.services.agent_service.obter_recomendacoes_recentes", lambda limite=15: [])
+    monkeypatch.setattr("app.services.ia_metrics_service.get_ia_dashboard_payload", lambda _ano, _mes: {})
+    monkeypatch.setattr("app.services.onboarding_admin_analytics_service.get_onboarding_word_cloud", lambda **kwargs: {"terms": [], "admin_hidden_terms": [], "total_raw_occurrences": 0, "total_filtered_occurrences": 0, "pareto_coverage": 0, "pareto_target": 0.8, "days": 30, "removed_terms": {"stopwords": {}, "admin_hidden": {}}})
+    monkeypatch.setattr(
+        "app.services.admin_conversion_dashboard_service.get_conversion_dashboard_payload",
+        lambda **_kwargs: {
+            "filters": {
+                "source": "cleide_audit",
+                "days": 90,
+                "source_options": [{"value": "all", "label": "Todos"}, {"value": "cleide_audit", "label": "Auditoria"}, {"value": "agente_compara", "label": "Agente Compara"}],
+                "period_options": [{"value": 7, "label": "7 dias"}, {"value": 30, "label": "30 dias"}, {"value": 90, "label": "90 dias"}],
+            },
+            "period": {"start_utc": "2026-05-09T00:00:00", "end_utc": "2026-08-06T23:59:59", "label": "Ultimos 90 dias"},
+            "kpis": {"uploaded_users": 10, "completed_users": 7, "first_audit_users": 6, "completion_rate": 0.7, "first_audit_rate": 0.6, "abandoned_users": 3, "upload_events": 15, "completion_events": 8},
+            "funnel": [{"key": "uploaded", "label": "Upload", "users": 10, "rate": 1.0, "dropoff_users": 3}, {"key": "completed", "label": "Conclusão", "users": 7, "rate": 0.7, "dropoff_users": 1}, {"key": "first_audit", "label": "Primeira auditoria", "users": 6, "rate": 0.6, "dropoff_users": 0}],
+            "series": [{"date": "2026-08-06", "label": "06/08", "uploaded_users": 1, "completed_users": 1, "first_audit_users": 1}],
+            "data_quality": {"has_data": True, "warnings": [], "service_failed": False},
+        },
+    )
+
+    with web.app.test_request_context("/admin/dashboard?categoria=vip&franquia_status=ativa&cancelado=ativos&conversion_source=cleide_audit&conversion_days=90"):
+        html = admin_routes.admin_dashboard.__wrapped__()
+
+    assert "Conversões" in html
+    assert "Usuários com upload" in html
+    assert "Usuários com conclusão" in html
+    assert "Primeiras auditorias" in html
+    assert "Taxa de conclusão" in html
+    assert 'name="conversion_source"' in html
+    assert 'name="conversion_days"' in html
+    assert 'value="categoria"' not in html
+    assert 'name="categoria" value="vip"' in html
+    assert 'name="franquia_status" value="ativa"' in html
+    assert 'name="cancelado" value="ativos"' in html
+    assert 'value="cleide_audit" selected' in html
+    assert 'value="90" selected' in html
+    assert "conversionSeriesChart" in html
+    assert "tojson" not in html
+    assert "Chart" in html
+
+
+def test_dashboard_conversion_failure_degrades_without_breaking_page(monkeypatch):
+    web = _load_web_module()
+    from app.painel_admin import admin_routes
+
+    monkeypatch.setattr(admin_routes, "verificar_acesso_admin", lambda: True)
+    monkeypatch.setattr(
+        "app.services.admin_dashboard_service.get_dashboard_metrics",
+        lambda **_kwargs: {"total_usuarios": 1, "total_usuarios_pagantes": 1, "total_leads": 1},
+    )
+    monkeypatch.setattr("app.services.admin_dashboard_service.list_categorias_distintas", lambda: [])
+    monkeypatch.setattr("app.services.admin_dashboard_service.list_franquia_status_distintos", lambda: [])
+    monkeypatch.setattr("app.services.agent_service.obter_kpis_insight", lambda: {"recomendacoes_pendentes": 0})
+    monkeypatch.setattr("app.services.agent_service.obter_recomendacoes_recentes", lambda limite=15: [])
+    monkeypatch.setattr("app.services.ia_metrics_service.get_ia_dashboard_payload", lambda _ano, _mes: {})
+    monkeypatch.setattr("app.services.onboarding_admin_analytics_service.get_onboarding_word_cloud", lambda **kwargs: {"terms": [], "admin_hidden_terms": [], "total_raw_occurrences": 0, "total_filtered_occurrences": 0, "pareto_coverage": 0, "pareto_target": 0.8, "days": 30, "removed_terms": {"stopwords": {}, "admin_hidden": {}}})
+    monkeypatch.setattr(
+        "app.services.admin_conversion_dashboard_service.get_conversion_dashboard_payload",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("conversion down")),
+    )
+
+    with web.app.test_request_context("/admin/dashboard?conversion_source=agente_compara&conversion_days=7"):
+        html = admin_routes.admin_dashboard.__wrapped__()
+
+    assert "Conversões" in html
+    assert "Métricas de conversão indisponíveis temporariamente." in html
+    assert "Nenhum dado de conversão encontrado" in html
+    assert "Consumo de IA (Cleiton)" in html
