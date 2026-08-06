@@ -1,15 +1,16 @@
-﻿# Estado Oficial Consolidado
+# Estado Oficial Consolidado
 
-Referência consolidada em 2026-07-31, auditada diretamente no código da branch `homolog`.
+Referência consolidada em 2026-08-05, auditada diretamente no código da branch `homolog`.
 
 ## Base desta consolidação
 
 - branch local auditada: `homolog`;
-- working tree auditado: havia alterações locais pré-existentes no repositório durante esta revisão documental; o estado funcional consolidado foi conferido pelo commit auditado e pelas referências remotas;
+- working tree auditado: limpo no início desta revisão documental;
 - upstream auditado: `origin/homolog`;
 - relação auditada com o upstream: sem diferença de conteúdo no checkout local (`0  0` em `git rev-list --left-right --count HEAD...origin/homolog`);
-- commit atual auditado: `29b8500` - `feat(agente-compara): consolida cálculo, validação e revisão multietapas`;
-- commit equivalente informado em produção por `cherry-pick`: `d20672a` - `feat(agente-compara): consolida cálculo, validação e revisão multietapas`;
+- commit atual auditado: `939b73e` - `feat: consolida fluxo e calculos do AgenteCompara`;
+- branch `producao` auditada em `fdec64a` - `feat: consolida fluxo e calculos do AgenteCompara`;
+- commits adicionais promovidos para produção e ainda não presentes em `homolog`: `db72007` - `fix: ajusta menus laterais e atalhos visuais` e `f9591dc` - `feat: consolida melhorias do AgenteCompara`;
 - esta consolidação usa como fonte principal o código atual do repositório, os testes do domínio e a infraestrutura versionada (`render.yaml`, `start.sh`, migrations e `.gitignore`);
 - quando há divergência entre processo operacional informado e arquivos versionados, a divergência é registrada explicitamente.
 
@@ -18,7 +19,7 @@ Referência consolidada em 2026-07-31, auditada diretamente no código da branch
 - `app/web.py` continua como aplicação Flask monolítica que registra as áreas de Cleiton, Júlia, Roberto, Cleide e AgenteCompara.
 - O banco oficial do sistema segue sendo PostgreSQL via `DATABASE_URL`, com schema governado por Alembic em `migrations/versions/`.
 - O projeto possui duas trilhas de persistência distintas: persistência transacional em banco e persistência técnica temporária em JSON sob `app/cleiton_doc_tmp/` para documentos, `temp_table`, lotes e resultados comparativos fora da sessão.
-- O AgenteCompara implementa um fluxo multitabela com estado, revisão humana, configuração fiscal global, coverage opcional, arquivo operacional, cálculo comparativo, storage dedicado de resultado, analytics leve de comparação e observabilidade própria.
+- O AgenteCompara implementa um fluxo multitabela com estado, revisão humana, configuração fiscal global, coverage opcional, arquivo operacional, cálculo comparativo, storage dedicado de resultado, analytics leve de comparação, memória pública consultável e chat contextual próprio da comparação.
 - Nesta publicação, o fluxo também passou a expor um contrato explícito de validação das taxas acessórias antes da confirmação da tabela, uma memória pública determinística do cálculo por linha e um gate de completeza para distinguir `calculated`, `calculated_with_warnings`, `incomplete` e `not_calculated`.
 
 ## AgenteCompara: arquitetura e jornada
@@ -190,6 +191,7 @@ Status unitários possíveis:
 - replays idempotentes da mesma configuração retornam `200`;
 - tentativas com etapa inválida, configuração incompleta ou identidade incompatível retornam erro sem mutação indevida do estado;
 - `GET /api/agente-compara/comparison/calculation` é o caminho oficial de leitura e acompanhamento;
+- `GET /api/agente-compara/comparison/calculation-memory` expõe a memória pública detalhada de uma célula já calculada, com proteção de escopo e limites técnicos;
 - o resultado é comparativo por `row_index`, com `table_results` por `table_id`;
 - cada célula expõe `calculated_freight`, `status`, `final_status`, `error`, `components`, `evidence`, `completeness`, `blocking_issues` e `calculation_memory`;
 - o payload público e o analytics derivado não expõem `charged_freight`, `expected_freight`, `difference`, `winner`, `ranking` ou `recommendation`.
@@ -268,6 +270,7 @@ Regras confirmadas:
 - `POST /api/agente-compara/chat`
 - `POST /api/agente-compara/audit-chat/unlock`
 - `POST /api/agente-compara/audit-chat`
+- `POST /api/agente-compara/comparison-chat`
 
 ## Interface atual do AgenteCompara
 
@@ -286,7 +289,10 @@ Comportamentos confirmados em `app/static/js/agente_compara.js`, `app/templates/
 - mensagens de estado para cálculo em andamento, billing pendente, falha de regularização e resultado obsoleto;
 - resumo comparativo, filtros, paginação e gráficos no bloco de resultados;
 - BI executivo do lote auditado no próprio template;
+- dashboard comparativo oficial abaixo do chat e fora do modal, com 9 widgets hideable, preferências persistidas em `localStorage` e seção geográfica própria;
+- modal de memória de cálculo por célula, inclusive para estados incompletos e diagnósticos bloqueantes;
 - `audit-chat` liberado por `unlock` depois do bundle analítico;
+- `comparison-chat` separado do `audit-chat`, bloqueado antes de READY, sem fetch pré-READY e disponível somente com `result` + `analytics` liberados;
 - linguagem neutra sem vencedor, ranking ou recomendação automática.
 
 ## Banco, deploy e limitações atuais
@@ -295,7 +301,7 @@ Comportamentos confirmados em `app/static/js/agente_compara.js`, `app/templates/
 - Alembic/Flask-Migrate governam o schema e a cadeia versionada permanece linear até `r2s3t4u5v6w7`;
 - esta entrega não adicionou migration, tabela ou coluna nova;
 - `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn;
-- o processo operacional informado registra homologação em `homolog`, promoção para produção por `cherry-pick` e equivalência funcional entre `29b8500` e `d20672a`;
+- o processo operacional informado registra homologação em `homolog`, promoção para produção na branch `producao` e aprovação do conjunto `fdec64a` + `db72007` + `f9591dc`;
 - persiste divergência entre o processo informado (`producao`) e o `render.yaml` versionado (`main`);
 - persiste divergência entre os health checks reais (`/health/liveness` e `/health/readiness`) e `healthCheckPath: /health` no YAML;
 - divergências antigas identificadas em `flask db check` para `cleiton_billing_apropriacao`, `franquia` e `multiuser_franquia_codigo` são preexistentes e exigem investigação separada;
@@ -321,6 +327,8 @@ Suites diretamente relacionadas e verificadas:
 - `tests/test_agente_compara_calculation_result_storage.py`
 - `tests/test_agente_compara_calculation_storage_integration.py`
 - `tests/test_agente_compara_comparison_analytics.py`
+- `tests/test_agente_compara_comparison_chat_context.py`
+- `tests/test_agente_compara_comparison_chat_routes_ui.py`
 - `tests/test_agente_compara_comparison_reset.py`
 - `tests/test_agente_compara_calculation_journey_ui.py`
 - `tests/test_agente_compara_billing_and_metrics.py`
@@ -342,4 +350,5 @@ Garantias efetivamente cobertas:
 - gate de completeza e memória pública do cálculo;
 - integração cálculo + billing + leitura pública;
 - analytics comparativo, determinismo, neutralidade e ausência de campos proibidos;
+- gate de disponibilidade, isolamento e contratos de UI do `comparison-chat`;
 - contratos de UI para estados, mensagens, filtros, paginação e gráficos.

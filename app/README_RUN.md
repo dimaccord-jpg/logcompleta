@@ -1,6 +1,6 @@
-﻿# Execução Local
+# Execução Local
 
-Referência auditada em 2026-07-31. A visão funcional oficial está em `docs/estado_oficial_consolidado.md`.
+Referência auditada em 2026-08-05. A visão funcional oficial está em `docs/estado_oficial_consolidado.md`.
 
 ## Pré-requisitos
 
@@ -25,7 +25,7 @@ Referência auditada em 2026-07-31. A visão funcional oficial está em `docs/es
 2. `/chat_julia?mode=operational`;
 3. `/fretes`;
 4. `/auditoria-frete`;
-5. `/agente-compara` com jornada completa: start, upload das duas tabelas obrigatórias, terceira opcional, revisão por tabela, impostos globais, coverage opcional, arquivo operacional, confirmação explícita do cálculo, leitura do resultado e analytics comparativo;
+5. `/agente-compara` com jornada completa: start, upload das duas tabelas obrigatórias, terceira opcional, revisão por tabela, impostos globais, coverage opcional, arquivo operacional, confirmação explícita do cálculo, leitura do resultado, analytics comparativo, modal de memória de cálculo e chat contextual pós-READY;
 6. `/health/liveness` e `/health/readiness`;
 7. `/admin/...` para métricas, billing e observabilidade;
 8. `/cron/*` apenas com segredo válido e em contexto controlado.

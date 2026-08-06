@@ -1,6 +1,6 @@
-﻿# Arquitetura Oficial
+# Arquitetura Oficial
 
-Referência arquitetural auditada em 2026-07-31. A fonte oficial de estado e contratos é `docs/estado_oficial_consolidado.md`.
+Referência arquitetural auditada em 2026-08-05. A fonte oficial de estado e contratos é `docs/estado_oficial_consolidado.md`.
 
 ## Mapa de superfícies
 
@@ -41,7 +41,8 @@ O AgenteCompara implementa arquitetura em camadas:
 - gate de completeza do cálculo em `app/agente_compara_calculation_completeness_service.py`;
 - orquestração multitabela em `app/agente_compara_comparison_calculation_service.py`;
 - execução, lock, idempotência, storage e billing em `app/agente_compara_calculation_execution_service.py`, `app/agente_compara_calculation_lock.py` e `app/agente_compara_calculation_result_storage.py`;
-- analytics comparativo derivado do resultado liberado em `app/agente_compara_comparison_analytics_service.py`.
+- analytics comparativo derivado do resultado liberado em `app/agente_compara_comparison_analytics_service.py`;
+- chat contextual pós-READY em `app/agente_compara_chat_context_service.py` e `app/run_agente_compara_comparison_chat.py`.
 
 ## Isolamento entre agentes
 

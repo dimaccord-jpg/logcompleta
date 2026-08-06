@@ -1,7 +1,7 @@
 # Troubleshooting Operacional
 
-Data de consolidação: `2026-07-20`
-Fotografia principal auditada no repositório local: `c2575f8`
+Data de consolidação: `2026-08-05`
+Fotografia principal auditada no repositório local: `939b73e`
 
 ## 1. Home pública sem responder
 
@@ -130,11 +130,23 @@ Conferir:
 4. `batch_scope`
 5. autenticação e autorização
 
-## 15. Consumo de linhas do Agente Compara parece duplicado
+## 15. Chat contextual da comparação continua bloqueado
+
+Conferir:
+
+1. existência de comparação ativa na sessão correta
+2. `GET /api/agente-compara/comparison/calculation`
+3. status `READY` sem `stale`
+4. `billing_status = applied`
+5. presença simultânea de `result` e `analytics`
+6. `POST /api/agente-compara/comparison-chat`
+7. autenticação e autorização por franquia
+
+## 16. Consumo de linhas do Agente Compara parece duplicado
 
 Correlacione `CleitonBillingApropriacao`, `ProcessingEvent`, `execution_id` e chave idempotente próprias do namespace `agente-compara-`.
 
-## 16. Documento removido incorretamente entre agentes
+## 17. Documento removido incorretamente entre agentes
 
 Conferir:
 
@@ -143,7 +155,7 @@ Conferir:
 3. ownership antes da remoção física
 4. testes de isolamento de Júlia, Cleide e Agente Compara
 
-## 17. Cron falha por autenticação
+## 18. Cron falha por autenticação
 
 Conferir:
 

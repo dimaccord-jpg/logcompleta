@@ -1,6 +1,6 @@
-﻿# Deploy e Promoção
+# Deploy e Promoção
 
-Referência auditada em 2026-07-31. A visão consolidada do estado atual está em `docs/estado_oficial_consolidado.md`.
+Referência auditada em 2026-08-05. A visão consolidada do estado atual está em `docs/estado_oficial_consolidado.md`.
 
 ## O que o repositório comprova
 
@@ -13,8 +13,8 @@ Referência auditada em 2026-07-31. A visão consolidada do estado atual está e
 ## O que o processo operacional informado registra
 
 - desenvolvimento e validação em `homolog`;
-- entrega homologada no commit `29b8500`;
-- promoção para produção por `cherry-pick`, com hash equivalente `d20672a`;
+- entrega homologada no commit `939b73e`;
+- promoção para produção na branch `producao`, com commits `fdec64a`, `db72007` e `f9591dc`;
 - deploy de produção manual no Render.
 
 ## Fluxo operacional recomendado
