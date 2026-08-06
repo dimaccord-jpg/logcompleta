@@ -2738,6 +2738,17 @@ function renderDocumentItem(doc) {
           return null;
         }
         setError('');
+        if (window.LogCompletaPixel && typeof window.LogCompletaPixel.trackFunnelEvent === 'function') {
+          try {
+            var uploadFunnelEvent = res.data.funnel_event;
+            window.LogCompletaPixel.trackFunnelEvent(uploadFunnelEvent, {
+              content_name: 'Auditoria da Cleide',
+              source: uploadFunnelEvent && uploadFunnelEvent.source ? uploadFunnelEvent.source : undefined
+            });
+          } catch (pixelErr) {
+            // Meta Pixel nunca bloqueia o fluxo de upload.
+          }
+        }
         return fetchDocuments().then(function (statusData) {
           if (statusData) return statusData;
           if (res.data.temp_table) {
@@ -6137,6 +6148,17 @@ function renderDocumentItem(doc) {
             'error'
           );
           return;
+        }
+        if (window.LogCompletaPixel && typeof window.LogCompletaPixel.trackFunnelEvent === 'function') {
+          try {
+            var auditFunnelEvent = res.data.funnel_event;
+            window.LogCompletaPixel.trackFunnelEvent(auditFunnelEvent, {
+              content_name: 'Auditoria da Cleide',
+              source: auditFunnelEvent && auditFunnelEvent.source ? auditFunnelEvent.source : undefined
+            });
+          } catch (pixelErr) {
+            // Meta Pixel nunca bloqueia o fluxo de auditoria.
+          }
         }
         if (res.data.temp_table) {
           setCurrentTempTable(res.data.temp_table);

@@ -5869,6 +5869,19 @@
         } else if (data.status === 'CALCULATION_READY') {
           applyComparisonCalculationPayload(data);
           comparisonState.currentStep = 'CALCULATION_READY';
+          if (window.LogCompletaPixel && typeof window.LogCompletaPixel.trackFunnelEvent === 'function') {
+            try {
+              var calculationFunnelEvent = data.funnel_event;
+              window.LogCompletaPixel.trackFunnelEvent(calculationFunnelEvent, {
+                content_name: 'Agente Compara',
+                source: calculationFunnelEvent && calculationFunnelEvent.source
+                  ? calculationFunnelEvent.source
+                  : undefined
+              });
+            } catch (pixelErr) {
+              // Meta Pixel nunca bloqueia o fluxo de cálculo.
+            }
+          }
         } else if (data.status === 'CALCULATION_FAILED') {
           applyComparisonCalculationPayload({
             status: 'CALCULATION_FAILED',
@@ -9233,6 +9246,17 @@ function renderDocumentItem(doc) {
         }
         if (!responseMatchesUploadAttempt(res.data)) {
           return null;
+        }
+        if (window.LogCompletaPixel && typeof window.LogCompletaPixel.trackFunnelEvent === 'function') {
+          try {
+            var uploadFunnelEvent = res.data.funnel_event;
+            window.LogCompletaPixel.trackFunnelEvent(uploadFunnelEvent, {
+              content_name: 'Agente Compara',
+              source: uploadFunnelEvent && uploadFunnelEvent.source ? uploadFunnelEvent.source : undefined
+            });
+          } catch (pixelErr) {
+            // Meta Pixel nunca bloqueia o fluxo de upload.
+          }
         }
         setError('');
         comparisonWizardModalSuppressed = false;
