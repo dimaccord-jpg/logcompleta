@@ -36,6 +36,45 @@
         }
     }
 
+    function trackCustomEvent(eventName, params) {
+        if (!eventName || !hasFbq()) {
+            return false;
+        }
+        try {
+            if (params && typeof params === "object" && Object.keys(params).length > 0) {
+                window.fbq("trackCustom", eventName, params);
+            } else {
+                window.fbq("trackCustom", eventName);
+            }
+            return true;
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function trackFunnelEvent(funnelEvent, params) {
+        try {
+            if (!funnelEvent || typeof funnelEvent !== "object") {
+                return false;
+            }
+            if (funnelEvent.allow_meta_pixel !== true) {
+                return false;
+            }
+            if (funnelEvent.event_name === "file_uploaded") {
+                return trackCustomEvent("AuditStarted", params);
+            }
+            if (
+                funnelEvent.event_name === "freight_calculated" &&
+                funnelEvent.is_first_audit === true
+            ) {
+                return trackCustomEvent("FirstAuditCompleted", params);
+            }
+            return false;
+        } catch (err) {
+            return false;
+        }
+    }
+
     function trackEventOnceBySessionId(eventName, sessionId, params) {
         const normalizedEvent = (eventName || "").trim();
         const normalizedSession = (sessionId || "").trim();
@@ -74,6 +113,8 @@
     window.LogCompletaPixel = {
         hasFbq,
         track: trackEvent,
+        trackCustom: trackCustomEvent,
+        trackFunnelEvent: trackFunnelEvent,
         trackOnceBySessionId: trackEventOnceBySessionId,
     };
 
