@@ -71,11 +71,12 @@ from app.agente_compara_comparison_state import (
 )
 from app.extensions import db
 from app.funnel_event_service import (
+    FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
     FUNNEL_EVENT_FREIGHT_CALCULATED,
     FUNNEL_SOURCE_AGENTE_COMPARA,
+    record_completion_with_first_audit,
     record_funnel_event,
 )
-from app.models import User, utcnow_naive
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,15 @@ def _build_calculation_funnel_idempotency_key(*, user_id: int, comparison_id: st
     return f"funnel:ac:calculation:{_sha256_hex(_canonical_json(payload))}"
 
 
+def _build_first_audit_funnel_idempotency_key(*, user_id: int) -> str:
+    payload = {
+        "source": "global",
+        "event_name": FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+        "user_id": int(user_id),
+    }
+    return f"funnel:first-audit:{_sha256_hex(_canonical_json(payload))}"
+
+
 def _record_calculation_funnel_event(
     *,
     comparison_id: str,
@@ -217,38 +227,28 @@ def _record_calculation_funnel_event(
             orm_session.begin()
             started_funnel_tx = True
         with db.session.begin_nested():
-            user = (
-                db.session.query(User)
-                .filter(User.id == int(user_id))
-                .with_for_update()
-                .one()
-            )
-            funnel_result = record_funnel_event(
-                event_name=FUNNEL_EVENT_FREIGHT_CALCULATED,
+            funnel_result = record_completion_with_first_audit(
                 source=FUNNEL_SOURCE_AGENTE_COMPARA,
                 user_id=int(user_id),
                 conta_id=int(conta_id),
                 franquia_id=int(franquia_id),
-                idempotency_key=_build_calculation_funnel_idempotency_key(
+                freight_idempotency_key=_build_calculation_funnel_idempotency_key(
                     user_id=int(user_id),
                     comparison_id=comparison_id,
                     execution_id=execution_id,
                 ),
+                first_audit_idempotency_key=_build_first_audit_funnel_idempotency_key(user_id=int(user_id)),
                 comparison_id=comparison_id,
                 execution_id=execution_id,
                 correlation_id=None,
                 metadata_json=None,
             )
-            is_first_audit = False
-            if funnel_result.get("created") is True and user.first_audit_completed_at is None:
-                user.first_audit_completed_at = utcnow_naive()
-                is_first_audit = True
-            db.session.flush()
-        if funnel_result.get("created") is not True:
+        if funnel_result.get("freight_calculated", {}).get("created") is not True:
             if started_funnel_tx:
                 db.session.rollback()
             return payload, False
         db.session.commit()
+        is_first_audit = bool(funnel_result.get("is_first_audit"))
         payload["is_first_audit"] = is_first_audit
         payload["funnel_event"] = {
             "event_name": FUNNEL_EVENT_FREIGHT_CALCULATED,
@@ -256,6 +256,11 @@ def _record_calculation_funnel_event(
             "allow_meta_pixel": True,
             "is_first_audit": is_first_audit,
         }
+        if is_first_audit:
+            payload["first_audit_event"] = {
+                "event_name": FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+                "source": FUNNEL_SOURCE_AGENTE_COMPARA,
+            }
         return payload, True
     except Exception as exc:
         db.session.rollback()

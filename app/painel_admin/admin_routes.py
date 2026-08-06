@@ -138,10 +138,15 @@ def admin_dashboard():
         list_categorias_distintas,
         list_franquia_status_distintos,
     )
+    from app.services.admin_conversion_dashboard_service import (
+        get_conversion_dashboard_payload,
+    )
 
     categoria_f = (request.args.get("categoria") or "").strip() or None
     franquia_status_f = (request.args.get("franquia_status") or "").strip() or None
     cancelado_f = (request.args.get("cancelado") or "ativos").strip().lower()
+    conversion_source = (request.args.get("conversion_source") or "all").strip().lower()
+    conversion_days_raw = request.args.get("conversion_days")
 
     dash_metrics = get_dashboard_metrics(
         categoria=categoria_f,
@@ -158,6 +163,57 @@ def admin_dashboard():
     _today = date.today()
     ia_metrics = get_ia_dashboard_payload(_today.year, _today.month)
     onboarding_word_cloud = get_onboarding_word_cloud(limit=40, days=30)
+    conversion_metrics = None
+    try:
+        conversion_metrics = get_conversion_dashboard_payload(
+            source=conversion_source,
+            days=conversion_days_raw or 30,
+        )
+    except Exception as exc:
+        logger.exception(
+            "admin_dashboard_conversion_metrics_failed source=%s days=%s failure_type=%s",
+            conversion_source,
+            conversion_days_raw,
+            exc.__class__.__name__,
+        )
+        conversion_metrics = {
+            "filters": {
+                "source": "all",
+                "days": 30,
+                "source_options": [
+                    {"value": "all", "label": "Todos"},
+                    {"value": "cleide_audit", "label": "Auditoria"},
+                    {"value": "agente_compara", "label": "Agente Compara"},
+                ],
+                "period_options": [
+                    {"value": 7, "label": "7 dias"},
+                    {"value": 30, "label": "30 dias"},
+                    {"value": 90, "label": "90 dias"},
+                ],
+            },
+            "period": {"start_utc": None, "end_utc": None, "label": "Ultimos 30 dias"},
+            "kpis": {
+                "uploaded_users": 0,
+                "completed_users": 0,
+                "first_audit_users": 0,
+                "completion_rate": 0.0,
+                "first_audit_rate": 0.0,
+                "abandoned_users": 0,
+                "upload_events": 0,
+                "completion_events": 0,
+            },
+            "funnel": [
+                {"key": "uploaded", "label": "Upload", "users": 0, "rate": 0.0, "dropoff_users": 0},
+                {"key": "completed", "label": "Conclusao", "users": 0, "rate": 0.0, "dropoff_users": 0},
+                {"key": "first_audit", "label": "Primeira auditoria", "users": 0, "rate": 0.0, "dropoff_users": 0},
+            ],
+            "series": [],
+            "data_quality": {
+                "has_data": False,
+                "warnings": ["Métricas de conversão indisponíveis temporariamente."],
+                "service_failed": True,
+            },
+        }
     return render_template(
         "dashboard.html",
         dash_metrics=dash_metrics,
@@ -170,6 +226,7 @@ def admin_dashboard():
         recomendacoes_recentes=recomendacoes_recentes,
         ia_metrics=ia_metrics,
         onboarding_word_cloud=onboarding_word_cloud,
+        conversion_metrics=conversion_metrics,
     )
 
 

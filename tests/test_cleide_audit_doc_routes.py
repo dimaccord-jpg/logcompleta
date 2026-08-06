@@ -9,6 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.extensions import db
+from app.models import FunnelEvent, User
+from tests.conftest import seed_conta_franquia_cliente, seed_usuario
+
 from app.cleide_audit_doc_service import (
     AUDIT_BI_DATASET_VERSION,
     CLEIDE_AUDIT_DOC_IDS_SESSION_KEY,
@@ -88,7 +92,53 @@ def _setup_doc_env(monkeypatch, tmp_path, **cfg_overrides):
 
 def _authorized(monkeypatch, web, *, authz=None):
     fake_user = SimpleNamespace(is_authenticated=True, conta_id=1, franquia_id=1)
-    monkeypatch.setattr(web, "current_user", fake_user)
+    monkeypatch.setattr(web, "current_user", fake_user, raising=False)
+    monkeypatch.setattr("app.cleide_audit_routes.current_user", fake_user)
+    monkeypatch.setattr("app.julia_documents_routes.current_user", fake_user)
+    authz_payload = authz or {"permitido": True, "modo_operacao": "normal"}
+    monkeypatch.setattr(
+        web,
+        "avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: authz_payload,
+    )
+    monkeypatch.setattr(
+        "app.cleide_audit_routes.avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: authz_payload,
+    )
+    monkeypatch.setattr(
+        "app.julia_documents_routes.avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: authz_payload,
+    )
+
+
+def _authorized_db_user(monkeypatch, web, *, email: str = "cleide-funnel@test.com"):
+    conta, franquia = seed_conta_franquia_cliente(slug=f"conta-{email.split('@')[0]}")
+    user = seed_usuario(franquia.id, conta.id, email=email)
+    fake_user = SimpleNamespace(
+        is_authenticated=True,
+        id=user.id,
+        conta_id=user.conta_id,
+        franquia_id=user.franquia_id,
+    )
+    monkeypatch.setattr(web, "current_user", fake_user, raising=False)
+    monkeypatch.setattr("app.cleide_audit_routes.current_user", fake_user)
+    monkeypatch.setattr("app.julia_documents_routes.current_user", fake_user)
+    monkeypatch.setattr(
+        web,
+        "avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: {"permitido": True, "modo_operacao": "normal"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.cleide_audit_routes.avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: {"permitido": True, "modo_operacao": "normal"},
+    )
+    monkeypatch.setattr(
+        "app.julia_documents_routes.avaliar_autorizacao_operacao_por_franquia",
+        lambda _u: {"permitido": True, "modo_operacao": "normal"},
+    )
+    return user
+    monkeypatch.setattr(web, "current_user", fake_user, raising=False)
     monkeypatch.setattr("app.cleide_audit_routes.current_user", fake_user)
     monkeypatch.setattr("app.julia_documents_routes.current_user", fake_user)
     authz_payload = authz or {"permitido": True, "modo_operacao": "normal"}
@@ -121,6 +171,19 @@ def _post_temp_table_save(client, payload: dict):
         json=payload,
         content_type="application/json",
     )
+
+
+def _build_local_client(app, monkeypatch, tmp_path, *, email: str):
+    with app.app_context():
+        _setup_doc_env(monkeypatch, tmp_path)
+        from app.cleide_audit_routes import cleide_audit_bp
+        if "cleide_audit" not in app.blueprints:
+            app.register_blueprint(cleide_audit_bp)
+        user = _authorized_db_user(monkeypatch, SimpleNamespace(app=app), email=email)
+        app.config["TESTING"] = True
+        app.config["SECRET_KEY"] = "test-secret"
+
+    return app.test_client(), user
 
 
 @pytest.fixture
@@ -889,3 +952,102 @@ def test_public_audit_bi_ready_with_sanitized_rows():
     assert "destination_city" not in row
     assert "document_number" not in row
     assert "calculation_details" not in payload
+
+
+def test_upload_success_creates_cleide_funnel_event(app, ctx, monkeypatch, tmp_path):
+    client, user = _build_local_client(app, monkeypatch, tmp_path, email="cleide-upload-created@test.com")
+    with app.app_context():
+        before = FunnelEvent.query.count()
+    monkeypatch.setattr("app.cleide_audit_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    resp = _upload(client, "nota.txt", make_txt("conteudo seguro"))
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["funnel_event"]["event_name"] == "file_uploaded"
+    assert body["funnel_event"]["source"] == "cleide_audit"
+
+    with app.app_context():
+        db.session.remove()
+        assert FunnelEvent.query.count() == before + 1
+        event = FunnelEvent.query.order_by(FunnelEvent.id.desc()).first()
+        assert event.user_id == user.id
+        assert event.document_id == body["document"]["doc_id"]
+        assert event.source == "cleide_audit"
+
+
+def test_upload_funnel_failure_preserves_business_success(app, ctx, monkeypatch, tmp_path):
+    client, _user = _build_local_client(app, monkeypatch, tmp_path, email="cleide-upload-fail@test.com")
+    with app.app_context():
+        before = FunnelEvent.query.count()
+    monkeypatch.setattr("app.cleide_audit_routes.trigger_temp_table_extraction_for_session", lambda **_k: None)
+    monkeypatch.setattr(
+        "app.cleide_audit_routes.record_funnel_event",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("analytics failed")),
+    )
+    resp = _upload(client, "nota.txt", make_txt("conteudo seguro"))
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert "funnel_event" not in body
+
+    with app.app_context():
+        db.session.remove()
+        assert FunnelEvent.query.count() == before
+
+
+def test_audit_run_persists_completion_and_first_audit(app, ctx, monkeypatch, tmp_path):
+    client, user = _build_local_client(app, monkeypatch, tmp_path, email="cleide-run-created@test.com")
+    monkeypatch.setattr(
+        "app.cleide_audit_routes.run_audit_batch_for_session",
+        lambda **_kwargs: {"audit_batch": {"audit_batch_id": "batch-1", "processed_at": "2026-08-06T12:00:00"}},
+    )
+    resp = client.post("/api/cleide-auditoria/audit/run", json={})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["funnel_event"]["event_name"] == "freight_calculated"
+    assert body["funnel_event"]["source"] == "cleide_audit"
+    assert body["funnel_event"]["is_first_audit"] is True
+
+    with app.app_context():
+        db.session.remove()
+        events = FunnelEvent.query.filter_by(user_id=user.id).order_by(FunnelEvent.id.asc()).all()
+        assert [event.event_name for event in events] == ["freight_calculated", "first_audit_completed"]
+        assert all(event.source == "cleide_audit" for event in events)
+        refreshed = db.session.get(User, user.id)
+        assert refreshed.first_audit_completed_at is not None
+
+
+def test_audit_run_replay_creates_only_completion_event_after_existing_first_audit(app, ctx, monkeypatch, tmp_path):
+    client, user = _build_local_client(app, monkeypatch, tmp_path, email="cleide-run-repeat@test.com")
+    monkeypatch.setattr(
+        "app.cleide_audit_routes.run_audit_batch_for_session",
+        lambda **_kwargs: {"audit_batch": {"audit_batch_id": "batch-2", "processed_at": "2026-08-06T12:00:00"}},
+    )
+    first = client.post("/api/cleide-auditoria/audit/run", json={"execution_id": "1"})
+    second = client.post("/api/cleide-auditoria/audit/run", json={"execution_id": "2"}, headers={"X-Execution-ID": "run-2"})
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.get_json()["funnel_event"]["is_first_audit"] is False
+
+    with app.app_context():
+        db.session.remove()
+        first_count = FunnelEvent.query.filter_by(user_id=user.id, event_name="first_audit_completed").count()
+        freight_count = FunnelEvent.query.filter_by(user_id=user.id, event_name="freight_calculated").count()
+        assert first_count == 1
+        assert freight_count == 2
+
+
+def test_audit_run_skips_funnel_when_not_processed(app, ctx, monkeypatch, tmp_path):
+    client, _user = _build_local_client(app, monkeypatch, tmp_path, email="cleide-run-unprocessed@test.com")
+    with app.app_context():
+        before = FunnelEvent.query.count()
+    monkeypatch.setattr(
+        "app.cleide_audit_routes.run_audit_batch_for_session",
+        lambda **_kwargs: {"audit_batch": {"audit_batch_id": "batch-3", "processed_at": None}},
+    )
+    resp = client.post("/api/cleide-auditoria/audit/run", json={})
+    assert resp.status_code == 200
+    assert "funnel_event" not in resp.get_json()
+
+    with app.app_context():
+        db.session.remove()
+        assert FunnelEvent.query.count() == before

@@ -6,6 +6,8 @@ Chat documental usa prompt/contexto próprios e governança Cleiton.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from pathlib import Path
 from flask import Blueprint, jsonify, request, send_file, session
@@ -102,10 +104,38 @@ from app.services.cleiton_doc_config_service import get_cleiton_doc_config
 from app.services.cleiton_operacao_autorizacao_service import (
     avaliar_autorizacao_operacao_por_franquia,
 )
+from app.funnel_event_service import (
+    FUNNEL_EVENT_FILE_UPLOADED,
+    FUNNEL_EVENT_FREIGHT_CALCULATED,
+    FUNNEL_SOURCE_CLEIDE_AUDIT,
+    record_completion_with_first_audit,
+    record_funnel_event,
+)
+from app.extensions import db
 
 logger = logging.getLogger(__name__)
 
 cleide_audit_bp = Blueprint("cleide_audit", __name__)
+
+
+def _canonical_funnel_payload(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _funnel_hash(value) -> str:
+    return hashlib.sha256(_canonical_funnel_payload(value).encode("utf-8")).hexdigest()
+
+
+def _cleide_upload_funnel_key(*, user_id: int, document_id: str) -> str:
+    return f"funnel:cleide:upload:{_funnel_hash({'user_id': int(user_id), 'document_id': (document_id or '').strip(), 'event_name': FUNNEL_EVENT_FILE_UPLOADED, 'source': FUNNEL_SOURCE_CLEIDE_AUDIT})}"
+
+
+def _cleide_completion_funnel_key(*, user_id: int, audit_batch_id: str, execution_id: str) -> str:
+    return f"funnel:cleide:completion:{_funnel_hash({'user_id': int(user_id), 'audit_batch_id': (audit_batch_id or '').strip(), 'execution_id': (execution_id or '').strip(), 'event_name': FUNNEL_EVENT_FREIGHT_CALCULATED, 'source': FUNNEL_SOURCE_CLEIDE_AUDIT})}"
+
+
+def _global_first_audit_funnel_key(*, user_id: int) -> str:
+    return f"funnel:first-audit:{_funnel_hash({'user_id': int(user_id), 'event_name': 'first_audit_completed', 'source': 'global'})}"
 
 
 def _session_payload() -> dict:
@@ -383,18 +413,61 @@ def cleide_audit_documents_upload():
     except Exception:
         logger.exception("Cleide temp_table: falha ao ler temp_table após upload.")
 
-    return jsonify(
-        {
-            "ok": True,
-            "document": document,
-            "session": _session_payload(),
-            "allowed_formats": get_allowed_document_formats(),
-            "calculation_bases": get_active_calculation_bases_for_runtime(
-                audit_cfg.calculation_bases
-            ),
-            "temp_table": temp_table,
-        }
-    )
+    payload = {
+        "ok": True,
+        "document": document,
+        "session": _session_payload(),
+        "allowed_formats": get_allowed_document_formats(),
+        "calculation_bases": get_active_calculation_bases_for_runtime(
+            audit_cfg.calculation_bases
+        ),
+        "temp_table": temp_table,
+    }
+
+    user_id = getattr(current_user, "id", None)
+    conta_id = getattr(current_user, "conta_id", None)
+    franquia_id = getattr(current_user, "franquia_id", None)
+    document_id = (document or {}).get("doc_id") if isinstance(document, dict) else None
+    if user_id is not None and conta_id is not None and franquia_id is not None and document_id:
+        started_funnel_tx = False
+        try:
+            orm_session = db.session()
+            if not orm_session.in_transaction():
+                orm_session.begin()
+                started_funnel_tx = True
+            funnel_result = record_funnel_event(
+                event_name=FUNNEL_EVENT_FILE_UPLOADED,
+                source=FUNNEL_SOURCE_CLEIDE_AUDIT,
+                user_id=int(user_id),
+                conta_id=int(conta_id),
+                franquia_id=int(franquia_id),
+                idempotency_key=_cleide_upload_funnel_key(user_id=int(user_id), document_id=document_id),
+                correlation_id=request.headers.get("X-Request-ID") or request.headers.get("X-Correlation-ID"),
+                document_id=document_id,
+                metadata_json=None,
+            )
+            if funnel_result.get("created") is True:
+                db.session.commit()
+                payload["funnel_event"] = {
+                    "event_name": FUNNEL_EVENT_FILE_UPLOADED,
+                    "source": FUNNEL_SOURCE_CLEIDE_AUDIT,
+                    "allow_meta_pixel": True,
+                    "is_first_audit": False,
+                }
+            elif started_funnel_tx:
+                db.session.rollback()
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception(
+                "cleide_audit_funnel_upload_failed event=%s source=%s user_id=%s document_id=%s failure_type=%s",
+                FUNNEL_EVENT_FILE_UPLOADED,
+                FUNNEL_SOURCE_CLEIDE_AUDIT,
+                user_id,
+                document_id,
+                exc.__class__.__name__,
+            )
+
+    return jsonify(payload)
 
 
 @cleide_audit_bp.route("/api/cleide-auditoria/documents/status", methods=["GET"])
@@ -714,7 +787,61 @@ def cleide_audit_batch_run():
             500,
         )
 
-    return jsonify({"ok": True, "temp_table": temp_table})
+    payload = {"ok": True, "temp_table": temp_table}
+
+    user_id = getattr(current_user, "id", None)
+    conta_id = getattr(current_user, "conta_id", None)
+    franquia_id = getattr(current_user, "franquia_id", None)
+    audit_batch = (temp_table or {}).get("audit_batch") if isinstance(temp_table, dict) else None
+    audit_batch_id = (audit_batch or {}).get("audit_batch_id") if isinstance(audit_batch, dict) else None
+    processed_at = (audit_batch or {}).get("processed_at") if isinstance(audit_batch, dict) else None
+    if user_id is not None and conta_id is not None and franquia_id is not None and audit_batch_id and processed_at:
+        execution_id = request.headers.get("X-Execution-ID") or request.form.get("execution_id") or "cleide-audit-run"
+        started_funnel_tx = False
+        try:
+            orm_session = db.session()
+            if not orm_session.in_transaction():
+                orm_session.begin()
+                started_funnel_tx = True
+            funnel_result = record_completion_with_first_audit(
+                source=FUNNEL_SOURCE_CLEIDE_AUDIT,
+                user_id=int(user_id),
+                conta_id=int(conta_id),
+                franquia_id=int(franquia_id),
+                freight_idempotency_key=_cleide_completion_funnel_key(
+                    user_id=int(user_id),
+                    audit_batch_id=str(audit_batch_id),
+                    execution_id=str(execution_id),
+                ),
+                first_audit_idempotency_key=_global_first_audit_funnel_key(user_id=int(user_id)),
+                occurred_at=None,
+                correlation_id=request.headers.get("X-Request-ID") or request.headers.get("X-Correlation-ID"),
+                audit_batch_id=str(audit_batch_id),
+                execution_id=str(execution_id)[:120],
+                metadata_json=None,
+            )
+            if funnel_result.get("freight_calculated", {}).get("created") is True:
+                db.session.commit()
+                payload["funnel_event"] = {
+                    "event_name": FUNNEL_EVENT_FREIGHT_CALCULATED,
+                    "source": FUNNEL_SOURCE_CLEIDE_AUDIT,
+                    "allow_meta_pixel": True,
+                    "is_first_audit": bool(funnel_result.get("is_first_audit")),
+                }
+            elif started_funnel_tx:
+                db.session.rollback()
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception(
+                "cleide_audit_funnel_completion_failed event=%s source=%s user_id=%s audit_batch_id=%s failure_type=%s",
+                FUNNEL_EVENT_FREIGHT_CALCULATED,
+                FUNNEL_SOURCE_CLEIDE_AUDIT,
+                user_id,
+                audit_batch_id,
+                exc.__class__.__name__,
+            )
+
+    return jsonify(payload)
 
 
 @cleide_audit_bp.route("/api/cleide-auditoria/audit/correction/preview", methods=["POST"])
