@@ -1341,6 +1341,19 @@
         fillLimitMessageElement(el, messageOrPayload);
         return;
       }
+      if (messageOrPayload.error_code === 'auth_required') {
+        el.replaceChildren();
+        el.appendChild(document.createTextNode(
+          'Autenticação necessária para documentos da Auditoria. '
+        ));
+        var loginLink = document.createElement('a');
+        loginLink.href = '/login?next=/auditoria-frete';
+        loginLink.textContent = 'Faça login';
+        loginLink.setAttribute('rel', 'noopener noreferrer');
+        el.appendChild(loginLink);
+        el.appendChild(document.createTextNode(' para continuar usando.'));
+        return;
+      }
       fillLimitMessageElement(el, messageOrPayload.message || friendlyError(messageOrPayload));
       return;
     }

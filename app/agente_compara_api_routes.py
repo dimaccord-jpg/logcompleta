@@ -296,7 +296,7 @@ def _authorize_agente_compara_api(*, auth_message: str):
 
 def _authorize_agente_compara_documents_api():
     return _authorize_agente_compara_api(
-        auth_message="Autenticação necessária para documentos da Agente Compara.",
+        auth_message="Autenticação necessária para documentos da Agente Compara. Faça login para continuar usando.",
     )
 
 
