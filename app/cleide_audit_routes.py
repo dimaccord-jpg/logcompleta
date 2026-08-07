@@ -181,7 +181,7 @@ def _authorize_cleide_audit_api(*, auth_message: str):
 
 def _authorize_cleide_audit_documents_api():
     return _authorize_cleide_audit_api(
-        auth_message="Autenticação necessária para documentos da Cleide Auditoria.",
+        auth_message="Autenticação necessária para documentos da Auditoria. Faça login para continuar usando.",
     )
 
 
