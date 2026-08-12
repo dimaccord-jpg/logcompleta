@@ -658,34 +658,45 @@ def agente_compara_documents_upload():
         funnel_identity["comparison_id"] = comparison.get("comparison_id")
     funnel_payload = _maybe_build_upload_funnel_payload(document=document, identity=funnel_identity)
     if funnel_payload is not None:
-        started_funnel_tx = False
-        try:
-            orm_session = db.session()
-            if not orm_session.in_transaction():
-                orm_session.begin()
-                started_funnel_tx = True
-            funnel_result = record_funnel_event(**funnel_payload)
-            if funnel_result.get("created") is True:
-                db.session.commit()
-                payload["funnel_event"] = {
-                    "event_name": FUNNEL_EVENT_FILE_UPLOADED,
-                    "source": FUNNEL_SOURCE_AGENTE_COMPARA,
-                    "allow_meta_pixel": True,
-                    "is_first_audit": False,
-                }
-            elif started_funnel_tx:
-                db.session.rollback()
-        except Exception as exc:
-            db.session.rollback()
-            logger.exception(
-                "agente_compara_funnel_upload_failed event=%s source=%s user_id=%s comparison_id=%s document_id=%s failure_type=%s",
-                FUNNEL_EVENT_FILE_UPLOADED,
-                FUNNEL_SOURCE_AGENTE_COMPARA,
-                getattr(current_user, "id", None),
-                identity.get("comparison_id"),
-                document.get("doc_id"),
-                exc.__class__.__name__,
+        from app.services.admin_desktop_access_test_service import (
+            is_desktop_access_admin_test_mode_for_current_user,
+        )
+
+        if is_desktop_access_admin_test_mode_for_current_user():
+            from app.services.admin_desktop_access_test_service import (
+                mark_first_use_for_current_session,
             )
+
+            mark_first_use_for_current_session()
+        else:
+            started_funnel_tx = False
+            try:
+                orm_session = db.session()
+                if not orm_session.in_transaction():
+                    orm_session.begin()
+                    started_funnel_tx = True
+                funnel_result = record_funnel_event(**funnel_payload)
+                if funnel_result.get("created") is True:
+                    db.session.commit()
+                    payload["funnel_event"] = {
+                        "event_name": FUNNEL_EVENT_FILE_UPLOADED,
+                        "source": FUNNEL_SOURCE_AGENTE_COMPARA,
+                        "allow_meta_pixel": True,
+                        "is_first_audit": False,
+                    }
+                elif started_funnel_tx:
+                    db.session.rollback()
+            except Exception as exc:
+                db.session.rollback()
+                logger.exception(
+                    "agente_compara_funnel_upload_failed event=%s source=%s user_id=%s comparison_id=%s document_id=%s failure_type=%s",
+                    FUNNEL_EVENT_FILE_UPLOADED,
+                    FUNNEL_SOURCE_AGENTE_COMPARA,
+                    getattr(current_user, "id", None),
+                    identity.get("comparison_id"),
+                    document.get("doc_id"),
+                    exc.__class__.__name__,
+                )
 
     return jsonify(payload)
 

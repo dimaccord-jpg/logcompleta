@@ -157,6 +157,170 @@
         {% endif %}
     </div>
 
+    {% set acq = acquisition_metrics or {} %}
+    {% set acq_stages = acq.get('stages') or {} %}
+    {% set acq_rates = acq.get('rates') or {} %}
+    {% set acq_funnel = acq.get('funnel') or [] %}
+    {% set acq_quality = acq.get('data_quality') or {} %}
+    {% set acq_period = acq.get('period') or {} %}
+    <h5 class="mt-4 mb-1">Aquisição — Landing Desktop</h5>
+    <p class="text-muted small mb-1">
+        Coorte por data de captura do Lead
+        <span
+            class="text-secondary"
+            title="O período seleciona Leads pela data de captura. As etapas seguintes acompanham a evolução dessa mesma coorte."
+            style="cursor: help;"
+        >(?)</span>
+        {% if acq_period.get('label') %}
+        · {{ acq_period.get('label') }}
+        {% endif %}
+    </p>
+    <p class="text-muted small mb-3">
+        Clique <a href="{{ url_for('acesso_desktop') }}">aqui</a> para visualizar a página.
+    </p>
+    {% if acq_quality.get('warnings') %}
+    <div class="mb-3">
+        {% for warning in acq_quality.get('warnings') %}
+        <div class="alert {% if acq_quality.get('service_failed') %}alert-warning{% else %}alert-secondary{% endif %} py-2 mb-2 small">{{ warning }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    <div class="card border-0 shadow-sm p-3 mb-4 acquisition-landing-funnel">
+        <div class="row g-2 g-md-3 align-items-stretch">
+            {% for step in acq_funnel %}
+            <div class="col-6 col-md">
+                <div class="border rounded p-3 h-100 text-center">
+                    <small class="text-muted d-block">{{ step.label }}</small>
+                    <strong class="fs-4 d-block">{{ (step.count or 0)|int }}</strong>
+                    {% if not loop.first %}
+                    <span class="badge bg-light text-dark mt-1">{{ '%.1f'|format((step.rate_from_previous or 0) * 100) }}%</span>
+                    {% else %}
+                    <span class="badge bg-light text-dark mt-1">coorte</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <div class="col-6 col-md"><div class="border rounded p-3 h-100 text-center"><small class="text-muted d-block">Leads</small><strong class="fs-4 d-block">0</strong></div></div>
+            <div class="col-6 col-md"><div class="border rounded p-3 h-100 text-center"><small class="text-muted d-block">Cliques</small><strong class="fs-4 d-block">0</strong><span class="badge bg-light text-dark mt-1">0.0%</span></div></div>
+            <div class="col-6 col-md"><div class="border rounded p-3 h-100 text-center"><small class="text-muted d-block">Cadastros</small><strong class="fs-4 d-block">0</strong><span class="badge bg-light text-dark mt-1">0.0%</span></div></div>
+            <div class="col-6 col-md"><div class="border rounded p-3 h-100 text-center"><small class="text-muted d-block">Primeiro uso</small><strong class="fs-4 d-block">0</strong><span class="badge bg-light text-dark mt-1">0.0%</span></div></div>
+            <div class="col-6 col-md"><div class="border rounded p-3 h-100 text-center"><small class="text-muted d-block">Primeira auditoria</small><strong class="fs-4 d-block">0</strong><span class="badge bg-light text-dark mt-1">0.0%</span></div></div>
+            {% endfor %}
+        </div>
+        <p class="small text-muted mb-0 mt-3">
+            Lead → First Audit:
+            <strong>{{ '%.1f'|format((acq_rates.get('lead_to_first_audit') or 0) * 100) }}%</strong>
+            · Leads {{ (acq_stages.get('lead') or 0)|int }}
+            · Cliques {{ (acq_stages.get('click') or 0)|int }}
+            · Cadastros {{ (acq_stages.get('registration') or 0)|int }}
+            · Primeiro uso {{ (acq_stages.get('first_use') or 0)|int }}
+            · Primeira auditoria {{ (acq_stages.get('first_audit') or 0)|int }}
+        </p>
+    </div>
+    {% if desktop_access_test_enabled %}
+    <div class="mb-4 desktop-access-admin-test">
+        <h6 class="mb-1">Homologação E2E</h6>
+        <p class="text-muted small mb-2">
+            Envie a jornada real para seu próprio e-mail sem registrar uma aquisição real.
+        </p>
+        <p class="small mb-3">
+            E-mail atual: <strong>{{ desktop_access_test_email }}</strong>
+        </p>
+        <form method="post" action="{{ url_for('admin.admin_dashboard') }}" class="d-flex flex-wrap gap-2 mb-3">
+            <input type="hidden" name="desktop_access_test_csrf" value="{{ desktop_access_test_csrf }}">
+            <input type="hidden" name="test_email" value="{{ desktop_access_test_email }}">
+            <button
+                type="submit"
+                class="btn btn-outline-secondary btn-sm"
+                name="action"
+                value="start_desktop_access_e2e"
+            >Iniciar novo teste E2E</button>
+            <button
+                type="submit"
+                class="btn btn-outline-secondary btn-sm"
+                name="action"
+                value="check_desktop_access_e2e_followup"
+            >Verificar follow-up agora</button>
+        </form>
+        <p class="text-muted small mb-2">
+            Envio para inspeção de conteúdo. Não valida a cadência de 24h/48h.
+        </p>
+        <form method="post" action="{{ url_for('admin.admin_dashboard') }}" class="d-flex flex-wrap gap-2 mb-3">
+            <input type="hidden" name="desktop_access_test_csrf" value="{{ desktop_access_test_csrf }}">
+            <input type="hidden" name="test_email" value="{{ desktop_access_test_email }}">
+            <button
+                type="submit"
+                class="btn btn-outline-secondary btn-sm"
+                name="action"
+                value="inspect_desktop_access_activation_email_1"
+            >Enviar E-mail 1 para inspeção</button>
+            <button
+                type="submit"
+                class="btn btn-outline-secondary btn-sm"
+                name="action"
+                value="inspect_desktop_access_activation_email_2"
+            >Enviar E-mail 2 para inspeção</button>
+            <button
+                type="submit"
+                class="btn btn-outline-secondary btn-sm"
+                name="action"
+                value="start_desktop_access_activation_timed"
+            >Iniciar sequência E2E temporizada</button>
+            <button
+                type="submit"
+                class="btn btn-outline-secondary btn-sm"
+                name="action"
+                value="check_desktop_access_e2e_activation"
+            >Verificar ativação agora</button>
+        </form>
+        {% if desktop_access_e2e_latest %}
+        <div class="small text-muted border rounded p-2">
+            <div class="mb-1">Último run: <code>{{ desktop_access_e2e_latest.run_id_short }}</code></div>
+            <div>Iniciado em: {{ desktop_access_e2e_latest.created_at }}</div>
+            <div>E-mail inicial enviado em: {{ desktop_access_e2e_latest.initial_email_sent_at }}</div>
+            <div>CTA clicado em: {{ desktop_access_e2e_latest.cta_clicked_at }}</div>
+            <div>Cadastro concluído em: {{ desktop_access_e2e_latest.registration_completed_at }}</div>
+            <div>Primeiro uso observado: {{ desktop_access_e2e_latest.first_use_seen_at }}</div>
+            <div>Primeira auditoria observada: {{ desktop_access_e2e_latest.first_audit_seen_at }}</div>
+            <div>Follow-up elegível em: {{ desktop_access_e2e_latest.followup_eligible_at }}</div>
+            <div>Follow-up enviado em: {{ desktop_access_e2e_latest.followup_sent_at }}</div>
+            <div>Unsubscribe realizado em: {{ desktop_access_e2e_latest.opt_out_at }}</div>
+            <div class="mt-2 mb-1"><strong>Ativação pós-cadastro (E2E)</strong></div>
+            <div>Sequência iniciada em: {{ desktop_access_e2e_latest.activation_sequence_started_at }}</div>
+            <div>E-mail 1 elegível em: {{ desktop_access_e2e_latest.activation_email_1_eligible_at }}</div>
+            <div>E-mail 1 enviado em: {{ desktop_access_e2e_latest.activation_email_1_sent_at }}</div>
+            <div>E-mail 2 elegível em: {{ desktop_access_e2e_latest.activation_email_2_eligible_at }}</div>
+            <div>E-mail 2 enviado em: {{ desktop_access_e2e_latest.activation_email_2_sent_at }}</div>
+            <div>Cancelamento ativação em: {{ desktop_access_e2e_latest.activation_opt_out_at }}</div>
+        </div>
+        {% else %}
+        <p class="text-muted small mb-0">Nenhum teste E2E iniciado ainda.</p>
+        {% endif %}
+        <p class="text-muted small mt-2 mb-0">
+            Disponível apenas em desenvolvimento e homologação. Não entra nas métricas de aquisição nem Conversões.
+        </p>
+    </div>
+    {% endif %}
+
+    <div class="mb-4">
+        <h6 class="mb-1">Ativação pós-cadastro</h6>
+        <p class="text-muted small mb-1">
+            Público: usuários cadastrados que ainda não fizeram o primeiro upload.
+        </p>
+        <p class="text-muted small mb-1">
+            1º lembrete: 24 horas após o cadastro.
+        </p>
+        <p class="text-muted small mb-1">
+            2º lembrete: 48 horas após o primeiro envio.
+        </p>
+        <p class="text-muted small mb-1">
+            Máximo: 2 e-mails.
+        </p>
+        <p class="text-muted small mb-0">
+            A sequência é encerrada após o primeiro upload ou cancelamento dos lembretes.
+        </p>
+    </div>
+
     {# Fase 1: Consumo de IA - dados reais (Cleiton / governanca) #}
     {% set ia = ia_metrics or {} %}
     <h5 class="mt-4 mb-3">Consumo de IA (Cleiton)</h5>

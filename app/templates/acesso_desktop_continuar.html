@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0A0A0F">
+  <title>Continue no computador | AgenteFrete</title>
+  <meta name="description" content="Continue para criar sua conta Free do AgenteFrete.">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/acesso_desktop.css') }}">
+</head>
+<body class="ad-page">
+  <div class="ad-wrap">
+    <header class="ad-header">
+      <a class="ad-logo" href="{{ url_for('acesso_desktop') }}" aria-label="AgenteFrete">
+        <img
+          src="{{ url_for('static', filename='img/logo.png') }}"
+          alt="AgenteFrete"
+          width="180"
+          height="48"
+        >
+      </a>
+    </header>
+
+    <main>
+      <section class="ad-hero" aria-labelledby="ad-continuar-headline">
+        <div class="ad-card">
+          <p class="ad-eyebrow">AgenteFrete</p>
+          <h1 id="ad-continuar-headline" class="ad-headline">Continue no computador.</h1>
+          <p class="ad-subheadline">
+            Seu próximo passo é criar sua conta Free do AgenteFrete.
+          </p>
+          <form method="post" action="{{ url_for('acesso_desktop_continuar', token=token) }}">
+            <button class="ad-cta" type="submit">Continuar para o cadastro Free</button>
+          </form>
+          <p class="ad-trust">Sem cartão de crédito</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="ad-footer">
+      <div>AgenteFrete</div>
+    </footer>
+  </div>
+</body>
+</html>

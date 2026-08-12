@@ -126,13 +126,210 @@ def _erro_admin_validacao_payload(erro: str, codigo_erro: str) -> dict:
     }
 
 
+def _handle_desktop_access_admin_test_post():
+    """
+    POST da Homologação E2E no /admin/dashboard.
+    PRG; nunca cria Lead; bloqueado em prod.
+    """
+    from flask import session
+    from app.services import admin_desktop_access_test_service as desktop_test
+
+    action = (request.form.get("action") or "").strip()
+    allowed_actions = (
+        desktop_test.ACTION_START_E2E,
+        desktop_test.ACTION_CHECK_FOLLOWUP,
+        desktop_test.ACTION_INSPECT_ACTIVATION_EMAIL_1,
+        desktop_test.ACTION_INSPECT_ACTIVATION_EMAIL_2,
+        desktop_test.ACTION_START_ACTIVATION_TIMED,
+        desktop_test.ACTION_CHECK_ACTIVATION,
+    )
+    if action not in allowed_actions:
+        flash("Ação de teste inválida.", "warning")
+        return redirect(url_for("admin.admin_dashboard"))
+
+    if not desktop_test.is_admin_test_env_allowed():
+        flash("Homologação E2E indisponível neste ambiente.", "warning")
+        return redirect(url_for("admin.admin_dashboard"))
+
+    csrf_ok = desktop_test.validate_and_rotate_csrf(
+        submitted=request.form.get("desktop_access_test_csrf"),
+        session_obj=session,
+    )
+    if not csrf_ok:
+        flash("Falha de validação do formulário E2E. Tente novamente.", "danger")
+        return redirect(url_for("admin.admin_dashboard"))
+
+    secret_key = current_app.config["SECRET_KEY"]
+    build_cta_url = lambda token: url_for(
+        "acesso_desktop_continuar",
+        token=token,
+        _external=True,
+    )
+    build_unsubscribe_url = lambda token: url_for(
+        "acesso_desktop_descadastrar",
+        token=token,
+        _external=True,
+    )
+    build_email_1_cta_url = lambda: url_for("cleide.cleide_auditoria", _external=True)
+    build_email_2_cta_url = lambda: url_for(
+        "agente_compara.agente_compara_page", _external=True
+    )
+
+    if action == desktop_test.ACTION_START_E2E:
+        email = request.form.get("test_email") or getattr(current_user, "email", "") or ""
+        result = desktop_test.start_e2e_test_run(
+            admin_user=current_user,
+            email=email,
+            secret_key=secret_key,
+            build_cta_url=build_cta_url,
+            build_unsubscribe_url=build_unsubscribe_url,
+            session_obj=session,
+        )
+        status = result.get("status")
+        if status == "sent":
+            flash("Novo teste E2E iniciado. Verifique seu e-mail.", "success")
+        elif status == "cooldown":
+            flash("Aguarde alguns segundos antes de iniciar outro teste E2E.", "warning")
+        elif status == "rejected":
+            flash(result.get("message") or "Início do teste E2E recusado.", "warning")
+        else:
+            flash("Não foi possível iniciar o teste E2E. Tente novamente.", "danger")
+        return redirect(url_for("admin.admin_dashboard"))
+
+    if action == desktop_test.ACTION_CHECK_FOLLOWUP:
+        result = desktop_test.check_and_maybe_send_latest_followup(
+            admin_user=current_user,
+            secret_key=secret_key,
+            build_cta_url=build_cta_url,
+            build_unsubscribe_url=build_unsubscribe_url,
+            session_obj=session,
+        )
+        status = result.get("status")
+        if status == "sent":
+            flash("Follow-up E2E enviado (elegível pela cadência real).", "success")
+        elif status == "cooldown":
+            flash("Aguarde alguns segundos antes de verificar o follow-up novamente.", "warning")
+        elif status == "not_eligible":
+            flash(result.get("message") or "Follow-up ainda não elegível.", "warning")
+        elif status == "skipped":
+            flash(result.get("message") or "Follow-up não enviado.", "warning")
+        elif status == "rejected":
+            flash(result.get("message") or "Verificação de follow-up recusada.", "warning")
+        else:
+            flash(result.get("message") or "Não foi possível verificar o follow-up.", "danger")
+        return redirect(url_for("admin.admin_dashboard"))
+
+    if action in (
+        desktop_test.ACTION_INSPECT_ACTIVATION_EMAIL_1,
+        desktop_test.ACTION_INSPECT_ACTIVATION_EMAIL_2,
+    ):
+        which = (
+            "email1"
+            if action == desktop_test.ACTION_INSPECT_ACTIVATION_EMAIL_1
+            else "email2"
+        )
+        result = desktop_test.inspect_send_activation_email(
+            admin_user=current_user,
+            which=which,
+            secret_key=secret_key,
+            build_cta_url=(
+                build_email_1_cta_url if which == "email1" else build_email_2_cta_url
+            ),
+            build_unsubscribe_url=build_unsubscribe_url,
+            session_obj=session,
+        )
+        status = result.get("status")
+        if status == "sent":
+            flash(
+                f"E-mail {1 if which == 'email1' else 2} de ativação enviado para inspeção. "
+                "Envio para inspeção de conteúdo. Não valida a cadência de 24h/48h.",
+                "success",
+            )
+        elif status == "cooldown":
+            flash("Aguarde alguns segundos antes de outro envio de inspeção.", "warning")
+        elif status == "rejected":
+            flash(result.get("message") or "Inspeção recusada.", "warning")
+        else:
+            flash("Não foi possível enviar o e-mail de inspeção.", "danger")
+        return redirect(url_for("admin.admin_dashboard"))
+
+    if action == desktop_test.ACTION_START_ACTIVATION_TIMED:
+        result = desktop_test.start_activation_timed_sequence(
+            admin_user=current_user,
+            secret_key=secret_key,
+            session_obj=session,
+        )
+        status = result.get("status")
+        if status == "sent":
+            flash(
+                "Sequência E2E temporizada iniciada (cadência real 24h + 48h).",
+                "success",
+            )
+        elif status == "cooldown":
+            flash("Aguarde alguns segundos antes de reiniciar a sequência.", "warning")
+        elif status == "rejected":
+            flash(result.get("message") or "Não foi possível iniciar a sequência.", "warning")
+        else:
+            flash("Falha ao iniciar sequência temporizada.", "danger")
+        return redirect(url_for("admin.admin_dashboard"))
+
+    result = desktop_test.check_and_maybe_send_latest_activation(
+        admin_user=current_user,
+        secret_key=secret_key,
+        build_email_1_cta_url=build_email_1_cta_url,
+        build_email_2_cta_url=build_email_2_cta_url,
+        build_unsubscribe_url=build_unsubscribe_url,
+        session_obj=session,
+    )
+    status = result.get("status")
+    if status == "sent":
+        flash(
+            f"Ativação E2E enviada ({result.get('which')}) pela cadência real.",
+            "success",
+        )
+    elif status == "cooldown":
+        flash("Aguarde alguns segundos antes de verificar a ativação novamente.", "warning")
+    elif status == "not_eligible":
+        flash(result.get("message") or "Ativação ainda não elegível.", "warning")
+    elif status == "rejected":
+        flash(result.get("message") or "Verificação de ativação recusada.", "warning")
+    else:
+        flash(result.get("message") or "Não foi possível processar a ativação E2E.", "danger")
+    return redirect(url_for("admin.admin_dashboard"))
+
+
 # --- Dashboard ---
-@admin_bp.route("/")
-@admin_bp.route("/dashboard")
+@admin_bp.route("/", methods=["GET", "POST"])
+@admin_bp.route("/dashboard", methods=["GET", "POST"])
 @login_required
 def admin_dashboard():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
+
+    if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+        from app.services.admin_desktop_access_test_service import (
+            ACTION_CHECK_ACTIVATION,
+            ACTION_CHECK_FOLLOWUP,
+            ACTION_INSPECT_ACTIVATION_EMAIL_1,
+            ACTION_INSPECT_ACTIVATION_EMAIL_2,
+            ACTION_START_ACTIVATION_TIMED,
+            ACTION_START_E2E,
+        )
+
+        if action in (
+            ACTION_START_E2E,
+            ACTION_CHECK_FOLLOWUP,
+            ACTION_INSPECT_ACTIVATION_EMAIL_1,
+            ACTION_INSPECT_ACTIVATION_EMAIL_2,
+            ACTION_START_ACTIVATION_TIMED,
+            ACTION_CHECK_ACTIVATION,
+        ):
+            return _handle_desktop_access_admin_test_post()
+        flash("Ação inválida.", "warning")
+        return redirect(url_for("admin.admin_dashboard"))
+
+    from flask import session
     from app.services.admin_dashboard_service import (
         get_dashboard_metrics,
         list_categorias_distintas,
@@ -141,12 +338,28 @@ def admin_dashboard():
     from app.services.admin_conversion_dashboard_service import (
         get_conversion_dashboard_payload,
     )
+    from app.services.admin_acquisition_dashboard_service import (
+        get_acquisition_dashboard_payload,
+    )
+    from app.services.lead_acquisition_service import CAMPANHA_ACESSO_DESKTOP
+    from app.services import admin_desktop_access_test_service as desktop_test
 
     categoria_f = (request.args.get("categoria") or "").strip() or None
     franquia_status_f = (request.args.get("franquia_status") or "").strip() or None
     cancelado_f = (request.args.get("cancelado") or "ativos").strip().lower()
     conversion_source = (request.args.get("conversion_source") or "all").strip().lower()
     conversion_days_raw = request.args.get("conversion_days")
+
+    desktop_access_test_enabled = desktop_test.is_admin_test_env_allowed()
+    desktop_access_test_csrf = None
+    desktop_access_e2e_latest = None
+    if desktop_access_test_enabled:
+        desktop_access_test_csrf = desktop_test.issue_csrf_token(session)
+        user_id = getattr(current_user, "id", None)
+        if user_id is not None:
+            desktop_access_e2e_latest = desktop_test.build_latest_run_status_payload(
+                int(user_id)
+            )
 
     dash_metrics = get_dashboard_metrics(
         categoria=categoria_f,
@@ -214,6 +427,48 @@ def admin_dashboard():
                 "service_failed": True,
             },
         }
+    # Aquisição reutiliza o período (conversion_days), mas ignora o filtro de produto.
+    acquisition_metrics = None
+    try:
+        acquisition_metrics = get_acquisition_dashboard_payload(
+            days=conversion_days_raw or 30,
+        )
+    except Exception as exc:
+        logger.exception(
+            "admin_dashboard_acquisition_metrics_failed days=%s failure_type=%s",
+            conversion_days_raw,
+            exc.__class__.__name__,
+        )
+        acquisition_metrics = {
+            "campaign": CAMPANHA_ACESSO_DESKTOP,
+            "period": {"start_utc": None, "end_utc": None, "label": "Ultimos 30 dias", "days": 30},
+            "stages": {
+                "lead": 0,
+                "click": 0,
+                "registration": 0,
+                "first_use": 0,
+                "first_audit": 0,
+            },
+            "rates": {
+                "lead_to_click": 0.0,
+                "click_to_registration": 0.0,
+                "registration_to_first_use": 0.0,
+                "first_use_to_first_audit": 0.0,
+                "lead_to_first_audit": 0.0,
+            },
+            "funnel": [
+                {"key": "lead", "label": "Leads", "count": 0, "rate_from_previous": 0.0},
+                {"key": "click", "label": "Cliques", "count": 0, "rate_from_previous": 0.0},
+                {"key": "registration", "label": "Cadastros", "count": 0, "rate_from_previous": 0.0},
+                {"key": "first_use", "label": "Primeiro uso", "count": 0, "rate_from_previous": 0.0},
+                {"key": "first_audit", "label": "Primeira auditoria", "count": 0, "rate_from_previous": 0.0},
+            ],
+            "data_quality": {
+                "has_data": False,
+                "warnings": ["Métricas de aquisição indisponíveis temporariamente."],
+                "service_failed": True,
+            },
+        }
     return render_template(
         "dashboard.html",
         dash_metrics=dash_metrics,
@@ -227,6 +482,11 @@ def admin_dashboard():
         ia_metrics=ia_metrics,
         onboarding_word_cloud=onboarding_word_cloud,
         conversion_metrics=conversion_metrics,
+        acquisition_metrics=acquisition_metrics,
+        desktop_access_test_enabled=desktop_access_test_enabled,
+        desktop_access_test_csrf=desktop_access_test_csrf,
+        desktop_access_test_email=getattr(current_user, "email", "") or "",
+        desktop_access_e2e_latest=desktop_access_e2e_latest,
     )
 
 

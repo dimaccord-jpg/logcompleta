@@ -40,16 +40,16 @@
                 
                 <ul class="nav nav-pills mb-4 justify-content-center af-tabs" id="pills-tab" role="tablist">
                     <li class="nav-item w-50" role="presentation">
-                        <button class="nav-link active fw-bold w-100" id="tab-login" data-bs-toggle="pill" data-bs-target="#content-login" type="button" role="tab">ENTRAR</button>
+                        <button class="nav-link fw-bold w-100{% if not show_register %} active{% endif %}" id="tab-login" data-bs-toggle="pill" data-bs-target="#content-login" type="button" role="tab" aria-selected="{{ 'true' if not show_register else 'false' }}">ENTRAR</button>
                     </li>
                     <li class="nav-item w-50" role="presentation">
-                        <button class="nav-link fw-bold w-100" id="tab-cadastro" data-bs-toggle="pill" data-bs-target="#content-cadastro" type="button" role="tab">CRIAR CONTA</button>
+                        <button class="nav-link fw-bold w-100{% if show_register %} active{% endif %}" id="tab-cadastro" data-bs-toggle="pill" data-bs-target="#content-cadastro" type="button" role="tab" aria-selected="{{ 'true' if show_register else 'false' }}">CRIAR CONTA</button>
                     </li>
                 </ul>
 
                 <div class="tab-content mt-4" id="pills-tabContent">
                     
-                    <div class="tab-pane fade show active" id="content-login" role="tabpanel">
+                    <div class="tab-pane fade{% if not show_register %} show active{% endif %}" id="content-login" role="tabpanel">
                         <div class="text-center mb-4">
                             <h4 class="fw-bold">Bem-vindo de volta</h4>
                             <p class="small" style="color: var(--af-text-muted);">Insira seus dados para acessar o painel.</p>
@@ -77,7 +77,7 @@
                         </div>
                     </div>
 
-                    <div class="tab-pane fade" id="content-cadastro" role="tabpanel">
+                    <div class="tab-pane fade{% if show_register %} show active{% endif %}" id="content-cadastro" role="tabpanel">
                         <div class="text-center mb-4">
                             <h4 class="fw-bold">Comece agora</h4>
                             <p class="small" style="color: var(--af-text-muted);">Crie sua conta gratuita em poucos segundos.</p>

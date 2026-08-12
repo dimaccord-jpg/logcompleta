@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0A0A0F">
+  <title>Continue no computador | AgenteFrete</title>
+  <meta name="description" content="{% if limite_free_texto %}Cadastre seu e-mail para continuar no desktop e conhecer as ferramentas do AgenteFrete com os {{ limite_free_texto }} créditos mensais incluídos no plano Free.{% else %}Cadastre seu e-mail para continuar no desktop e conhecer as ferramentas do AgenteFrete com os créditos mensais incluídos no plano Free.{% endif %}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/acesso_desktop.css') }}">
+</head>
+<body class="ad-page">
+  <div class="ad-wrap">
+    <header class="ad-header">
+      <a class="ad-logo" href="{{ url_for('acesso_desktop') }}" aria-label="AgenteFrete">
+        <img
+          src="{{ url_for('static', filename='img/logo.png') }}"
+          alt="AgenteFrete"
+          width="180"
+          height="48"
+        >
+      </a>
+    </header>
+
+    <main>
+      <section class="ad-hero" aria-labelledby="ad-headline">
+        <div class="ad-hero-copy">
+          <p class="ad-eyebrow">IA especializada em logística</p>
+          <h1 id="ad-headline" class="ad-headline">Analise seus fretes com mais clareza no computador.</h1>
+          <p class="ad-subheadline">
+            {% if limite_free_texto %}
+            Cadastre seu e-mail para continuar no desktop e conhecer as ferramentas do AgenteFrete com os {{ limite_free_texto }} créditos mensais incluídos no plano Free.
+            {% else %}
+            Cadastre seu e-mail para continuar no desktop e conhecer as ferramentas do AgenteFrete com os créditos mensais incluídos no plano Free.
+            {% endif %}
+          </p>
+
+          <ul class="ad-benefits">
+            <li>Mais espaço para analisar documentos e tabelas</li>
+            <li>Comparações mais fáceis de visualizar</li>
+            <li>Experiência pensada para análises de frete mais completas</li>
+          </ul>
+
+          <p class="ad-trust-line">Sem cartão de crédito · Cadastro simples · Plano Free</p>
+        </div>
+
+        <aside class="ad-card" aria-labelledby="ad-form-title">
+          {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+              {% for category, message in messages %}
+                {% if category == 'success' %}
+                  <div class="ad-success" role="status">
+                    <h2>Cadastro recebido.</h2>
+                    <p>{{ message }}</p>
+                  </div>
+                {% else %}
+                  <div class="ad-alert ad-alert-error" role="alert">{{ message }}</div>
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+          {% endwith %}
+
+          <h2 id="ad-form-title" class="ad-card-title">Continue no computador</h2>
+          <p class="ad-card-lead">Informe seu e-mail e enviaremos o link para você continuar.</p>
+
+          <form method="post" action="{{ url_for('acesso_desktop') }}">
+            <label class="ad-label" for="email">E-mail profissional ou pessoal</label>
+            <input
+              class="ad-input"
+              type="email"
+              id="email"
+              name="email"
+              required
+              autocomplete="email"
+              inputmode="email"
+              maxlength="150"
+              placeholder="voce@empresa.com"
+              value="{{ email_value or '' }}"
+              {% if form_error %}aria-invalid="true"{% endif %}
+            >
+            <button class="ad-cta" type="submit">Quero continuar no computador</button>
+          </form>
+
+          <p class="ad-microcopy">Os créditos mensais já fazem parte do plano Free do AgenteFrete.</p>
+          <p class="ad-trust">Sem cartão de crédito.</p>
+        </aside>
+      </section>
+
+      <section class="ad-section ad-how" aria-labelledby="ad-como-funciona">
+        <div class="ad-section-head">
+          <h2 id="ad-como-funciona">Como funciona</h2>
+          <p class="ad-section-sub">Três passos para continuar sua experiência no desktop.</p>
+        </div>
+        <ol class="ad-steps">
+          <li>
+            <span class="ad-step-num" aria-hidden="true">01</span>
+            <strong>Informe seu e-mail</strong>
+            <p>Use o e-mail que você utiliza no trabalho ou no dia a dia.</p>
+          </li>
+          <li>
+            <span class="ad-step-num" aria-hidden="true">02</span>
+            <strong>Abra no computador</strong>
+            <p>Você recebe um link para continuar a experiência no desktop.</p>
+          </li>
+          <li>
+            <span class="ad-step-num" aria-hidden="true">03</span>
+            <strong>Comece no plano Free</strong>
+            <p>Conheça as ferramentas usando os créditos mensais incluídos no plano.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="ad-section ad-why" aria-labelledby="ad-por-que-desktop">
+        <div class="ad-section-head">
+          <h2 id="ad-por-que-desktop">Por que usar no computador?</h2>
+          <p class="ad-section-sub">
+            Análises logísticas costumam envolver documentos, tabelas e comparações que ficam mais confortáveis em uma tela maior.
+          </p>
+        </div>
+        <ul class="ad-why-grid">
+          <li>
+            <strong>Mais espaço para comparar informações</strong>
+            <p>Visualize tabelas e resultados com menos necessidade de alternar telas.</p>
+          </li>
+          <li>
+            <strong>Leitura mais confortável de documentos</strong>
+            <p>Trabalhe com tabelas de frete, planilhas e arquivos com melhor aproveitamento da tela.</p>
+          </li>
+          <li>
+            <strong>Mais contexto para analisar</strong>
+            <p>Veja informações relacionadas lado a lado durante a análise.</p>
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="ad-footer">
+      <nav aria-label="Documentos legais">
+        <a href="{{ url_for('terms_of_use') }}" target="_blank" rel="noopener noreferrer">Termos de Uso</a>
+        <a href="{{ url_for('privacy_policy') }}" target="_blank" rel="noopener noreferrer">Política de Privacidade</a>
+      </nav>
+      <div>AgenteFrete</div>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0A0A0F">
+  <title>Preferência de e-mails | AgenteFrete</title>
+  <meta name="description" content="Gerencie e-mails desta jornada de acesso pelo computador.">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/acesso_desktop.css') }}">
+</head>
+<body class="ad-page">
+  <div class="ad-wrap">
+    <header class="ad-header">
+      <a class="ad-logo" href="{{ url_for('acesso_desktop') }}" aria-label="AgenteFrete">
+        <img
+          src="{{ url_for('static', filename='img/logo.png') }}"
+          alt="AgenteFrete"
+          width="180"
+          height="48"
+        >
+      </a>
+    </header>
+
+    <main>
+      <section class="ad-hero" aria-labelledby="ad-unsub-headline">
+        <div class="ad-card">
+          {% if confirmed %}
+          <h1 id="ad-unsub-headline" class="ad-headline">Preferência atualizada.</h1>
+          <p class="ad-subheadline">
+            Você não receberá novos e-mails desta jornada.
+          </p>
+          {% else %}
+          <h1 id="ad-unsub-headline" class="ad-headline">Cancelar mensagens desta jornada?</h1>
+          <p class="ad-subheadline">
+            Você deixará de receber novos e-mails relacionados a este acesso pelo computador.
+          </p>
+          <form method="post" action="{{ url_for('acesso_desktop_descadastrar', token=token) }}">
+            <button class="ad-cta" type="submit">Cancelar mensagens</button>
+          </form>
+          {% endif %}
+        </div>
+      </section>
+    </main>
+
+    <footer class="ad-footer">
+      <div>AgenteFrete</div>
+    </footer>
+  </div>
+</body>
+</html>

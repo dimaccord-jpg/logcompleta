@@ -27,7 +27,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 # 1. Imports do Flask e Extensões Base
-from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify, Response, send_file, send_from_directory
+from flask import Flask, render_template, redirect, url_for, request, flash, abort, session, jsonify, Response, send_file, send_from_directory, current_app
 from flask_migrate import Migrate
 from flask_session import Session
 from flask_login import login_user, login_required, logout_user, current_user
@@ -68,6 +68,18 @@ from app.auth_services import (
 
 from app.news_ai import registrar_lead_newsletter
 from app.services import user_admin_control_service
+from app.services.lead_acquisition_service import (
+    CAMPANHA_ACESSO_DESKTOP,
+    FONTE_LANDING,
+    capturar_lead_para_campanha,
+)
+from app.services.lead_campaign_email_service import (
+    apply_campaign_opt_out,
+    mark_first_cta_click,
+    maybe_send_initial_cta_email,
+    resolve_lead_for_cta_token,
+    resolve_lead_for_unsubscribe_token,
+)
 from app.run_julia_agente_imagem import FALLBACK_ASSET_LOCAL, log_image_runtime_config
 
 # Model used by the home route to list portal news/articles.
@@ -479,6 +491,21 @@ def _normalize_discovery_response_handoffs(result: dict, *, authenticated: bool)
 
 
 def _post_login_redirect(user):
+    from app.services import admin_desktop_access_test_service as desktop_test
+
+    test_ctx = desktop_test.get_test_mode_context(session)
+    if test_ctx is not None:
+        user_id = getattr(user, "id", None)
+        ctx_uid = test_ctx.get("user_id", test_ctx.get("test_user_id"))
+        if user_id is None or ctx_uid is None or int(ctx_uid) != int(user_id):
+            desktop_test.clear_test_mode(session)
+            session.pop("post_login_next", None)
+            flash(
+                "Este teste E2E pertence a outra conta. Use a conta correspondente.",
+                "warning",
+            )
+        # Contexto E2E válido permanece; redirect segue o fluxo normal (sem bypass visual).
+
     if user_is_admin(user):
         return redirect(url_for('admin.admin_dashboard'))
     nxt = _safe_next_redirect(session.pop('post_login_next', None))
@@ -852,7 +879,13 @@ def login():
             login_user(user)
             return _post_login_redirect(user)
         flash(error or 'Email ou senha incorretos.', 'danger')
-    return render_template('login.html', active_term=get_active_term())
+    # mode=register só controla a aba inicial da UI; não autentica nem redireciona.
+    show_register = request.args.get("mode") == "register"
+    return render_template(
+        'login.html',
+        active_term=get_active_term(),
+        show_register=show_register,
+    )
 
 
 @app.route('/request-password-reset', methods=['GET', 'POST'])
@@ -1061,13 +1094,35 @@ def register():
     accept_terms = bool(request.form.get('accept_terms'))
     if not accept_terms:
         flash('É obrigatório aceitar os Termos de Uso para criar sua conta.', 'danger')
-        return redirect(url_for('login'))
+        return redirect(url_for('login', mode='register'))
     full_name = request.form.get('nome') or ""
     email = request.form.get('email') or ""
     password = request.form.get('password') or ""
     job_role = request.form.get('job_role') or ""
     usage_purpose = request.form.get('usage_purpose') or ""
     subscribes_to_newsletter = bool(request.form.get('subscribes_to_newsletter'))
+
+    # E2E Replay: branch invisível — mesmas validações visíveis, sem criar User.
+    from app.services import admin_desktop_access_test_service as desktop_test
+
+    replay = desktop_test.try_registration_replay(
+        full_name=full_name,
+        email=email,
+        password=password,
+        accept_terms=accept_terms,
+        session_obj=session,
+    )
+    if replay is not None:
+        if not replay.get("ok"):
+            flash(replay.get("message") or "Erro ao cadastrar.", "danger")
+            return redirect(url_for("login", mode="register"))
+        # Mesmo redirect de sucesso da Registration real; sem CompleteRegistration Meta.
+        flash(replay.get("message") or "Conta criada com sucesso! Faça login.", "success")
+        pending_next = _safe_next_redirect(session.get("post_login_next"))
+        if pending_next:
+            return redirect(url_for("login", next=pending_next))
+        return redirect(url_for("login"))
+
     new_user, error = register_user(
         full_name, email, password,
         job_role=job_role,
@@ -1077,7 +1132,7 @@ def register():
     )
     if new_user is None:
         flash(error or 'Erro ao cadastrar.', 'danger')
-        return redirect(url_for('login'))
+        return redirect(url_for('login', mode='register'))
     session[_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION] = True
     flash('Conta criada com sucesso! Faça login.', 'success')
     # Cadastro por senha exige login posterior; preserva next seguro até o login.
@@ -1588,6 +1643,359 @@ def api_webhook_stripe():
                 "codigo_erro": "webhook_stripe_falha_interna",
             }
         ), 500
+
+
+_LEAD_EMAIL_MAX_LEN = 150
+
+
+def _email_acesso_desktop_valido(email: str) -> bool:
+    """
+    Validação server-side simples (sem regex), alinhada à semântica do cadastro/newsletter:
+    rejeita vazio e entradas claramente inválidas antes da persistência.
+    """
+    value = (email or "").strip()
+    if not value or len(value) > _LEAD_EMAIL_MAX_LEN:
+        return False
+    if any(ch.isspace() for ch in value):
+        return False
+    if value.count("@") != 1:
+        return False
+    local, _, domain = value.partition("@")
+    if not local or not domain:
+        return False
+    if "." not in domain or domain.startswith(".") or domain.endswith("."):
+        return False
+    return True
+
+
+def _formatar_limite_free_apresentacao(limite) -> str | None:
+    """Apresentação legível do limite Free; não altera o valor operacional."""
+    from decimal import Decimal, InvalidOperation
+
+    if limite is None:
+        return None
+    try:
+        valor = limite if isinstance(limite, Decimal) else Decimal(str(limite))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if valor <= 0:
+        return None
+    integral = valor.to_integral_value()
+    if valor == integral:
+        return str(int(integral))
+    return format(valor.normalize(), "f")
+
+
+def _resolver_limite_free_landing() -> str | None:
+    """
+    Lê o limite Free da mesma fonte operacional do cadastro.
+    Em falha, retorna None para copy genérica (sem inventar número).
+    """
+    from app.services.plano_service import obter_limite_referencia_plano_admin
+
+    try:
+        limite = obter_limite_referencia_plano_admin("free", exigir_configurado=True)
+    except Exception:
+        logger.exception("Falha ao resolver limite Free para landing /acesso-desktop")
+        return None
+    texto = _formatar_limite_free_apresentacao(limite)
+    if texto is None:
+        logger.warning("Limite Free indisponível/ inválido para landing /acesso-desktop")
+    return texto
+
+
+def _render_acesso_desktop(*, email_value: str = "", form_error: bool = False):
+    return render_template(
+        "acesso_desktop.html",
+        email_value=email_value,
+        form_error=form_error,
+        limite_free_texto=_resolver_limite_free_landing(),
+    )
+
+
+@app.route("/acesso-desktop", methods=["GET", "POST"])
+def acesso_desktop():
+    """
+    Landing pública de aquisição (Ads → Landing → Lead → e-mail CTA).
+    Campanha/source definidos apenas no servidor.
+    """
+    if request.method == "POST":
+        email_raw = request.form.get("email") or ""
+        if not _email_acesso_desktop_valido(email_raw):
+            flash("Informe um e-mail válido para continuar.", "danger")
+            return _render_acesso_desktop(
+                email_value=email_raw.strip()[:_LEAD_EMAIL_MAX_LEN],
+                form_error=True,
+            )
+        try:
+            # Identidade de campanha fixa no servidor — ignora campos enviados pelo cliente.
+            captura = capturar_lead_para_campanha(
+                email_raw,
+                CAMPANHA_ACESSO_DESKTOP,
+                FONTE_LANDING,
+            )
+        except Exception:
+            logger.exception("Falha ao capturar lead na landing /acesso-desktop")
+            flash(
+                "Não foi possível registrar seu acesso agora. Tente novamente em instantes.",
+                "danger",
+            )
+            return redirect(url_for("acesso_desktop"))
+
+        send_status = "skipped"
+        if captura.get("status") != "campaign_mismatch":
+            lead = captura["lead"]
+            send_status = maybe_send_initial_cta_email(
+                lead,
+                secret_key=app.config["SECRET_KEY"],
+                build_cta_url=lambda token: url_for(
+                    "acesso_desktop_continuar",
+                    token=token,
+                    _external=True,
+                ),
+                build_unsubscribe_url=lambda token: url_for(
+                    "acesso_desktop_descadastrar",
+                    token=token,
+                    _external=True,
+                ),
+            )
+
+        # Resposta pública neutra: não revela mismatch, opt-out nem reenvio.
+        if send_status == "sent":
+            flash("Enviamos as instruções para o e-mail informado.", "success")
+        else:
+            flash("Seu e-mail foi registrado com sucesso.", "success")
+        return redirect(url_for("acesso_desktop"))
+
+    return _render_acesso_desktop()
+
+
+def _flash_acesso_desktop_link_indisponivel():
+    flash(
+        "Este link não está disponível. Informe seu e-mail novamente.",
+        "danger",
+    )
+
+
+def _flash_acesso_desktop_test_link_indisponivel():
+    flash(
+        "Este link não está disponível ou expirou.",
+        "warning",
+    )
+
+
+def _handle_acesso_desktop_admin_test_continuar(token, test_payload):
+    """
+    Branch E2E no CTA continuar — experiência VISÍVEL idêntica à real.
+    GET: scanner-safe (não ativa contexto / não marca clique).
+    POST: marca cta_clicked_at no TestRun + ativa sessão + mesmo redirect do CTA real.
+    """
+    from app.services import admin_desktop_access_test_service as desktop_test
+
+    if not desktop_test.is_admin_test_env_allowed():
+        _flash_acesso_desktop_link_indisponivel()
+        return redirect(url_for("acesso_desktop"))
+
+    user = desktop_test.get_authorized_admin_test_user(test_payload["user_id"])
+    if user is None:
+        _flash_acesso_desktop_link_indisponivel()
+        return redirect(url_for("acesso_desktop"))
+
+    test_run = desktop_test.find_test_run_by_run_id(test_payload["run_id"])
+    if test_run is None or int(test_run.user_id) != int(user.id):
+        _flash_acesso_desktop_link_indisponivel()
+        return redirect(url_for("acesso_desktop"))
+
+    if request.method == "GET":
+        # Mesma página/template/copy do CTA real — sem indicador de teste.
+        return render_template(
+            "acesso_desktop_continuar.html",
+            token=token,
+        )
+
+    # POST: first-write-wins no run + contexto de sessão.
+    try:
+        desktop_test.mark_cta_clicked(test_run)
+    except Exception:
+        logger.exception(
+            "desktop_access_e2e_cta_click_failed run_id=%s user_id=%s",
+            test_run.run_id,
+            user.id,
+        )
+        _flash_acesso_desktop_link_indisponivel()
+        return redirect(url_for("acesso_desktop"))
+
+    activated = desktop_test.activate_test_mode(
+        user_id=int(user.id),
+        run_id=test_payload["run_id"],
+        session_obj=session,
+    )
+    if activated is None:
+        _flash_acesso_desktop_link_indisponivel()
+        return redirect(url_for("acesso_desktop"))
+
+    logger.info(
+        "desktop_access_e2e_cta_clicked user_id=%s run_id=%s",
+        user.id,
+        test_payload["run_id"],
+    )
+    # Destino idêntico ao CTA real.
+    return redirect(url_for("login", mode="register"))
+
+
+@app.route("/acesso-desktop/continuar/<token>", methods=["GET", "POST"])
+def acesso_desktop_continuar(token):
+    """
+    Página intermediária do CTA.
+    GET: seguro para scanners (não registra clique / não ativa E2E).
+    POST real: primeiro cta_clicked_at + redirect ao cadastro Free normal.
+    POST E2E: marca TestRun + ativa contexto + mesmo redirect.
+    """
+    from app.services import admin_desktop_access_test_service as desktop_test
+
+    test_payload = desktop_test.resolve_admin_test_token(
+        token,
+        secret_key=current_app.config["SECRET_KEY"],
+    )
+    if test_payload is not None:
+        return _handle_acesso_desktop_admin_test_continuar(token, test_payload)
+
+    lead = resolve_lead_for_cta_token(token, secret_key=current_app.config["SECRET_KEY"])
+    if lead is None:
+        _flash_acesso_desktop_link_indisponivel()
+        return redirect(url_for("acesso_desktop"))
+
+    if request.method == "POST":
+        try:
+            mark_first_cta_click(lead)
+        except Exception:
+            logger.exception(
+                "Falha ao registrar clique CTA desktop_access: lead_id=%s",
+                lead.id,
+            )
+            _flash_acesso_desktop_link_indisponivel()
+            return redirect(url_for("acesso_desktop"))
+        # Destino fixo no servidor — ignora next/destination do cliente.
+        return redirect(url_for("login", mode="register"))
+
+    return render_template(
+        "acesso_desktop_continuar.html",
+        token=token,
+    )
+
+
+@app.route("/acesso-desktop/descadastrar/<token>", methods=["GET", "POST"])
+def acesso_desktop_descadastrar(token):
+    """
+    Opt-out apenas da jornada de aquisição (Lead), ativação pós-cadastro ou run E2E.
+    GET: confirmação (não altera estado).
+    POST: aplica opt-out idempotente no alvo correspondente.
+    """
+    from app.services import admin_desktop_access_test_service as desktop_test
+    from app.services.desktop_access_activation_email_service import (
+        apply_activation_opt_out,
+        resolve_lead_for_activation_unsubscribe_token,
+    )
+
+    e2e_payload = desktop_test.resolve_e2e_unsubscribe_token(
+        token,
+        secret_key=current_app.config["SECRET_KEY"],
+    )
+    if e2e_payload is not None:
+        if not desktop_test.is_admin_test_env_allowed():
+            _flash_acesso_desktop_link_indisponivel()
+            return redirect(url_for("acesso_desktop"))
+        user = desktop_test.get_authorized_admin_test_user(e2e_payload["user_id"])
+        test_run = desktop_test.find_test_run_by_run_id(e2e_payload["run_id"])
+        if user is None or test_run is None or int(test_run.user_id) != int(user.id):
+            _flash_acesso_desktop_link_indisponivel()
+            return redirect(url_for("acesso_desktop"))
+
+        if request.method == "POST":
+            try:
+                purpose = e2e_payload.get("purpose")
+                if purpose == desktop_test.PURPOSE_E2E_ACTIVATION_UNSUBSCRIBE:
+                    desktop_test.mark_activation_opt_out(test_run)
+                else:
+                    desktop_test.mark_opt_out(test_run)
+            except Exception:
+                logger.exception(
+                    "desktop_access_e2e_opt_out_failed run_id=%s",
+                    test_run.run_id,
+                )
+                _flash_acesso_desktop_link_indisponivel()
+                return redirect(url_for("acesso_desktop"))
+            logger.info(
+                "desktop_access_e2e_opt_out user_id=%s run_id=%s",
+                user.id,
+                test_run.run_id,
+            )
+            return render_template(
+                "acesso_desktop_descadastrar.html",
+                token=token,
+                confirmed=True,
+            )
+        return render_template(
+            "acesso_desktop_descadastrar.html",
+            token=token,
+            confirmed=False,
+        )
+
+    activation_lead = resolve_lead_for_activation_unsubscribe_token(
+        token,
+        secret_key=current_app.config["SECRET_KEY"],
+    )
+    if activation_lead is not None:
+        if request.method == "POST":
+            try:
+                apply_activation_opt_out(activation_lead)
+            except Exception:
+                logger.exception(
+                    "Falha ao aplicar activation opt-out desktop_access: lead_id=%s",
+                    activation_lead.id,
+                )
+                _flash_acesso_desktop_link_indisponivel()
+                return redirect(url_for("acesso_desktop"))
+            return render_template(
+                "acesso_desktop_descadastrar.html",
+                token=token,
+                confirmed=True,
+            )
+        return render_template(
+            "acesso_desktop_descadastrar.html",
+            token=token,
+            confirmed=False,
+        )
+
+    lead = resolve_lead_for_unsubscribe_token(
+        token,
+        secret_key=current_app.config["SECRET_KEY"],
+    )
+    if lead is None:
+        _flash_acesso_desktop_link_indisponivel()
+        return redirect(url_for("acesso_desktop"))
+
+    if request.method == "POST":
+        try:
+            apply_campaign_opt_out(lead)
+        except Exception:
+            logger.exception(
+                "Falha ao aplicar opt-out desktop_access: lead_id=%s",
+                lead.id,
+            )
+            _flash_acesso_desktop_link_indisponivel()
+            return redirect(url_for("acesso_desktop"))
+        return render_template(
+            "acesso_desktop_descadastrar.html",
+            token=token,
+            confirmed=True,
+        )
+
+    return render_template(
+        "acesso_desktop_descadastrar.html",
+        token=token,
+        confirmed=False,
+    )
 
 
 # Rota para newsletter
