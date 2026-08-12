@@ -25,10 +25,15 @@ def send_email(
     subject: str,
     html: str,
     text: str | None = None,
+    attachments: list | None = None,
+    headers: dict | None = None,
 ) -> None:
     """
     Envia e-mail usando a API do Resend.
     Centraliza o envio para facilitar manutenção e troca de provider.
+
+    attachments/headers são opcionais e retrocompatíveis: callers existentes
+    sem esses argumentos continuam inalterados.
     """
     api_key = os.getenv("RESEND_API_KEY")
     if not api_key:
@@ -48,6 +53,10 @@ def send_email(
     }
     if text:
         payload["text"] = text
+    if attachments:
+        payload["attachments"] = attachments
+    if headers:
+        payload["headers"] = headers
 
     try:
         response = requests.post(

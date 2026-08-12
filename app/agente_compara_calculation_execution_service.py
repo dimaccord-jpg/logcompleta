@@ -220,6 +220,16 @@ def _record_calculation_funnel_event(
     franquia_id = getattr(current_user, "franquia_id", None)
     if user_id is None or conta_id is None or franquia_id is None:
         return payload, False
+
+    from app.services.admin_desktop_access_test_service import (
+        complete_test_mode_after_successful_audit,
+        is_desktop_access_admin_test_mode_for_current_user,
+    )
+
+    if is_desktop_access_admin_test_mode_for_current_user():
+        complete_test_mode_after_successful_audit()
+        return payload, False
+
     started_funnel_tx = False
     try:
         orm_session = db.session()
@@ -273,6 +283,7 @@ def _record_calculation_funnel_event(
             execution_id,
             exc.__class__.__name__,
         )
+        return payload, False
     return payload, False
 
 

@@ -164,9 +164,67 @@ class FreteReal(db.Model):
 
 class Lead(db.Model):
     __tablename__ = 'leads'
+    __table_args__ = (
+        db.Index(
+            "ix_leads_acquisition_campaign_captured_at",
+            "acquisition_campaign",
+            "campaign_captured_at",
+        ),
+    )
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(150), unique=True, nullable=False)
     data_inscricao = db.Column(db.DateTime, default=db.func.current_timestamp())
+    # Aquisição (campanha): nullable para preservar leads históricos (ex.: newsletter).
+    acquisition_campaign = db.Column(db.String(80), nullable=True)
+    acquisition_source = db.Column(db.String(50), nullable=True)
+    campaign_captured_at = db.Column(db.DateTime, nullable=True)
+    # Jornada futura (schema antecipado; sem uso operacional nesta etapa).
+    cta_email_sent_at = db.Column(db.DateTime, nullable=True)
+    cta_clicked_at = db.Column(db.DateTime, nullable=True)
+    converted_user_id = db.Column(db.Integer, nullable=True)  # referência lógica a User.id
+    converted_at = db.Column(db.DateTime, nullable=True)
+    followup_count = db.Column(db.Integer, nullable=False, default=0)
+    last_followup_sent_at = db.Column(db.DateTime, nullable=True)
+    opt_out_at = db.Column(db.DateTime, nullable=True)
+    # Ativação pós-cadastro (sequência própria; não reutiliza follow-up pré-cadastro).
+    activation_email_1_sent_at = db.Column(db.DateTime, nullable=True)
+    activation_email_2_sent_at = db.Column(db.DateTime, nullable=True)
+    activation_opt_out_at = db.Column(db.DateTime, nullable=True)
+
+
+class DesktopAccessE2ETestRun(db.Model):
+    """
+    Estado técnico de homologação E2E da jornada Landing Desktop.
+
+    Isolado de Lead/aquisição real: um run por execução, mesmo User/e-mail.
+    """
+
+    __tablename__ = "desktop_access_e2e_test_run"
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.String(64), unique=True, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    initial_email_sent_at = db.Column(db.DateTime, nullable=True)
+    cta_clicked_at = db.Column(db.DateTime, nullable=True)
+    registration_completed_at = db.Column(db.DateTime, nullable=True)
+    followup_sent_at = db.Column(db.DateTime, nullable=True)
+    opt_out_at = db.Column(db.DateTime, nullable=True)
+    first_use_seen_at = db.Column(db.DateTime, nullable=True)
+    first_audit_seen_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    # Ativação pós-cadastro (E2E Replay — paridade com Lead).
+    activation_email_1_sent_at = db.Column(db.DateTime, nullable=True)
+    activation_email_2_sent_at = db.Column(db.DateTime, nullable=True)
+    activation_opt_out_at = db.Column(db.DateTime, nullable=True)
+    activation_sequence_started_at = db.Column(db.DateTime, nullable=True)
+
+    user = db.relationship(
+        "User",
+        foreign_keys=[user_id],
+        backref=db.backref("desktop_access_e2e_test_runs", lazy="dynamic"),
+    )
+
 
 class Pauta(db.Model):
     """Pauta para a Júlia. Scout/import preenchem; Verificador define status_verificacao. Só aprovadas vão para Julia."""

@@ -10,6 +10,29 @@ def _load_web_module():
     return importlib.import_module("app.web")
 
 
+def _empty_acquisition_payload():
+    return {
+        "campaign": "desktop_access",
+        "period": {"start_utc": None, "end_utc": None, "label": "Ultimos 30 dias", "days": 30},
+        "stages": {"lead": 0, "click": 0, "registration": 0, "first_use": 0, "first_audit": 0},
+        "rates": {
+            "lead_to_click": 0.0,
+            "click_to_registration": 0.0,
+            "registration_to_first_use": 0.0,
+            "first_use_to_first_audit": 0.0,
+            "lead_to_first_audit": 0.0,
+        },
+        "funnel": [
+            {"key": "lead", "label": "Leads", "count": 0, "rate_from_previous": 0.0},
+            {"key": "click", "label": "Cliques", "count": 0, "rate_from_previous": 0.0},
+            {"key": "registration", "label": "Cadastros", "count": 0, "rate_from_previous": 0.0},
+            {"key": "first_use", "label": "Primeiro uso", "count": 0, "rate_from_previous": 0.0},
+            {"key": "first_audit", "label": "Primeira auditoria", "count": 0, "rate_from_previous": 0.0},
+        ],
+        "data_quality": {"has_data": False, "warnings": [], "service_failed": False},
+    }
+
+
 def test_dashboard_renderiza_sem_bloco_de_insight(monkeypatch):
     web = _load_web_module()
     from app.painel_admin import admin_routes
@@ -55,6 +78,10 @@ def test_dashboard_renderiza_sem_bloco_de_insight(monkeypatch):
             "days": 30,
             "removed_terms": {"stopwords": {}, "admin_hidden": {}},
         },
+    )
+    monkeypatch.setattr(
+        "app.services.admin_acquisition_dashboard_service.get_acquisition_dashboard_payload",
+        lambda **_kwargs: _empty_acquisition_payload(),
     )
 
     with web.app.test_request_context("/admin/dashboard"):
@@ -136,11 +163,16 @@ def test_dashboard_renderiza_bloco_de_conversoes_com_filtros_preservados(monkeyp
             "data_quality": {"has_data": True, "warnings": [], "service_failed": False},
         },
     )
+    monkeypatch.setattr(
+        "app.services.admin_acquisition_dashboard_service.get_acquisition_dashboard_payload",
+        lambda **_kwargs: _empty_acquisition_payload(),
+    )
 
     with web.app.test_request_context("/admin/dashboard?categoria=vip&franquia_status=ativa&cancelado=ativos&conversion_source=cleide_audit&conversion_days=90"):
         html = admin_routes.admin_dashboard.__wrapped__()
 
     assert "Conversões" in html
+    assert "Aquisição — Landing Desktop" in html
     assert "Usuários com upload" in html
     assert "Usuários com conclusão" in html
     assert "Primeiras auditorias" in html
@@ -177,6 +209,10 @@ def test_dashboard_conversion_failure_degrades_without_breaking_page(monkeypatch
         "app.services.admin_conversion_dashboard_service.get_conversion_dashboard_payload",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("conversion down")),
     )
+    monkeypatch.setattr(
+        "app.services.admin_acquisition_dashboard_service.get_acquisition_dashboard_payload",
+        lambda **_kwargs: _empty_acquisition_payload(),
+    )
 
     with web.app.test_request_context("/admin/dashboard?conversion_source=agente_compara&conversion_days=7"):
         html = admin_routes.admin_dashboard.__wrapped__()
@@ -184,4 +220,5 @@ def test_dashboard_conversion_failure_degrades_without_breaking_page(monkeypatch
     assert "Conversões" in html
     assert "Métricas de conversão indisponíveis temporariamente." in html
     assert "Nenhum dado de conversão encontrado" in html
+    assert "Aquisição — Landing Desktop" in html
     assert "Consumo de IA (Cleiton)" in html

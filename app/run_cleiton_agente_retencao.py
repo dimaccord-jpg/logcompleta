@@ -5,6 +5,8 @@ Limpeza auditavel e idempotente; eventos de purge registrados na auditoria.
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import or_
+
 from app.extensions import db
 from app.models import (
     AuditoriaGerencial,
@@ -49,7 +51,14 @@ def limpar_dados_antigos(app_flask) -> int:
             if count_noticias:
                 logger.info("Retencao: %d noticias/artigos removidos (antes de %s).", count_noticias, limite.date())
 
-            q_lead = Lead.query.filter(Lead.data_inscricao < limite)
+            # Lead: data_inscricao antiga NÃO basta se houver captura recente de campanha.
+            q_lead = Lead.query.filter(
+                Lead.data_inscricao < limite,
+                or_(
+                    Lead.campaign_captured_at.is_(None),
+                    Lead.campaign_captured_at < limite,
+                ),
+            )
             count_leads = q_lead.count()
             q_lead.delete(synchronize_session=False)
             total += count_leads

@@ -2,6 +2,10 @@ import os
 import json
 import logging
 from datetime import datetime
+
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+
 from app.extensions import db
 from app.models import Lead, NoticiaPortal, Pauta
 
@@ -9,25 +13,48 @@ logger = logging.getLogger(__name__)
 
 # --- LÓGICA DE LEADS (NEWSLETTER) ---
 
+def _normalize_lead_email(email):
+    """Trim + lower para identidade única de Lead; não reescreve e-mails já persistidos."""
+    return (email or "").strip().lower()
+
+
 def registrar_lead_newsletter(email):
     """
     Gerencia a entrada de novos leads no leads.db
     """
-    if not email:
+    email_normalized = _normalize_lead_email(email)
+    if not email_normalized:
         return False, "E-mail é obrigatório."
-    
+
     try:
-        # Verifica se o lead já existe
-        existe = Lead.query.filter_by(email=email).first()
+        # Lookup case-insensitive; não altera campos de aquisição/jornada se já existir.
+        existe = (
+            Lead.query.filter(func.lower(Lead.email) == email_normalized)
+            .order_by(Lead.id.asc())
+            .first()
+        )
         if existe:
             return True, "Você já está na nossa lista de inteligência!"
-        
-        novo_lead = Lead(email=email)
+
+        novo_lead = Lead(email=email_normalized)
         db.session.add(novo_lead)
         db.session.commit()
-        logger.info(f"✅ NOVO LEAD: {email} cadastrado com sucesso.")
+        logger.info(f"✅ NOVO LEAD: {email_normalized} cadastrado com sucesso.")
         return True, "Bem-vindo à LogTech! Sua inscrição foi confirmada."
-    
+
+    except IntegrityError:
+        # Disputa simultânea com a mesma identidade normalizada: reutiliza a linha existente.
+        db.session.rollback()
+        existe = (
+            Lead.query.filter(func.lower(Lead.email) == email_normalized)
+            .order_by(Lead.id.asc())
+            .first()
+        )
+        if existe:
+            return True, "Você já está na nossa lista de inteligência!"
+        logger.error("❌ ERRO AO SALVAR LEAD: IntegrityError sem Lead existente após rollback.")
+        return False, "Erro interno ao processar cadastro."
+
     except Exception as e:
         db.session.rollback()
         logger.error(f"❌ ERRO AO SALVAR LEAD: {e}")
