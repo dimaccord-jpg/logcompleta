@@ -1,0 +1,22 @@
+{% set openai_ads_pixel_id = (config.get('OPENAI_ADS_PIXEL_ID') or '')|trim %}
+{% if openai_ads_pixel_id %}
+<script>
+(() => {
+    const completeRegistrationEnabled = {{ (pixel_event_complete_registration or false)|tojson }};
+
+    function hasOaiq() {
+        return typeof window.oaiq === "function";
+    }
+
+    if (completeRegistrationEnabled && hasOaiq()) {
+        try {
+            window.oaiq("measure", "registration_completed", {
+                type: "customer_action"
+            });
+        } catch (err) {
+            // Measurement nunca bloqueia o fluxo.
+        }
+    }
+})();
+</script>
+{% endif %}

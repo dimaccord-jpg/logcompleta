@@ -1,0 +1,23 @@
+{% set openai_ads_pixel_id = (config.get('OPENAI_ADS_PIXEL_ID') or '')|trim %}
+{% if openai_ads_pixel_id %}
+<script>
+  (function (w, d, s, u) {
+    if (w.oaiq) return;
+    var q = function () {
+      q.q.push(arguments);
+    };
+    q.q = [];
+    w.oaiq = q;
+    var js = d.createElement(s);
+    js.async = true;
+    js.src = u;
+    var f = d.getElementsByTagName(s)[0];
+    f.parentNode.insertBefore(js, f);
+  })(window, document, "script", "https://bzrcdn.openai.com/sdk/oaiq.min.js");
+
+  oaiq("init", {
+    pixelId: {{ openai_ads_pixel_id|tojson }}{% if config.get('OPENAI_ADS_DEBUG') %},
+    debug: true{% endif %}
+  });
+</script>
+{% endif %}

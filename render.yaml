@@ -24,6 +24,10 @@ services:
         sync: false
       - key: PLANOS_UPGRADE_URL
         sync: false
+      - key: OPENAI_ADS_PIXEL_ID
+        sync: false
+      - key: OPENAI_ADS_DEBUG
+        sync: false
       - key: OPS_TOKEN
         sync: false
       - key: BOOTSTRAP_ADMIN_EMAIL
@@ -91,6 +95,10 @@ services:
       - key: CRON_SECRET
         sync: false
       - key: PLANOS_UPGRADE_URL
+        sync: false
+      - key: OPENAI_ADS_PIXEL_ID
+        sync: false
+      - key: OPENAI_ADS_DEBUG
         sync: false
       - key: OPS_TOKEN
         sync: false
