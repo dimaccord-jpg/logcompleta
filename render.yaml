@@ -76,8 +76,8 @@ services:
   - type: web
     name: logcompleta-web-prod
     env: python
-    branch: main
-    autoDeploy: false
+    branch: producao
+    autoDeploy: true
     buildCommand: bash ./build.sh
     startCommand: bash ./start.sh
     healthCheckPath: /health
