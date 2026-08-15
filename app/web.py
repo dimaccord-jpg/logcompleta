@@ -220,6 +220,8 @@ app.config['SESSION_COOKIE_HTTPONLY'] = settings.session_cookie_httponly
 app.config['SESSION_COOKIE_SAMESITE'] = settings.session_cookie_samesite
 app.config['PLANOS_UPGRADE_URL'] = settings.planos_upgrade_url
 app.config['FACEBOOK_PIXEL_ID'] = settings.facebook_pixel_id
+app.config['OPENAI_ADS_PIXEL_ID'] = settings.openai_ads_pixel_id
+app.config['OPENAI_ADS_DEBUG'] = settings.openai_ads_debug
 
 # Configuração para OAuth em HTTPS com auto-redirecionamento
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.

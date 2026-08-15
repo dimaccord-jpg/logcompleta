@@ -59,3 +59,53 @@ def test_secret_key_valida_permite_boot_em_homolog_e_prod(monkeypatch, tmp_path,
 def test_session_cookie_secure_por_ambiente(monkeypatch, tmp_path, app_env, expected_secure):
     settings_module = _load_settings(monkeypatch, tmp_path, app_env, "super-secret-key-1234567890")
     assert settings_module.settings.session_cookie_secure is expected_secure
+
+
+def test_openai_ads_pixel_ausente_nao_impede_boot(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_ADS_PIXEL_ID", raising=False)
+    monkeypatch.delenv("OPENAI_ADS_DEBUG", raising=False)
+    settings_module = _load_settings(monkeypatch, tmp_path, "dev", None)
+    assert settings_module.settings.openai_ads_pixel_id == ""
+    assert settings_module.settings.openai_ads_debug is False
+
+
+def test_openai_ads_pixel_id_lido_do_ambiente(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENAI_ADS_PIXEL_ID", "  px_test_123  ")
+    monkeypatch.delenv("OPENAI_ADS_DEBUG", raising=False)
+    settings_module = _load_settings(monkeypatch, tmp_path, "dev", None)
+    assert settings_module.settings.openai_ads_pixel_id == "px_test_123"
+    assert settings_module.settings.openai_ads_debug is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("true", True),
+        ("1", True),
+        ("t", True),
+        ("false", False),
+        ("0", False),
+        ("", False),
+    ],
+)
+def test_openai_ads_debug_parse(monkeypatch, tmp_path, raw, expected):
+    if raw == "":
+        monkeypatch.delenv("OPENAI_ADS_DEBUG", raising=False)
+    else:
+        monkeypatch.setenv("OPENAI_ADS_DEBUG", raw)
+    monkeypatch.delenv("OPENAI_ADS_PIXEL_ID", raising=False)
+    settings_module = _load_settings(monkeypatch, tmp_path, "dev", None)
+    assert settings_module.settings.openai_ads_debug is expected
+
+
+def test_openai_ads_settings_nao_expoe_capi_ou_secret(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_ADS_PIXEL_ID", raising=False)
+    monkeypatch.delenv("OPENAI_ADS_DEBUG", raising=False)
+    settings_module = _load_settings(monkeypatch, tmp_path, "dev", None)
+    fields = settings_module.Settings.__dataclass_fields__
+    assert "openai_ads_pixel_id" in fields
+    assert "openai_ads_debug" in fields
+    assert "openai_ads_capi_key" not in fields
+    assert not any("capi" in name.lower() for name in fields)
+    assert not any("openai_ads" in name.lower() and "secret" in name.lower() for name in fields)
+    assert not any("openai_ads" in name.lower() and "key" in name.lower() for name in fields)
