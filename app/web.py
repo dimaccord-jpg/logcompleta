@@ -42,7 +42,7 @@ from app.cleide_audit_routes import cleide_audit_bp
 from app.cleide_routes import cleide_bp
 from app.julia_documents_routes import julia_documents_bp
 from app.infra import (
-    get_user_by_id,
+    load_user_for_flask_login,
     admin_required,
     user_is_admin,
     get_julia_chat_max_history,
@@ -66,7 +66,7 @@ from app.auth_services import (
     send_email,
 )
 
-from app.news_ai import registrar_lead_newsletter
+from app.news_ai import registrar_newsletter_subscription
 from app.services import user_admin_control_service
 from app.services.lead_acquisition_service import (
     CAMPANHA_ACESSO_DESKTOP,
@@ -80,6 +80,18 @@ from app.services.lead_campaign_email_service import (
     resolve_lead_for_cta_token,
     resolve_lead_for_unsubscribe_token,
 )
+from app.services.communication_suppression_backfill_service import (
+    register_communication_suppression_backfill_command,
+)
+from app.services.lead_email_minimization_service import (
+    register_lead_email_minimization_command,
+)
+from app.services.newsletter_subscription_backfill_service import (
+    register_newsletter_subscription_backfill_command,
+)
+from app.services.user_privacy_rights_service import (
+    register_privacy_rights_user_command,
+)
 from app.run_julia_agente_imagem import FALLBACK_ASSET_LOCAL, log_image_runtime_config
 
 # Model used by the home route to list portal news/articles.
@@ -88,10 +100,17 @@ from app.models import NoticiaPortal
 # 2. Configuração de ambiente centralizada (após validar driver e carregar .env via settings)
 from app.settings import settings
 from app.env_loader import mask_database_url_for_log, log_database_boot_diagnostics
+from app.privacy_marketing import (
+    PRIVACY_MARKETING_DECISIONS,
+    PRIVACY_MARKETING_STATE_REJECTED,
+    SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION as _SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION,
+    SESSION_PIXEL_EVENT_LEAD as _SESSION_PIXEL_EVENT_LEAD,
+    apply_privacy_marketing_cookie,
+    discard_pending_marketing_pixel_flags,
+    is_privacy_marketing_allowed,
+    parse_privacy_marketing_cookie,
+)
 
-
-_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION = "pixel_event_complete_registration_once"
-_SESSION_PIXEL_EVENT_LEAD = "pixel_event_lead_once"
 _SESSION_ONBOARDING_DISCOVERY_COUNT = "onboarding_discovery_count"
 _SESSION_ONBOARDING_DISCOVERY_ANON_ID = "onboarding_discovery_anon_id"
 _SESSION_ONBOARDING_JULIA_CONTEXT = "onboarding_julia_context"
@@ -222,6 +241,11 @@ app.config['PLANOS_UPGRADE_URL'] = settings.planos_upgrade_url
 app.config['FACEBOOK_PIXEL_ID'] = settings.facebook_pixel_id
 app.config['OPENAI_ADS_PIXEL_ID'] = settings.openai_ads_pixel_id
 app.config['OPENAI_ADS_DEBUG'] = settings.openai_ads_debug
+app.config['PRIVACY_MARKETING_COOKIE_NAME'] = settings.privacy_marketing_cookie_name
+app.config['PRIVACY_MARKETING_COOKIE_MAX_AGE_SECONDS'] = settings.privacy_marketing_cookie_max_age_seconds
+app.config['COMMUNICATION_SUPPRESSION_HMAC_SECRET'] = (
+    settings.communication_suppression_hmac_secret
+)
 
 # Configuração para OAuth em HTTPS com auto-redirecionamento
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.
@@ -256,12 +280,26 @@ app.register_blueprint(julia_documents_bp)
 
 @app.context_processor
 def inject_facebook_pixel_context():
+    cookie_name = settings.privacy_marketing_cookie_name
+    privacy_state = parse_privacy_marketing_cookie(request.cookies.get(cookie_name))
+    marketing_allowed = is_privacy_marketing_allowed(privacy_state)
+
+    complete_registration = False
+    lead = False
+    if marketing_allowed:
+        complete_registration = bool(
+            session.pop(_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION, False)
+        )
+        lead = bool(session.pop(_SESSION_PIXEL_EVENT_LEAD, False))
+    elif privacy_state == PRIVACY_MARKETING_STATE_REJECTED:
+        discard_pending_marketing_pixel_flags(session)
+
     return {
         "facebook_pixel_id": (app.config.get("FACEBOOK_PIXEL_ID") or "").strip(),
-        "pixel_event_complete_registration": bool(
-            session.pop(_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION, False)
-        ),
-        "pixel_event_lead": bool(session.pop(_SESSION_PIXEL_EVENT_LEAD, False)),
+        "pixel_event_complete_registration": complete_registration,
+        "pixel_event_lead": lead,
+        "privacy_marketing_state": privacy_state,
+        "privacy_marketing_allowed": marketing_allowed,
     }
 
 
@@ -320,12 +358,12 @@ def _consumo_identidade_before_request():
 with app.app_context():
     from app.models import User, FreteReal, NoticiaPortal
     from app.brain import processar_inteligencia_frete
-    from app.news_ai import registrar_lead_newsletter
+    from app.news_ai import registrar_newsletter_subscription
     from app.terms_services import get_active_term
 
 @login_manager.user_loader
 def load_user(user_id):
-    return get_user_by_id(user_id)
+    return load_user_for_flask_login(user_id)
 
 
 @login_manager.unauthorized_handler
@@ -1398,6 +1436,36 @@ def api_roberto_bi_recomendacoes():
     return api_recomendacoes()
 
 
+@app.route("/api/privacy/marketing-consent", methods=["POST"])
+def privacy_marketing_consent():
+    """Registra preferência first-party de marketing. Não exige login."""
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "json_required"}), 400
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "json_required"}), 400
+    if set(payload.keys()) != {"decision"}:
+        return jsonify({"ok": False, "error": "invalid_decision"}), 400
+
+    decision = payload.get("decision")
+    if decision not in PRIVACY_MARKETING_DECISIONS:
+        return jsonify({"ok": False, "error": "invalid_decision"}), 400
+
+    if decision == PRIVACY_MARKETING_STATE_REJECTED:
+        discard_pending_marketing_pixel_flags(session)
+
+    response = jsonify({"ok": True, "decision": decision})
+    apply_privacy_marketing_cookie(
+        response,
+        decision=decision,
+        cookie_name=settings.privacy_marketing_cookie_name,
+        max_age_seconds=settings.privacy_marketing_cookie_max_age_seconds,
+        secure=settings.session_cookie_secure,
+    )
+    return response
+
+
 # --- API Onboarding Discovery (Cleiton Discovery AI; shell visual Júlia) ---
 @app.route('/api/onboarding_discovery', methods=['POST'])
 def api_onboarding_discovery():
@@ -2014,11 +2082,66 @@ def acesso_desktop_descadastrar(token):
 @app.route('/inscrever-newsletter', methods=['POST'])
 def inscrever_newsletter():
     email = request.form.get('email')
-    # O web.py apenas repassa o e-mail, o news_ai faz o trabalho pesado
-    sucesso, mensagem = registrar_lead_newsletter(email)
+    sucesso, mensagem = registrar_newsletter_subscription(email)
     
     flash(mensagem, "success" if sucesso else "danger")
     return redirect(url_for('feed'))
+
+
+@app.route("/newsletter/cancelar/<token>", methods=["GET", "POST"])
+def newsletter_cancelar(token):
+    """Opt-out de newsletter. Não é campaign opt-out nem CommunicationSuppression."""
+    from app.services.newsletter_subscription_service import (
+        resolve_subscription_for_unsubscribe_token,
+        signing_secret_key,
+        unsubscribe,
+    )
+
+    token_preview = (token or "")[:8]
+    try:
+        secret_key = signing_secret_key()
+        row = resolve_subscription_for_unsubscribe_token(token, secret_key=secret_key)
+    except Exception:
+        logger.exception("newsletter unsubscribe token resolve failed token_prefix=%s", token_preview)
+        row = None
+
+    if row is None:
+        logger.info("newsletter unsubscribe token_invalid token_prefix=%s", token_preview)
+        return render_template(
+            "newsletter_cancelar.html",
+            token=token,
+            confirmed=False,
+            invalid=True,
+        ), 400
+
+    if request.method == "POST":
+        try:
+            unsubscribe(row.email, commit=True, sync_user_flag=True)
+        except Exception:
+            logger.exception(
+                "newsletter unsubscribe apply failed subscription_id=%s",
+                row.id,
+            )
+            return render_template(
+                "newsletter_cancelar.html",
+                token=token,
+                confirmed=False,
+                invalid=True,
+            ), 500
+        logger.info("newsletter unsubscribe applied subscription_id=%s", row.id)
+        return render_template(
+            "newsletter_cancelar.html",
+            token=token,
+            confirmed=True,
+            invalid=False,
+        )
+
+    return render_template(
+        "newsletter_cancelar.html",
+        token=token,
+        confirmed=False,
+        invalid=False,
+    )
 
 # --- OUTROS MÓDULOS (PLACEHOLDERS) ---
 
@@ -2275,6 +2398,12 @@ def cli_bootstrap_admin():
 
     with app.app_context():
         ensure_bootstrap_admin_user(db, raise_on_failure=True)
+
+
+register_communication_suppression_backfill_command(app)
+register_lead_email_minimization_command(app)
+register_privacy_rights_user_command(app)
+register_newsletter_subscription_backfill_command(app)
 
 
 # --- EXECUÇÃO E MANUTENÇÃO ---

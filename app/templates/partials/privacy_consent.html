@@ -1,0 +1,101 @@
+{% set _privacy_state = privacy_marketing_state|default('unknown') %}
+{% set _privacy_consent_endpoint = url_for('privacy_marketing_consent') if has_endpoint('privacy_marketing_consent') else '/api/privacy/marketing-consent' %}
+<div
+    id="af-privacy-root"
+    data-endpoint="{{ _privacy_consent_endpoint }}"
+    data-state="{{ _privacy_state }}"
+>
+    {% if _privacy_state == 'unknown' %}
+    <div
+        id="af-privacy-banner"
+        class="af-privacy-banner"
+        role="region"
+        aria-label="Preferências de privacidade"
+    >
+        <div class="af-privacy-banner-inner">
+            <p class="af-privacy-copy">
+                Utilizamos tecnologias necessárias para o funcionamento do AgenteFrete
+                e, com sua autorização, tecnologias de marketing e medição.
+                <a
+                    href="{{ url_for('privacy_policy') }}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >Política de Privacidade</a>
+            </p>
+            <div class="af-privacy-actions">
+                <button type="button" class="af-privacy-btn" data-af-privacy-decision="accepted">
+                    Aceitar
+                </button>
+                <button type="button" class="af-privacy-btn" data-af-privacy-decision="rejected">
+                    Rejeitar não necessários
+                </button>
+                <button
+                    type="button"
+                    class="af-privacy-btn-text"
+                    data-af-privacy-open-panel
+                    aria-expanded="false"
+                    aria-controls="af-privacy-panel"
+                >
+                    Gerenciar preferências
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div
+        id="af-privacy-panel"
+        class="af-privacy-panel"
+        hidden
+        role="region"
+        aria-labelledby="af-privacy-panel-title"
+        aria-hidden="true"
+    >
+        <div class="af-privacy-panel-inner">
+            <div class="af-privacy-panel-header">
+                <h2 id="af-privacy-panel-title" class="af-privacy-panel-title" tabindex="-1">
+                    Preferências de privacidade
+                </h2>
+                <button
+                    type="button"
+                    class="af-privacy-btn-text"
+                    data-af-privacy-close-panel
+                    aria-label="Fechar preferências de privacidade"
+                >
+                    Fechar
+                </button>
+            </div>
+
+            <div class="af-privacy-category">
+                <div class="af-privacy-category-head">
+                    <strong>Necessários</strong>
+                    <span class="af-privacy-badge">Sempre ativos</span>
+                </div>
+                <p class="af-privacy-copy">Sessão, autenticação, segurança e funcionamento do serviço.</p>
+            </div>
+
+            <div class="af-privacy-category">
+                <div class="af-privacy-category-head">
+                    <strong>Marketing e medição</strong>
+                    <span class="af-privacy-badge" id="af-privacy-marketing-status">
+                        {% if _privacy_state == 'accepted' %}ativado{% else %}desativado{% endif %}
+                    </span>
+                </div>
+                <p class="af-privacy-copy">
+                    Meta Pixel e OpenAI Ads Measurement para medir campanhas e conversões.
+                </p>
+                <div class="af-privacy-actions">
+                    <button type="button" class="af-privacy-btn" data-af-privacy-decision="accepted">
+                        Aceitar
+                    </button>
+                    <button type="button" class="af-privacy-btn" data-af-privacy-decision="rejected">
+                        Rejeitar não necessários
+                    </button>
+                </div>
+            </div>
+
+            <p id="af-privacy-error" class="af-privacy-error" hidden role="alert"></p>
+        </div>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='js/privacy_consent.js') }}"></script>

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Newsletter | AgenteFrete</title>
+</head>
+<body>
+  <main>
+    {% if invalid %}
+    <h1>Link indisponível</h1>
+    <p>Não foi possível confirmar este pedido de cancelamento da newsletter.</p>
+    {% elif confirmed %}
+    <h1>Inscrição cancelada</h1>
+    <p>Você não receberá novas mensagens da newsletter.</p>
+    {% else %}
+    <h1>Cancelar newsletter?</h1>
+    <p>Você deixará de receber as análises da newsletter AgenteFrete.</p>
+    <form method="post" action="{{ url_for('newsletter_cancelar', token=token) }}">
+      <button type="submit">Cancelar inscrição</button>
+    </form>
+    {% endif %}
+  </main>
+</body>
+</html>

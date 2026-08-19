@@ -190,6 +190,80 @@ class Lead(db.Model):
     activation_email_1_sent_at = db.Column(db.DateTime, nullable=True)
     activation_email_2_sent_at = db.Column(db.DateTime, nullable=True)
     activation_opt_out_at = db.Column(db.DateTime, nullable=True)
+    # Término operacional da jornada de ativação deste converted_user_id.
+    # Não é opt-out: não preenche opt_out_at / activation_opt_out_at.
+    activation_ended_at = db.Column(db.DateTime, nullable=True)
+    activation_ended_for_user_id = db.Column(db.Integer, nullable=True)  # referência lógica a User.id
+    # Identidade criptográfica do e-mail original (HMAC-SHA256 hex, 64).
+    # Sem plaintext. Não é dedupe, reconciliação, analytics nem newsletter.
+    # Não implica opt-out / CommunicationSuppression.
+    email_hmac = db.Column(db.String(64), nullable=True)
+
+
+class CommunicationSuppression(db.Model):
+    """
+    Memória persistente de opt-out por finalidade, sem plaintext de e-mail.
+
+    Independente de Lead/User: a identidade é HMAC(email normalizado).
+    Não substitui Lead.opt_out_at / Lead.activation_opt_out_at nesta fase.
+    Backfill histórico controlado: communication_suppression_backfill_service.
+    """
+
+    __tablename__ = "communication_suppression"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "email_hmac",
+            "purpose",
+            name="uq_communication_suppression_email_hmac_purpose",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    email_hmac = db.Column(db.String(64), nullable=False)
+    purpose = db.Column(db.String(64), nullable=False)
+    suppressed_at = db.Column(db.DateTime, nullable=False)
+    source = db.Column(db.String(80), nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+
+
+class NewsletterSubscription(db.Model):
+    """
+    Autoridade operacional de destinatários da newsletter.
+
+    Independente de Lead, User (sem FK), campanha desktop e CommunicationSuppression.
+    Funciona para não-users. User.subscribes_to_newsletter permanece por UX/compatibilidade.
+
+    Semântica de subscribed_at (UTC naive via utcnow_naive):
+    - inscrição nova: agora (início da vigência)
+    - reinscrição após unsubscribe: agora da nova inscrição (vigência atual)
+    - inscrição repetida já ativa: inalterado (idempotente)
+
+    unsubscribed_at preenchido no opt-out; null enquanto a inscrição está ativa.
+    source é valor controlado (não é payload livre).
+    """
+
+    __tablename__ = "newsletter_subscription"
+    __table_args__ = (
+        db.UniqueConstraint("email", name="uq_newsletter_subscription_email"),
+    )
+
+    SOURCE_PUBLIC_NEWSLETTER = "public_newsletter"
+    SOURCE_USER_PREFERENCE = "user_preference"
+    SOURCE_USER_PREFERENCE_BACKFILL = "user_preference_backfill"
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(150), nullable=False)
+    subscribed_at = db.Column(db.DateTime, nullable=False)
+    unsubscribed_at = db.Column(db.DateTime, nullable=True)
+    source = db.Column(db.String(80), nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False
+    )
+
+    @property
+    def is_active(self) -> bool:
+        return self.unsubscribed_at is None
 
 
 class DesktopAccessE2ETestRun(db.Model):

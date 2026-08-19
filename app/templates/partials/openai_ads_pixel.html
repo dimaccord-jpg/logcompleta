@@ -1,5 +1,5 @@
 {% set openai_ads_pixel_id = (config.get('OPENAI_ADS_PIXEL_ID') or '')|trim %}
-{% if openai_ads_pixel_id %}
+{% if openai_ads_pixel_id and privacy_marketing_allowed %}
 <script>
   (function (w, d, s, u) {
     if (w.oaiq) return;

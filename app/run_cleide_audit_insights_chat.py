@@ -50,6 +50,7 @@ from app.run_cleide_audit_chat import (
 )
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.cleide_audit_config_service import get_cleide_audit_config
+from app.services.external_ai_masking import mask_structured_for_external_ai
 
 logger = logging.getLogger(__name__)
 
@@ -411,7 +412,7 @@ def _run_gemini_analytical_reply(
     prompt = build_insights_user_prompt(
         user_message=clean_message,
         history_slice=history_slice,
-        context_payload=compact,
+        context_payload=mask_structured_for_external_ai(compact),
         intent=intent,
     )
     last_error: Exception | None = None

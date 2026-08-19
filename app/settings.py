@@ -3,6 +3,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app import env_loader
+from app.privacy_marketing import (
+    PRIVACY_MARKETING_COOKIE_MAX_AGE_SECONDS,
+    PRIVACY_MARKETING_COOKIE_NAME,
+)
 
 
 AppEnv = Literal["dev", "homolog", "prod"]
@@ -69,6 +73,9 @@ class Settings:
     openai_ads_pixel_id: str
     openai_ads_debug: bool
     public_base_url: str
+    privacy_marketing_cookie_name: str
+    privacy_marketing_cookie_max_age_seconds: int
+    communication_suppression_hmac_secret: str
 
 
 def _build_settings() -> Settings:
@@ -160,6 +167,17 @@ def _build_settings() -> Settings:
     public_base_url = (
         (os.getenv("PUBLIC_BASE_URL") or "https://www.agentefrete.com.br").strip().rstrip("/")
     )
+    privacy_marketing_cookie_name = PRIVACY_MARKETING_COOKIE_NAME
+    privacy_marketing_cookie_max_age_seconds = PRIVACY_MARKETING_COOKIE_MAX_AGE_SECONDS
+    communication_suppression_hmac_secret = (
+        os.getenv("COMMUNICATION_SUPPRESSION_HMAC_SECRET") or ""
+    ).strip()
+    print(
+        "[VALIDAÇÃO] COMMUNICATION_SUPPRESSION_HMAC_SECRET:",
+        "configurado"
+        if communication_suppression_hmac_secret
+        else "ausente (suppression desabilitada)",
+    )
 
     # 11) Debug: forçamos False em homolog/prod por segurança
     debug = (os.getenv("FLASK_DEBUG", "False") or "False").lower() in ("true", "1", "t")
@@ -199,6 +217,9 @@ def _build_settings() -> Settings:
         openai_ads_pixel_id=openai_ads_pixel_id,
         openai_ads_debug=openai_ads_debug,
         public_base_url=public_base_url,
+        privacy_marketing_cookie_name=privacy_marketing_cookie_name,
+        privacy_marketing_cookie_max_age_seconds=privacy_marketing_cookie_max_age_seconds,
+        communication_suppression_hmac_secret=communication_suppression_hmac_secret,
     )
 
 

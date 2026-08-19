@@ -2,7 +2,8 @@
 Storage dedicado do resultado comparativo do AgenteCompara (correção Etapa 5).
 
 Persiste o payload completo fora da sessão Flask (filesystem isolado em
-cleiton_doc_tmp/agente_compara_calc), com escrita atômica e checksum SHA-256.
+cleiton_doc_tmp/agente_compara_calc), com escrita atômica, checksum SHA-256
+e retenção limitada (TTL) de result/memory.
 
 Não importa Cleide. Não contém matemática de frete.
 """
@@ -14,6 +15,7 @@ import logging
 import os
 import time
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -32,6 +34,7 @@ RESULT_STORAGE_SCHEMA_VERSION = 2
 RESULT_SUBDIR_NAME = "agente_compara_calc"
 RESULT_FILENAME_PREFIX = "cc_result_"
 MEMORY_FILENAME_PREFIX = "cc_memory_"
+AGENTE_COMPARA_CALC_STORAGE_TTL_HOURS = 48
 
 # Cenário medido ~5.14 MB (2000×3). Limite técnico folgado acima do caso aprovado.
 RESULT_MAX_BYTES = 16 * 1024 * 1024
@@ -78,6 +81,9 @@ _FORBIDDEN_PUBLIC_RESULT_FIELDS = frozenset(
 )
 
 _SAFE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,200}$")
+_CALC_STORAGE_SWEEP_MIN_INTERVAL_SECONDS = 300
+_CALC_STORAGE_SWEEP_MAX_FILES = 40
+_calc_storage_sweep_monotonic = 0.0
 
 
 class AgenteComparaCalculationResultStorageError(Exception):
@@ -140,6 +146,263 @@ def _raise_storage_error(
         invalid_type=invalid_type,
         invalid_path=invalid_path,
     ) from exc
+
+
+def _calc_storage_ttl_hours() -> int:
+    return max(1, int(AGENTE_COMPARA_CALC_STORAGE_TTL_HOURS))
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _format_calc_storage_timestamp(dt: datetime) -> str:
+    return _as_utc(dt).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_calc_storage_timestamp(raw: Any) -> datetime | None:
+    if isinstance(raw, datetime):
+        return _as_utc(raw)
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except Exception:
+        return None
+    return _as_utc(parsed)
+
+
+def build_calc_storage_retention_window(
+    *,
+    created_at: str | datetime | None = None,
+    expires_at: str | datetime | None = None,
+) -> dict[str, str]:
+    """Janela única de retenção do par result/memory (UTC, TTL centralizado)."""
+    created_dt = _parse_calc_storage_timestamp(created_at)
+    if created_dt is None:
+        created_dt = _as_utc(_utcnow())
+    expires_dt = _parse_calc_storage_timestamp(expires_at)
+    if expires_dt is None:
+        expires_dt = created_dt + timedelta(hours=_calc_storage_ttl_hours())
+    return {
+        "created_at": _format_calc_storage_timestamp(created_dt),
+        "expires_at": _format_calc_storage_timestamp(expires_dt),
+    }
+
+
+def _retention_window_from_inputs(
+    *,
+    created_at: str | datetime | None = None,
+    expires_at: str | datetime | None = None,
+    meta: dict | None = None,
+) -> dict[str, str]:
+    payload = meta if isinstance(meta, dict) else {}
+    return build_calc_storage_retention_window(
+        created_at=created_at if created_at is not None else payload.get("created_at"),
+        expires_at=expires_at if expires_at is not None else payload.get("expires_at"),
+    )
+
+
+def paired_calc_storage_key(storage_key: str | None) -> str | None:
+    key = (storage_key or "").strip()
+    if not key:
+        return None
+    if key.startswith(RESULT_FILENAME_PREFIX):
+        return key.replace(RESULT_FILENAME_PREFIX, MEMORY_FILENAME_PREFIX, 1)
+    if key.startswith(MEMORY_FILENAME_PREFIX):
+        return key.replace(MEMORY_FILENAME_PREFIX, RESULT_FILENAME_PREFIX, 1)
+    return None
+
+
+def _mtime_utc(path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
+
+
+def _legacy_expires_at_from_mtime(path: Path) -> datetime | None:
+    mtime = _mtime_utc(path)
+    if mtime is None:
+        return None
+    return mtime + timedelta(hours=_calc_storage_ttl_hours())
+
+
+def _envelope_expires_at(envelope: dict, path: Path) -> datetime | None:
+    expires_at = _parse_calc_storage_timestamp(envelope.get("expires_at"))
+    if expires_at is not None:
+        return expires_at
+    created_at = _parse_calc_storage_timestamp(envelope.get("created_at"))
+    if created_at is not None:
+        return created_at + timedelta(hours=_calc_storage_ttl_hours())
+    # Legado: ausência de timestamps NÃO significa expirado. Fallback transitório = mtime + TTL.
+    return _legacy_expires_at_from_mtime(path)
+
+
+def _is_calc_storage_expired(envelope: dict, path: Path) -> bool:
+    expires_at = _envelope_expires_at(envelope, path)
+    if expires_at is None:
+        return False
+    return _as_utc(_utcnow()) >= expires_at
+
+
+def _purge_expired_calc_storage_pair(
+    *,
+    result_storage_key: str | None = None,
+    memory_storage_key: str | None = None,
+) -> None:
+    result_keys: set[str] = set()
+    memory_keys: set[str] = set()
+    result_key = (result_storage_key or "").strip()
+    memory_key = (memory_storage_key or "").strip()
+    if result_key:
+        result_keys.add(result_key)
+        paired = paired_calc_storage_key(result_key)
+        if paired:
+            memory_keys.add(paired)
+    if memory_key:
+        memory_keys.add(memory_key)
+        paired = paired_calc_storage_key(memory_key)
+        if paired:
+            result_keys.add(paired)
+    for key in result_keys:
+        delete_comparison_calculation_result(key)
+    for key in memory_keys:
+        delete_comparison_calculation_memories(key)
+
+
+def _raise_expired_calc_storage(
+    *,
+    artifact_type: str,
+    storage_key: str,
+    envelope: dict,
+    comparison_id: str,
+    fingerprint: str,
+    missing_error: str,
+    missing_message: str,
+) -> None:
+    logger.info(
+        "agente_compara_%s_expired comparison_id=%s fingerprint=%s",
+        artifact_type,
+        (comparison_id or "")[:32],
+        (fingerprint or "")[:12],
+    )
+    result_key = storage_key if artifact_type == "result" else (envelope.get("result_storage_key") or paired_calc_storage_key(storage_key))
+    memory_key = storage_key if artifact_type == "memory" else (envelope.get("memory_storage_key") or paired_calc_storage_key(storage_key))
+    _purge_expired_calc_storage_pair(
+        result_storage_key=result_key if isinstance(result_key, str) else None,
+        memory_storage_key=memory_key if isinstance(memory_key, str) else None,
+    )
+    raise AgenteComparaCalculationResultStorageError(
+        missing_error,
+        missing_message,
+    )
+
+
+def _peek_calc_storage_envelope(path: Path) -> dict | None:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            envelope = json.load(handle)
+    except Exception:
+        return None
+    return envelope if isinstance(envelope, dict) else None
+
+
+def _sweep_expires_at(envelope: dict, path: Path) -> datetime | None:
+    """
+    Instantâneo de expiração para sweep.
+
+    expires_at válido → autoridade.
+    Ausência de expires_at → legado (mtime + TTL).
+    expires_at presente porém inválido → None (não apagar).
+    """
+    if "expires_at" not in envelope or envelope.get("expires_at") is None:
+        return _legacy_expires_at_from_mtime(path)
+    parsed = _parse_calc_storage_timestamp(envelope.get("expires_at"))
+    if parsed is None:
+        logger.info("agente_compara_calc_sweep_skipped_invalid_expires_at")
+        return None
+    return parsed
+
+
+def _purge_expired_recognized_calc_file(path: Path, envelope: dict) -> bool:
+    key = path.stem
+    try:
+        resolved_path = path.resolve()
+        if key.startswith(RESULT_FILENAME_PREFIX):
+            if resolve_result_storage_path(key) != resolved_path:
+                return False
+            memory_key = envelope.get("memory_storage_key")
+            _purge_expired_calc_storage_pair(
+                result_storage_key=key,
+                memory_storage_key=memory_key if isinstance(memory_key, str) else None,
+            )
+            return True
+        if key.startswith(MEMORY_FILENAME_PREFIX):
+            if resolve_memory_storage_path(key) != resolved_path:
+                return False
+            _purge_expired_calc_storage_pair(memory_storage_key=key)
+            return True
+    except (AgenteComparaCalculationResultStorageError, OSError):
+        return False
+    return False
+
+
+def maybe_cleanup_expired_calculation_storage(
+    directory: Path | None = None,
+    *,
+    min_interval_seconds: int = _CALC_STORAGE_SWEEP_MIN_INTERVAL_SECONDS,
+    max_files: int = _CALC_STORAGE_SWEEP_MAX_FILES,
+) -> int:
+    """
+    Sweep oportunístico limitado de cc_result_/cc_memory_ claramente expirados.
+
+    Novos: expires_at explícito. Legado sem expires_at: mtime + TTL.
+    Não remove JSON corrompido nem expires_at inválido. Sem scheduler.
+    """
+    global _calc_storage_sweep_monotonic
+    now_mono = time.monotonic()
+    if (now_mono - _calc_storage_sweep_monotonic) < max(0, int(min_interval_seconds)):
+        return 0
+    _calc_storage_sweep_monotonic = now_mono
+    target = directory
+    if target is None:
+        try:
+            target = get_calculation_result_storage_dir()
+        except Exception:
+            return 0
+    removed = 0
+    try:
+        entries = list(target.iterdir())
+    except OSError:
+        return 0
+    inspected = 0
+    for path in entries:
+        if inspected >= max(1, int(max_files)):
+            break
+        if not path.is_file() or path.suffix.lower() != ".json":
+            continue
+        name = path.name
+        if not (name.startswith(RESULT_FILENAME_PREFIX) or name.startswith(MEMORY_FILENAME_PREFIX)):
+            continue
+        inspected += 1
+        envelope = _peek_calc_storage_envelope(path)
+        if envelope is None:
+            continue
+        expires_at = _sweep_expires_at(envelope, path)
+        if expires_at is None:
+            continue
+        if _as_utc(_utcnow()) < expires_at:
+            continue
+        if _purge_expired_recognized_calc_file(path, envelope):
+            removed += 1
+    return removed
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -252,6 +515,8 @@ def save_comparison_calculation_result(
     result: dict,
     schema_version: int = RESULT_STORAGE_SCHEMA_VERSION,
     memory_storage_meta: dict | None = None,
+    created_at: str | datetime | None = None,
+    expires_at: str | datetime | None = None,
 ) -> dict:
     """
     Serializa, valida e grava atomicamente o resultado.
@@ -306,11 +571,18 @@ def save_comparison_calculation_result(
     metrics["last_completed_stage"] = "result_checksum_validated"
     storage_key = build_result_storage_key(comparison_id=comparison_id, fingerprint=fingerprint)
     path = resolve_result_storage_path(storage_key)
+    retention = _retention_window_from_inputs(
+        created_at=created_at,
+        expires_at=expires_at,
+        meta=memory_storage_meta,
+    )
 
     envelope = {
         "schema_version": int(schema_version),
         "comparison_id": (comparison_id or "").strip(),
         "request_fingerprint": (fingerprint or "").strip(),
+        "created_at": retention["created_at"],
+        "expires_at": retention["expires_at"],
         "result_schema_version": int(result.get("schema_version") or 1),
         "result_checksum": checksum,
         "result_size_bytes": size,
@@ -377,6 +649,7 @@ def save_comparison_calculation_result(
         (fingerprint or "")[:12],
         size,
     )
+    maybe_cleanup_expired_calculation_storage(path.parent)
     return {
         "result_storage_key": storage_key,
         "result_checksum": checksum,
@@ -385,6 +658,8 @@ def save_comparison_calculation_result(
         "result_limit_bytes": RESULT_MAX_BYTES,
         "result_schema_version": int(result.get("schema_version") or 1),
         "schema_version": int(schema_version),
+        "created_at": retention["created_at"],
+        "expires_at": retention["expires_at"],
         "memory_storage_key": (memory_storage_meta or {}).get("memory_storage_key"),
         "memory_checksum": (memory_storage_meta or {}).get("memory_checksum"),
         "memory_size_bytes": (memory_storage_meta or {}).get("memory_size_bytes"),
@@ -502,6 +777,17 @@ def load_comparison_calculation_result(
 
     _assert_no_forbidden_fields(result)
 
+    if _is_calc_storage_expired(envelope, path):
+        _raise_expired_calc_storage(
+            artifact_type="result",
+            storage_key=storage_key,
+            envelope=envelope,
+            comparison_id=comparison_id,
+            fingerprint=fingerprint,
+            missing_error=ERROR_RESULT_MISSING,
+            missing_message="Resultado comparativo não encontrado.",
+        )
+
     logger.info(
         "agente_compara_result_loaded comparison_id=%s fingerprint=%s result_size_bytes=%s",
         (comparison_id or "")[:32],
@@ -546,6 +832,8 @@ def save_comparison_calculation_memory_payload(
     fingerprint: str,
     memory_payload: dict,
     schema_version: int = RESULT_STORAGE_SCHEMA_VERSION,
+    created_at: str | datetime | None = None,
+    expires_at: str | datetime | None = None,
 ) -> dict:
     if not isinstance(memory_payload, dict):
         raise AgenteComparaCalculationResultStorageError(
@@ -592,10 +880,13 @@ def save_comparison_calculation_memory_payload(
     metrics["last_completed_stage"] = "memory_checksum_validated"
     storage_key = build_memory_storage_key(comparison_id=comparison_id, fingerprint=fingerprint)
     path = resolve_memory_storage_path(storage_key)
+    retention = build_calc_storage_retention_window(created_at=created_at, expires_at=expires_at)
     envelope = {
         "schema_version": int(schema_version),
         "comparison_id": (comparison_id or "").strip(),
         "request_fingerprint": (fingerprint or "").strip(),
+        "created_at": retention["created_at"],
+        "expires_at": retention["expires_at"],
         "memory_checksum": checksum,
         "memory_size_bytes": size,
         "memory_payload": memory_payload,
@@ -628,6 +919,7 @@ def save_comparison_calculation_memory_payload(
             operation="memory.reload_post_write",
         )
     metrics["last_completed_stage"] = "memory_reloaded"
+    maybe_cleanup_expired_calculation_storage(path.parent)
     return {
         "memory_storage_key": storage_key,
         "memory_checksum": checksum,
@@ -636,6 +928,8 @@ def save_comparison_calculation_memory_payload(
         "memory_limit_bytes": MEMORY_MAX_BYTES,
         "memory_schema_version": int(memory_payload.get("schema_version") or schema_version),
         "schema_version": int(schema_version),
+        "created_at": retention["created_at"],
+        "expires_at": retention["expires_at"],
     }
 
 
@@ -654,19 +948,31 @@ def load_comparison_calculation_memory_payload(
             envelope = json.load(handle)
     except Exception as exc:
         raise AgenteComparaCalculationResultStorageError(ERROR_MEMORY_CORRUPT, "Memórias corrompidas.") from exc
+    if not isinstance(envelope, dict):
+        raise AgenteComparaCalculationResultStorageError(ERROR_MEMORY_CORRUPT, "Memórias corrompidas.")
     payload = envelope.get("memory_payload")
     if not isinstance(payload, dict):
         raise AgenteComparaCalculationResultStorageError(ERROR_MEMORY_CORRUPT, "Memórias corrompidas.")
+    if (envelope.get("comparison_id") or "").strip() != (comparison_id or "").strip():
+        raise AgenteComparaCalculationResultStorageError(ERROR_RESULT_IDENTITY_MISMATCH, "Memórias não pertencem à comparação informada.")
+    if (envelope.get("request_fingerprint") or "").strip() != (fingerprint or "").strip():
+        raise AgenteComparaCalculationResultStorageError(ERROR_RESULT_IDENTITY_MISMATCH, "Memórias não correspondem à configuração atual.")
     raw = _canonical_json_bytes(payload)
     checksum = sha256_hex_of_bytes(raw)
     if checksum != (envelope.get("memory_checksum") or "").strip():
         raise AgenteComparaCalculationResultStorageError(ERROR_MEMORY_CORRUPT, "Memórias corrompidas.")
     if expected_checksum and checksum != (expected_checksum or "").strip():
         raise AgenteComparaCalculationResultStorageError(ERROR_MEMORY_CORRUPT, "Memórias corrompidas.")
-    if (envelope.get("comparison_id") or "").strip() != (comparison_id or "").strip():
-        raise AgenteComparaCalculationResultStorageError(ERROR_RESULT_IDENTITY_MISMATCH, "Memórias não pertencem à comparação informada.")
-    if (envelope.get("request_fingerprint") or "").strip() != (fingerprint or "").strip():
-        raise AgenteComparaCalculationResultStorageError(ERROR_RESULT_IDENTITY_MISMATCH, "Memórias não correspondem à configuração atual.")
+    if _is_calc_storage_expired(envelope, path):
+        _raise_expired_calc_storage(
+            artifact_type="memory",
+            storage_key=storage_key,
+            envelope=envelope,
+            comparison_id=comparison_id,
+            fingerprint=fingerprint,
+            missing_error=ERROR_MEMORY_MISSING,
+            missing_message="Memórias não encontradas.",
+        )
     return payload
 
 

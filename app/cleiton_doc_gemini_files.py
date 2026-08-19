@@ -27,6 +27,7 @@ from app.cleiton_doc_contracts import (
     GEMINI_FILE_STATE_FAILED,
     GEMINI_FILE_STATE_PROCESSING,
 )
+from app.services.external_ai_masking import mask_structured_for_external_ai
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +238,10 @@ def upload_pdf_to_gemini_files_api(
             error_summary="gemini_client_unavailable",
         )
 
-    safe_display = (display_name or "documento.pdf").strip() or "documento.pdf"
+    original_display = (display_name or "documento.pdf").strip() or "documento.pdf"
+    safe_display = mask_structured_for_external_ai(
+        {"display_name": original_display}
+    )["display_name"]
     try:
         doc_io = io.BytesIO(file_bytes)
         uploaded = gemini_client.files.upload(

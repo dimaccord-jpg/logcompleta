@@ -2,7 +2,8 @@
 Ativação pós-cadastro — sequência de e-mails desktop_access.
 
 Registration → 24h sem upload → E-mail 1 → 48h sem upload → E-mail 2
-Máximo 2 e-mails. Um file_uploaded (Cleide ou AgenteCompara) ou opt-out encerra.
+Máximo 2 e-mails. Um file_uploaded (Cleide ou AgenteCompara), opt-out
+ou encerramento operacional da jornada (vínculo do User) encerra.
 
 Não mistura com builders/follow-up pré-cadastro.
 """
@@ -23,8 +24,21 @@ from app.funnel_event_service import (
     FUNNEL_SOURCE_AGENTE_COMPARA,
     FUNNEL_SOURCE_CLEIDE_AUDIT,
 )
-from app.models import FunnelEvent, Lead, utcnow_naive
+from app.models import FunnelEvent, Lead, User, utcnow_naive
 from app.services.lead_acquisition_service import CAMPANHA_ACESSO_DESKTOP
+from app.services.communication_suppression_service import (
+    PURPOSE_ACTIVATION,
+    SOURCE_ACTIVATION_UNSUBSCRIBE,
+    check_email_suppression,
+    normalize_email_hmac,
+    suppress_email,
+    suppress_email_hmac,
+)
+from app.services.lead_email_state import (
+    LeadEmailIdentityError,
+    is_lead_email_minimized,
+)
+from app.services.user_lifecycle_service import is_user_operationally_closed
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +84,9 @@ _STATUS_SKIPPED = "skipped"
 _STATUS_FAILED = "failed"
 _STATUS_SKIPPED_UPLOAD = "skipped_upload"
 _STATUS_SKIPPED_OPT_OUT = "skipped_opt_out"
+_STATUS_SKIPPED_JOURNEY_ENDED = "skipped_journey_ended"
+_STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE = "suppression_check_unavailable"
+_STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED = "skipped_lead_email_minimized"
 
 _IMG_DIR = Path(__file__).resolve().parents[1] / "static" / "img" / "email"
 _HERO_EMAIL_1_PATH = _IMG_DIR / "activation_email1_negociado_cobrado_conferido.png"
@@ -122,11 +139,47 @@ def resolve_lead_for_activation_unsubscribe_token(
 
 
 def apply_activation_opt_out(lead: Lead, *, now=None) -> None:
-    """First-write-wins; altera somente activation_opt_out_at."""
-    if lead.activation_opt_out_at is not None:
-        return
-    lead.activation_opt_out_at = now if now is not None else utcnow_naive()
-    db.session.commit()
+    """First-write-wins; um commit final: activation_opt_out_at + ACTIVATION.
+
+    Lead minimizado: usa Lead.email_hmac (nunca o placeholder).
+    HMAC ausente/inválido: fail-closed, rollback total.
+    """
+    try:
+        if lead.activation_opt_out_at is None:
+            lead.activation_opt_out_at = now if now is not None else utcnow_naive()
+        if is_lead_email_minimized(lead):
+            digest = normalize_email_hmac(getattr(lead, "email_hmac", None))
+            if digest is None:
+                raise LeadEmailIdentityError(
+                    "Lead minimizado sem email_hmac valido; suppression recusada"
+                )
+            ok = suppress_email_hmac(
+                digest,
+                PURPOSE_ACTIVATION,
+                SOURCE_ACTIVATION_UNSUBSCRIBE,
+                suppressed_at=lead.activation_opt_out_at,
+                commit=False,
+            )
+            if not ok:
+                raise LeadEmailIdentityError(
+                    "Falha ao persistir suppression por HMAC no activation opt-out"
+                )
+        else:
+            suppress_email(
+                lead.email,
+                PURPOSE_ACTIVATION,
+                SOURCE_ACTIVATION_UNSUBSCRIBE,
+                suppressed_at=lead.activation_opt_out_at,
+                commit=False,
+            )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception(
+            "Falha ao aplicar activation opt-out: lead_id=%s",
+            getattr(lead, "id", None),
+        )
+        raise
 
 
 def has_first_upload(user_id: int) -> bool:
@@ -163,12 +216,82 @@ def has_valid_campaign_registration(lead: Lead) -> bool:
 
 
 def is_activation_opted_out(lead: Lead) -> bool:
-    """Opt-out da sequência OU opt-out anterior da campanha (privacidade)."""
+    """Opt-out real da sequência OU opt-out anterior da campanha (privacidade)."""
+    return _activation_communication_block(lead) == _STATUS_SKIPPED_OPT_OUT
+
+
+def _activation_communication_block(lead: Lead) -> str | None:
+    """Skip de envio de ativação: opt-out real vs falha operacional da suppression."""
+    if is_lead_email_minimized(lead):
+        return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
     if lead.activation_opt_out_at is not None:
-        return True
+        return _STATUS_SKIPPED_OPT_OUT
     if lead.opt_out_at is not None:
+        return _STATUS_SKIPPED_OPT_OUT
+    check = check_email_suppression(lead.email, PURPOSE_ACTIVATION)
+    if check.is_unavailable:
+        return _STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE
+    if check.suppressed:
+        return _STATUS_SKIPPED_OPT_OUT
+    return None
+
+
+def is_activation_journey_ended(lead: Lead) -> bool:
+    """
+    Jornada de ativação explicitamente encerrada para o User convertido atual.
+
+    Não usa activation_opt_out_at. Encerramento antigo de outro user_id
+    não bloqueia automaticamente uma jornada futura associada a outro User.
+    """
+    if getattr(lead, "activation_ended_at", None) is None:
+        return False
+    ended_for = getattr(lead, "activation_ended_for_user_id", None)
+    converted = getattr(lead, "converted_user_id", None)
+    if ended_for is None or converted is None:
+        return False
+    return int(ended_for) == int(converted)
+
+
+def _converted_user_is_operationally_closed(lead: Lead) -> bool:
+    """
+    Compatibilidade histórica: User já encerrado antes da coluna existir.
+
+    Conservador: converted_user_id ausente ou User inexistente não é
+    inferido como encerrado. Leitura pura — não grava activation_ended_at.
+    """
+    if lead.converted_user_id is None:
+        return False
+    user = db.session.get(User, int(lead.converted_user_id))
+    if user is None:
+        return False
+    return is_user_operationally_closed(user)
+
+
+def is_activation_journey_unavailable(lead: Lead) -> bool:
+    """
+    Gate completo da jornada: não deve receber e-mail de ativação.
+
+    Combina:
+    A) opt-out já existente (activation_opt_out_at / opt_out_at);
+    B) CommunicationSuppression ACTIVATION já existente;
+    B2) consulta de suppression operacionalmente indisponível (fail-closed);
+    C) encerramento explícito da jornada (ended_at + ended_for == converted);
+    D) User convertido operacionalmente encerrado (ponte histórica).
+
+    Não trata C/D como opt-out. Não persiste nada.
+    """
+    if _activation_communication_block(lead) is not None:
         return True
-    return False
+    if is_activation_journey_ended(lead):
+        return True
+    return _converted_user_is_operationally_closed(lead)
+
+
+def _skip_reason_when_unavailable(lead: Lead) -> str:
+    block = _activation_communication_block(lead)
+    if block is not None:
+        return block
+    return _STATUS_SKIPPED_JOURNEY_ENDED
 
 
 def activation_email_1_eligible_since(*, now=None):
@@ -424,7 +547,7 @@ def build_activation_email_2(
 def should_send_activation_email_1(lead: Lead, *, now=None) -> bool:
     if not has_valid_campaign_registration(lead):
         return False
-    if is_activation_opted_out(lead):
+    if is_activation_journey_unavailable(lead):
         return False
     if lead.activation_email_1_sent_at is not None:
         return False
@@ -442,7 +565,7 @@ def should_send_activation_email_1(lead: Lead, *, now=None) -> bool:
 def should_send_activation_email_2(lead: Lead, *, now=None) -> bool:
     if not has_valid_campaign_registration(lead):
         return False
-    if is_activation_opted_out(lead):
+    if is_activation_journey_unavailable(lead):
         return False
     if lead.activation_email_1_sent_at is None:
         return False
@@ -510,8 +633,8 @@ def _recheck_before_send(lead: Lead, *, which: str, now=None) -> str | None:
     Retorna status de skip ou None se ainda elegível.
     """
     db.session.refresh(lead)
-    if is_activation_opted_out(lead):
-        return _STATUS_SKIPPED_OPT_OUT
+    if is_activation_journey_unavailable(lead):
+        return _skip_reason_when_unavailable(lead)
     if lead.converted_user_id is None:
         return _STATUS_SKIPPED
     if has_first_upload(int(lead.converted_user_id)):
@@ -542,9 +665,11 @@ def maybe_send_activation_email_1(
     Grava activation_email_1_sent_at somente após sucesso do sender.
     Residual: provider success + DB commit failure (retry pode reenviar).
     """
+    if is_lead_email_minimized(lead):
+        return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
     if not should_send_activation_email_1(lead, now=now):
-        if is_activation_opted_out(lead):
-            return _STATUS_SKIPPED_OPT_OUT
+        if is_activation_journey_unavailable(lead):
+            return _skip_reason_when_unavailable(lead)
         if lead.converted_user_id and has_first_upload(int(lead.converted_user_id)):
             return _STATUS_SKIPPED_UPLOAD
         return _STATUS_SKIPPED
@@ -554,6 +679,8 @@ def maybe_send_activation_email_1(
         return skip
 
     try:
+        if is_lead_email_minimized(lead):
+            return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
         unsub_token = generate_activation_unsubscribe_token(lead.id, secret_key=secret_key)
         unsubscribe_url = build_unsubscribe_url(unsub_token)
         cta_url = build_cta_url()
@@ -601,9 +728,11 @@ def maybe_send_activation_email_2(
     Envia E-mail 2 no máximo uma vez (somente após E1).
     Grava activation_email_2_sent_at somente após sucesso do sender.
     """
+    if is_lead_email_minimized(lead):
+        return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
     if not should_send_activation_email_2(lead, now=now):
-        if is_activation_opted_out(lead):
-            return _STATUS_SKIPPED_OPT_OUT
+        if is_activation_journey_unavailable(lead):
+            return _skip_reason_when_unavailable(lead)
         if lead.converted_user_id and has_first_upload(int(lead.converted_user_id)):
             return _STATUS_SKIPPED_UPLOAD
         return _STATUS_SKIPPED
@@ -613,6 +742,8 @@ def maybe_send_activation_email_2(
         return skip
 
     try:
+        if is_lead_email_minimized(lead):
+            return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
         unsub_token = generate_activation_unsubscribe_token(lead.id, secret_key=secret_key)
         unsubscribe_url = build_unsubscribe_url(unsub_token)
         cta_url = build_cta_url()
@@ -668,6 +799,8 @@ def process_eligible_activation_emails(
         "email2_sent": 0,
         "suppressed_upload": 0,
         "suppressed_opt_out": 0,
+        "skipped_suppression_unavailable": 0,
+        "skipped_lead_email_minimized": 0,
         "failures": 0,
     }
 
@@ -697,6 +830,10 @@ def process_eligible_activation_emails(
             stats["suppressed_upload"] += 1
         elif status == _STATUS_SKIPPED_OPT_OUT:
             stats["suppressed_opt_out"] += 1
+        elif status == _STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE:
+            stats["skipped_suppression_unavailable"] += 1
+        elif status == _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED:
+            stats["skipped_lead_email_minimized"] += 1
         elif status == _STATUS_FAILED:
             stats["failures"] += 1
 
@@ -726,13 +863,17 @@ def process_eligible_activation_emails(
             stats["suppressed_upload"] += 1
         elif status == _STATUS_SKIPPED_OPT_OUT:
             stats["suppressed_opt_out"] += 1
+        elif status == _STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE:
+            stats["skipped_suppression_unavailable"] += 1
+        elif status == _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED:
+            stats["skipped_lead_email_minimized"] += 1
         elif status == _STATUS_FAILED:
             stats["failures"] += 1
 
     logger.info(
         "Activation desktop_access: examined=%s email1_candidates=%s email1_sent=%s "
         "email2_candidates=%s email2_sent=%s suppressed_upload=%s "
-        "suppressed_opt_out=%s failures=%s",
+        "suppressed_opt_out=%s skipped_suppression_unavailable=%s failures=%s",
         stats["examined"],
         stats["email1_candidates"],
         stats["email1_sent"],
@@ -740,6 +881,7 @@ def process_eligible_activation_emails(
         stats["email2_sent"],
         stats["suppressed_upload"],
         stats["suppressed_opt_out"],
+        stats["skipped_suppression_unavailable"],
         stats["failures"],
     )
     return stats

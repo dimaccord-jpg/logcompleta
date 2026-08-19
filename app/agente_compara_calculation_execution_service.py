@@ -40,6 +40,7 @@ from app.agente_compara_calculation_result_storage import (
     AgenteComparaCalculationResultStorageError,
     ERROR_RESULT_CORRUPT,
     ERROR_RESULT_MISSING,
+    build_calc_storage_retention_window,
     delete_comparison_calculation_result,
     load_comparison_calculation_result,
     load_comparison_calculation_memory_payload,
@@ -1428,10 +1429,13 @@ def execute_comparison_calculation(
                 memory_payload = compacted["memory_payload"]
                 public_result = _public_result(_rehydrate_compact_result(compact_result, memory_payload))
                 try:
+                    retention = build_calc_storage_retention_window()
                     memory_storage_meta = save_comparison_calculation_memory_payload(
                         comparison_id=cmp_id,
                         fingerprint=fingerprint,
                         memory_payload=memory_payload,
+                        created_at=retention["created_at"],
+                        expires_at=retention["expires_at"],
                     )
                     saved_memory_key = (memory_storage_meta.get("memory_storage_key") or "").strip() or None
                     storage_meta = save_comparison_calculation_result(
@@ -1439,6 +1443,8 @@ def execute_comparison_calculation(
                         fingerprint=fingerprint,
                         result=compact_result,
                         memory_storage_meta=memory_storage_meta,
+                        created_at=retention["created_at"],
+                        expires_at=retention["expires_at"],
                     )
                 except AgenteComparaCalculationResultStorageError as exc:
                     logger.exception(

@@ -27,8 +27,11 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/agentefrete-theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/privacy_consent.css') }}">
+    {% if privacy_marketing_allowed %}
     {% include "partials/pixel_base.html" %}
     {% include "partials/openai_ads_pixel.html" %}
+    {% endif %}
     <style>
         :root {
             /* Cores de Alto Contraste */
@@ -171,7 +174,7 @@
     </style>
     {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body{% if privacy_marketing_state|default('unknown') == 'unknown' %} class="af-privacy-banner-visible"{% endif %}>
     {% set cleide_auditoria_target = url_for('cleide.cleide_auditoria') if has_endpoint('cleide.cleide_auditoria') else '/auditoria-frete' %}
     {% set agente_compara_target = url_for('agente_compara.agente_compara_page') if has_endpoint('agente_compara.agente_compara_page') else '/agente-compara' %}
     {% set cleide_auditoria_href = cleide_auditoria_target if current_user.is_authenticated else url_for('login', next=cleide_auditoria_target) %}
@@ -361,6 +364,17 @@
             >
                 Política de Privacidade
             </a>
+            <span style="color:#5A5A72;"> · </span>
+            <button
+                type="button"
+                id="af-privacy-open-preferences"
+                class="af-privacy-footer-btn"
+                data-af-privacy-open-panel
+                aria-expanded="false"
+                aria-controls="af-privacy-panel"
+            >
+                Preferências de privacidade
+            </button>
             <div class="mt-2" style="color:#a8b2d1; font-weight:500;">
                 Contato: contat@agentefrete.com.br
             </div>
@@ -385,7 +399,10 @@
             });
         });
     </script>
+    {% include "partials/privacy_consent.html" %}
+    {% if privacy_marketing_allowed %}
     {% include "partials/pixel_events.html" %}
     {% include "partials/openai_ads_pixel_events.html" %}
+    {% endif %}
 </body>
 </html>

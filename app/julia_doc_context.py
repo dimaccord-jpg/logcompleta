@@ -38,6 +38,10 @@ from app.cleiton_doc_service import (
 from app.cleiton_doc_store import load_document_record
 from app.prompts import JULIA_CHAT_DOCUMENTAL_GUIDANCE
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
+from app.services.external_ai_masking import (
+    ExternalAiMaskingSession,
+    mask_structured_for_external_ai,
+)
 
 _TRUNCATION_NOTICE = "[... contexto truncado por limite de caracteres ...]"
 logger = logging.getLogger(__name__)
@@ -182,8 +186,12 @@ def build_julia_document_context_for_chat() -> dict:
     blocks: list[str] = []
     context_truncated = False
 
+    outbound_session = ExternalAiMaskingSession()
     for idx, record in enumerate(considered, start=1):
-        blocks.append(_format_document_block(idx, record))
+        outbound_record = mask_structured_for_external_ai(
+            record, session=outbound_session
+        )
+        blocks.append(_format_document_block(idx, outbound_record))
 
     body = "".join(blocks)
     context_block = header + body
