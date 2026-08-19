@@ -21,6 +21,7 @@ except ImportError as exc:
 import json
 import logging
 import uuid
+from datetime import datetime
 from urllib.parse import quote, urlparse, urlsplit
 from pathlib import Path
 
@@ -665,6 +666,18 @@ def _pop_onboarding_julia_context() -> dict | None:
     return raw if isinstance(raw, dict) else None
 
 
+FEED_EDITORIAL_LIMITE = 5
+
+
+def _ordenar_feed_editorial(itens, limite=FEED_EDITORIAL_LIMITE):
+    """Mescla insights e artigos em ordem cronológica decrescente, limitados ao total do feed."""
+    return sorted(
+        itens,
+        key=lambda item: getattr(item, "data_publicacao", None) or datetime.min,
+        reverse=True,
+    )[:limite]
+
+
 def _load_feed_editorial():
     """Notícias e artigos publicados/parciais para a superfície editorial (/feed)."""
     limite_noticias = getattr(settings, 'noticias_limite', 5)
@@ -697,7 +710,7 @@ def _load_feed_editorial():
     except Exception as e:
         logging.error("Erro ao buscar artigos para o feed: %s", e)
         artigos_reais = []
-    return noticias_reais, artigos_reais
+    return _ordenar_feed_editorial(list(noticias_reais) + list(artigos_reais))
 
 
 # --- ROTAS PÚBLICAS E ACESSO ---
@@ -750,11 +763,10 @@ def chat_julia():
 
 @app.route('/feed')
 def feed():
-    noticias_reais, artigos_reais = _load_feed_editorial()
+    noticias_reais = _load_feed_editorial()
     return render_template(
         'feed.html',
         noticias=noticias_reais,
-        artigos=artigos_reais,
     )
 
 
