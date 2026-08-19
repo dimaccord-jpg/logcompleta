@@ -29,6 +29,19 @@ body.af-privacy-banner-visible {
   z-index: 1100;
 }
 
+/* md+: o banner/painel não pode cobrir o rodapé da sidebar (login/logout/perfil). */
+@media (min-width: 768px) {
+  #sidebar.active ~ #af-privacy-root .af-privacy-banner,
+  #sidebar.active ~ #af-privacy-root .af-privacy-panel {
+    left: var(--sidebar-collapsed, 80px);
+  }
+
+  #sidebar:not(.active) ~ #af-privacy-root .af-privacy-banner,
+  #sidebar:not(.active) ~ #af-privacy-root .af-privacy-panel {
+    left: var(--sidebar-width, 260px);
+  }
+}
+
 .af-privacy-panel {
   z-index: 1101;
   background: #111119;
