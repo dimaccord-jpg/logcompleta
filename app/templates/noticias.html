@@ -10,10 +10,10 @@
             {{ noticia.data_publicacao.strftime('%d/%m/%Y %H:%M') if noticia.data_publicacao else 'Recente' }} • {{ noticia.fonte }}
         </div>
         <h2 class="card-title h4 mt-2">{{ noticia.titulo_julia }}</h2>
-        <p class="card-text">{{ noticia.resumo_julia|truncate(150, True, '...') }}</p>
+        <p class="card-text">{{ (noticia.resumo_julia or noticia.subtitulo or '')|truncate(150, True, '...') }}</p>
         
         <a class="btn btn-sm btn-primary me-2" href="{{ url_for('detalhe_noticia', noticia_id=noticia.id) }}">
-            Ver Insight Log Completa →
+            {% if noticia.tipo == 'artigo' %}Ver Artigo{% else %}Ver Insight{% endif %}
         </a>
 
         <a class="btn btn-sm btn-outline-secondary" href="{{ noticia.link }}" target="_blank">
