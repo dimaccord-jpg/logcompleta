@@ -3,62 +3,41 @@ import json
 import logging
 from datetime import datetime
 
-from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
-
-from app.extensions import db
-from app.models import Lead, NoticiaPortal, Pauta
+from app.models import NoticiaPortal, Pauta
+from app.services.newsletter_subscription_service import (
+    STATUS_ALREADY_ACTIVE,
+    STATUS_CREATED,
+    STATUS_INVALID,
+    STATUS_REACTIVATED,
+    SOURCE_PUBLIC_NEWSLETTER,
+    subscribe,
+)
 
 logger = logging.getLogger(__name__)
 
-# --- LÓGICA DE LEADS (NEWSLETTER) ---
-
-def _normalize_lead_email(email):
-    """Trim + lower para identidade única de Lead; não reescreve e-mails já persistidos."""
-    return (email or "").strip().lower()
+# --- LÓGICA DE NEWSLETTER (não cria Lead) ---
 
 
-def registrar_lead_newsletter(email):
+def registrar_newsletter_subscription(email):
     """
-    Gerencia a entrada de novos leads no leads.db
-    """
-    email_normalized = _normalize_lead_email(email)
-    if not email_normalized:
-        return False, "E-mail é obrigatório."
+    Inscreve e-mail na newsletter pública.
 
+    Não cria nem altera Lead. Não toca campanha, opt-out nem CommunicationSuppression.
+    """
     try:
-        # Lookup case-insensitive; não altera campos de aquisição/jornada se já existir.
-        existe = (
-            Lead.query.filter(func.lower(Lead.email) == email_normalized)
-            .order_by(Lead.id.asc())
-            .first()
-        )
-        if existe:
-            return True, "Você já está na nossa lista de inteligência!"
+        result = subscribe(email, source=SOURCE_PUBLIC_NEWSLETTER, commit=True)
+    except Exception:
+        logger.exception("newsletter_subscription public register failed")
+        return False, "Erro interno ao processar cadastro."
 
-        novo_lead = Lead(email=email_normalized)
-        db.session.add(novo_lead)
-        db.session.commit()
-        logger.info(f"✅ NOVO LEAD: {email_normalized} cadastrado com sucesso.")
+    if result.status == STATUS_INVALID:
+        return False, "E-mail é obrigatório."
+    if result.status == STATUS_ALREADY_ACTIVE:
+        return True, "Você já está na nossa lista de inteligência!"
+    if result.status in (STATUS_CREATED, STATUS_REACTIVATED):
         return True, "Bem-vindo à LogTech! Sua inscrição foi confirmada."
-
-    except IntegrityError:
-        # Disputa simultânea com a mesma identidade normalizada: reutiliza a linha existente.
-        db.session.rollback()
-        existe = (
-            Lead.query.filter(func.lower(Lead.email) == email_normalized)
-            .order_by(Lead.id.asc())
-            .first()
-        )
-        if existe:
-            return True, "Você já está na nossa lista de inteligência!"
-        logger.error("❌ ERRO AO SALVAR LEAD: IntegrityError sem Lead existente após rollback.")
-        return False, "Erro interno ao processar cadastro."
-
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"❌ ERRO AO SALVAR LEAD: {e}")
-        return False, "Erro interno ao processar cadastro."
+    logger.error("newsletter_subscription public register status inesperado")
+    return False, "Erro interno ao processar cadastro."
 
 # --- LÓGICA DE NOTÍCIAS E BLOG ---
 def buscar_noticias_portal():

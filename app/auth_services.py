@@ -512,6 +512,20 @@ def handle_google_oauth_callback(
 # --- Perfil e registro ---
 
 
+def _sync_newsletter_preference(email: str, subscribed: bool, *, commit: bool = False) -> None:
+    """Mantém NewsletterSubscription coerente com preferência explícita do User."""
+    from app.services.newsletter_subscription_service import (
+        SOURCE_USER_PREFERENCE,
+        subscribe,
+        unsubscribe,
+    )
+
+    if subscribed:
+        subscribe(email, source=SOURCE_USER_PREFERENCE, commit=commit)
+        return
+    unsubscribe(email, commit=commit, sync_user_flag=False)
+
+
 def complete_user_profile(
     user,
     job_role: str,
@@ -526,6 +540,7 @@ def complete_user_profile(
     user.job_role = (job_role or "").strip()
     user.usage_purpose = (usage_purpose or "").strip()
     user.subscribes_to_newsletter = bool(subscribes_to_newsletter)
+    _sync_newsletter_preference(user.email, bool(subscribes_to_newsletter), commit=False)
     if accept_terms:
         user.accepted_terms_at = _utcnow_naive()
     db.session.commit()
@@ -582,25 +597,8 @@ def register_user(
     if accept_terms:
         new_user.accepted_terms_at = now
     db.session.add(new_user)
+    _sync_newsletter_preference(
+        email, bool(subscribes_to_newsletter), commit=False
+    )
     db.session.commit()
     return new_user, None
-
-
-def encerrar_contrato(user) -> None:
-    """
-    Anonimiza os dados do usuário e de tabelas relacionadas conforme política,
-    mantendo o registro para integridade referencial e auditoria.
-    Não faz logout; a rota deve invalidar a sessão após chamar esta função.
-    """
-    uid = user.id
-    user.email = f"encerrado_{uid}@anon.local"
-    user.full_name = "Conta encerrada"
-    user.password_hash = None
-    user.oauth_provider = None
-    user.oauth_sub = None
-    user.subscribes_to_newsletter = False
-    user.job_role = None
-    user.usage_purpose = None
-    user.accepted_terms_at = None
-    db.session.commit()
-    logger.info("Contrato encerrado e dados anonimizados para user id=%s", uid)

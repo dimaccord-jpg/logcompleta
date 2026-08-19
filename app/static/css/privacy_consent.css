@@ -1,0 +1,153 @@
+body.af-privacy-banner-visible {
+  padding-bottom: 96px;
+}
+
+.af-privacy-footer-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #a8b2d1;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.af-privacy-footer-btn:hover,
+.af-privacy-footer-btn:focus-visible {
+  color: #f0f0f5;
+  text-decoration: underline;
+}
+
+.af-privacy-banner,
+.af-privacy-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #0a0a0f;
+  color: #f0f0f5;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 1100;
+}
+
+.af-privacy-panel {
+  z-index: 1101;
+  background: #111119;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.af-privacy-banner-inner,
+.af-privacy-panel-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 12px 16px;
+}
+
+.af-privacy-copy {
+  margin: 0 0 10px;
+  color: #c5c5d6;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.af-privacy-copy a {
+  color: #8a8aa3;
+  text-decoration: underline;
+}
+
+.af-privacy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.af-privacy-btn {
+  background: transparent;
+  color: #f0f0f5;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.af-privacy-btn:hover,
+.af-privacy-btn:focus-visible {
+  border-color: #00bfff;
+  color: #ffffff;
+}
+
+.af-privacy-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.af-privacy-btn-text {
+  background: none;
+  border: 0;
+  color: #8a8aa3;
+  padding: 8px 4px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.af-privacy-btn-text:hover,
+.af-privacy-btn-text:focus-visible {
+  color: #f0f0f5;
+}
+
+.af-privacy-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.af-privacy-panel-title {
+  margin: 0;
+  font-size: 1rem;
+  color: #f0f0f5;
+}
+
+.af-privacy-category {
+  padding: 10px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.af-privacy-category-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.af-privacy-badge {
+  color: #8a8aa3;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.af-privacy-error {
+  margin: 10px 0 0;
+  color: #ff4d6a;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 767.98px) {
+  body.af-privacy-banner-visible {
+    padding-bottom: 140px;
+  }
+
+  .af-privacy-btn,
+  .af-privacy-btn-text {
+    min-height: 40px;
+  }
+}

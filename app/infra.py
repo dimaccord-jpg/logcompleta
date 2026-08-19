@@ -263,11 +263,28 @@ def ensure_bootstrap_admin_user(db_instance, *, raise_on_failure: bool = False) 
 
 
 def get_user_by_id(user_id):
-    """Retorna User por id (para Flask-Login user_loader)."""
+    """Retorna User por id, inclusive se operacionalmente encerrado.
+
+    Uso interno (billing, analytics, histórico, admin). Não esconde
+    Users encerrados. O user_loader de autenticação é
+    load_user_for_flask_login.
+    """
     try:
         return db.session.get(User, int(user_id))
     except (TypeError, ValueError):
         return None
+
+
+def load_user_for_flask_login(user_id):
+    """user_loader: sessão antiga de User encerrado deixa de autenticar."""
+    from app.services.user_operational_state import is_user_operationally_closed
+
+    user = get_user_by_id(user_id)
+    if user is None:
+        return None
+    if is_user_operationally_closed(user):
+        return None
+    return user
 
 
 # --- Vínculo geográfico (Roberto Intelligence / BI) ---

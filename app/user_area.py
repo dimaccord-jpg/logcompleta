@@ -9,7 +9,7 @@ from flask_login import login_required, current_user, logout_user
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from app.models import User
-from app.auth_services import encerrar_contrato
+from app.services.user_lifecycle_service import encerrar_vinculo_operacional_usuario
 from app.services.cleiton_monetizacao_service import (
     conciliar_checkout_session_stripe,
     criar_sessao_portal_pagamento_stripe,
@@ -560,13 +560,23 @@ def regularizar_pagamento_stripe():
 @login_required
 def encerrar_contrato_route():
     """
-    Encerra o contrato do usuário: anonimiza dados, invalida sessão e redireciona.
-    Deve ser chamado após confirmação no modal (POST).
+    Encerra o vínculo operacional do usuário autenticado e invalida a sessão.
+
+    Não é exclusão LGPD, cancelamento de assinatura nem downgrade.
+    Logout e session.clear permanecem nesta camada; o cookie first-party
+    de marketing não é gerenciado aqui.
     """
     user = current_user._get_current_object()
     if not isinstance(user, User):
         return redirect(url_for("user.perfil"))
-    encerrar_contrato(user)
+    resultado = encerrar_vinculo_operacional_usuario(user)
+    if not resultado.sucesso:
+        logger.warning(
+            "Falha no encerramento contratual user_id=%s: %s",
+            getattr(user, "id", None),
+            resultado.mensagem,
+        )
+        return redirect(url_for("user.perfil"))
     logout_user()
     session.clear()
     return redirect(url_for("index"))

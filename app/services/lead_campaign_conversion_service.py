@@ -15,6 +15,7 @@ from sqlalchemy import func
 from app.extensions import db
 from app.models import Lead, User, utcnow_naive
 from app.services.lead_acquisition_service import CAMPANHA_ACESSO_DESKTOP
+from app.services.lead_email_state import is_lead_email_minimized
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,9 @@ def reconcile_lead(
     if lead.converted_user_id is not None:
         return STATUS_ALREADY
 
+    if is_lead_email_minimized(lead):
+        return STATUS_NO_USER
+
     email_norm = _normalize_email(lead.email)
     if users_for_email is None:
         users_for_email = find_users_by_normalized_email(email_norm)
@@ -137,7 +141,11 @@ def reconcile_desktop_access_leads() -> dict[str, Any]:
     if not candidates:
         return stats
 
-    email_set = {_normalize_email(lead.email) for lead in candidates}
+    email_set = {
+        _normalize_email(lead.email)
+        for lead in candidates
+        if not is_lead_email_minimized(lead)
+    }
     grouped = _users_grouped_by_normalized_email(email_set)
 
     changed = False

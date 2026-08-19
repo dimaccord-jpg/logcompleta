@@ -1,4 +1,4 @@
-{% if facebook_pixel_id %}
+{% if facebook_pixel_id and privacy_marketing_allowed %}
 <script>
 (() => {
     const completeRegistrationEnabled = {{ (pixel_event_complete_registration or false)|tojson }};

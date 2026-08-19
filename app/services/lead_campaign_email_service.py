@@ -16,6 +16,19 @@ from app.auth_services import send_email
 from app.extensions import db
 from app.models import Lead, utcnow_naive
 from app.services.lead_acquisition_service import CAMPANHA_ACESSO_DESKTOP
+from app.services.communication_suppression_service import (
+    PURPOSE_ACTIVATION,
+    PURPOSE_PRE_REGISTRATION,
+    SOURCE_CAMPAIGN_UNSUBSCRIBE,
+    check_email_suppression,
+    normalize_email_hmac,
+    suppress_email,
+    suppress_email_hmac,
+)
+from app.services.lead_email_state import (
+    LeadEmailIdentityError,
+    is_lead_email_minimized,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +50,8 @@ _STATUS_SKIPPED = "skipped"
 _STATUS_FAILED = "failed"
 _STATUS_SKIPPED_CONVERTED = "skipped_converted"
 _STATUS_SKIPPED_OPT_OUT = "skipped_opt_out"
+_STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE = "suppression_check_unavailable"
+_STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED = "skipped_lead_email_minimized"
 
 
 def _build_pre_registration_layout(
@@ -203,10 +218,24 @@ def _build_cta_email_html(*, cta_url: str, unsubscribe_url: str) -> str:
     return build_initial_cta_email(cta_url=cta_url, unsubscribe_url=unsubscribe_url)["html"]
 
 
+def _pre_registration_communication_block(lead: Lead) -> str | None:
+    """Skip de envio pré-cadastro: opt-out real vs falha operacional da suppression."""
+    if is_lead_email_minimized(lead):
+        return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
+    if lead.opt_out_at is not None:
+        return _STATUS_SKIPPED_OPT_OUT
+    check = check_email_suppression(lead.email, PURPOSE_PRE_REGISTRATION)
+    if check.is_unavailable:
+        return _STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE
+    if check.suppressed:
+        return _STATUS_SKIPPED_OPT_OUT
+    return None
+
+
 def should_send_initial_cta(lead: Lead) -> bool:
     if lead.acquisition_campaign != CAMPANHA_ACESSO_DESKTOP:
         return False
-    if lead.opt_out_at is not None:
+    if _pre_registration_communication_block(lead) is not None:
         return False
     if lead.cta_email_sent_at is not None:
         return False
@@ -223,13 +252,20 @@ def maybe_send_initial_cta_email(
     """
     Envia no maximo um CTA inicial por Lead/campanha.
 
-    Retorna: sent | skipped | failed
+    Retorna: sent | skipped | failed | suppression_check_unavailable
     Grava cta_email_sent_at somente apos sucesso do sender.
     """
+    block = _pre_registration_communication_block(lead)
+    if block == _STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE:
+        return _STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE
+    if block == _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED:
+        return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
     if not should_send_initial_cta(lead):
         return _STATUS_SKIPPED
 
     try:
+        if is_lead_email_minimized(lead):
+            return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
         cta_token = generate_cta_token(lead.id, secret_key=secret_key)
         unsub_token = generate_unsubscribe_token(lead.id, secret_key=secret_key)
         cta_url = build_cta_url(cta_token)
@@ -275,11 +311,67 @@ def mark_first_cta_click(lead: Lead) -> None:
 
 
 def apply_campaign_opt_out(lead: Lead) -> None:
-    """Primeiro opt-out vence; nao altera newsletter nem remove o Lead."""
-    if lead.opt_out_at is not None:
-        return
-    lead.opt_out_at = utcnow_naive()
-    db.session.commit()
+    """
+    Primeiro opt-out vence; um commit final.
+
+    Mapeamento alinhado ao futuro backfill histórico:
+    opt_out_at → PRE_REGISTRATION + ACTIVATION.
+    Não altera newsletter nem remove o Lead.
+
+    Lead minimizado: usa Lead.email_hmac (nunca o placeholder).
+    HMAC ausente/inválido: fail-closed, rollback total.
+    """
+    try:
+        if lead.opt_out_at is None:
+            lead.opt_out_at = utcnow_naive()
+        stamp = lead.opt_out_at
+        if is_lead_email_minimized(lead):
+            digest = normalize_email_hmac(getattr(lead, "email_hmac", None))
+            if digest is None:
+                raise LeadEmailIdentityError(
+                    "Lead minimizado sem email_hmac valido; suppression recusada"
+                )
+            ok_pre = suppress_email_hmac(
+                digest,
+                PURPOSE_PRE_REGISTRATION,
+                SOURCE_CAMPAIGN_UNSUBSCRIBE,
+                suppressed_at=stamp,
+                commit=False,
+            )
+            ok_act = suppress_email_hmac(
+                digest,
+                PURPOSE_ACTIVATION,
+                SOURCE_CAMPAIGN_UNSUBSCRIBE,
+                suppressed_at=stamp,
+                commit=False,
+            )
+            if not ok_pre or not ok_act:
+                raise LeadEmailIdentityError(
+                    "Falha ao persistir suppression por HMAC no opt-out de campanha"
+                )
+        else:
+            suppress_email(
+                lead.email,
+                PURPOSE_PRE_REGISTRATION,
+                SOURCE_CAMPAIGN_UNSUBSCRIBE,
+                suppressed_at=stamp,
+                commit=False,
+            )
+            suppress_email(
+                lead.email,
+                PURPOSE_ACTIVATION,
+                SOURCE_CAMPAIGN_UNSUBSCRIBE,
+                suppressed_at=stamp,
+                commit=False,
+            )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception(
+            "Falha ao aplicar opt-out de campanha: lead_id=%s",
+            getattr(lead, "id", None),
+        )
+        raise
 
 
 def build_followup_email(*, cta_url: str, unsubscribe_url: str) -> dict[str, str]:
@@ -324,7 +416,7 @@ def should_send_followup(lead: Lead, *, now=None) -> bool:
         return False
     if lead.converted_user_id is not None:
         return False
-    if lead.opt_out_at is not None:
+    if _pre_registration_communication_block(lead) is not None:
         return False
     count = lead.followup_count if lead.followup_count is not None else 0
     if count >= MAX_FOLLOWUPS:
@@ -362,7 +454,8 @@ def maybe_send_followup_email(
     """
     Envia no maximo um follow-up por Lead/campanha.
 
-    Retorna: sent | skipped | skipped_converted | skipped_opt_out | failed
+    Retorna: sent | skipped | skipped_converted | skipped_opt_out |
+    suppression_check_unavailable | failed
 
     Recheck imediatamente antes do envio:
     - User correspondente -> marca conversao e nao envia
@@ -381,10 +474,13 @@ def maybe_send_followup_email(
     )
 
     if not should_send_followup(lead, now=now):
+        block = _pre_registration_communication_block(lead)
+        if block == _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED:
+            return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
         if lead.converted_user_id is not None:
             return _STATUS_SKIPPED_CONVERTED
-        if lead.opt_out_at is not None:
-            return _STATUS_SKIPPED_OPT_OUT
+        if block is not None:
+            return block
         return _STATUS_SKIPPED
 
     # Recheck de conversao imediatamente antes do envio.
@@ -411,13 +507,16 @@ def maybe_send_followup_email(
 
     # Recheck de opt-out (pode ter mudado apos a selecao do batch).
     db.session.refresh(lead)
-    if lead.opt_out_at is not None:
-        return _STATUS_SKIPPED_OPT_OUT
+    block = _pre_registration_communication_block(lead)
+    if block is not None:
+        return block
 
     if not should_send_followup(lead, now=now):
         return _STATUS_SKIPPED
 
     try:
+        if is_lead_email_minimized(lead):
+            return _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED
         cta_token = generate_cta_token(lead.id, secret_key=secret_key)
         unsub_token = generate_unsubscribe_token(lead.id, secret_key=secret_key)
         cta_url = build_cta_url(cta_token)
@@ -476,6 +575,8 @@ def process_eligible_followups(
         "skipped": 0,
         "skipped_converted": 0,
         "skipped_opt_out": 0,
+        "skipped_suppression_unavailable": 0,
+        "skipped_lead_email_minimized": 0,
         "failed": 0,
     }
     candidates = list_followup_candidates(now=now)
@@ -505,6 +606,10 @@ def process_eligible_followups(
             stats["skipped_converted"] += 1
         elif status == _STATUS_SKIPPED_OPT_OUT:
             stats["skipped_opt_out"] += 1
+        elif status == _STATUS_SKIPPED_SUPPRESSION_UNAVAILABLE:
+            stats["skipped_suppression_unavailable"] += 1
+        elif status == _STATUS_SKIPPED_LEAD_EMAIL_MINIMIZED:
+            stats["skipped_lead_email_minimized"] += 1
         elif status == _STATUS_FAILED:
             stats["failed"] += 1
         else:
@@ -512,11 +617,12 @@ def process_eligible_followups(
 
     logger.info(
         "Follow-up desktop_access: candidates=%s sent=%s skipped_converted=%s "
-        "skipped_opt_out=%s skipped=%s failed=%s",
+        "skipped_opt_out=%s skipped_suppression_unavailable=%s skipped=%s failed=%s",
         stats["candidates"],
         stats["sent"],
         stats["skipped_converted"],
         stats["skipped_opt_out"],
+        stats["skipped_suppression_unavailable"],
         stats["skipped"],
         stats["failed"],
     )
