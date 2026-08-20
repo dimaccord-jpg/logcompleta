@@ -90,6 +90,20 @@ def _client(web):
     return web.app.test_client()
 
 
+def _accept_marketing(client):
+    try:
+        client.set_cookie("af_privacy_marketing", "v1:accepted")
+    except TypeError:
+        client.set_cookie("localhost", "af_privacy_marketing", "v1:accepted")
+
+
+def _reject_marketing(client):
+    try:
+        client.set_cookie("af_privacy_marketing", "v1:rejected")
+    except TypeError:
+        client.set_cookie("localhost", "af_privacy_marketing", "v1:rejected")
+
+
 def test_home_anonima_sem_pixel_id_nao_inclui_sdk(web):
     resp = _client(web).get("/")
     html = resp.get_data(as_text=True)
@@ -99,9 +113,30 @@ def test_home_anonima_sem_pixel_id_nao_inclui_sdk(web):
     assert "oaiq.min.js" not in html
 
 
-def test_home_com_pixel_id_inclui_init_oficial(web):
+def test_home_com_pixel_id_sem_consentimento_nao_inclui_sdk(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
     html = _client(web).get("/").get_data(as_text=True)
+    assert SDK_URL not in html
+    assert "oaiq(" not in html
+    assert "oaiq.min.js" not in html
+    assert "bzrcdn.openai.com" not in html
+
+
+def test_home_com_pixel_id_rejected_nao_inclui_sdk(web):
+    web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
+    client = _client(web)
+    _reject_marketing(client)
+    html = client.get("/").get_data(as_text=True)
+    assert SDK_URL not in html
+    assert "oaiq(" not in html
+    assert "bzrcdn.openai.com" not in html
+
+
+def test_home_com_pixel_id_inclui_init_oficial(web):
+    web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
+    client = _client(web)
+    _accept_marketing(client)
+    html = client.get("/").get_data(as_text=True)
     assert SDK_URL in html
     assert f'pixelId: "{PIXEL_ID}"' in html
     assert 'oaiq("init"' in html
@@ -112,14 +147,18 @@ def test_home_com_pixel_id_inclui_init_oficial(web):
 def test_home_com_debug_habilitado_usa_parametro_documentado(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
     web.app.config["OPENAI_ADS_DEBUG"] = True
-    html = _client(web).get("/").get_data(as_text=True)
+    client = _client(web)
+    _accept_marketing(client)
+    html = client.get("/").get_data(as_text=True)
     assert 'oaiq("init"' in html
     assert "debug: true" in html
 
 
 def test_home_com_oppref_continua_200(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
-    resp = _client(web).get("/?oppref=TESTE_OPACO")
+    client = _client(web)
+    _accept_marketing(client)
+    resp = client.get("/?oppref=TESTE_OPACO")
     html = resp.get_data(as_text=True)
     assert resp.status_code == 200
     assert SDK_URL in html
@@ -128,7 +167,9 @@ def test_home_com_oppref_continua_200(web):
 
 def test_segunda_pagina_publica_login_recebe_pixel_global(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
-    resp = _client(web).get("/login")
+    client = _client(web)
+    _accept_marketing(client)
+    resp = client.get("/login")
     html = resp.get_data(as_text=True)
     assert resp.status_code == 200
     assert SDK_URL in html
@@ -137,7 +178,9 @@ def test_segunda_pagina_publica_login_recebe_pixel_global(web):
 
 def test_html_nao_inclui_capi_nem_pii_da_integracao(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
-    html = _client(web).get("/").get_data(as_text=True)
+    client = _client(web)
+    _accept_marketing(client)
+    html = client.get("/").get_data(as_text=True)
     snippet = _openai_script_blocks(html)
     assert snippet
     for marker in FORBIDDEN_PII_MARKERS:
@@ -150,6 +193,7 @@ def test_html_nao_inclui_capi_nem_pii_da_integracao(web):
 def test_registration_completed_somente_no_mesmo_fato_do_complete_registration(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
     client = _client(web)
+    _accept_marketing(client)
     with client.session_transaction() as sess:
         sess["pixel_event_complete_registration_once"] = True
     html = client.get("/login").get_data(as_text=True)
@@ -175,7 +219,9 @@ def test_ausencia_do_pixel_nao_quebra_o_fato_de_registro(web):
 
 def test_pixel_sem_fato_de_registro_nao_emite_conversao(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
-    html = _client(web).get("/").get_data(as_text=True)
+    client = _client(web)
+    _accept_marketing(client)
+    html = client.get("/").get_data(as_text=True)
     assert 'oaiq("init"' in html
     assert "const completeRegistrationEnabled = false" in html
     assert "if (completeRegistrationEnabled && hasOaiq())" in html
@@ -186,6 +232,7 @@ def test_openai_e_meta_permanecem_independentes(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = PIXEL_ID
     web.app.config["FACEBOOK_PIXEL_ID"] = "meta_pixel_test"
     client = _client(web)
+    _accept_marketing(client)
     with client.session_transaction() as sess:
         sess["pixel_event_complete_registration_once"] = True
     html = client.get("/login").get_data(as_text=True)
@@ -215,6 +262,7 @@ def test_partials_estruturais_nao_expandem_escopo():
     settings_src = SETTINGS_PY.read_text(encoding="utf-8")
 
     assert SDK_URL in base
+    assert "privacy_marketing_allowed" in base
     assert 'oaiq("init"' in base
     assert "pixelId:" in base
     assert "debug: true" in base
@@ -222,9 +270,11 @@ def test_partials_estruturais_nao_expandem_escopo():
     assert "email_sha256" not in base
     assert "oppref" not in base.lower()
 
+    assert "privacy_marketing_allowed" in events
     assert 'pixel_event_complete_registration' in events
     assert 'window.oaiq("measure", "registration_completed"' in events
     assert 'type: "customer_action"' in events
+    assert "privacy_marketing_allowed" in meta
     assert 'trackEvent("CompleteRegistration")' in meta
     for event_name in FORBIDDEN_CONVERSIONS:
         assert event_name not in events

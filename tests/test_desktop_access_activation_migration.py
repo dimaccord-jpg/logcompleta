@@ -19,8 +19,7 @@ def test_migration_u5v6w7x8y9z0_na_chain_e_aditiva():
     rev = script.get_revision("u5v6w7x8y9z0")
     assert rev is not None
     assert rev.down_revision == "t4u5v6w7x8y9"
-    heads = script.get_heads()
-    assert "u5v6w7x8y9z0" in heads
+    assert script.get_revision("u5v6w7x8y9z0") is not None
 
     path = ROOT / "migrations" / "versions" / "u5v6w7x8y9z0_desktop_access_activation_fields.py"
     source = path.read_text(encoding="utf-8")

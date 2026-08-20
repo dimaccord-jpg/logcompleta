@@ -594,3 +594,127 @@ def test_25_nao_interfere_followup_pre_cadastro(app):
             assert status == "sent"
             fu_mock.assert_called_once()
             assert "Continuar meu cadastro" in fu_mock.call_args.kwargs["html"]
+
+
+def test_26_jornada_encerrada_email1_nao_envia(app):
+    with app.app_context():
+        converted = _utcnow() - timedelta(days=2)
+        lead = _make_converted_lead(
+            email="ended.e1@empresa.com",
+            converted_at=converted,
+            captured_at=converted - timedelta(hours=1),
+        )
+        lead.activation_ended_at = converted + timedelta(hours=2)
+        lead.activation_ended_for_user_id = lead.converted_user_id
+        db.session.commit()
+        now = converted + timedelta(hours=24)
+        with patch.object(activation, "send_email") as send_mock:
+            status = _send_e1(lead, now=now)
+            send_mock.assert_not_called()
+            assert status == "skipped_journey_ended"
+            assert activation.should_send_activation_email_1(lead, now=now) is False
+            assert activation.is_activation_journey_ended(lead) is True
+            assert activation.is_activation_opted_out(lead) is False
+            lead = db.session.get(Lead, lead.id)
+            assert lead.activation_email_1_sent_at is None
+            assert lead.opt_out_at is None
+            assert lead.activation_opt_out_at is None
+
+
+def test_27_jornada_encerrada_email2_nao_envia(app):
+    with app.app_context():
+        e1_sent = _utcnow() - timedelta(days=3)
+        lead = _make_converted_lead(
+            email="ended.e2@empresa.com",
+            converted_at=e1_sent - timedelta(hours=24),
+            captured_at=e1_sent - timedelta(hours=25),
+            activation_email_1_sent_at=e1_sent,
+        )
+        lead.activation_ended_at = e1_sent + timedelta(hours=1)
+        lead.activation_ended_for_user_id = lead.converted_user_id
+        db.session.commit()
+        now = e1_sent + timedelta(hours=48)
+        with patch.object(activation, "send_email") as send_mock:
+            status = _send_e2(lead, now=now)
+            send_mock.assert_not_called()
+            assert status == "skipped_journey_ended"
+            assert activation.should_send_activation_email_2(lead, now=now) is False
+            lead = db.session.get(Lead, lead.id)
+            assert lead.activation_email_2_sent_at is None
+            assert lead.opt_out_at is None
+            assert lead.activation_opt_out_at is None
+
+
+def test_28_user_historico_encerrado_bloqueia_sem_backfill(app):
+    with app.app_context():
+        converted = _utcnow() - timedelta(days=2)
+        lead = _make_converted_lead(
+            email="hist.closed@empresa.com",
+            converted_at=converted,
+            captured_at=converted - timedelta(hours=1),
+        )
+        user = db.session.get(User, lead.converted_user_id)
+        user.email = f"encerrado_{user.id}@anon.local"
+        db.session.commit()
+        now = converted + timedelta(hours=24)
+        with patch.object(activation, "send_email") as send_mock:
+            status = _send_e1(lead, now=now)
+            send_mock.assert_not_called()
+            assert status == "skipped_journey_ended"
+            lead = db.session.get(Lead, lead.id)
+            assert lead.activation_ended_at is None
+            assert lead.activation_ended_for_user_id is None
+            assert lead.opt_out_at is None
+            assert lead.activation_opt_out_at is None
+            assert activation.is_activation_journey_ended(lead) is False
+            assert activation.is_activation_journey_unavailable(lead) is True
+
+
+def test_29_encerramento_de_outro_user_nao_bloqueia_jornada_atual(app):
+    with app.app_context():
+        converted = _utcnow() - timedelta(days=2)
+        lead = _make_converted_lead(
+            email="other.ended@empresa.com",
+            converted_at=converted,
+            captured_at=converted - timedelta(hours=1),
+        )
+        lead.activation_ended_at = converted + timedelta(hours=1)
+        lead.activation_ended_for_user_id = int(lead.converted_user_id) + 999
+        db.session.commit()
+        now = converted + timedelta(hours=24)
+        assert activation.is_activation_journey_ended(lead) is False
+        with patch.object(activation, "send_email") as send_mock:
+            status = _send_e1(lead, now=now)
+            send_mock.assert_called_once()
+            assert status == "sent"
+
+
+def test_30_recheck_barra_quando_user_encerra_antes_do_send(app):
+    with app.app_context():
+        from app.services.user_lifecycle_service import encerrar_vinculo_operacional_usuario
+
+        converted = _utcnow() - timedelta(days=2)
+        lead = _make_converted_lead(
+            email="recheck.closed@empresa.com",
+            converted_at=converted,
+            captured_at=converted - timedelta(hours=1),
+        )
+        user = db.session.get(User, lead.converted_user_id)
+        now = converted + timedelta(hours=24)
+        original_recheck = activation._recheck_before_send
+
+        def _recheck_with_close(lead_arg, *, which, now=None):
+            encerrar_vinculo_operacional_usuario(user)
+            return original_recheck(lead_arg, which=which, now=now)
+
+        with patch.object(
+            activation, "_recheck_before_send", side_effect=_recheck_with_close
+        ), patch.object(activation, "send_email") as send_mock:
+            with patch.object(activation, "should_send_activation_email_1", return_value=True):
+                status = _send_e1(lead, now=now)
+            send_mock.assert_not_called()
+            assert status == "skipped_journey_ended"
+            lead = db.session.get(Lead, lead.id)
+            assert lead.activation_email_1_sent_at is None
+            assert lead.opt_out_at is None
+            assert lead.activation_opt_out_at is None

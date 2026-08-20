@@ -1,523 +1,192 @@
-# Guia de Monetizacao, Franquias e Planos
+# Guia de Monetização, Franquias e Planos
 
-Este documento consolida a parte de monetizacao do Agentefrete / LogCompleta com foco em:
+Referência auditada em 2026-08-15. Este guia descreve a monetização que o código implementa hoje.
 
-- planos comerciais e operacionais
-- franquia de consumo
-- contagem, calculo e conversao de uso em creditos
-- upload do Roberto e apropriacao de consumo
-- integracao com Stripe
-- regras de governanca e observabilidade
+## Visão geral
 
-Ele complementa o `README.md`, mas nao substitui o documento principal do projeto.
+A monetização do projeto é dividida em duas camadas:
 
-## 1. Visao Geral
+- camada comercial e contratual, centrada em `ContaMonetizacaoVinculo`, `MonetizacaoFato`, checkout e webhook Stripe;
+- camada operacional, centrada em `Franquia`, consumo, autorização de uso, billing técnico e governança do Cleiton.
 
-A monetizacao do projeto e separada em duas camadas:
+Regra principal:
 
-- camada comercial/contratual: define plano, cobranca, vinculo externo e fatos de monetizacao
-- camada operacional: define se o uso pode acontecer, quanto ja foi consumido e qual o estado real da franquia
+- Stripe não substitui `Franquia`;
+- `User.creditos` é legado;
+- decisões de uso, bloqueio, degradação e expiração precisam olhar a franquia operacional.
 
-Regra central:
+## Fonte de verdade operacional
 
-- a fonte de verdade operacional e `Franquia`
-- Stripe nao substitui `Franquia`
-- `User.creditos` e legado e nao deve ser usado como fonte oficial de saldo
+Entidades centrais:
 
-Na pratica:
-
-- o contrato pode nascer ou mudar via admin e Stripe
-- o consumo tecnico vira credito consumido no motor Cleiton
-- o efeito real de limite, degradacao, bloqueio e expiracao converge para `Franquia`
-
-## 2. Fonte de Verdade Operacional
-
-Entidade principal:
-
+- `Conta`
 - `Franquia`
+- `User`
+- `ContaMonetizacaoVinculo`
+- `MonetizacaoFato`
+- `ProcessingEvent`
+- `IaConsumoEvento`
+- `CleitonBillingApropriacao`
+- `CleitonCostConfig`
 
-Campos operacionais oficiais:
+Campos operacionais mais relevantes em `Franquia`:
 
-- `Franquia.limite_total`
-- `Franquia.consumo_acumulado`
-- `Franquia.status`
+- `limite_total`
+- `consumo_acumulado`
+- `inicio_ciclo`
+- `fim_ciclo`
+- `bloqueio_manual`
+- `status`
 
-Leitura operacional:
+## Planos ativos no código
 
-- autorizacao em tempo de uso deve olhar `Franquia`
-- incidentes de saldo, limite ou bloqueio devem ser investigados primeiro em `Franquia`
-
-Campos e estruturas auxiliares:
-
-- `Conta`: raiz contratual/comercial
-- `ContaMonetizacaoVinculo`: vinculo comercial externo da conta
-- `MonetizacaoFato`: trilha append-only de fatos externos e internos de monetizacao
-- `ProcessingEvent`: eventos tecnicos de processamento
-- `IaConsumoEvento`: eventos tecnicos de IA
-- `CleitonBillingApropriacao`: apropriacao idempotente do billing tecnico do Roberto
-- `CleitonCostConfig`: parametros de custo e regua de creditos
-
-## 3. Catalogo Completo de Planos
-
-Planos catalogados no codigo administrativo:
+Planos catalogados:
 
 - `free`
 - `starter`
 - `pro`
 - `multiuser`
 - `avulso`
-
-Plano operacional adicional suportado pelo controle interno:
-
 - `uso_adm`
 
-### 3.1 Estado comercial atual por tipo
+Leitura prática:
 
-Planos preparados para gateway de monetizacao nesta fase:
+- `starter` e `pro` são os fluxos pagos mais claramente integrados ao gateway;
+- `multiuser` e `avulso` continuam suportados operacionalmente;
+- `uso_adm` é interno;
+- `free` continua sendo a entrada freemium.
 
-- `starter`
-- `pro`
+## Configuração administrativa dos planos
 
-Planos catalogados, mas fora do fluxo principal de gateway/assinatura nesta fase:
-
-- `free`
-- `multiuser`
-- `avulso`
-
-Plano de uso interno/administrativo:
-
-- `uso_adm`
-
-Observacoes importantes:
-
-- `free` nao tem `price_id` de Stripe no fluxo comercial atual
-- `starter` e `pro` sao os planos pagos preparados para Stripe
-- `multiuser` existe no catalogo e no controle operacional, inclusive com criacao de franquias adicionais e codigos de acesso
-- `avulso` existe no motor operacional e na administracao de planos
-- `uso_adm` existe no controle de usuario e no fluxo operacional, mas nao faz parte do catalogo SaaS exibido como produto comercial padrao
-
-### 3.2 Onde o projeto guarda os parametros de cada plano
-
-Os planos nao dependem de valores hardcoded para monetizacao do dia a dia. A configuracao administrativa usa `ConfigRegras`.
-
-Chaves administrativas por plano:
+Os planos usam `ConfigRegras` para parâmetros administrativos, incluindo:
 
 - `plano_valor_admin_<codigo>`
 - `plano_franquia_ref_admin_<codigo>`
-
-Chaves adicionais para planos com gateway:
-
 - `plano_gateway_provider_admin_<codigo>`
 - `plano_gateway_product_id_admin_<codigo>`
 - `plano_gateway_price_id_admin_<codigo>`
 - `plano_gateway_currency_admin_<codigo>`
 - `plano_gateway_interval_admin_<codigo>`
 - `plano_gateway_ready_admin_<codigo>`
-
-Configuracao especial do free:
-
 - `freemium_trial_dias`
 
-Interpretacao oficial:
+O valor comercial e a franquia operacional não são a mesma coisa.
 
-- valor do plano = parametro comercial/admin
-- franquia do plano = limite operacional real em creditos
+## Governança de franquia
 
-## 4. Regra da Franquia
+- cada usuário comercial deve ter vínculo com `Conta` e `Franquia`;
+- a autorização operacional central passa por `avaliar_autorizacao_operacao_por_franquia`;
+- o plano operacional da franquia é resolvido por serviços do Cleiton;
+- `multiuser` pode gerar várias franquias para a mesma conta e códigos em `MultiuserFranquiaCodigo`.
 
-A franquia e a unidade operacional real de consumo.
+## Estados operacionais
 
-Cada franquia tem:
+O código trabalha com estados como:
 
-- conta vinculada
-- limite total em creditos
-- consumo acumulado em creditos
-- status persistido
-- ciclo operacional
+- `active`
+- `degraded`
+- `blocked`
+- `expired`
 
-Regras oficiais:
+Leitura operacional resumida:
 
-- novo usuario comercial `free` deve nascer com `Franquia.limite_total` numerico
-- `Franquia.limite_total = None` nao e comportamento permitido para novo usuario comercial
-- nao atualizar saldo operacional fora de `Franquia`
-- nao usar `User.creditos` para decisao de autorizacao, cobranca ou bloqueio
+- `free` tende a bloquear quando atinge o limite;
+- `starter`, `pro` e `multiuser` tendem a degradar ao atingir o limite;
+- `avulso` pode expirar por vigência ou limite;
+- `uso_adm` e estruturas internas seguem trilha especial, salvo bloqueio manual.
 
-## 5. Regua de Conversao para Creditos
+## Stripe
 
-A conversao de consumo tecnico em credito depende de `CleitonCostConfig`.
+Fluxos confirmados no código:
 
-Parametros principais:
+- página de contratação em `/contrate-um-plano`;
+- criação/início de checkout em `/api/contratacao/stripe/iniciar`;
+- conciliação de retorno de checkout na própria área do usuário;
+- regularização em `/perfil/regularizar-pagamento` e `/perfil/regularizar-pagamento/stripe`;
+- encerramento contratual em `/perfil/encerrar-contrato`;
+- webhook oficial em `/api/webhook/stripe`.
+
+Variáveis de ambiente principais:
+
+- `STRIPE_API_KEY`
+- `STRIPE_PUBLISHABLE_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_SUCCESS_URL`
+- `STRIPE_CANCEL_URL`
+- `STRIPE_CHECKOUT_API_BASE_URL`
+
+## Eventos e fatos de monetização
+
+- Stripe gera fatos persistidos e auditáveis;
+- a conta pode manter customer, subscription, price e snapshots normalizados;
+- o efeito operacional final continua mediado pelos serviços de governança de franquia e plano;
+- a área admin possui trilhas de auditoria para inconsistências de vínculo, múltiplas subscriptions, pendências e guardrails.
+
+## Billing técnico e consumo
+
+Há separação explícita entre:
+
+- consumo de IA em `IaConsumoEvento`;
+- processamento em `ProcessingEvent`;
+- apropriação idempotente em `CleitonBillingApropriacao`.
+
+Conversões operacionais usam parâmetros de `CleitonCostConfig`, como:
 
 - `credit_tokens_per_credit`
 - `credit_lines_per_credit`
 - `credit_ms_per_credit`
 
-Interpretacao:
+### Régua de conversão para créditos
 
-- quantos tokens de IA 1 credito compra
-- quantas linhas processadas 1 credito compra
-- quantos milissegundos processados 1 credito compra
+As conversões operacionais seguem as fórmulas implementadas em `cleiton_franquia_operacional_service.py`:
 
-### 5.1 Formula de conversao por tokens
+- tokens: `creditos = tokens / credit_tokens_per_credit`
+- linhas: `creditos = linhas / credit_lines_per_credit`
+- tempo de processamento: `creditos = processing_time_ms / credit_ms_per_credit`
 
-Formula:
+As conversões:
 
-- `creditos = tokens / credit_tokens_per_credit`
-
-Comportamento:
-
-- converte com precisao decimal
-- arredonda para 6 casas
-- se a regua estiver ausente ou invalida, a conversao falha e o motor registra erro de configuracao
-
-### 5.2 Formula de conversao por linhas
-
-Formula:
-
-- `creditos = linhas / credit_lines_per_credit`
-
-Uso:
-
-- aplicada a `ProcessingEvent.rows_processed`
-
-### 5.3 Formula de conversao por tempo de processamento
-
-Formula:
-
-- `creditos = processing_time_ms / credit_ms_per_credit`
-
-Uso:
-
-- aplicada a `ProcessingEvent.processing_time_ms`
-
-### 5.4 Soma de creditos de um evento
-
-Eventos de IA:
-
-- usam `total_tokens`
-- fallback para `input_tokens + output_tokens`
-
-Eventos de processamento:
-
-- somam creditos por linhas processadas
-- somam creditos por milissegundos processados
-
-Formula conceitual do processamento:
-
-- `creditos_evento_processing = creditos_linhas + creditos_ms`
-
-## 6. Custo Tecnico e Referencia de Runtime
-
-O projeto tambem guarda parametros de custo para leitura operacional e dashboard.
-
-Campos principais em `CleitonCostConfig`:
-
-- `runtime_monthly_cost`
-- `month_seconds`
-- `allocation_percent`
-- `overhead_factor`
-- `cost_per_million_tokens`
-
-Formula derivada de custo por segundo:
-
-- `custo_por_segundo = (runtime_monthly_cost * allocation_percent * overhead_factor) / month_seconds`
-
-Importante:
-
-- esse calculo serve como referencia de custo tecnico
-- `cost_per_million_tokens` e apenas referencia simples
-- essa referencia nao entra no calculo do upload Roberto
-
-## 7. Regras de Abatimento de Consumo
-
-Nem todo evento tecnico deve abater da franquia do cliente.
-
-O motor nao abate quando:
-
-- a origem e sistema interno
-- nao existe `usuario_id`
-- nao existe `franquia_id`
-- a origem e HTTP anonima
-- a franquia e a franquia reservada do sistema interno
-
-O motor so deve refletir consumo quando houver identidade operacional valida de cliente.
-
-## 8. Regras de Status da Franquia
-
-O status operacional e recalculado com base em:
-
-- bloqueio manual
-- plano operacional
-- vigencia do ciclo
-- limite total
-- consumo acumulado
-
-Classificacao oficial:
-
-- `active`
-  - franquia interna sem bloqueio manual
-  - ou limite ainda nao atingido
-  - ou limite efetivo inexistente
-- `blocked`
-  - bloqueio manual
-  - plano `free` no limite
-  - plano indefinido no limite
-  - fallback de seguranca
-- `degraded`
-  - planos `starter`, `pro` e `multiuser` quando atingem o limite
-- `expired`
-  - vigencia expirada
-  - ou plano `avulso` ao atingir limite/vigencia
-
-Leitura resumida por plano:
-
-- `free`: bateu o limite, bloqueia
-- `starter`: bateu o limite, degrada
-- `pro`: bateu o limite, degrada
-- `multiuser`: bateu o limite, degrada
-- `avulso`: bateu o limite ou vigencia, expira
-- `uso_adm` / interna: ignora regra comercial padrao e permanece operacional, salvo bloqueio manual
-
-## 9. Upload do Roberto e Consumo da Franquia
-
-O upload de Excel do Roberto participa diretamente da monetizacao operacional.
-
-Fluxo resumido:
-
-1. o upload valida arquivo e colunas obrigatorias
-2. o sistema normaliza e processa as linhas validas
-3. o sistema aplica limite operacional de volume para uso do BI
-4. os dados uteis sao gravados no storage temporario do Roberto
-5. o billing operacional do upload e apropriado de forma idempotente
-
-### 9.1 O que conta para consumo no upload
-
-No fluxo atual:
-
-- `rows_processed` usa a quantidade de `linhas_processadas` validas antes do corte operacional de `linhas_utilizadas`
-- `processing_time_ms` mede o tempo real de processamento da request
-
-Isso significa:
-
-- o consumo do upload e calculado pelo que foi efetivamente processado para preparar o upload
-- o teto operacional de exibicao/uso posterior nao altera retroativamente a contagem tecnica ja feita para billing
-
-### 9.2 Idempotencia do upload
-
-O upload usa chave:
-
-- `roberto-upload:<execution_id>`
-
-Garantias:
-
-- uma mesma chave nao deve apropriar consumo duas vezes
-- `CleitonBillingApropriacao` guarda o marcador append-only da apropriacao
-- em caso de repeticao, o fluxo retorna como duplicado em vez de debitar novamente
-
-### 9.3 Contrato da apropriacao
-
-O resultado da apropriacao do upload expõe:
-
-- se foi duplicado
-- se apropriou consumo
-- `processing_event_id`
-- `creditos_apropriados`
-- motivo
-- novo status da franquia
-- consumo acumulado atual
-
-## 10. IA, Tokens e Consumo
-
-### 10.1 Auditoria Cleide: linhas e reprocessamento
-
-O fluxo atual usa `apropriar_billing_cleide_operational_flow` com marcador único em `CleitonBillingApropriacao`.
-
-- upload de cobertura cobra as linhas persistidas em `cleide_audit_coverage_upload`;
-- upload do lote auditado cobra suas linhas em `cleide_audit_batch_upload`;
-- o primeiro `audit/run` não cobra novamente o lote já cobrado no upload;
-- novo clique sem lote obsoleto também não cobra;
-- `_audit_batch_should_bill_operational_run` só autoriza `cleide_audit_batch_processed` quando um lote antes processado está em `needs_reprocess` efetivo, inclusive por versão fiscal ou parser tarifário desatualizados;
-- falha anterior à persistência não gera apropriação;
-- repetição da chave idempotente retorna duplicado sem novo débito.
-
-Bloqueios da autorização por franquia retornam o CTA de upgrade quando configurado. Chat documental e chat de insights podem gerar `IaConsumoEvento`, mas não chamam a apropriação de linhas operacionais. Tokens de IA e linhas/tempo de processamento permanecem separados.
+- não consideram valores negativos; a entrada é normalizada para no mínimo zero;
+- usam `Decimal`;
+- são arredondadas para 6 casas decimais com `ROUND_HALF_UP`;
+- falham explicitamente quando a régua correspondente está ausente ou é menor ou igual a zero.
 
 Para eventos de IA:
 
-- o consumo tecnico vem de `IaConsumoEvento`
-- o motor converte tokens em creditos via `credit_tokens_per_credit`
+- usa `total_tokens` quando disponível e maior que zero;
+- caso contrário, usa `input_tokens + output_tokens`.
 
-Regra operacional:
+Para eventos de processamento:
 
-- IA bem sucedida pode abater da franquia quando houver identidade valida de cliente
-- se a configuracao de creditos estiver ausente ou invalida, a apropriacao falha com erro de configuracao e deve ser tratada como incidente de parametrizacao, nao como saldo zero
+- converte `rows_processed` em créditos;
+- converte `processing_time_ms` em créditos;
+- soma as duas parcelas;
+- quantiza o total novamente para 6 casas decimais.
 
-## 11. Multiuser
+## Roberto
 
-O plano `multiuser` exige atencao especial porque pode gerar mais de uma franquia operacional para a mesma conta.
+- o upload de Excel do Roberto participa do billing operacional;
+- a apropriação é idempotente;
+- o fluxo usa storage temporário próprio e não depende de saldo em `User.creditos`;
+- o consumo considera processamento técnico real, não apenas exibição posterior.
 
-Comportamentos relevantes:
+## Cleide
 
-- cria franquias adicionais vinculadas a mesma conta
-- gera codigos em `MultiuserFranquiaCodigo`
-- mantem governanca central via `Conta` e `Franquia`
-- quando atinge o limite operacional, entra em `degraded`
+- upload de coverage, upload do lote e processamento do lote têm eventos operacionais separados;
+- o primeiro processamento não deve cobrar de novo o lote já apropriado no upload;
+- chat documental e chat analítico podem registrar consumo de IA, mas não substituem billing operacional de linhas.
 
-## 12. Free, Trial e Usuarios Legados
+## AgenteCompara
 
-O plano `free` tem duas regras importantes:
+- uploads documentais podem registrar evento de funil;
+- o cálculo comparativo tem billing operacional próprio e liberação pública condicionada a `billing_status=applied`;
+- há idempotência por `execution_id` e fingerprint;
+- o fluxo também pode marcar `first_audit_completed` quando aplicável.
 
-- onboarding novo deve nascer com limite operacional numerico
-- trial administrativo e parametrizado por `freemium_trial_dias`
+## Regras que não devem ser quebradas
 
-Existe tambem rotina de saneamento para legado:
-
-- `corrigir_franquias_free_sem_limite()`
-
-Objetivo:
-
-- corrigir usuarios `free` antigos ou inconsistentes que ficaram sem `limite_total`
-
-## 13. Stripe, Cobranca e Contrato
-
-Stripe entra como fonte de fatos externos, nao como estado operacional final.
-
-Entidades principais:
-
-- `ContaMonetizacaoVinculo`
-- `MonetizacaoFato`
-
-Regra de arquitetura:
-
-- fatos Stripe relevantes sao persistidos
-- a correlacao comercial precisa ser auditavel
-- o efeito operacional em `Franquia` continua mediado pela camada central do Cleiton
-
-### 13.1 Fluxos comerciais mapeados
-
-Fluxo atual documentado:
-
-- `free -> starter`: inicia novo checkout embutido
-- `starter -> pro`: atualiza subscription existente
-- `pro -> starter`: downgrade pendente para virar no proximo ciclo
-- `starter/pro -> free`: `cancel_at_period_end = true` e troca interna posterior
-
-Guardrail de UX atual:
-
-- downgrade para `free` ou `starter` deve abrir modal de confirmacao antes de qualquer chamada ao backend;
-- o endpoint oficial permanece `/api/contratacao/stripe/iniciar`;
-- o payload oficial permanece `{ plano_codigo, confirmar_downgrade }`;
-- ausencia do modal deve ser tratada como erro visivel no frontend, nao como falha silenciosa.
-
-Importante:
-
-- nenhum efeito operacional de plano deve ignorar o Cleiton
-- status contratual externo nao escreve diretamente o status da franquia sem passar pela camada central
-
-## 14. O que cada plano representa na monetizacao
-
-### `free`
-
-- entrada freemium
-- sem price Stripe no fluxo atual
-- usa trial administrativo
-- deve nascer com franquia numerica
-- ao atingir limite, bloqueia
-
-### `starter`
-
-- plano pago com suporte de gateway
-- usa configuracao administrativa de valor e franquia
-- possui chaves de provider/product/price/currency/interval/ready
-- ao atingir limite, degrada
-
-### `pro`
-
-- plano pago com suporte de gateway
-- mesma governanca central de `starter`
-- upgrade e downgrade tratados pelo fluxo de monetizacao
-- ao atingir limite, degrada
-
-### `multiuser`
-
-- plano catalogado e suportado operacionalmente
-- pode gerar varias franquias/codigos na mesma conta
-- tratado como plano degradavel ao atingir limite
-- nao faz parte do gateway comercial padrao desta fase
-
-### `avulso`
-
-- plano catalogado e suportado operacionalmente
-- ao atingir limite ou vigencia, expira
-- nao faz parte do gateway comercial padrao desta fase
-
-### `uso_adm`
-
-- plano interno/administrativo
-- suportado no controle de usuarios
-- nao e produto comercial publico
-- nao deve ser usado como referencia de monetizacao de cliente final
-
-## 15. Observabilidade e Auditoria
-
-Objetos e trilhas que sustentam auditoria:
-
-- `Franquia`
-- `IaConsumoEvento`
-- `ProcessingEvent`
-- `CleitonBillingApropriacao`
-- `ContaMonetizacaoVinculo`
-- `MonetizacaoFato`
-- `CleitonCostConfig`
-
-Checagens importantes:
-
-- reconciliar `Franquia.consumo_acumulado` com soma recalculada dos eventos abataveis
-- validar coerencia entre `ContaMonetizacaoVinculo`, `MonetizacaoFato` e `Franquia`
-- revisar status persistido e status recalculado da franquia
-
-Endpoint administrativo citado no projeto:
-
-- `/admin/api/cleiton-franquia/<franquia_id>/validacao`
-
-## 16. Regras que nao podem ser quebradas
-
-Estas regras devem ser preservadas em qualquer manutencao futura:
-
-- nao mover a fonte de verdade operacional para `User.creditos`
-- nao escrever consumo, limite ou status fora de `Franquia`
-- nao aplicar efeito contratual direto de Stripe sem passar pela camada central do Cleiton
-- nao debitar upload do Roberto sem idempotencia
-- nao debitar novamente o primeiro processamento da Cleide após o upload do lote
-- nao confundir consumo IA do chat com consumo operacional por linhas
-- nao tratar consumo anonimo/sistema como consumo faturavel do cliente
-- nao criar bypass de governanca para planos pagos, trial ou franquias multiuser
-- nao assumir que valor comercial do plano e o mesmo que a franquia operacional
-
-## 17. Checklist Rapido de Validacao
-
-Antes de alterar monetizacao, planos ou franquias, confirmar:
-
-- o plano existe no catalogo correto
-- a franquia de referencia do plano esta configurada
-- a leitura operacional continua baseada em `Franquia`
-- a regua de creditos esta configurada e valida
-- o upload do Roberto continua idempotente
-- uploads e reprocessamento da Cleide continuam idempotentes
-- eventos de IA e processamento continuam conciliaveis
-- Stripe continua como fonte de fatos, nao como fonte de verdade operacional
-- observabilidade e trilhas append-only continuam preservadas
-
-## 18. Resumo Executivo
-
-Em uma frase:
-
-- monetizacao comercial define contrato; franquia define operacao.
-
-Em termos práticos:
-
-- planos definem embalagem comercial e referencia operacional
-- Cleiton converte uso tecnico em creditos
-- Roberto consome franquia via upload/processamento
-- Stripe registra fatos externos
-- `Franquia` decide o estado real do cliente no uso do sistema
+- não usar `User.creditos` como saldo oficial;
+- não aplicar efeitos de Stripe diretamente sobre autorização operacional sem passar pela governança do Cleiton;
+- não perder a idempotência de uploads e apropriações;
+- não misturar consumo de IA com consumo operacional por linhas/tempo;
+- não tratar eventos anônimos ou do sistema como faturáveis ao cliente.

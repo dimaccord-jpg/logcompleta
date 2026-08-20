@@ -1,61 +1,110 @@
-# Arquitetura Oficial
+# Arquitetura do Produto
 
-Referência arquitetural auditada em 2026-08-05. A fonte oficial de estado e contratos é `docs/estado_oficial_consolidado.md`.
+Referência auditada em 2026-08-19. A fonte de verdade é o código atual.
 
-## Mapa de superfícies
+## Identidade do produto
 
-| Superfície | Acesso | Responsabilidade |
+- produto: Agente Frete
+- empresa: `Logcompleta Agentes Inteligentes LTDA`
+- domínio principal: `https://www.agentefrete.com.br/`
+- stack principal: Flask + templates + Bootstrap
+
+## Experiência pública vs autenticada
+
+- antes do login, a home apresenta o Copiloto público;
+- antes do login, a home não apresenta Júlia como experiência principal;
+- após login, a Júlia passa a ser a experiência principal;
+- a aplicação mantém na mesma base as superfícies pública, autenticada, administrativa e operacional.
+
+## Superfícies principais
+
+| Superfície | Acesso | Papel atual |
 |---|---|---|
-| `/` | público/logado | discovery Cleiton e handoff |
-| `/chat_julia?mode=operational` | autenticado | consultoria operacional da Júlia |
-| `/fretes` | autenticado | BI e chat do Roberto |
-| `/auditoria-frete` | página pública; API protegida | auditoria operacional da Cleide |
-| `/agente-compara` | página pública; APIs protegidas | comparação multitabela do AgenteCompara |
-| `/admin/...` | admin | billing, métricas, custos e observabilidade |
+| `/` | público/logado | home, discovery, aquisição e Copiloto público |
+| `/chat_julia` | público ou autenticado | conversa inicial e modo operacional da Júlia |
+| `/auditoria-frete` | página pública; APIs autenticadas | Cleide Auditoria |
+| `/agente-compara` | página pública; APIs autenticadas | comparação multitabela |
+| `/fretes` | autenticado | Roberto BI |
+| `/feed` | público | feed editorial misto |
+| `/contrate-um-plano`, `/perfil/*` | autenticado | billing e área do usuário |
+| `/admin/*` | admin | governança, operação e dashboards |
+| `/cron/*`, `/ops/*`, `/health*` | operacional | automação, diagnóstico e health |
 
-## Aplicação e blueprints
+## Domínios/agentes
 
-`app/web.py` registra os blueprints de admin, operações, usuário, Cleide, AgenteCompara e documentos da Júlia. Roberto continua sem blueprint próprio separado.
+### Copiloto público
 
-## Camadas estruturais
+- vive principalmente na home e na jornada pública;
+- faz triagem, onboarding e handoff;
+- não representa o mesmo fluxo operacional autenticado da Júlia.
 
-- camada web Flask em `app/web.py` e blueprints;
-- camada de domínio do AgenteCompara em `app/agente_compara_*`;
-- trilho documental técnico compartilhado do Cleiton em `app/cleiton_doc_*`;
-- métricas e billing operacional em serviços e modelos próprios;
-- banco PostgreSQL para persistência transacional;
-- JSON temporário para documentos, `temp_table`, lotes e resultado comparativo fora da sessão.
+### Júlia
 
-## AgenteCompara
+- assistente operacional do ambiente autenticado;
+- também existe em modo público inicial em `/chat_julia`;
+- combina chat, documentos e pipeline editorial;
+- usa rotas e serviços documentais próprios.
 
-O AgenteCompara implementa arquitetura em camadas:
+### Cleide
 
-- página em `app/agente_compara_routes.py`;
-- rotas HTTP/API em `app/agente_compara_api_routes.py`;
-- estado multitabela em `app/agente_compara_comparison_state.py`;
-- upload, revisão, coverage e arquivo operacional em `app/agente_compara_doc_service.py`;
-- extração técnica da `temp_table` em `app/run_agente_compara_temp_table.py`;
-- gate determinístico de validação da `temp_table` em `app/agente_compara_temp_table_validation_service.py`;
-- cálculo unitário em `app/agente_compara_calculation_service.py`;
-- memória pública do cálculo em `app/agente_compara_calculation_memory_service.py`;
-- gate de completeza do cálculo em `app/agente_compara_calculation_completeness_service.py`;
-- orquestração multitabela em `app/agente_compara_comparison_calculation_service.py`;
-- execução, lock, idempotência, storage e billing em `app/agente_compara_calculation_execution_service.py`, `app/agente_compara_calculation_lock.py` e `app/agente_compara_calculation_result_storage.py`;
-- analytics comparativo derivado do resultado liberado em `app/agente_compara_comparison_analytics_service.py`;
-- chat contextual pós-READY em `app/agente_compara_chat_context_service.py` e `app/run_agente_compara_comparison_chat.py`.
+- foco em auditoria de fretes;
+- rota prioritária atual: `/auditoria-frete`;
+- upload de Excel, CSV e PDF no fluxo operacional;
+- entrevista proativa, memória temporária, confirmações e BI operacional;
+- mantém isolamento de sessão, eventos e billing.
 
-## Isolamento entre agentes
+### AgenteCompara
 
-- Júlia, Cleide e AgenteCompara usam namespaces de sessão distintos;
-- AgenteCompara usa `flow_type`, billing e eventos de processamento próprios;
-- não há compartilhamento de `comparison_id`, `table_id`, `temp_table_id` ou lotes entre AgenteCompara e Cleide;
-- o isolamento é reforçado por testes específicos do domínio.
+- compara até 3 tabelas de frete;
+- 2 tabelas são obrigatórias e a 3ª é opcional;
+- usa `comparison_id`, `table_id` e `slot` para identidade do fluxo;
+- tem preparação, revisão, cálculo, memória e dashboard próprios;
+- o código já implementa cálculo comparativo, mas a documentação deve seguir o que estiver confirmado no runtime real de cada etapa.
 
-## Infraestrutura versionada
+### Roberto
 
-- `start.sh` aplica `db upgrade` antes do Gunicorn;
-- `render.yaml` versionado aponta homolog para `homolog` e produção para `main`;
-- `start.sh` aceita `producao` como alias de produção para inferência de `APP_ENV`;
-- o código expõe `/health/liveness` e `/health/readiness`.
+- rota existente: `/fretes`;
+- domínio de BI e leitura quantitativa de fretes;
+- permanece implementado, mas escondido/não priorizado na experiência atual;
+- não foi removido.
 
-A diferença entre branch operacional informada de produção (`producao`) e branch versionada no YAML (`main`) continua sendo uma divergência operacional, não uma equivalência comprovada em código.
+### Cleiton
+
+- camada transversal de governança, billing técnico, observabilidade e orquestração;
+- concentra regras de franquia, custos, eventos de processamento e parte das automações.
+
+## Composição técnica
+
+- núcleo Flask em `app/web.py`;
+- blueprints ativos incluem admin, ops, user, Cleide, Cleide Auditoria, AgenteCompara e documentos da Júlia;
+- Roberto, OAuth, onboarding, newsletter, webhooks e rotas gerais permanecem no `app/web.py`;
+- persistência transacional em PostgreSQL;
+- schema evoluído via Alembic;
+- persistência técnica em disco para documentos, índices, resultados e artefatos temporários.
+
+## Isolamento entre domínios
+
+- Júlia, Cleide e AgenteCompara usam chaves e escopos distintos em sessão;
+- Cleide Auditoria e AgenteCompara compartilham parte do trilho técnico documental do Cleiton, mas não compartilham identidade funcional;
+- AgenteCompara usa storage comparativo próprio;
+- Cleide Auditoria usa coverage, lote e contexto analítico próprios;
+- billing e eventos não devem ser misturados entre os domínios.
+
+## Persistência e runtime
+
+- `DATABASE_URL` é a fonte de persistência transacional;
+- `APP_DATA_DIR` sustenta storage técnico fora da sessão;
+- `INDICES_FILE_PATH` fica fora da pasta efêmera da release em homolog/prod;
+- `start.sh` roda `db upgrade` antes do Gunicorn.
+- `render.yaml` versionado define homolog na branch `homolog` com `APP_ENV=homolog` e produção na branch `producao` com `APP_ENV=prod`;
+- os dois serviços versionados usam `autoDeploy: true`, `build.sh`, `start.sh` e `healthCheckPath: /health`;
+- quando `APP_ENV` não vem explícito, `start.sh` reconhece `main`, `master`, `producao` e `prod` como ambiente de produção;
+- o runtime também expõe `/health/liveness` e `/health/readiness`.
+
+
+## Relações importantes
+
+- autenticação e lifecycle do usuário convivem com billing e auditoria, mas não apagam estrutura contratual;
+- documentos legais têm governança própria por upload/admin e storage persistente;
+- consentimento de marketing é separado de cookies/sessão necessários;
+- masking para IA externa acontece na boundary outbound, não no dado persistido interno.

@@ -28,6 +28,15 @@ def _pixel_helper() -> str:
     return _read(PIXEL_EVENTS)
 
 
+def test_pixel_sdk_requires_privacy_marketing_allowed():
+    base = _read(PIXEL_BASE)
+    events = _read(PIXEL_EVENTS)
+    assert "privacy_marketing_allowed" in base
+    assert "privacy_marketing_allowed" in events
+    assert "connect.facebook.net" in base
+    assert "fbevents.js" in base
+
+
 def test_track_standard_events_still_use_fbq_track():
     helper = _pixel_helper()
     track_fn = helper[helper.index("function trackEvent") : helper.index("function trackCustomEvent")]

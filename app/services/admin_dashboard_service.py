@@ -1,6 +1,7 @@
 """
 Métricas reais do dashboard administrativo (usuários, leads, filtros).
-Alinhado a auth_services.encerrar_contrato para usuários cancelados (email anonimizado).
+Alinhado a user_lifecycle_service para usuários com vínculo operacional encerrado
+(email operacional anonimizado). Encerramento contratual != exclusão LGPD.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from sqlalchemy import not_
 from app.extensions import db
 from app.models import Franquia, Lead, User
 
-# Padrão de email após encerramento (auth_services.encerrar_contrato).
+# Padrão de email após encerramento contratual (user_lifecycle_service).
 CANCELADO_EMAIL_LIKE = "encerrado%@anon.local"
 
 

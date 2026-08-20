@@ -146,7 +146,7 @@ def test_agente_compara_menu_admin_mostra_atalhos_completos(monkeypatch):
 
     web = _load_web_module()
     user = _AuthUser()
-    monkeypatch.setattr(web, "get_user_by_id", lambda _user_id: user)
+    monkeypatch.setattr(web, "load_user_for_flask_login", lambda _user_id: user)
     client = web.app.test_client()
     with client.session_transaction() as sess:
         sess["_user_id"] = user.get_id()

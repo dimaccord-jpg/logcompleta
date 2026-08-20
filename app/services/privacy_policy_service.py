@@ -16,6 +16,10 @@ from app.extensions import db
 from app.infra import get_admin_executor
 from app.legal_document_storage import build_safe_storage_path
 from app.models import PrivacyPolicy, User
+from app.services.legal_notification_eligibility import (
+    REASON_CLOSED,
+    classify_legal_notification_recipient,
+)
 from app.privacy_policy_services import (
     ensure_privacy_policy_dir_exists,
     get_active_privacy_policy,
@@ -102,47 +106,59 @@ def _build_unique_privacy_policy_filename(upload_dir: str, original_filename: st
 def _notify_privacy_policy_update(app, policy_url: str, upload_date) -> tuple[int, int]:
     """Notifica usuários sobre a atualização da política. Falhas não interrompem o fluxo."""
     with app.app_context():
-        # Não há no model User um campo explícito e confiável de ativo/inativo.
-        # Nesta rodada mantemos compatibilidade com envio para todos os usuários.
         users = User.query.all()
         sent = 0
         failed = 0
-        ignored = 0
+        eligible = 0
+        ignored_closed = 0
+        ignored_invalid_email = 0
         total_users = len(users)
         logger.info(
-            "Iniciando notificação operacional de política atualizada. total_usuarios_encontrados=%s",
+            "Iniciando notificação jurídica de política atualizada. total_usuarios_encontrados=%s",
             total_users,
         )
         for user in users:
-            user_email = (user.email or "").strip()
-            if not user_email:
-                ignored += 1
-                logger.warning(
-                    "Notificação de política ignorada por e-mail ausente. user_id=%s",
-                    getattr(user, "id", None),
-                )
+            decision = classify_legal_notification_recipient(user)
+            if not decision.eligible:
+                if decision.reason == REASON_CLOSED:
+                    ignored_closed += 1
+                    logger.info(
+                        "Notificação de política ignorada por encerramento/desidentificação. user_id=%s",
+                        getattr(user, "id", None),
+                    )
+                else:
+                    ignored_invalid_email += 1
+                    logger.info(
+                        "Notificação de política ignorada por e-mail ausente/inválido. user_id=%s",
+                        getattr(user, "id", None),
+                    )
                 continue
+            eligible += 1
             try:
                 send_privacy_policy_updated_notification(
-                    user_email=user_email,
-                    user_name=user.full_name or user_email,
+                    user_email=decision.email,
+                    user_name=user.full_name or decision.email,
                     policy_url=policy_url,
                     upload_date=upload_date,
                 )
                 sent += 1
             except Exception as exc:
                 logger.warning(
-                    "Falha ao enviar notificação de política para %s: %s",
-                    user_email,
-                    exc,
+                    "Falha ao enviar notificação de política. user_id=%s error_type=%s",
+                    getattr(user, "id", None),
+                    type(exc).__name__,
                 )
                 failed += 1
         logger.info(
-            "Notificação operacional concluída. total_usuarios_encontrados=%s enviados=%s falhas=%s ignorados_sem_email=%s",
+            "Notificação jurídica de política concluída. total_usuarios_encontrados=%s "
+            "elegiveis=%s enviados=%s falhas=%s ignorados_encerrados=%s "
+            "ignorados_email_invalido=%s",
             total_users,
+            eligible,
             sent,
             failed,
-            ignored,
+            ignored_closed,
+            ignored_invalid_email,
         )
         return sent, failed
 

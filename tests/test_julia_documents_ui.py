@@ -29,10 +29,9 @@ class _AuthUser(UserMixin):
         self.full_name = "Tester User"
 
 
-def _force_login(client, web, *, is_admin: bool = False):
+def _force_login(client, web, monkeypatch, *, is_admin: bool = False):
     user = _AuthUser(is_admin=is_admin)
-    monkey_get = lambda _user_id: user
-    setattr(web, "get_user_by_id", monkey_get)
+    monkeypatch.setattr(web, "load_user_for_flask_login", lambda _user_id: user)
     with client.session_transaction() as sess:
         sess["_user_id"] = user.get_id()
         sess["_fresh"] = True
@@ -54,7 +53,7 @@ def _operational_client(monkeypatch, *, is_admin: bool = False, force_login: boo
     )
     client = web.app.test_client()
     if force_login:
-        _force_login(client, web, is_admin=is_admin)
+        _force_login(client, web, monkeypatch, is_admin=is_admin)
     return client
 
 

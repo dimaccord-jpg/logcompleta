@@ -1,80 +1,63 @@
-# LogCompleta / AgenteFrete
+# Agente Frete
 
-Referência principal auditada em 2026-08-05: `docs/estado_oficial_consolidado.md`.
+Mapa documental auditado em 2026-08-19. A consolidação mais detalhada está em `docs/estado_producao.md` e `docs/arquitetura_oficial.md`.
 
 ## Visão do produto
 
-O repositório continua concentrando as superfícies de Cleiton, Júlia, Roberto, Cleide e AgenteCompara em uma aplicação Flask única, com PostgreSQL como banco oficial e trilhas técnicas temporárias em JSON para fluxos documentais, lotes e cálculo comparativo.
+Agente Frete é o produto operado pela `Logcompleta Agentes Inteligentes LTDA`, com experiência pública e autenticada na mesma aplicação Flask.
 
-A visão oficial do AgenteCompara no código atual é a de um fluxo multitabela com:
+Antes do login, a superfície principal é o Copiloto público da home. Depois do login, a experiência principal passa a ser a Júlia.
 
-- 2 tabelas obrigatórias e 3ª opcional;
-- estado em sessão por `comparison_id`, `table_id` e slot;
-- extração técnica para `temp_table`;
-- revisão humana por tabela;
-- configuração fiscal global;
-- coverage opcional;
-- arquivo operacional com template oficial;
-- cálculo comparativo com lock, fingerprint, idempotência, gate de completude e storage dedicado fora da sessão;
-- memória pública determinística por linha, incluindo componentes aplicados/ignorados e diagnósticos de cálculo;
-- validação determinística de taxas acessórias antes do avanço da revisão;
-- analytics comparativo leve no resultado liberado, chat contextual comparativo pós-READY e observabilidade/billing operacional próprios.
+Os domínios ativos no código atual são:
 
-## Arquitetura resumida
+- Copiloto público: discovery e triagem inicial na home.
+- Júlia: assistente operacional do ambiente autenticado, com suporte documental.
+- Cleide: auditoria de fretes.
+- AgenteCompara: comparação de até 3 tabelas de frete sobre a mesma base operacional.
+- Roberto: BI de fretes; a rota existe, mas está escondida/não priorizada na experiência atual.
+- Cleiton: governança, orquestração, billing técnico e observabilidade.
+
+## Arquitetura em alto nível
 
 - aplicação principal em `app/web.py`;
-- página do AgenteCompara em `app/agente_compara_routes.py`;
-- APIs do AgenteCompara em `app/agente_compara_api_routes.py`;
+- stack principal: Flask + templates + Bootstrap;
+- persistência transacional em PostgreSQL via `DATABASE_URL`;
 - schema governado por Alembic em `migrations/versions/`;
-- boot versionado via `start.sh`, com `db upgrade` antes do Gunicorn;
-- infraestrutura versionada em `render.yaml`;
-- temporários técnicos sob `app/cleiton_doc_tmp/`.
+- persistência técnica em `APP_DATA_DIR` para documentos, índices, artefatos temporários e resultados fora da sessão;
+- deploy Render com `build.sh` + `start.sh`, e `db upgrade` automático no boot.
 
-## Banco e migrations
+## Superfícies principais
 
-A entrega recente do AgenteCompara não adicionou migration, tabela nem coluna nova. A cadeia versionada permanece linear até `r2s3t4u5v6w7`, mas o sistema continua dependendo da aplicação das migrations existentes no boot.
+- `/`: home pública com Copiloto, onboarding, aquisição e consentimento.
+- `/chat_julia`: copiloto público e modo operacional autenticado.
+- `/auditoria-frete`: Cleide Auditoria.
+- `/agente-compara`: comparação multitabela.
+- `/fretes`: Roberto BI.
+- `/feed`: feed editorial misto de artigos e insights.
+- `/contrate-um-plano`, `/perfil`, `/perfil/regularizar-pagamento`: billing e área do usuário.
+- `/termos-de-uso` e `/politica-de-privacidade`: documentos legais ativos.
 
-## Deploy e ambientes
+## Estado atual relevante
 
-O código versionado comprova:
+- branch operacional de produção documentada: `producao`;
+- migration head esperada em produção: `y9z0a1b2c3d4`;
+- deploy atual executa `python -m flask --app app.web db upgrade` antes do Gunicorn;
+- `APP_ENV` é obrigatório e aceito apenas como `dev`, `homolog` ou `prod`;
+- em homolog/prod, `APP_DATA_DIR` e `INDICES_FILE_PATH` precisam apontar para storage persistente;
+- Stripe usa `/api/webhook/stripe`, com `invoice.paid` como evento principal de confirmação contratual;
+- consentimento de marketing, suppression, newsletter, lifecycle e masking outbound já estão implantados e documentados abaixo.
 
-- branch local auditada: `homolog`;
-- commit auditado na branch atual: `939b73e` (`feat: consolida fluxo e calculos do AgenteCompara`);
-- `origin/homolog` apontando para o mesmo conteúdo do checkout local auditado;
-- `origin/producao` apontando para o commit promovido `fdec64a` (`feat: consolida fluxo e calculos do AgenteCompara`);
-- homolog em `homolog` com `autoDeploy: true` no `render.yaml`;
-- produção em `main` com `autoDeploy: false` no `render.yaml`;
-- `start.sh` inferindo `APP_ENV=prod` para `main`, `master`, `producao` e `prod`;
-- health checks reais em `/health/liveness` e `/health/readiness`;
-- `healthCheckPath: /health` ainda declarado no YAML.
+## Documentação principal
 
-O processo operacional informado para a publicação validada em 2026-08-05 registra homologação em `939b73e`, promoção para produção na branch `producao` pelos commits `fdec64a`, `db72007` e `f9591dc`, com deploy manual no Render. A divergência entre a branch operacional informada (`producao`) e a branch versionada no `render.yaml` (`main`) continua aberta.
-
-## Testes e dependências de desenvolvimento
-
-- a suíte direcionada validada do AgenteCompara registrou `612 passed, 1 skipped, 2 warnings`;
-- os warnings observados eram depreciações de bibliotecas externas, sem falha funcional atribuída ao fluxo publicado;
-- `playwright>=1.40.0` foi adicionado somente em `requirements-dev.txt`;
-- o Render instala apenas `requirements.txt` pelo `build.sh`, então Playwright não é dependência de produção nem etapa automática do deploy.
-
-## Arquivos locais ignorados
-
-Não entram no Git nem no deploy versionado:
-
-- `app/indices.json`;
-- `cache_*.json`, incluindo `cache_noticias.json`;
-- `scripts/security/rotation-report*.json`;
-- arquivos `*.db`, `*.sqlite` e `*.sqlite3`;
-- `app/cleiton_doc_tmp/`;
-- uploads temporários e diretórios locais de suporte operacional.
-
-Templates oficiais `.xlsx` seguem versionados por exceção explícita do `.gitignore`.
-
-## Documentação oficial
-
-- visão consolidada: `docs/estado_oficial_consolidado.md`
-- arquitetura: `docs/arquitetura_oficial.md`
+- arquitetura do produto: `docs/arquitetura_oficial.md`
+- deploy e operação: `app/README_DEPLOY.md`
+- estado consolidado de produção: `docs/estado_producao.md`
+- LGPD, lifecycle e retenção: `docs/lgpd_governanca_tecnica.md`
+- consentimento e marketing: `docs/consentimento_privacidade_marketing.md`
+- newsletter e suppression: `docs/comunicacoes_newsletter_suppression.md`
+- IA externa e masking: `docs/integracoes_ia_privacidade.md`
+- governança técnica dos documentos legais: `docs/governanca_documentos_legais.md`
+- monetização e franquias: `docs/guia_monetizacao_franquias.md`
+- Cleide Auditoria: `docs/cleide_auditoria_operacional.md`
 - runtime e observabilidade: `docs/runtime_ia_e_observabilidade.md`
 - execução local: `app/README_RUN.md`
-- deploy: `app/README_DEPLOY.md`
-- troubleshooting: `docs/troubleshooting_operacional.md`

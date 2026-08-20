@@ -30,7 +30,7 @@ class _AuthUser(UserMixin):
 
 def _force_login(client, web, *, is_admin=False):
     user = _AuthUser(is_admin=is_admin)
-    setattr(web, "get_user_by_id", lambda _user_id: user)
+    setattr(web, "load_user_for_flask_login", lambda _user_id: user)
     with client.session_transaction() as sess:
         sess["_user_id"] = user.get_id()
         sess["_fresh"] = True

@@ -21,10 +21,9 @@ class _AuthUser(UserMixin):
         self.full_name = "Tester User"
 
 
-def _force_login(client, web, *, is_admin=False):
+def _force_login(client, web, monkeypatch, *, is_admin=False):
     user = _AuthUser(is_admin=is_admin)
-    monkey_get = lambda _user_id: user
-    setattr(web, "get_user_by_id", monkey_get)
+    monkeypatch.setattr(web, "load_user_for_flask_login", lambda _user_id: user)
     with client.session_transaction() as sess:
         sess["_user_id"] = user.get_id()
         sess["_fresh"] = True
@@ -66,7 +65,7 @@ def test_fretes_retorna_200_quando_autenticado(monkeypatch):
     )
 
     client = web.app.test_client()
-    _force_login(client, web, is_admin=False)
+    _force_login(client, web, monkeypatch, is_admin=False)
     resp = client.get("/fretes")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
@@ -121,7 +120,7 @@ def test_roberto_upload_logado_continua_fluxo_oficial(monkeypatch):
 
     monkeypatch.setattr(web, "processar_upload_frete_excel", _upload_stub)
     client = web.app.test_client()
-    _force_login(client, web, is_admin=False)
+    _force_login(client, web, monkeypatch, is_admin=False)
     resp = client.post("/api/roberto/upload", data={}, content_type="multipart/form-data")
     assert resp.status_code == 200
     payload = resp.get_json() or {}
@@ -138,7 +137,7 @@ def test_fretes_autenticado_nao_tem_redirect_privado_para_login(monkeypatch):
         lambda _u: {"permitido": True, "modo_operacao": "normal"},
     )
     client = web.app.test_client()
-    _force_login(client, web, is_admin=False)
+    _force_login(client, web, monkeypatch, is_admin=False)
     resp = client.get("/fretes")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)

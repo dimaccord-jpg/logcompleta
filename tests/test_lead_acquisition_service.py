@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from app.extensions import db
-from app.models import Lead
-from app.news_ai import registrar_lead_newsletter
+from app.models import Lead, NewsletterSubscription
+from app.news_ai import registrar_newsletter_subscription
 from app.run_cleiton_agente_retencao import limpar_dados_antigos
 from app.services.lead_acquisition_service import capturar_lead_para_campanha
 
@@ -220,17 +220,17 @@ def test_retencao_remove_lead_realmente_antigo(app):
 
 def test_newsletter_continua_funcionando_sem_campanha(app):
     with app.app_context():
-        ok, msg = registrar_lead_newsletter("news@empresa.com")
+        ok, msg = registrar_newsletter_subscription("news@empresa.com")
         assert ok is True
-        lead = Lead.query.filter_by(email="news@empresa.com").first()
-        assert lead is not None
-        assert lead.acquisition_campaign is None
-        assert lead.campaign_captured_at is None
-        assert lead.followup_count == 0
+        row = NewsletterSubscription.query.filter_by(email="news@empresa.com").first()
+        assert row is not None
+        assert row.unsubscribed_at is None
+        assert Lead.query.count() == 0
 
-        ok2, _ = registrar_lead_newsletter("news@empresa.com")
+        ok2, _ = registrar_newsletter_subscription("news@empresa.com")
         assert ok2 is True
-        assert Lead.query.count() == 1
+        assert NewsletterSubscription.query.count() == 1
+        assert Lead.query.count() == 0
         assert msg
 
 
@@ -258,11 +258,12 @@ def test_campanha_depois_newsletter_preserva_aquisicao(app):
         lead.opt_out_at = opt_out_at
         db.session.commit()
 
-        ok, _ = registrar_lead_newsletter("camp-news@empresa.com")
+        ok, _ = registrar_newsletter_subscription("camp-news@empresa.com")
         lead2 = Lead.query.filter_by(id=lead_id).first()
 
         assert ok is True
         assert Lead.query.count() == 1
+        assert NewsletterSubscription.query.filter_by(email="camp-news@empresa.com").first() is not None
         assert lead2 is not None
         assert lead2.id == lead_id
         assert lead2.acquisition_campaign == CAMPAIGN_A
@@ -287,7 +288,7 @@ def test_campanha_depois_newsletter_casing_diferente_preserva(app):
         lead_id = first["lead"].id
         captured_at = first["lead"].campaign_captured_at
 
-        ok, _ = registrar_lead_newsletter("Usuario@Empresa.com")
+        ok, _ = registrar_newsletter_subscription("Usuario@Empresa.com")
         lead = Lead.query.filter_by(id=lead_id).first()
 
         assert ok is True
@@ -300,21 +301,23 @@ def test_campanha_depois_newsletter_casing_diferente_preserva(app):
 
 def test_newsletter_nova_persiste_email_lowercase(app):
     with app.app_context():
-        ok, _ = registrar_lead_newsletter("Usuario@Empresa.com")
-        lead = Lead.query.first()
+        ok, _ = registrar_newsletter_subscription("Usuario@Empresa.com")
+        row = NewsletterSubscription.query.first()
 
         assert ok is True
-        assert Lead.query.count() == 1
-        assert lead.email == "usuario@empresa.com"
+        assert NewsletterSubscription.query.count() == 1
+        assert Lead.query.count() == 0
+        assert row.email == "usuario@empresa.com"
 
 
 def test_newsletter_repeticao_casing_diferente_idempotente(app):
     with app.app_context():
-        ok1, _ = registrar_lead_newsletter("Usuario@Empresa.com")
-        ok2, _ = registrar_lead_newsletter("usuario@empresa.com")
-        leads = Lead.query.all()
+        ok1, _ = registrar_newsletter_subscription("Usuario@Empresa.com")
+        ok2, _ = registrar_newsletter_subscription("usuario@empresa.com")
+        rows = NewsletterSubscription.query.all()
 
         assert ok1 is True
         assert ok2 is True
-        assert len(leads) == 1
-        assert leads[0].email == "usuario@empresa.com"
+        assert len(rows) == 1
+        assert rows[0].email == "usuario@empresa.com"
+        assert Lead.query.count() == 0
