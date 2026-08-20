@@ -353,7 +353,7 @@
         {% block content %}{% endblock %}
     </div>
     {% if not request.path.startswith('/admin/confirmar-promocao-admin/') and not request.path.startswith('/admin/confirmar-revogacao-admin/') %}
-    <footer class="py-4 mt-4" style="background:#050c16; border-top:1px solid rgba(255,255,255,.08);">
+    <footer class="py-4 mt-4" style="background:#050c16; border-top:1px solid rgba(255,255,255,.08); font-size:0.8125rem;">
         <div class="container text-center">
             <a
                 href="{{ url_for('privacy_policy') }}"
@@ -377,6 +377,9 @@
             </button>
             <div class="mt-2" style="color:#a8b2d1; font-weight:500;">
                 Contato: contat@agentefrete.com.br
+            </div>
+            <div class="mt-2" style="color:#a8b2d1; font-weight:500;">
+                AgenteFrete é uma plataforma da LOGCOMPLETA AGENTES INTELIGENTES LTDA — Nome fantasia: AGENTE FRETE — CNPJ 52.583.078/0001-80 — Paulínia/SP.
             </div>
         </div>
     </footer>
