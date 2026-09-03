@@ -186,13 +186,13 @@ def _authorize_cleide_audit_documents_api():
 
 
 CHAT_DISABLED_MESSAGE = (
-    "O chat da Cleide Auditoria está desabilitado no momento."
+    "O chat do AgenteAudita está desabilitado no momento."
 )
 DOCUMENTS_REQUIRED_MESSAGE = (
-    "Envie pelo menos um documento para a Cleide analisar nesta conversa."
+    "Envie pelo menos um documento para o AgenteAudita analisar nesta conversa."
 )
 AUDIT_UPLOAD_DISABLED_MESSAGE = (
-    "Upload documental da Cleide Auditoria está desabilitado no momento."
+    "Upload documental do AgenteAudita está desabilitado no momento."
 )
 
 
@@ -1023,7 +1023,7 @@ def cleide_audit_correction_undo():
 @cleide_audit_bp.route("/api/cleide-auditoria/chat", methods=["POST"])
 def cleide_audit_chat():
     unauthorized = _authorize_cleide_audit_api(
-        auth_message="Autenticação necessária para conversar com a Cleide Auditoria.",
+        auth_message="Autenticação necessária para conversar com o AgenteAudita.",
     )
     if unauthorized is not None:
         return unauthorized
@@ -1175,7 +1175,7 @@ def cleide_audit_chat():
 @cleide_audit_bp.route("/api/cleide-auditoria/audit-chat/unlock", methods=["POST"])
 def cleide_audit_insights_chat_unlock():
     unauthorized = _authorize_cleide_audit_api(
-        auth_message="Autenticação necessária para liberar o chat analítico da Cleide Auditoria.",
+        auth_message="Autenticação necessária para liberar o chat analítico do AgenteAudita.",
     )
     if unauthorized is not None:
         return unauthorized
@@ -1210,7 +1210,7 @@ def cleide_audit_insights_chat_unlock():
 @cleide_audit_bp.route("/api/cleide-auditoria/audit-chat", methods=["POST"])
 def cleide_audit_insights_chat():
     unauthorized = _authorize_cleide_audit_api(
-        auth_message="Autenticação necessária para consultas analíticas da Cleide Auditoria.",
+        auth_message="Autenticação necessária para consultas analíticas do AgenteAudita.",
     )
     if unauthorized is not None:
         return unauthorized

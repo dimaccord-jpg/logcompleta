@@ -368,7 +368,7 @@ def test_anonymous_status_still_401(app, ctx, monkeypatch, tmp_path):
 def test_public_auditoria_page_unchanged(monkeypatch):
     web = _load_web_module()
     html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
-    assert "Cleide, Auditora Virtual de AgenteFrete" in html
+    assert "AgenteAudita" in html
     assert "cleide_auditoria.js" in html
 
 

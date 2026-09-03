@@ -70,9 +70,9 @@ Regras do JSON:
 - reply: conversacional; nunca menu fixo; nunca começar com "Existem algumas formas de trabalhar esse tema".
 - recommended_agent: só quando fizer sentido; null para cumprimentos, curiosidade genérica ou falta de contexto.
 - handoff / handoffs: opcionais; omita ou null se não houver recomendação real de navegação.
-- Destinos de Cleide:
-  - cleide_freight_audit → /auditoria-frete (Auditoria de Fretes: cobrança, cobrado vs esperado, tabela negociada, divergências, memória de cálculo). Preferir este para auditoria.
-  - cleide_audit → /cleide-bi-frete (BI Cleide anterior/legado). NÃO usar para auditoria de cobrança.
+- Destinos técnicos de auditoria (agent `cleide`):
+  - cleide_freight_audit → /auditoria-frete (Auditoria de Fretes com o AgenteAudita: cobrança, cobrado vs esperado, tabela negociada, divergências, memória de cálculo). Preferir este para auditoria.
+  - cleide_audit → /cleide-bi-frete (BI de Auditoria legado). NÃO usar para auditoria de cobrança.
 - Roberto: roberto_bi → /fretes (indicadores, gráficos, BI gerencial, previsões).
 - AgenteCompara: agente_compara → /agente-compara (comparação de tabelas / BID comparativo interno). Label sugerido do CTA: "Iniciar comparação de tabelas".
 - Artefato não define destino: planilha, PDF, tabela, custo ou transportadora isolados → converse e peça objetivo; sem handoff.
@@ -81,8 +81,9 @@ Regras do JSON:
   - Auditar cobrança / cobrado vs esperado → cleide_freight_audit.
   - Previsão / evolução histórica → roberto_bi.
   - Estratégia / negociação / sourcing sem cálculo multitabela → julia_operational.
-- handoffs: use para oferecer dois caminhos (ex.: AgenteCompara + Júlia; AgenteCompara + Cleide; AgenteCompara + Roberto; Júlia + Roberto), no máximo 2.
-- needs_login: true apenas para continuidade operacional real com Júlia; default false.
+- handoffs: use para oferecer dois caminhos (ex.: AgenteCompara + AgenteFrete; AgenteCompara + AgenteAudita; AgenteCompara + Roberto; AgenteFrete + Roberto), no máximo 2.
+- needs_login: true apenas para continuidade operacional real com AgenteFrete; default false.
+- O campo label do JSON é opcional; o backend usa o rótulo canônico da taxonomia.
 - Pode encaminhar BID comparativo interno ao AgenteCompara.
 - Não prometa cotação automatizada, BID aberto no mercado, coleta externa de propostas, contratação ou decisão automática.
 """.strip()
@@ -226,6 +227,9 @@ def _build_system_prompt() -> str:
         "Você é o Copilot do AgenteFrete — assistente conversacional na Home do produto.\n\n"
         "Seu papel é conversar de forma natural, explicar o que o produto faz com honestidade "
         "e sugerir agentes ou navegação apenas quando fizer sentido.\n\n"
+        "Identidade pública: use AgenteFrete (nunca Júlia) e AgenteAudita (nunca Cleide ou "
+        "Cleide Auditoria). IDs técnicos internos (`julia`, `cleide`, `julia_operational`, "
+        "`cleide_freight_audit`) não devem ser apresentados como marca.\n\n"
         "--- DOCUMENTO DE CAPACIDADES ---\n"
         f"{capabilities}\n"
         "--- FIM DO DOCUMENTO ---\n\n"
@@ -277,7 +281,6 @@ def _normalize_recommended_agent(raw: Any) -> str | None:
 def _build_handoff_payload(
     dest_id: str,
     *,
-    label: str | None = None,
     capability_domain: str | None = None,
 ) -> dict[str, Any] | None:
     if dest_id not in VALID_DESTINATIONS:
@@ -285,9 +288,10 @@ def _build_handoff_payload(
     spec = DESTINATIONS[dest_id]
     if not capability_domain and dest_id == "agente_compara":
         capability_domain = "freight_table_comparison"
+    # Destinations conhecidos: o label público vem da taxonomia, não de texto livre do modelo.
     payload: dict[str, Any] = {
         "destination": dest_id,
-        "label": (label or spec.label).strip(),
+        "label": spec.label.strip(),
         "requires_login": bool(spec.requires_login),
         "requires_dataset": spec.requires_dataset,
         "url": spec.url,
@@ -345,8 +349,7 @@ def _parse_handoff_entry(raw: Any, *, user_message: str = "") -> dict[str, Any] 
     dest_id = _remap_destination_for_message(dest_id, user_message)
     if dest_id not in VALID_DESTINATIONS:
         return None
-    label = str(raw.get("label") or "").strip() or None
-    return _build_handoff_payload(dest_id, label=label)
+    return _build_handoff_payload(dest_id)
 
 
 def _collect_handoffs(

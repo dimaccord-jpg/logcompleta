@@ -1,10 +1,28 @@
+import os
 import shutil
 from pathlib import Path
 from uuid import uuid4
 
+# Isolamento de pytest DEVE rodar antes de qualquer import da aplicação.
+# Assignment (não setdefault): DATABASE_URL herdada do shell não pode vencer.
+PYTEST_DISPOSABLE_SQLALCHEMY_URI = "sqlite:///:memory:"
+PYTEST_PROCESS_DATABASE_URL = (
+    "postgresql://pytest:pytest@pytest-isolation.invalid:5432/logcompleta_pytest_test"
+)
+
+
+def apply_pytest_database_isolation() -> None:
+    """Força ambiente de teste descartável. Não herda DATABASE_URL operacional."""
+    os.environ["TESTING"] = "1"
+    os.environ["DATABASE_URL"] = PYTEST_PROCESS_DATABASE_URL
+
+
+apply_pytest_database_isolation()
+
 import pytest
 from flask import Flask
 
+from app.db_operational_safety import run_test_schema_operation
 from app.extensions import db
 
 
@@ -36,19 +54,50 @@ _patch_pytest_tmp_cleanup_for_windows()
 pytest_plugins = ("tests.cleiton_doc_fixtures",)
 
 
+def pytest_configure(config):
+    apply_pytest_database_isolation()
+
+
+def pytest_sessionstart(session):
+    apply_pytest_database_isolation()
+    from app.db_operational_safety import is_disposable_test_database
+
+    process_uri = os.environ.get("DATABASE_URL") or ""
+    if process_uri != PYTEST_PROCESS_DATABASE_URL:
+        raise RuntimeError(
+            "pytest recusado: isolamento central de DATABASE_URL não aplicado. "
+            "URI operacional herdada não pode permanecer no processo de teste."
+        )
+    if not is_disposable_test_database(PYTEST_DISPOSABLE_SQLALCHEMY_URI):
+        raise RuntimeError(
+            "pytest recusado: URI descartável do fixture de teste é inválida."
+        )
+
+
 @pytest.fixture(scope="function")
 def app():
     flask_app = Flask(__name__)
-    flask_app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    # URI do fixture é constante — DATABASE_URL do processo não decide este banco.
+    flask_app.config["SQLALCHEMY_DATABASE_URI"] = PYTEST_DISPOSABLE_SQLALCHEMY_URI
     flask_app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     flask_app.config["TESTING"] = True
     db.init_app(flask_app)
     with flask_app.app_context():
         import app.models  # noqa: F401 — registra metadados das tabelas
-        db.create_all()
+        run_test_schema_operation(
+            db,
+            flask_app.config["SQLALCHEMY_DATABASE_URI"],
+            testing=True,
+            operation="create_all",
+        )
     yield flask_app
     with flask_app.app_context():
-        db.drop_all()
+        run_test_schema_operation(
+            db,
+            flask_app.config["SQLALCHEMY_DATABASE_URI"],
+            testing=True,
+            operation="drop_all",
+        )
 
 
 @pytest.fixture

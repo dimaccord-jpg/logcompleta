@@ -469,6 +469,30 @@ def admin_dashboard():
                 "service_failed": True,
             },
         }
+    home_cta_experiment_metrics = None
+    try:
+        from app.services.admin_home_cta_experiment_service import (
+            get_home_cta_experiment_dashboard_payload,
+        )
+
+        home_cta_experiment_metrics = get_home_cta_experiment_dashboard_payload(
+            days=conversion_days_raw or 30,
+        )
+    except Exception as exc:
+        logger.exception(
+            "admin_dashboard_home_cta_experiment_metrics_failed days=%s failure_type=%s",
+            conversion_days_raw,
+            exc.__class__.__name__,
+        )
+        from app.services.admin_home_cta_experiment_service import (
+            empty_home_cta_experiment_dashboard_payload,
+        )
+
+        home_cta_experiment_metrics = empty_home_cta_experiment_dashboard_payload(
+            days=30,
+            warning="Métricas do experimento de CTA indisponíveis temporariamente.",
+            service_failed=True,
+        )
     return render_template(
         "dashboard.html",
         dash_metrics=dash_metrics,
@@ -483,6 +507,7 @@ def admin_dashboard():
         onboarding_word_cloud=onboarding_word_cloud,
         conversion_metrics=conversion_metrics,
         acquisition_metrics=acquisition_metrics,
+        home_cta_experiment_metrics=home_cta_experiment_metrics,
         desktop_access_test_enabled=desktop_access_test_enabled,
         desktop_access_test_csrf=desktop_access_test_csrf,
         desktop_access_test_email=getattr(current_user, "email", "") or "",

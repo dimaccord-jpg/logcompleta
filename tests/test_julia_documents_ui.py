@@ -176,9 +176,12 @@ def test_operational_home_sem_ctas_onboarding(monkeypatch):
 def test_operational_home_julia_welcome_typewriter_contract(monkeypatch):
     client = _operational_client(monkeypatch)
     html = client.get("/").get_data(as_text=True)
+    from app.services.home_cta_experiment_service import HOME_CTA_VARIANTS
+
     assert 'id="juliaWelcomeMessage"' in html
     assert 'data-typewriter-enabled="true"' in html
-    assert 'data-typewriter-text="Faça uma pergunta sobre logística..."' in html
+    assert any(f'data-typewriter-text="{text}"' in html for text in HOME_CTA_VARIANTS.values())
+    assert 'data-typewriter-text="Faça uma pergunta sobre logística..."' not in html
     assert "chat_behavior.js" in html
     assert "Como estruturar um plano de redução de custo logístico" not in html
 

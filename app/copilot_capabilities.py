@@ -30,11 +30,11 @@ AGENT_BLURBS: dict[str, str] = {
         "e cenários dos próximos meses, com indicadores e BI gerencial de fretes."
     ),
     "cleide": (
-        "Cleide audita cobrança — compara valor cobrado com o esperado pela tabela "
+        "O AgenteAudita audita cobrança — compara valor cobrado com o esperado pela tabela "
         "negociada, explica memória de cálculo e aponta divergências."
     ),
     "julia": (
-        "Júlia é a consultoria operacional logada — estratégia, supply chain, "
+        "O AgenteFrete é a consultoria operacional logada — estratégia, supply chain, "
         "planejamento e apoio com documentos no chat quando logado."
     ),
     "agente_compara": (
@@ -50,10 +50,10 @@ ACTIVITY_AMBIGUOUS_REPLY = (
     "Se você quer prever os próximos meses, indicadores ou BI gerencial de fretes, "
     "Roberto é o melhor caminho. "
     "Se quer auditar cobrança, comparar cobrado com esperado ou validar tabela negociada, "
-    "a Auditoria de Fretes da Cleide é mais indicada. "
+    "a Auditoria de Fretes com o AgenteAudita é mais indicada. "
     "Se quer comparar propostas de transportadoras sobre o mesmo volume, "
     "o AgenteCompara é o caminho. "
-    "Se a ideia é decidir uma estratégia de redução ou negociação, Júlia pode ajudar. "
+    "Se a ideia é decidir uma estratégia de redução ou negociação, o AgenteFrete pode ajudar. "
     "Qual é o seu objetivo principal?"
 )
 
@@ -61,7 +61,7 @@ BI_VS_AUDIT_TRIAGE_REPLY = (
     "Depende do objetivo: "
     "para indicadores, gráficos, análise gerencial e previsões de frete, use o BI do Roberto (/fretes); "
     "para conferir cobrança, comparar cobrado com esperado, validar tabela negociada ou ver "
-    "divergências e memória de cálculo, use a Auditoria de Fretes da Cleide (/auditoria-frete); "
+    "divergências e memória de cálculo, use a Auditoria de Fretes com o AgenteAudita (/auditoria-frete); "
     "para comparar duas ou três tabelas/propostas sobre o mesmo volume, use o AgenteCompara (/agente-compara)."
 )
 
@@ -519,7 +519,7 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
         return {
             "reply": (
                 "Para auditar cobrança, comparar cobrado com esperado, validar tabela negociada "
-                f"ou investigar divergências — a Auditoria de Fretes da Cleide é o caminho. "
+                f"ou investigar divergências — a Auditoria de Fretes com o AgenteAudita é o caminho. "
                 f"{AGENT_BLURBS['cleide']}"
             ),
             "recommended_agent": "cleide",
@@ -533,7 +533,7 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
         return {
             "reply": (
                 "Para decidir, negociar, planejar estrategicamente ou entender impactos "
-                f"macroeconômicos, Júlia é a melhor apoio. {AGENT_BLURBS['julia']}"
+                f"macroeconômicos, o AgenteFrete é o melhor apoio. {AGENT_BLURBS['julia']}"
             ),
             "recommended_agent": "julia",
             "handoff": {"destination": "julia_operational"},
@@ -560,7 +560,7 @@ def build_local_conversational_reply(user_message: str) -> dict[str, Any]:
             "reply": (
                 "Posso conversar sobre sua operação logística e, quando fizer sentido, "
                 "indicar o melhor caminho — BI e previsão com Roberto, Auditoria de Fretes "
-                "com Cleide, comparação de tabelas com AgenteCompara, estratégia com Júlia "
+                "com o AgenteAudita, comparação de tabelas com AgenteCompara, estratégia com o AgenteFrete "
                 "ou notícias no Feed. O que você quer explorar?"
             ),
             "recommended_agent": None,

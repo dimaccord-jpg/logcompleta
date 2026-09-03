@@ -717,6 +717,11 @@ def _load_feed_editorial():
 @app.route('/')
 def index():
     from app.capability_taxonomy import ONBOARDING_CTAS
+    from app.services.home_cta_experiment_service import (
+        build_home_cta_template_context,
+        resolve_home_cta_assignment,
+        try_record_home_cta_impression,
+    )
 
     indicadores = _load_home_indicadores()
 
@@ -725,6 +730,8 @@ def index():
     # Estado operacional do chat (fonte única: autorização operacional por franquia).
     julia_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
     julia_chat_surface = 'operational' if is_authenticated else 'discovery'
+    home_cta_assignment = resolve_home_cta_assignment(user=current_user)
+    try_record_home_cta_impression(home_cta_assignment)
     return render_template(
         'index.html',
         indicadores=indicadores,
@@ -735,6 +742,7 @@ def index():
         julia_chat_surface=julia_chat_surface,
         julia_documents_ui=is_authenticated,
         julia_handoff_context=_pop_onboarding_julia_context() if is_authenticated else None,
+        home_cta_experiment=build_home_cta_template_context(home_cta_assignment),
     )
 
 
@@ -1529,6 +1537,12 @@ def api_onboarding_discovery():
         if history is None:
             history = []
         cta_id = (data.get("cta_id") or "").strip() or None
+        if user_message or cta_id:
+            from app.services.home_cta_experiment_service import (
+                try_record_home_cta_conversion_from_session,
+            )
+
+            try_record_home_cta_conversion_from_session(cta_id=cta_id)
         result = cleiton_discovery_reply(
             user_message,
             history,
@@ -1593,7 +1607,7 @@ def api_chat_julia():
     """Endpoint que recebe mensagem e histórico; exige login e valida operação por franquia."""
     if not current_user.is_authenticated:
         return jsonify({
-            "error": "É necessário estar logado para conversar com a Júlia.",
+            "error": "É necessário estar logado para conversar com o AgenteFrete.",
             "require_login": True,
         }), 401
     try:
@@ -1618,6 +1632,12 @@ def api_chat_julia():
             if isinstance(regularizacao_cta, dict):
                 payload.update(regularizacao_cta)
             return jsonify(payload)
+        if user_message and data.get("home_cta_surface") is True:
+            from app.services.home_cta_experiment_service import (
+                try_record_home_cta_conversion_from_session,
+            )
+
+            try_record_home_cta_conversion_from_session()
         max_history = get_julia_chat_max_history()
         from app.cleiton_doc_contracts import FLOW_TYPE_JULIA_CHAT
         from app.julia_doc_context import build_julia_document_context_for_chat

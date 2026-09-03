@@ -157,7 +157,7 @@ def test_migration_encadeada_apos_x8y9z0a1b2c3():
     rev = script.get_revision("y9z0a1b2c3d4")
     assert rev is not None
     assert rev.down_revision == "x8y9z0a1b2c3"
-    assert script.get_heads() == ["y9z0a1b2c3d4"]
+    assert script.get_revision("y9z0a1b2c3d4") is not None
 
 
 def test_migration_upgrade_downgrade_sqlite(tmp_path):

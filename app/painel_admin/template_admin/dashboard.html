@@ -217,6 +217,60 @@
             · Primeira auditoria {{ (acq_stages.get('first_audit') or 0)|int }}
         </p>
     </div>
+
+    {% set cta_exp = home_cta_experiment_metrics or {} %}
+    {% set cta_variants = cta_exp.get('variants') or [] %}
+    {% set cta_quality = cta_exp.get('data_quality') or {} %}
+    {% set cta_period = cta_exp.get('period') or {} %}
+    <h5 class="mt-4 mb-1">Experimento — CTA da Home</h5>
+    <p class="text-muted small mb-3">
+        Período: mesmo filtro de Conversões
+        {% if cta_period.get('label') %}
+        · {{ cta_period.get('label') }}
+        {% endif %}
+        · decisão humana, sem vencedor automático.
+    </p>
+    {% if cta_quality.get('warnings') %}
+    <div class="mb-3">
+        {% for warning in cta_quality.get('warnings') %}
+        <div class="alert {% if cta_quality.get('service_failed') %}alert-warning{% else %}alert-secondary{% endif %} py-2 mb-2 small">{{ warning }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    <div class="card border-0 shadow-sm p-3 mb-4">
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Variante</th>
+                        <th>CTA</th>
+                        <th class="text-end">Impressões</th>
+                        <th class="text-end">Chats iniciados</th>
+                        <th class="text-end">Conversão</th>
+                        <th class="text-end">Diferença vs A</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in cta_variants %}
+                    <tr>
+                        <td>{{ row.label }}</td>
+                        <td>{{ row.text }}</td>
+                        <td class="text-end">{{ (row.impressions or 0)|int }}</td>
+                        <td class="text-end">{{ (row.conversions or 0)|int }}</td>
+                        <td class="text-end">{{ '%.1f'|format(row.conversion_rate or 0) }}%</td>
+                        <td class="text-end">
+                            {% if row.uplift_pp_vs_a is none %}
+                            base
+                            {% else %}
+                            {{ '%+.1f'|format(row.uplift_pp_vs_a) }} p.p.
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
     {% if desktop_access_test_enabled %}
     <div class="mb-4 desktop-access-admin-test">
         <h6 class="mb-1">Homologação E2E</h6>

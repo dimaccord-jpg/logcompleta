@@ -9,14 +9,14 @@
     <div class="julia-chat-header">
       <div class="d-flex align-items-center">
         {% if julia_surface == 'operational' and config.JULIA_AVATAR_URL %}
-        <img src="{{ config.JULIA_AVATAR_URL }}" alt="{% if julia_surface == 'operational' %}Júlia{% else %}Copilot do AgenteFrete{% endif %}" class="julia-chat-avatar me-2" />
+        <img src="{{ config.JULIA_AVATAR_URL }}" alt="{% if julia_surface == 'operational' %}AgenteFrete{% else %}Copilot do AgenteFrete{% endif %}" class="julia-chat-avatar me-2" />
         {% else %}
         <span class="julia-chat-avatar-placeholder me-2"><i class="bi bi-robot"></i></span>
         {% endif %}
         <div>
           {% if julia_surface == 'operational' %}
-          <span class="fw-bold julia-chat-name">Júlia, Editora Virtual de AgenteFrete</span>
-          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Consultoria em logística, supply chain, estratégia e planejamento. Atenção: a Júlia é uma IA e pode cometer erros.</small>
+          <span class="fw-bold julia-chat-name">AgenteFrete</span>
+          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Assistente virtual especializado em logística. Atenção: o AgenteFrete é uma IA e pode cometer erros.</small>
           {% else %}
           <span class="fw-bold julia-chat-name">Copilot do AgenteFrete</span>
           <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Descubra o melhor caminho para sua operação logística.</small>
@@ -26,6 +26,7 @@
     </div>
     <div class="julia-chat-messages" id="juliaChatMessages">
       <div class="julia-chat-welcome small py-3 px-2" id="juliaChatWelcome">
+        {% set home_cta_text = home_cta_experiment.text if home_cta_experiment and home_cta_experiment.text else none %}
         {% if julia_surface == 'operational' %}
         {% if julia_handoff_context %}
         Você está continuando uma conversa iniciada no Copilot do AgenteFrete.<br><br>
@@ -37,16 +38,16 @@
         {% else %}
         <span id="juliaWelcomeMessage"
               data-typewriter-enabled="true"
-              data-typewriter-text="Faça uma pergunta sobre logística..."
+              data-typewriter-text="{{ home_cta_text or 'Faça uma pergunta sobre logística...' }}"
               aria-live="polite"></span>
-        <noscript>Faça uma pergunta sobre logística...</noscript>
+        <noscript>{{ home_cta_text or 'Faça uma pergunta sobre logística...' }}</noscript>
         {% endif %}
         {% else %}
         <span id="copilotWelcomeMessage"
               data-typewriter-enabled="true"
-              data-typewriter-text="Faça uma pergunta."
+              data-typewriter-text="{{ home_cta_text or 'Faça uma pergunta.' }}"
               aria-live="polite"></span>
-        <noscript>Faça uma pergunta.</noscript>
+        <noscript>{{ home_cta_text or 'Faça uma pergunta.' }}</noscript>
         {% endif %}
       </div>
       {% if julia_surface != 'operational' %}
@@ -93,7 +94,7 @@
                    tabindex="-1"
                    aria-hidden="true">
             <textarea class="form-control julia-chat-input" id="juliaChatInput"
-                      placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
+                      placeholder="{% if julia_surface == 'operational' %}Mensagem para o AgenteFrete...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
             <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
               <i class="bi bi-send-fill"></i>
             </button>
@@ -101,7 +102,7 @@
           <div class="julia-chat-actions-menu"
                id="juliaChatActionsMenu"
                role="menu"
-               aria-label="Menu de ações da Júlia"
+               aria-label="Menu de ações do AgenteFrete"
                hidden>
             <button type="button"
                     class="julia-actions-item"
@@ -136,7 +137,7 @@
         {% else %}
         <div class="input-group">
           <textarea class="form-control julia-chat-input" id="juliaChatInput"
-                    placeholder="{% if julia_surface == 'operational' %}Mensagem para a Júlia...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
+                    placeholder="{% if julia_surface == 'operational' %}Mensagem para o AgenteFrete...{% else %}Pergunte sobre frete, custos, auditoria, planejamento ou estratégia logística...{% endif %}" rows="2" autocomplete="off"></textarea>
           <button type="submit" class="btn btn-primary julia-chat-send" id="juliaChatSend" aria-label="Enviar">
             <i class="bi bi-send-fill"></i>
           </button>

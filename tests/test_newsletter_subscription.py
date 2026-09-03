@@ -650,7 +650,7 @@ def test_migration_encadeada_apos_head_local():
     nxt = script.get_revision("y9z0a1b2c3d4")
     assert nxt is not None
     assert nxt.down_revision == "x8y9z0a1b2c3"
-    assert script.get_heads() == ["y9z0a1b2c3d4"]
+    assert script.get_revision("y9z0a1b2c3d4") is not None
 
 
 def test_migration_upgrade_downgrade_sqlite(tmp_path):

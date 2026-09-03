@@ -1,10 +1,8 @@
 """Testes do endpoint backend de chat da Cleide Auditoria (Fase 2)."""
 from __future__ import annotations
 
-import importlib
 import inspect
 import io
-import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -51,11 +49,22 @@ def _patch_audit_cfg(monkeypatch, **overrides):
     return cfg
 
 
-def _load_web_module():
-    os.environ.setdefault("APP_ENV", "dev")
-    os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
-    os.environ.setdefault("SECRET_KEY", "test-secret")
-    return importlib.import_module("app.web")
+def _isolated_web(app):
+    """HTTP app de teste: Flask isolado + blueprints reais. Não usa app.web.app."""
+    from app.cleide_audit_routes import cleide_audit_bp
+    from app.julia_documents_routes import julia_documents_bp
+
+    app.config["TESTING"] = True
+    app.config["SECRET_KEY"] = "test-secret"
+    if "cleide_audit" not in app.blueprints:
+        app.register_blueprint(cleide_audit_bp)
+    if "julia_documents" not in app.blueprints:
+        app.register_blueprint(julia_documents_bp)
+    return SimpleNamespace(
+        app=app,
+        current_user=None,
+        avaliar_autorizacao_operacao_por_franquia=None,
+    )
 
 
 def _setup_doc_env(monkeypatch, tmp_path, **cfg_overrides):
@@ -70,7 +79,7 @@ def _setup_doc_env(monkeypatch, tmp_path, **cfg_overrides):
 
 def _authorized(monkeypatch, web, *, authz=None):
     fake_user = SimpleNamespace(is_authenticated=True, conta_id=1, franquia_id=1)
-    monkeypatch.setattr(web, "current_user", fake_user)
+    monkeypatch.setattr(web, "current_user", fake_user, raising=False)
     monkeypatch.setattr("app.cleide_audit_routes.current_user", fake_user)
     monkeypatch.setattr("app.julia_documents_routes.current_user", fake_user)
     authz_payload = authz or {"permitido": True, "modo_operacao": "normal"}
@@ -78,6 +87,7 @@ def _authorized(monkeypatch, web, *, authz=None):
         web,
         "avaliar_autorizacao_operacao_por_franquia",
         lambda _u: authz_payload,
+        raising=False,
     )
     monkeypatch.setattr(
         "app.cleide_audit_routes.avaliar_autorizacao_operacao_por_franquia",
@@ -131,16 +141,15 @@ def _upload(client, filename: str, content: bytes, mime: str = "text/plain"):
 def web_client(app, tmp_path, monkeypatch, ctx):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
+        web = _isolated_web(app)
     _authorized(monkeypatch, web)
-    web.app.config["TESTING"] = True
-    return web.app.test_client()
+    return app.test_client()
 
 
 def test_anonymous_receives_401(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
+    web = _isolated_web(app)
     anon = SimpleNamespace(is_authenticated=False)
     monkeypatch.setattr(web, "current_user", anon)
     monkeypatch.setattr("app.cleide_audit_routes.current_user", anon)
@@ -155,7 +164,7 @@ def test_anonymous_receives_401(app, ctx, monkeypatch, tmp_path):
 def test_blocked_user_receives_403(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
+    web = _isolated_web(app)
     upgrade_cta = {
         "error_code": "plan_limit_reached",
         "message": "Você atingiu o limite de uso do plano Free. Não pare agora! ",
@@ -186,7 +195,7 @@ def test_blocked_user_receives_403(app, ctx, monkeypatch, tmp_path):
 def test_blocked_user_chat_403_preserves_upgrade_cta(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
+    web = _isolated_web(app)
     upgrade_cta = {
         "error_code": "plan_limit_reached",
         "message": "Você atingiu o limite de uso do plano Free. Não pare agora! ",
@@ -215,7 +224,7 @@ def test_blocked_user_chat_403_preserves_upgrade_cta(app, ctx, monkeypatch, tmp_
 def test_expired_user_receives_403(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
+    web = _isolated_web(app)
     _authorized(
         monkeypatch,
         web,
@@ -235,7 +244,7 @@ def test_expired_user_receives_403(app, ctx, monkeypatch, tmp_path):
 def test_degraded_user_allowed(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
+    web = _isolated_web(app)
     _authorized(
         monkeypatch,
         web,
@@ -252,7 +261,7 @@ def test_degraded_user_allowed(app, ctx, monkeypatch, tmp_path):
 def test_ia_not_called_when_blocked(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
+    web = _isolated_web(app)
     _authorized(
         monkeypatch,
         web,
@@ -600,7 +609,7 @@ def test_no_rigid_template_validation():
 def test_chat_endpoint_registered(app, ctx, monkeypatch, tmp_path):
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
-    web = _load_web_module()
+    web = _isolated_web(app)
     rules = {rule.rule for rule in web.app.url_map.iter_rules()}
     assert "/api/cleide-auditoria/chat" in rules
 
@@ -716,7 +725,7 @@ def test_fallback_message_not_used_on_auth_required(app, ctx, monkeypatch, tmp_p
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
     _patch_audit_cfg(monkeypatch, fallback_message=FALLBACK_CUSTOM)
-    web = _load_web_module()
+    web = _isolated_web(app)
     anon = SimpleNamespace(is_authenticated=False)
     monkeypatch.setattr(web, "current_user", anon)
     monkeypatch.setattr("app.cleide_audit_routes.current_user", anon)
@@ -729,7 +738,7 @@ def test_fallback_message_not_used_on_franquia_blocked(app, ctx, monkeypatch, tm
     with app.app_context():
         _setup_doc_env(monkeypatch, tmp_path)
     _patch_audit_cfg(monkeypatch, fallback_message=FALLBACK_CUSTOM)
-    web = _load_web_module()
+    web = _isolated_web(app)
     _authorized(
         monkeypatch,
         web,

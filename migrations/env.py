@@ -64,9 +64,17 @@ def get_metadata():
     return db.metadata
 
 
+def _guard_alembic_before_connect(url: str) -> None:
+    """Bloqueia downgrade acidental antes de abrir conexão. Upgrade não é bloqueado."""
+    from app.db_operational_safety import guard_alembic_env
+
+    guard_alembic_env(url, cmd_opts=getattr(config, "cmd_opts", None))
+
+
 def run_migrations_offline():
     """Run migrations in 'offline' mode."""
-    url = config.get_main_option("sqlalchemy.url")
+    url = _resolve_database_url()
+    _guard_alembic_before_connect(url)
     context.configure(url=url, target_metadata=get_metadata(), literal_binds=True)
 
     with context.begin_transaction():
@@ -84,8 +92,11 @@ def run_migrations_online():
                 directives[:] = []
                 logger.info("No changes in schema detected.")
 
+    url = _resolve_database_url()
+    _guard_alembic_before_connect(url)
+
     connectable = create_engine(
-        _resolve_database_url(),
+        url,
         pool_pre_ping=True,
     )
 

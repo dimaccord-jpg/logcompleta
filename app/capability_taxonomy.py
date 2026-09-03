@@ -37,7 +37,7 @@ DOMAIN_LABELS: dict[str, str] = {
     "editorial_market": "Notícias e tendências de mercado",
     "strategic_logistics": "Estratégia e consultoria logística",
     "freight_bi": "BI de Fretes e indicadores (Roberto)",
-    "operational_audit": "Auditoria de Fretes (Cleide)",
+    "operational_audit": "Auditoria de Fretes com o AgenteAudita",
     "forecast_planning": "Previsibilidade e planejamento de frete",
     "freight_table_comparison": "Comparação de tabelas de frete / BID comparativo",
     "future_quotation": "Cotação automatizada de frete",
@@ -111,7 +111,7 @@ DESTINATIONS: dict[str, DestinationSpec] = {
     ),
     "julia_operational": DestinationSpec(
         id="julia_operational",
-        label="Continuar com Júlia gratuitamente",
+        label="Continuar com o AgenteFrete gratuitamente",
         url="/chat_julia?mode=operational",
         requires_login=True,
         requires_dataset=False,
@@ -128,7 +128,7 @@ DESTINATIONS: dict[str, DestinationSpec] = {
     ),
     "cleide_freight_audit": DestinationSpec(
         id="cleide_freight_audit",
-        label="Auditoria de Fretes (Cleide)",
+        label="Auditoria de Fretes com o AgenteAudita",
         url="/auditoria-frete",
         requires_login=True,
         requires_dataset=True,
@@ -137,7 +137,7 @@ DESTINATIONS: dict[str, DestinationSpec] = {
     # Legado: BI Cleide anterior — não é o destino padrão de auditoria de cobrança.
     "cleide_audit": DestinationSpec(
         id="cleide_audit",
-        label="BI Cleide (legado)",
+        label="BI de Auditoria (legado)",
         url="/cleide-bi-frete",
         requires_login=True,
         requires_dataset=True,

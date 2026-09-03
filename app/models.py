@@ -765,3 +765,30 @@ class MonetizacaoFato(db.Model):
     conta = db.relationship("Conta", backref=db.backref("fatos_monetizacao", lazy="dynamic"))
     franquia = db.relationship("Franquia", backref=db.backref("fatos_monetizacao", lazy="dynamic"))
     usuario = db.relationship("User", backref=db.backref("fatos_monetizacao", lazy="dynamic"))
+
+
+class HomeCtaExperimentEvent(db.Model):
+    """Evento isolado do experimento A/B/C do CTA da Home. Sem PII e sem FunnelEvent."""
+
+    __tablename__ = "home_cta_experiment_event"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "experiment",
+            "assignment_id",
+            "event_type",
+            name="uq_home_cta_experiment_event_assignment_type",
+        ),
+        db.Index(
+            "ix_home_cta_experiment_event_experiment_occurred_at",
+            "experiment",
+            "occurred_at",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    experiment = db.Column(db.String(40), nullable=False)
+    assignment_id = db.Column(db.String(64), nullable=False)
+    variant = db.Column(db.String(16), nullable=False)
+    event_type = db.Column(db.String(20), nullable=False)
+    interaction_origin = db.Column(db.String(20), nullable=True)
+    occurred_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)

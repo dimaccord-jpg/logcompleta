@@ -478,7 +478,7 @@
         } else {
           btn.setAttribute('data-handoff-action', 'start_julia');
         }
-        btn.textContent = actionItem.label || 'Continuar com Júlia gratuitamente';
+        btn.textContent = actionItem.label || 'Continuar com o AgenteFrete gratuitamente';
       } else if (actionItem.url) {
         btn.className = actionItem.requires_login ? 'copilot-limit-btn' : 'copilot-suggestion-btn';
         btn.setAttribute('data-handoff-url', actionItem.url);
@@ -494,6 +494,22 @@
     if (wrap.childNodes.length) container.appendChild(wrap);
   }
 
+  function resolveWelcomeTypewriterText(welcome) {
+    if (typeof window.HOME_CTA_EXPERIMENT !== 'undefined'
+        && window.HOME_CTA_EXPERIMENT
+        && window.HOME_CTA_EXPERIMENT.text) {
+      return String(window.HOME_CTA_EXPERIMENT.text);
+    }
+    var existing = welcome && welcome.querySelector
+      ? welcome.querySelector('[data-typewriter-enabled="true"][data-typewriter-text]')
+      : null;
+    if (existing) {
+      var current = existing.getAttribute('data-typewriter-text') || '';
+      if (current) return current;
+    }
+    return '';
+  }
+
   function enableJuliaOperationalMode() {
     DISCOVERY_MODE = false;
     API_URL = '/api/chat_julia';
@@ -501,21 +517,35 @@
     var roleEl = document.querySelector('.julia-chat-role');
     var welcome = byId('juliaChatWelcome');
     var input = byId('juliaChatInput');
-    if (nameEl) nameEl.textContent = 'Júlia, Editora Virtual de AgenteFrete';
+    if (nameEl) nameEl.textContent = 'AgenteFrete';
     if (roleEl) {
-      roleEl.textContent = 'Consultoria em logística, supply chain, estratégia e planejamento. Atenção: a Júlia é uma IA e pode cometer erros.';
+      roleEl.textContent = 'Assistente virtual especializado em logística. Atenção: o AgenteFrete é uma IA e pode cometer erros.';
     }
     if (welcome) {
-      welcome.innerHTML = '';
-      var span = document.createElement('span');
-      span.setAttribute('data-typewriter-enabled', 'true');
-      span.setAttribute('data-typewriter-text', 'Faça uma pergunta sobre logística...');
-      span.setAttribute('aria-live', 'polite');
-      welcome.appendChild(span);
-      runTypewriterOnElement(span);
+      var ctaText = resolveWelcomeTypewriterText(welcome);
+      if (ctaText) {
+        var span = welcome.querySelector('[data-typewriter-enabled="true"]');
+        if (!span) {
+          welcome.innerHTML = '';
+          span = document.createElement('span');
+          span.setAttribute('data-typewriter-enabled', 'true');
+          span.setAttribute('aria-live', 'polite');
+          welcome.appendChild(span);
+        }
+        span.setAttribute('data-typewriter-text', ctaText);
+        resetOptInTypewriter(span);
+      } else {
+        welcome.innerHTML = '';
+        var fallback = document.createElement('span');
+        fallback.setAttribute('data-typewriter-enabled', 'true');
+        fallback.setAttribute('data-typewriter-text', 'Faça uma pergunta sobre logística...');
+        fallback.setAttribute('aria-live', 'polite');
+        welcome.appendChild(fallback);
+        runTypewriterOnElement(fallback);
+      }
       welcome.style.display = 'block';
     }
-    if (input) input.placeholder = 'Mensagem para a Júlia...';
+    if (input) input.placeholder = 'Mensagem para o AgenteFrete...';
     setDiscoverySuggestionsVisible(false);
     updateLimitUI(isBlockedAuthorization(chatLimits), chatLimits);
   }
@@ -568,7 +598,7 @@
       el.id = loadingId;
       el.className = 'julia-chat-msg julia-chat-msg-bot';
       el.innerHTML = '<div class="julia-chat-msg-inner"><span class="spinner-border spinner-border-sm me-1"></span> '
-        + (DISCOVERY_MODE ? 'Analisando seu cenário...' : 'Júlia está pensando...')
+        + (DISCOVERY_MODE ? 'Analisando seu cenário...' : 'AgenteFrete está analisando...')
         + '</div>';
       container.appendChild(el);
       container.scrollTop = container.scrollHeight;
@@ -638,6 +668,13 @@
     if (DISCOVERY_MODE && ctaForRequest) {
       payload.cta_id = ctaForRequest;
     }
+    if (
+      !DISCOVERY_MODE
+      && typeof window.HOME_CTA_EXPERIMENT !== 'undefined'
+      && window.HOME_CTA_EXPERIMENT
+    ) {
+      payload.home_cta_surface = true;
+    }
     if (!DISCOVERY_MODE && options.source === 'suggestion_chip') {
       payload.message = '[[JULIA_SUGGESTION::source=suggestion_chip;mode=execute_direct]] ' + text;
     }
@@ -663,7 +700,7 @@
         var data = res.data;
         setLoading(messagesEl, false);
         if (res.status === 401 && !DISCOVERY_MODE) {
-          appendMessage('bot', data.error || 'É necessário estar logado para conversar com a Júlia.', messagesEl);
+          appendMessage('bot', data.error || 'É necessário estar logado para conversar com o AgenteFrete.', messagesEl);
           return;
         }
         if (!DISCOVERY_MODE && isJuliaPlanLimitResponse(data)) {

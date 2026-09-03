@@ -48,7 +48,7 @@
   };
 
   var CHAT_FIXED_ERRORS = {
-    login: 'É necessário estar logado para conversar com a Cleide.',
+    login: 'É necessário estar logado para conversar com o AgenteAudita.',
     network: 'Não foi possível obter resposta. Verifique sua conexão e tente novamente.',
     service: 'O serviço está indisponível no momento. Tente novamente em instantes.'
   };
@@ -2949,7 +2949,7 @@ function renderDocumentItem(doc) {
     if (!input) return;
 
     if (chatUnlocked) {
-      input.placeholder = 'Mensagem para a Cleide...';
+      input.placeholder = 'Mensagem para o AgenteAudita...';
       input.removeAttribute('aria-disabled');
       input.classList.remove('cleide-auditoria-input--locked');
       if (composer) composer.classList.remove('cleide-auditoria-composer--chat-locked');
@@ -3073,7 +3073,7 @@ function renderDocumentItem(doc) {
     btn.type = 'button';
     btn.className = 'cleide-auditoria-chat-copy-btn';
     btn.setAttribute('data-cleide-auditoria-copy', '1');
-    btn.setAttribute('aria-label', 'Copiar resposta da Cleide');
+    btn.setAttribute('aria-label', 'Copiar resposta do AgenteAudita');
     btn.textContent = 'Copiar';
     actions.appendChild(btn);
     return actions;
@@ -3174,7 +3174,7 @@ function renderDocumentItem(doc) {
       var el = document.createElement('div');
       el.id = CHAT_LOADING_ID;
       el.className = 'cleide-auditoria-chat-msg cleide-auditoria-chat-msg-bot';
-      el.innerHTML = '<div class="cleide-auditoria-chat-msg-inner"><span class="spinner-border spinner-border-sm me-1"></span> Cleide está analisando...</div>';
+      el.innerHTML = '<div class="cleide-auditoria-chat-msg-inner"><span class="spinner-border spinner-border-sm me-1"></span> AgenteAudita está analisando...</div>';
       container.appendChild(el);
       container.scrollTop = container.scrollHeight;
       return;
@@ -5796,7 +5796,7 @@ function renderDocumentItem(doc) {
     section.appendChild(title);
     var subtitle = document.createElement('p');
     subtitle.className = 'cleide-audit-diagnostics-subtitle';
-    subtitle.textContent = 'A Cleide identificou padrões agregados nos erros do processamento. Esta fase apenas explica o problema.';
+    subtitle.textContent = 'O AgenteAudita identificou padrões agregados nos erros do processamento. Esta fase apenas explica o problema.';
     section.appendChild(subtitle);
     if (groups.length) {
       groups.forEach(function (group) {

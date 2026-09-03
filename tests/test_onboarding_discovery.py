@@ -122,8 +122,8 @@ class TestCapabilityTaxonomyStructural:
         assert "Conhecimento do Copilot" in doc
         assert len(doc) > 2000
         assert "Roberto" in doc
-        assert "Cleide" in doc
-        assert "Júlia" in doc
+        assert "AgenteAudita" in doc
+        assert "AgenteFrete" in doc
         assert "AgenteCompara" in doc
         assert "WMS" in doc
         assert "Regra-mãe: Artefatos vs Atividade Fim" in doc
@@ -240,6 +240,53 @@ class TestCopilotParsingAndGuardrails:
         assert len(result["handoffs"]) == 2
         assert "Existem algumas formas de trabalhar esse tema" not in result["reply"]
 
+    def test_known_destination_uses_taxonomy_label_not_llm_branding(self):
+        cases = (
+            (
+                "cleide_freight_audit",
+                "Auditoria de Fretes (Cleide)",
+                "Quero auditar cobranças de frete",
+                "cleide",
+            ),
+            (
+                "julia_operational",
+                "Analisar com Júlia",
+                "Quero decidir como reduzir custo.",
+                "julia",
+            ),
+            (
+                "cleide_audit",
+                "BI Cleide (legado)",
+                "Quero abrir o painel antigo da Cleide.",
+                "cleide",
+            ),
+        )
+        for dest_id, llm_label, message, agent in cases:
+            parsed = {
+                "reply": "Caminho recomendado.",
+                "recommended_agent": agent,
+                "handoff": {"destination": dest_id, "label": llm_label},
+                "confidence": "high",
+                "reason": "branding",
+            }
+            result = _apply_guardrails(parsed, message)
+            spec = DESTINATIONS[dest_id]
+            payload = result["handoff"]
+            assert payload["destination"] == dest_id
+            assert payload["url"] == spec.url
+            assert payload["agent"] == spec.agent
+            assert payload["requires_login"] == spec.requires_login
+            assert payload["requires_dataset"] == spec.requires_dataset
+            assert payload["label"] == spec.label
+            assert payload["label"] != llm_label
+            assert "Cleide" not in payload["label"]
+            assert "Júlia" not in payload["label"]
+            assert "Julia" not in payload["label"]
+            if spec.handoff_action == "start_julia":
+                assert payload["action"] == "start_julia"
+            else:
+                assert "action" not in payload
+
 
 class TestOnboardingAuditContext:
     def test_build_context_includes_sanitized_fields(self):
@@ -293,7 +340,7 @@ class TestCleitonDiscoveryReply:
         monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
         result = cleiton_discovery_reply("Quero auditar frete.", [])
         assert FALLBACK_UNAVAILABLE_REPLY not in result["reply"]
-        assert "Cleide" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
         assert result["handoff"] is not None
         assert result["handoff"]["destination"] == "cleide_freight_audit"
 
@@ -470,8 +517,11 @@ class TestOnboardingHomeUxContract:
         monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
         monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", lambda _u: {"permitido": True})
         html = web.app.test_client().get("/").get_data(as_text=True)
+        from app.services.home_cta_experiment_service import HOME_CTA_VARIANTS
+
         assert 'id="copilotWelcomeMessage"' in html
-        assert 'data-typewriter-text="Faça uma pergunta."' in html
+        assert any(f'data-typewriter-text="{text}"' in html for text in HOME_CTA_VARIANTS.values())
+        assert 'data-typewriter-text="Faça uma pergunta."' not in html
         assert 'id="onboardingCtaGrid"' not in html
         assert 'id="juliaChatDiscoverySuggestions"' in html
         assert "Se quiser, você pode começar por uma destas ideias:" in html
@@ -817,8 +867,8 @@ class TestPlanilhaKnowledge:
         result = cleiton_discovery_reply("Tenho uma planilha de fretes.", [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
-        assert "Júlia" in result["reply"] or "Julia" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
+        assert "AgenteFrete" in result["reply"]
         assert "Qual é o seu objetivo principal" in result["reply"]
         assert "Existem algumas formas" not in result["reply"]
 
@@ -917,7 +967,7 @@ class TestPlanilhaKnowledge:
         result = cleiton_discovery_reply("Você aceita planilha?", [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
 
     def test_subir_dados_sem_handoff_local(self, monkeypatch):
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -926,8 +976,8 @@ class TestPlanilhaKnowledge:
         result = cleiton_discovery_reply("Posso subir meus dados?", [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
-        assert "Júlia" in result["reply"] or "Julia" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
+        assert "AgenteFrete" in result["reply"]
 
     def test_auditar_planilha_cleide_local(self, monkeypatch):
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -942,7 +992,7 @@ class TestPlanilhaKnowledge:
         monkeypatch.setattr("app.run_cleiton_discovery.auditoria_registrar", lambda *a, **k: None)
         result = cleiton_discovery_reply("Quero gerar dashboard da minha planilha.", [])
         assert result["handoff"] is None
-        assert "Roberto" in result["reply"] or "Cleide" in result["reply"]
+        assert "Roberto" in result["reply"] or "AgenteAudita" in result["reply"]
 
     def test_spreadsheet_ambiguous_reply_matches_document(self):
         local = build_local_conversational_reply("Tenho uma planilha de fretes.")
@@ -968,7 +1018,7 @@ class TestDashboardKnowledge:
         result = cleiton_discovery_reply("Quero gerar dashboard.", [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
         assert "Existem algumas formas" not in result["reply"]
 
     def test_dashboard_generico_suprime_roberto_do_gemini(self, monkeypatch):
@@ -1072,7 +1122,8 @@ class TestCostKnowledge:
         doc = load_capabilities_document()
         assert "Artefato não define agente" in doc or "Artefatos não definem agente" in doc
         assert "Motor Quantitativo Preditivo" in doc or "Quantitativo Preditivo" in doc
-        assert "BI Cleide" in doc or "Auditoria da Cleide" in doc
+        assert "AgenteAudita" in doc
+        assert "cleide_freight_audit" in doc
 
     def test_resolve_cost_ambiguous_without_intent(self):
         assert resolve_cost_context("Quero analisar meu custo de frete.") == "cost_ambiguous"
@@ -1086,8 +1137,8 @@ class TestCostKnowledge:
         result = cleiton_discovery_reply("Quero analisar meu custo de frete.", [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
-        assert "Júlia" in result["reply"] or "Julia" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
+        assert "AgenteFrete" in result["reply"]
         assert "Qual é o seu objetivo principal" in result["reply"]
 
     def test_custo_generico_suprime_handoff_roberto_do_gemini(self, monkeypatch):
@@ -1120,7 +1171,7 @@ class TestCostKnowledge:
         result = cleiton_discovery_reply("Quero dashboard de custo de frete.", [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
 
     def test_custo_dashboard_sem_objetivo_suprime_roberto_do_gemini(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -1175,8 +1226,8 @@ class TestCostKnowledge:
         result = cleiton_discovery_reply("Quero reduzir custo de frete.", [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
-        assert "Júlia" in result["reply"] or "Julia" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
+        assert "AgenteFrete" in result["reply"]
 
     def test_custo_inflacao_julia_e_roberto(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -1221,7 +1272,7 @@ class TestActivityFimKnowledge:
         result = cleiton_discovery_reply(message, [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
 
     @pytest.mark.parametrize("message", [
         "Quero prever meu custo de frete dos próximos meses.",
@@ -1371,7 +1422,7 @@ class TestDocumentKnowledge:
         result = cleiton_discovery_reply("Tenho um PDF.", [])
         assert result["handoff"] is None
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
 
     def test_pdf_generico_suprime_julia_do_gemini(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -1427,7 +1478,8 @@ class TestDocumentKnowledge:
         doc = load_capabilities_document()
         assert "consultiva-operacional" in doc or "consultivo-operacional" in doc
         assert "não substitui" in doc.lower() or "não substitui" in doc
-        assert "Roberto" in doc and "Cleide" in doc
+        assert "Roberto" in doc and "AgenteAudita" in doc
+        assert "cleide_freight_audit" in doc
 
     def test_discovery_home_sem_ui_documental(self, monkeypatch):
         os.environ.setdefault("APP_ENV", "dev")
@@ -1532,7 +1584,7 @@ class TestFreightAuditVsRobertoBi:
         assert "/fretes" in result["reply"]
         assert "/auditoria-frete" in result["reply"]
         assert "Roberto" in result["reply"]
-        assert "Cleide" in result["reply"]
+        assert "AgenteAudita" in result["reply"]
 
     def test_gemini_cleide_freight_audit_normalized(self, monkeypatch):
         _mock_gemini(monkeypatch, {
@@ -2352,5 +2404,7 @@ class TestAgenteComparaOnboardingSkill:
         assert result["handoff"]["destination"] == "cleide_freight_audit"
         assert result["handoff"]["url"] == "/auditoria-frete"
         assert result["handoff"]["requires_login"] is True
-        assert result["handoff"]["label"] == "Ir para Auditoria de Fretes"
+        assert result["handoff"]["agent"] == "cleide"
+        assert result["handoff"]["label"] == DESTINATIONS["cleide_freight_audit"].label
+        assert result["handoff"]["label"] != "Ir para Auditoria de Fretes"
         assert result["discovery"]["next_action"] == "handoff"

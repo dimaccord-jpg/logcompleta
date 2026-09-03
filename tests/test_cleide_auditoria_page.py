@@ -44,9 +44,9 @@ def test_cleide_auditoria_welcome_typewriter_contract(monkeypatch):
     web = _load_web_module()
     html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
     assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
-    assert "Cleide, Auditora Virtual de AgenteFrete" in html
-    assert "Atenção: a Cleide é uma IA e pode cometer erros." in html
-    assert "Envie arquivos de apoio para a Cleide analisar nesta conversa." in html
+    assert "AgenteAudita" in html
+    assert "Assistente especializado em auditoria de fretes. Atenção: o AgenteAudita é uma IA e pode cometer erros." in html
+    assert "Envie arquivos de apoio para o AgenteAudita analisar nesta conversa." in html
     assert "A conexão com upload assistido será ativada na próxima etapa." not in html
     assert 'id="cleideAuditoriaWelcome"' in html
     assert 'data-typewriter-text="Faça o upload da tabela de frete."' in html
@@ -228,7 +228,7 @@ def test_cleide_auditoria_menu_admin_tem_atalhos_completos(monkeypatch):
     assert "/agente-compara" in menu_chunk
     assert "Feed" in menu_chunk
     assert "Previsibilidade Frete" in menu_chunk
-    assert "BI Cleide" in menu_chunk
+    assert "BI de Auditoria" in menu_chunk
     assert "/cleide-bi-frete" in menu_chunk
     assert menu_chunk.index("Enviar arquivos") < menu_chunk.index("Home")
     assert menu_chunk.index("Home") < menu_chunk.index("Auditoria de Frete")
@@ -1812,7 +1812,7 @@ def test_cleide_auditoria_chat_copy_button_contract():
     assert "function buildCleideCopyAction" in js
     assert "function copyCleideTextToClipboard" in js
     assert "function getCleideMessageTextForCopy" in js
-    assert "aria-label', 'Copiar resposta da Cleide'" in js or 'aria-label", "Copiar resposta da Cleide"' in js
+    assert "aria-label', 'Copiar resposta do AgenteAudita'" in js or 'aria-label", "Copiar resposta do AgenteAudita"' in js
     assert "btn.type = 'button'" in js or 'btn.type = "button"' in js
     assert "cleide-auditoria-chat-copy-btn" in js
     assert "navigator.clipboard.writeText" in js

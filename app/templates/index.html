@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}{% if julia_chat_surface == 'operational' %}Consultoria logística com a Júlia | Agentefrete{% else %}Copilot do AgenteFrete | Discovery logístico{% endif %}{% endblock %}
+{% block title %}{% if julia_chat_surface == 'operational' %}AgenteFrete | Assistente virtual especializado em logística{% else %}Copilot do AgenteFrete | Discovery logístico{% endif %}{% endblock %}
 
 {% block meta_description %}
 {% if julia_chat_surface == 'operational' %}
-Converse com a Júlia sobre frete, logística, supply chain e planejamento no Agentefrete.
+Converse com o AgenteFrete, assistente virtual especializado em logística, sobre frete, supply chain e planejamento.
 {% else %}
 Converse com o Copilot do AgenteFrete para descobrir o melhor caminho para sua operação logística.
 {% endif %}
@@ -34,6 +34,9 @@ Converse com o Copilot do AgenteFrete para descobrir o melhor caminho para sua o
   window.JULIA_CHAT_LIMITS = {{ julia_chat_limits|tojson|safe }};
   window.JULIA_CHAT_AUTHENTICATED = {{ 'true' if current_user.is_authenticated else 'false' }};
   window.JULIA_CHAT_LOGIN_URL = {{ url_for('login')|tojson }};
+  {% if home_cta_experiment %}
+  window.HOME_CTA_EXPERIMENT = {{ home_cta_experiment|tojson|safe }};
+  {% endif %}
 
   {% if julia_chat_surface != 'operational' %}
   window.ONBOARDING_DISCOVERY_MODE = true;
