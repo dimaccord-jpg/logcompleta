@@ -9,7 +9,9 @@
     <div class="julia-chat-header">
       <div class="d-flex align-items-center">
         {% if julia_surface == 'operational' and config.JULIA_AVATAR_URL %}
-        <img src="{{ config.JULIA_AVATAR_URL }}" alt="{% if julia_surface == 'operational' %}AgenteFrete{% else %}Copilot do AgenteFrete{% endif %}" class="julia-chat-avatar me-2" />
+        <img src="{{ config.JULIA_AVATAR_URL }}" alt="AgenteFrete" class="julia-chat-avatar me-2" />
+        {% elif julia_surface != 'operational' and config.JULIA_AVATAR_URL %}
+        <img src="{{ config.JULIA_AVATAR_URL }}" alt="Copilot do AgenteFrete" class="julia-chat-avatar me-2" />
         {% else %}
         <span class="julia-chat-avatar-placeholder me-2"><i class="bi bi-robot"></i></span>
         {% endif %}
@@ -686,6 +688,27 @@
     flex-wrap: wrap;
     gap: 0.45rem;
     align-items: center;
+  }
+  .agentefrete-platform-guidance {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid rgba(0, 191, 255, 0.22);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .agentefrete-platform-guidance-title {
+    font-size: 0.82rem;
+    font-weight: 650;
+    color: var(--af-text-primary, #F0F0F5);
+  }
+  .agentefrete-platform-guidance-text {
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: var(--af-text-secondary, #C8CCE5);
   }
   .copilot-suggestion-btn,
   .copilot-limit-btn {

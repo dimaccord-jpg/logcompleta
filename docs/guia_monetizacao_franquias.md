@@ -1,6 +1,6 @@
 # Guia de Monetização, Franquias e Planos
 
-Referência auditada em 2026-08-15. Este guia descreve a monetização que o código implementa hoje.
+Referência auditada em 2026-09-04. Este guia descreve a monetização que o código implementa hoje.
 
 ## Visão geral
 
@@ -90,9 +90,9 @@ O código trabalha com estados como:
 
 Leitura operacional resumida:
 
-- `free` tende a bloquear quando atinge o limite;
-- `starter`, `pro` e `multiuser` tendem a degradar ao atingir o limite;
-- `avulso` pode expirar por vigência ou limite;
+- `free` tende a bloquear (`blocked`) quando atinge o limite;
+- `starter`, `pro` e `multiuser` tendem a degradar (`degraded`) ao atingir o limite;
+- `avulso` pode expirar (`expired`) por vigência ou limite;
 - `uso_adm` e estruturas internas seguem trilha especial, salvo bloqueio manual.
 
 ## Stripe
@@ -106,6 +106,10 @@ Fluxos confirmados no código:
 - encerramento contratual em `/perfil/encerrar-contrato`;
 - webhook oficial em `/api/webhook/stripe`.
 
+Evento contratual principal documentável:
+
+- `invoice.paid`
+
 Variáveis de ambiente principais:
 
 - `STRIPE_API_KEY`
@@ -117,8 +121,8 @@ Variáveis de ambiente principais:
 
 ## Eventos e fatos de monetização
 
-- Stripe gera fatos persistidos e auditáveis;
-- a conta pode manter customer, subscription, price e snapshots normalizados;
+- Stripe gera fatos persistidos e auditáveis em `MonetizacaoFato`;
+- a conta pode manter customer, subscription, price e snapshots normalizados em `ContaMonetizacaoVinculo`;
 - o efeito operacional final continua mediado pelos serviços de governança de franquia e plano;
 - a área admin possui trilhas de auditoria para inconsistências de vínculo, múltiplas subscriptions, pendências e guardrails.
 
@@ -163,6 +167,8 @@ Para eventos de processamento:
 - soma as duas parcelas;
 - quantiza o total novamente para 6 casas decimais.
 
+Consumo interno, anônimo ou da franquia reservada de sistema não abate da franquia do cliente.
+
 ## Roberto
 
 - o upload de Excel do Roberto participa do billing operacional;
@@ -170,9 +176,9 @@ Para eventos de processamento:
 - o fluxo usa storage temporário próprio e não depende de saldo em `User.creditos`;
 - o consumo considera processamento técnico real, não apenas exibição posterior.
 
-## Cleide
+## AgenteAudita / Cleide
 
-- upload de coverage, upload do lote e processamento do lote têm eventos operacionais separados;
+- upload de coverage, upload do lote e processamento do lote têm eventos operacionais separados (`cleide_audit_coverage_upload`, `cleide_audit_batch_upload`, `cleide_audit_batch_processed`);
 - o primeiro processamento não deve cobrar de novo o lote já apropriado no upload;
 - chat documental e chat analítico podem registrar consumo de IA, mas não substituem billing operacional de linhas.
 

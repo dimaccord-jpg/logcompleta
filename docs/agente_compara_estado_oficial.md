@@ -1,8 +1,8 @@
 # AgenteCompara — Estado Oficial
 
-## AgenteCompara: arquitetura e jornada
+Referência auditada em 2026-09-04. O código atual é a fonte de verdade.
 
-### Superfícies e isolamento
+## Superfícies e isolamento
 
 - página: `/agente-compara`;
 - template principal: `app/templates/agente_compara.html`;
@@ -10,9 +10,9 @@
 - APIs: namespace `/api/agente-compara/*`;
 - estado da comparação: sessão Flask em `agente_compara_comparison_state`;
 - documentos do fluxo: session keys `agente_compara_*`;
-- isolamento confirmado em código e testes frente a Cleide e Júlia por `comparison_id`, `table_id`, `temp_table_id`, `flow_type`, billing e eventos próprios.
+- isolamento confirmado em código e testes frente ao domínio técnico Cleide e à Julia por `comparison_id`, `table_id`, `temp_table_id`, `flow_type`, billing e eventos próprios.
 
-### Jornada oficial
+## Jornada oficial
 
 1. `POST /api/agente-compara/comparison/start`
 2. preparação da tabela 1
@@ -26,7 +26,7 @@
 10. confirmação explícita e cálculo comparativo multitabela
 11. leitura do resultado consolidado e analytics comparativo
 
-### Estados oficiais
+## Estados oficiais
 
 Status globais confirmados em `app/agente_compara_comparison_state.py`:
 
@@ -63,7 +63,7 @@ Status por tabela:
 - `failed`
 - `discarded`
 
-### Regras de slots e identidade
+## Regras de slots e identidade
 
 - slots 1 e 2 são obrigatórios; slot 3 é opcional;
 - o slot 2 nasce bloqueado e só é liberado após a confirmação da tabela 1;
@@ -75,9 +75,7 @@ Status por tabela:
 - `resolve_table_identity` não aceita usar `comparison_id` ou `table_id` de outra sessão;
 - `documents/status`, upload, limpeza, save e reset rejeitam escopos incompatíveis.
 
-## AgenteCompara: documentos, revisão e validação
-
-### Upload e `temp_table`
+## Upload e `temp_table`
 
 - `POST /api/agente-compara/documents/upload` exige autenticação, autorização, `carrier_name` e escopo válido de `comparison_id`, `table_id` e `slot`;
 - o upload registra documento no trilho técnico compartilhado do Cleiton, mas com namespace do AgenteCompara, e dispara a extração técnica da `temp_table`;
@@ -86,12 +84,12 @@ Status por tabela:
 - quando há dados parciais úteis, o backend força `needs_review`;
 - revisão humana preserva artefatos e impede overwrite automático do mesmo conjunto de origem.
 
-### Edição, revisão e avanço
+## Edição, revisão e avanço
 
 - `POST /api/agente-compara/temp-table/save` permite salvar rascunho, salvar e avançar, avançar para coverage e atualizar apenas `carrier_name`;
 - o frontend usa modal obrigatório para identificar a transportadora, edição manual dos dados extraídos, abas de frete, impostos, coverage e arquivo operacional, além de `review_presentation` por taxa acessória com estados `resolved`, `blocking` e `informational`.
 
-### Validação determinística antes do avanço
+## Validação determinística antes do avanço
 
 Arquivo central:
 
@@ -106,9 +104,7 @@ Comportamento atual:
 - bases de cálculo não mapeadas, valores ausentes ou inválidos, unidades incompatíveis, mínimos sem vínculo e regras extraídas não confirmadas bloqueiam o avanço;
 - condições textuais não suportadas e operações não executáveis pelo motor também são barradas antes do cálculo.
 
-## Impostos, coverage e arquivo operacional
-
-### Configuração fiscal global
+## Configuração fiscal global
 
 - `POST /api/agente-compara/comparison/taxes` salva configuração global da comparação;
 - `include_taxes=false` é permitido e produz status fiscal `no_taxes`;
@@ -117,13 +113,13 @@ Comportamento atual:
 - `tax_calculation_version = agente_compara_tax_v2` e o modo fiscal atual é `inside`;
 - há suporte a ICMS e ISS conforme configuração global.
 
-### Coverage opcional
+## Coverage opcional
 
 - `POST /api/agente-compara/coverage/upload` usa as colunas `UF destino`, `Cidade destino` e `Região de frete`;
 - coverage é opcional e pode ser pulado;
 - quando a regra tarifária depende de região e o coverage não existe, o cálculo pode retornar `missing_coverage_mapping` ou `ambiguous_coverage_mapping`.
 
-### Arquivo operacional para comparação
+## Arquivo operacional para comparação
 
 - template oficial: `app/protected_files/templates/template_agente_compara.xlsx`;
 - download: `GET /api/agente-compara/audit-template`;
@@ -132,8 +128,6 @@ Comportamento atual:
 - a transportadora do cálculo vem do `carrier_name` associado a cada tabela confirmada.
 
 ## Cálculo comparativo
-
-### Estrutura e regras
 
 Arquivos centrais:
 
@@ -163,7 +157,7 @@ Status unitários possíveis:
 - `invalid_invoice_value`
 - `unsupported_pricing_model`
 
-### Contrato público do cálculo
+## Contrato público do cálculo
 
 - `POST /api/agente-compara/comparison/calculate` exige `execution_id` e protege contra clique duplo no frontend;
 - replays idempotentes da mesma configuração retornam `200`;
@@ -174,7 +168,7 @@ Status unitários possíveis:
 - cada célula expõe `calculated_freight`, `status`, `final_status`, `error`, `components`, `evidence`, `completeness`, `blocking_issues` e `calculation_memory`;
 - o payload público e o analytics derivado não expõem `charged_freight`, `expected_freight`, `difference`, `winner`, `ranking` ou `recommendation`.
 
-### Completeza, memória, storage e idempotência
+## Completeza, memória, storage e idempotência
 
 Arquivos centrais:
 
@@ -205,7 +199,7 @@ Proteções confirmadas:
 - mudança de entrada durante a execução invalida o resultado e força nova tentativa;
 - o cálculo não recalcula silenciosamente quando o storage esperado some ou fica corrompido.
 
-### Billing e liberação do resultado
+## Billing e liberação do resultado
 
 - o fluxo só libera `result` publicamente quando `billing_status=applied`;
 - estados confirmados: `not_started`, `pending`, `applied`, `failed`;
@@ -213,13 +207,11 @@ Proteções confirmadas:
 
 ## Reset e invalidação do fluxo
 
-Regras confirmadas:
-
 - `POST /api/agente-compara/comparison/reset` remove a comparação atual, os `temp_table_id` vinculados e o cache de idempotência do save;
 - o reset é idempotente e não recria comparação por efeito colateral;
 - após reset, `GET /api/agente-compara/documents/status` continua vazio até novo start/upload;
 - um novo upload após reset gera `comparison_id` novo;
-- o reset preserva chaves de sessão de outros domínios, como Cleide;
+- o reset preserva chaves de sessão de outros domínios, como o domínio técnico Cleide;
 - limpar os documentos de um slot rebaixa a jornada para a etapa correspondente e invalida configuração global derivada quando necessário;
 - mudanças em tabela, fiscalidade ou regra de preço podem marcar resultado ou batch como `stale`, exigindo nova execução ou nova revisão.
 
@@ -237,6 +229,7 @@ Regras confirmadas:
 - `POST /api/agente-compara/comparison/taxes`
 - `POST /api/agente-compara/comparison/calculate`
 - `GET /api/agente-compara/comparison/calculation`
+- `GET /api/agente-compara/comparison/calculation-memory`
 - `POST /api/agente-compara/temp-table/save`
 - `POST /api/agente-compara/coverage/upload`
 - `GET /api/agente-compara/audit-template`
@@ -250,7 +243,7 @@ Regras confirmadas:
 - `POST /api/agente-compara/audit-chat`
 - `POST /api/agente-compara/comparison-chat`
 
-## Interface atual do AgenteCompara
+## Interface atual
 
 Comportamentos confirmados em `app/static/js/agente_compara.js`, `app/templates/agente_compara.html` e testes de UI:
 
@@ -273,22 +266,28 @@ Comportamentos confirmados em `app/static/js/agente_compara.js`, `app/templates/
 - `comparison-chat` separado do `audit-chat`, bloqueado antes de READY, sem fetch pré-READY e disponível somente com `result` + `analytics` liberados;
 - linguagem neutra sem vencedor, ranking ou recomendação automática.
 
-## Banco, deploy e limitações atuais
+## Limites e honestidade
+
+- o sistema não deve ser documentado como marketplace de cotação;
+- não envia concorrência ao mercado;
+- não contrata transportadora;
+- não decide automaticamente pelo usuário;
+- regras não suportadas pelo motor não devem ser tratadas como cálculo definitivo.
+
+## Banco, deploy e limites atuais
 
 - PostgreSQL é o banco oficial quando configurado via `DATABASE_URL`;
-- Alembic/Flask-Migrate governam o schema e a cadeia versionada permanece linear até `r2s3t4u5v6w7`;
-- esta entrega não adicionou migration, tabela ou coluna nova;
+- Alembic/Flask-Migrate governam o schema e a cadeia versionada permanece linear até `z0a1b2c3d4e5`;
+- a migration da home adiciona `home_cta_experiment_event` e não altera o schema isolado do AgenteCompara;
 - `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn;
-- o processo operacional informado registra homologação em `homolog`, promoção para produção na branch `producao` e aprovação do conjunto `fdec64a` + `db72007` + `f9591dc`;
-- persiste divergência entre o processo informado (`producao`) e o `render.yaml` versionado (`main`);
-- persiste divergência entre os health checks reais (`/health/liveness` e `/health/readiness`) e `healthCheckPath: /health` no YAML;
+- `render.yaml` atual aponta homologação para a branch `homolog` e produção para a branch `producao`, ambos com `autoDeploy: true`;
+- o Render usa `healthCheckPath: /health`; a aplicação também expõe `/health/liveness` e `/health/readiness`;
 - divergências antigas identificadas em `flask db check` para `cleiton_billing_apropriacao`, `franquia` e `multiuser_franquia_codigo` são preexistentes e exigem investigação separada;
-- Playwright é dependência de desenvolvimento (`requirements-dev.txt`) e não integra o runtime de produção;
-- a suíte direcionada validada do AgenteCompara registrou `612 passed, 1 skipped, 2 warnings`, sendo os warnings restritos a depreciações externas.
+- Playwright é dependência de desenvolvimento (`requirements-dev.txt`) e não integra o runtime de produção.
 
 ## Testes e cobertura efetivamente comprovada
 
-Suites diretamente relacionadas e verificadas:
+Suites diretamente relacionadas:
 
 - `tests/test_agente_compara_comparison_start.py`
 - `tests/test_agente_compara_comparison_journey.py`

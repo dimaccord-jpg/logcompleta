@@ -1,6 +1,6 @@
 # Governança Técnica dos Documentos Legais
 
-Referência auditada em 2026-08-19.
+Referência auditada em 2026-09-04.
 
 ## Escopo
 
@@ -49,7 +49,9 @@ Diretórios canônicos:
 - esta documentação descreve governança técnica, não o conteúdo jurídico
 - PDFs e arquivos jurídicos ativos não devem ser editados nesta missão documental
 
-## Referências úteis
+## Referências técnicas
+
+Os arquivos abaixo existem no repositório e descrevem a implementação técnica, sem alterar o conteúdo jurídico:
 
 - `docs/runbooks/documentos_legais_storage_persistente.md`
 - `app/legal_document_storage.py`

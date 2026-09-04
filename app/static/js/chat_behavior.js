@@ -449,7 +449,10 @@
         label: handoff.label || '',
         url: handoff.url || null,
         action: handoff.action || null,
-        requires_login: handoff.requires_login === true
+        requires_login: handoff.requires_login === true,
+        open_in_new_tab: handoff.open_in_new_tab === true,
+        guidance_title: handoff.guidance_title || '',
+        guidance_text: handoff.guidance_text || ''
       });
     });
 
@@ -479,6 +482,31 @@
           btn.setAttribute('data-handoff-action', 'start_julia');
         }
         btn.textContent = actionItem.label || 'Continuar com o AgenteFrete gratuitamente';
+      } else if (actionItem.url && (actionItem.guidance_title || actionItem.guidance_text)) {
+        var guidance = document.createElement('div');
+        guidance.className = 'agentefrete-platform-guidance';
+        if (actionItem.guidance_title) {
+          var titleEl = document.createElement('div');
+          titleEl.className = 'agentefrete-platform-guidance-title';
+          titleEl.textContent = actionItem.guidance_title;
+          guidance.appendChild(titleEl);
+        }
+        if (actionItem.guidance_text) {
+          var textEl = document.createElement('div');
+          textEl.className = 'agentefrete-platform-guidance-text';
+          textEl.textContent = actionItem.guidance_text;
+          guidance.appendChild(textEl);
+        }
+        btn.className = 'copilot-suggestion-btn';
+        btn.setAttribute('data-handoff-url', actionItem.url);
+        btn.setAttribute('data-handoff-login', actionItem.requires_login ? '1' : '0');
+        if (actionItem.open_in_new_tab === true) {
+          btn.setAttribute('data-handoff-new-tab', '1');
+        }
+        btn.textContent = actionItem.label || 'Abrir ferramenta';
+        guidance.appendChild(btn);
+        wrap.appendChild(guidance);
+        return;
       } else if (actionItem.url) {
         btn.className = actionItem.requires_login ? 'copilot-limit-btn' : 'copilot-suggestion-btn';
         btn.setAttribute('data-handoff-url', actionItem.url);
@@ -829,6 +857,10 @@
         if (handoffBtn) {
           var url = handoffBtn.getAttribute('data-handoff-url') || '';
           if (url) {
+            if (handoffBtn.getAttribute('data-handoff-new-tab') === '1') {
+              window.open(url, '_blank', 'noopener,noreferrer');
+              return;
+            }
             navigateHandoff(url);
             return;
           }

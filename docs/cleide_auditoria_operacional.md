@@ -1,6 +1,15 @@
-# Cleide Auditoria
+# AgenteAudita — Auditoria Operacional
 
-Referência auditada em 2026-08-15. Este guia descreve o fluxo operacional real da Cleide Auditoria no código atual.
+Referência auditada em 2026-09-04. Este guia descreve o fluxo operacional real da auditoria de fretes no código atual.
+
+## Identidade
+
+- identidade pública: **AgenteAudita**
+- identidade técnica histórica/interna: **Cleide**
+- rota pública: `/auditoria-frete`
+- APIs técnicas: `/api/cleide-auditoria/*`
+
+Em textos voltados ao produto, usar AgenteAudita. Em endpoints, arquivos, classes, services, agent IDs, `flow_type` e contexto histórico, manter Cleide quando tecnicamente correto.
 
 ## Escopo e autorização
 
@@ -47,14 +56,14 @@ Leitura correta:
 ## Coverage, lote e BI
 
 - coverage é opcional;
-- o lote auditado usa template oficial próprio;
+- o lote auditado usa template oficial próprio (`app/protected_files/templates/template_cleide_auditoria_frete.xlsx`);
 - o BI executivo e o chat analítico só ficam disponíveis após processamento válido do lote;
-- filtros e contexto do BI permanecem restritos ao escopo do lote atual.
+- filtros e contexto do BI permanecem restritos ao escopo do lote atual;
 - o BI executivo expõe quatro gráficos canônicos: `transportadora`, `uf_destino`, `temporal` e `pareto_transportadora`.
 
 ## Billing, funil e primeira auditoria
 
-Eventos operacionais relevantes:
+Eventos operacionais relevantes (nomes técnicos do domínio Cleide):
 
 - `cleide_audit_coverage_upload`
 - `cleide_audit_batch_upload`
@@ -70,12 +79,17 @@ Comportamento atual:
 
 ## IA, configuração e isolamento
 
-- a Cleide Auditoria usa configuração persistida própria em `app/services/cleide_audit_config_service.py`;
+- o domínio usa configuração persistida própria em `app/services/cleide_audit_config_service.py`;
 - os limites documentais respeitam tetos globais compartilhados do ecossistema Cleiton;
 - chat documental e chat analítico usam contextos distintos;
 - a leitura analítica depende da qualidade e da confiança dos dados do lote; quando a confiança for média ou baixa, a limitação deve ser destacada antes das recomendações;
-- a Cleide apresenta fatos, leitura gerencial, hipóteses e próximos passos, mas não toma a decisão final sobre cobranças, responsabilidades ou providências;
-- o domínio da Cleide permanece isolado do AgenteCompara em sessão, billing, eventos e artefatos.
+- o AgenteAudita apresenta fatos, leitura gerencial, hipóteses e próximos passos, mas não toma a decisão final sobre cobranças, responsabilidades ou providências;
+- o domínio permanece isolado do AgenteCompara em sessão, billing, eventos e artefatos.
+
+## Superfície atual versus legado
+
+- a superfície atual de auditoria é `/auditoria-frete`;
+- referências a BI Cleide anterior (`/cleide-bi-frete`) devem ser tratadas como legado ou compatibilidade histórica, nunca como fluxo principal atual.
 
 ## Fontes de código
 

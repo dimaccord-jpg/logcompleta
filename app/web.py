@@ -1664,6 +1664,24 @@ def api_chat_julia():
         )
         result["authorization"] = authz
         result["limit_reached"] = not authz.get("permitido", True)
+        try:
+            from app.services.agentefrete_platform_guidance_service import (
+                resolve_agentefrete_platform_guidance,
+            )
+
+            platform_guidance = resolve_agentefrete_platform_guidance(user_message)
+        except Exception:
+            logging.exception(
+                "Falha ao resolver orientação de ferramenta interna do AgenteFrete."
+            )
+            platform_guidance = None
+        if (
+            isinstance(platform_guidance, dict)
+            and platform_guidance.get("url")
+            and not result.get("handoff")
+            and not result.get("handoffs")
+        ):
+            result["handoff"] = platform_guidance
         return jsonify(result)
     except Exception as e:
         logging.exception("Erro em /api/chat_julia: %s", e)
