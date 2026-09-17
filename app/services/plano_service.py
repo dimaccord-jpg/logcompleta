@@ -247,6 +247,12 @@ def _bool_from_raw(raw: str | bool | None) -> bool:
 
 
 def _normalizar_gateway_provider(raw: str | None) -> str | None:
+    """Provider externo é opcional na etapa administrativa.
+
+    Vazio/None = configuração externa ainda não informada (pendente).
+    Só aplica a allowlist quando um provider foi de fato preenchido.
+    Nesta fase, o único valor aceito é stripe.
+    """
     txt = (raw or "").strip().lower()
     if not txt:
         return None
@@ -283,6 +289,32 @@ def _normalizar_gateway_interval(raw: str | None) -> str | None:
     if txt not in _GATEWAY_INTERVALO_OPCOES:
         raise ValueError("Periodicidade inválida para gateway. Use month ou year.")
     return txt
+
+
+def _normalizar_overlay_gateway_admin(
+    *,
+    provider_raw: str | None,
+    product_id_raw: str | None,
+    price_id_raw: str | None,
+    currency_raw: str | None,
+    interval_raw: str | None,
+    pronto_raw: str | bool | None,
+) -> dict:
+    """Overlay opcional de configuração externa.
+
+    Independente dos parâmetros administrativos. Ausência de
+    provider/Product/Price/moeda/periodicidade não é erro de cadastro:
+    o estado permanece pendente e a prontidão real é calculada em
+    `_ler_config_gateway_plano`. Provider, se informado, deve ser stripe.
+    """
+    return {
+        "provider": _normalizar_gateway_provider(provider_raw),
+        "product_id": _normalizar_gateway_product_id(product_id_raw),
+        "price_id": _normalizar_gateway_price_id(price_id_raw),
+        "currency": _normalizar_gateway_currency(currency_raw),
+        "interval": _normalizar_gateway_interval(interval_raw),
+        "pronto": _bool_from_raw(pronto_raw),
+    }
 
 
 def _obter_cfg_map(chaves: list[str]) -> dict[str, ConfigRegras]:
@@ -326,8 +358,11 @@ def _ler_config_gateway_plano(cfg_map: dict[str, ConfigRegras], plano_codigo: st
     pronto = bool(cfg_ready and (cfg_ready.valor_inteiro or 0) == 1)
 
     pendencias: list[str] = []
-    if not provider:
+    provider_n = (provider or "").strip().lower()
+    if not provider_n:
         pendencias.append("gateway_provider_nao_configurado")
+    elif provider_n not in _GATEWAY_PROVIDER_OPCOES:
+        pendencias.append("gateway_provider_invalido")
     if not product_id:
         pendencias.append("gateway_product_id_nao_configurado")
     if not price_id:
@@ -339,7 +374,9 @@ def _ler_config_gateway_plano(cfg_map: dict[str, ConfigRegras], plano_codigo: st
     if not pronto:
         pendencias.append("gateway_pronto_desmarcado")
 
-    configuracao_valida = len(pendencias) == 0
+    configuracao_valida = (
+        len(pendencias) == 0 and provider_n in _GATEWAY_PROVIDER_OPCOES
+    )
     return {
         "provider": provider,
         "product_id": product_id,
@@ -543,6 +580,11 @@ def atualizar_parametros_plano_admin(
     Atualiza parâmetros administrativos do plano:
     - valor comercial admin em ConfigRegras
     - franquia operacional em Franquia.limite_total
+    - quantidade mínima e limite de aumento automático (Multiuser)
+
+    A configuração externa Stripe é overlay independente nesta etapa.
+    Pode permanecer vazia (pendente) sem bloquear a persistência
+    administrativa. Checkout continua gated por configuracao_valida.
     """
     codigo = (plano_codigo or "").strip().lower()
     plano = _PLANOS_POR_CODIGO.get(codigo)
@@ -561,12 +603,22 @@ def atualizar_parametros_plano_admin(
             limite_aumento_automatico = _parse_limite_aumento_automatico_raw(
                 limite_aumento_automatico_raw
             )
-    gateway_provider = _normalizar_gateway_provider(gateway_provider_raw)
-    gateway_product_id = _normalizar_gateway_product_id(gateway_product_id_raw)
-    gateway_price_id = _normalizar_gateway_price_id(gateway_price_id_raw)
-    gateway_currency = _normalizar_gateway_currency(gateway_currency_raw)
-    gateway_interval = _normalizar_gateway_interval(gateway_interval_raw)
-    gateway_pronto = _bool_from_raw(gateway_pronto_raw)
+    gateway_overlay = None
+    if codigo in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
+        gateway_overlay = _normalizar_overlay_gateway_admin(
+            provider_raw=gateway_provider_raw,
+            product_id_raw=gateway_product_id_raw,
+            price_id_raw=gateway_price_id_raw,
+            currency_raw=gateway_currency_raw,
+            interval_raw=gateway_interval_raw,
+            pronto_raw=gateway_pronto_raw,
+        )
+    gateway_provider = (gateway_overlay or {}).get("provider")
+    gateway_product_id = (gateway_overlay or {}).get("product_id")
+    gateway_price_id = (gateway_overlay or {}).get("price_id")
+    gateway_currency = (gateway_overlay or {}).get("currency")
+    gateway_interval = (gateway_overlay or {}).get("interval")
+    gateway_pronto = bool((gateway_overlay or {}).get("pronto"))
     categorias = tuple(c.lower() for c in plano["categorias"])
     franquias = (
         db.session.query(Franquia)

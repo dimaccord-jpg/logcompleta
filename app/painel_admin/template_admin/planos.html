@@ -97,7 +97,7 @@
                                 type="text"
                                 class="form-control"
                                 name="gateway_provider"
-                                value="{{ plano.gateway_config.provider if plano.gateway_config else '' }}"
+                                value="{{ (plano.gateway_config.provider or '') if plano.gateway_config else '' }}"
                                 placeholder="stripe"
                             >
                         </div>
@@ -108,7 +108,7 @@
                                 type="text"
                                 class="form-control"
                                 name="gateway_product_id"
-                                value="{{ plano.gateway_config.product_id if plano.gateway_config else '' }}"
+                                value="{{ (plano.gateway_config.product_id or '') if plano.gateway_config else '' }}"
                                 placeholder="prod_xxx"
                             >
                         </div>
@@ -119,7 +119,7 @@
                                 type="text"
                                 class="form-control"
                                 name="gateway_price_id"
-                                value="{{ plano.gateway_config.price_id if plano.gateway_config else '' }}"
+                                value="{{ (plano.gateway_config.price_id or '') if plano.gateway_config else '' }}"
                                 placeholder="price_xxx"
                             >
                         </div>
@@ -131,7 +131,7 @@
                                     type="text"
                                     class="form-control"
                                     name="gateway_currency"
-                                    value="{{ plano.gateway_config.currency if plano.gateway_config else '' }}"
+                                    value="{{ (plano.gateway_config.currency or '') if plano.gateway_config else '' }}"
                                     placeholder="brl"
                                 >
                             </div>
@@ -141,7 +141,7 @@
                                     type="text"
                                     class="form-control"
                                     name="gateway_interval"
-                                    value="{{ plano.gateway_config.interval if plano.gateway_config else '' }}"
+                                    value="{{ (plano.gateway_config.interval or '') if plano.gateway_config else '' }}"
                                     placeholder="month"
                                 >
                             </div>
