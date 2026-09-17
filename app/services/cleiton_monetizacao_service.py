@@ -2400,7 +2400,7 @@ def processar_fato_stripe_conciliado(
     ignorar_atualizacao_vinculo_evento_antigo = False
     invoice_multiuser_recusada = False
     if _plano_eh_multiuser(plano_codigo) and event_type_n == "invoice.paid":
-        ciclo, ids, invoice_multiuser_recusada = _preparar_invoice_paid_multiuser(
+        ciclo, ids, invoice_multiuser_recusada, object_payload = _preparar_invoice_paid_multiuser(
             object_data=object_payload,
             ids=ids,
             correlacao=correlacao,
@@ -2754,7 +2754,7 @@ def processar_evento_stripe(
     ignorar_atualizacao_vinculo_evento_antigo = False
     invoice_multiuser_recusada = False
     if _plano_eh_multiuser(plano_codigo) and event_type == "invoice.paid":
-        ciclo, ids, invoice_multiuser_recusada = _preparar_invoice_paid_multiuser(
+        ciclo, ids, invoice_multiuser_recusada, object_data = _preparar_invoice_paid_multiuser(
             object_data=object_data,
             ids=ids,
             correlacao=correlacao,
@@ -3203,6 +3203,30 @@ def _carregar_subscription_stripe_opcional(subscription_id: str | None) -> dict[
         return {}
 
 
+def _carregar_invoice_stripe_opcional(invoice_id: str | None) -> dict[str, Any]:
+    iid = _norm_text(invoice_id)
+    if not iid:
+        return {}
+    try:
+        return _stripe_get(f"/invoices/{iid}")
+    except Exception:
+        logger.info("Invoice Stripe não recuperável para linha contratual Multiuser")
+        return {}
+
+
+def _mesclar_invoice_stripe_refetch(
+    original: dict[str, Any],
+    fetched: dict[str, Any],
+) -> dict[str, Any]:
+    out = dict(original)
+    out.update(fetched)
+    orig_meta = original.get("metadata") if isinstance(original.get("metadata"), dict) else {}
+    fetched_meta = fetched.get("metadata") if isinstance(fetched.get("metadata"), dict) else {}
+    if orig_meta or fetched_meta:
+        out["metadata"] = {**fetched_meta, **orig_meta}
+    return out
+
+
 def _correlation_id_de_metadata(metadata: dict[str, Any]) -> str | None:
     return _norm_text(metadata.get("correlation_id")) or _norm_text(
         metadata.get("checkout_intent_id")
@@ -3215,16 +3239,31 @@ def _enriquecer_invoice_paga_multiuser(
     ids: dict[str, Any],
     correlacao: dict[str, Any],
     ciclo: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+    ja_refetch: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     from app.services.conta_multiuser_invoice_linha_service import (
+        LinhaContratualMultiuserAusenteError,
         selecionar_linha_contratual_multiuser,
+        subscription_id_do_invoice,
         subscription_item_multiuser_da_assinatura,
     )
     from app.services.plano_service import obter_configuracao_gateway_plano_admin
 
     cfg = obter_configuracao_gateway_plano_admin(CODIGO_MULTIUSER) or {}
     price_esperado = _norm_text(cfg.get("price_id")) or _norm_text(ids.get("price_id"))
-    subscription_id = _norm_text(ids.get("subscription_id"))
+    if not price_esperado:
+        from app.services.conta_multiuser_checkout_intencao_service import (
+            buscar_intencao_por_correlation,
+        )
+
+        correlation = _correlation_id_de_metadata(_metadata_from_event_object(object_data))
+        intencao = buscar_intencao_por_correlation(correlation)
+        if intencao is not None:
+            price_esperado = _norm_text(intencao.price_id)
+    subscription_id = (
+        _norm_text(ids.get("subscription_id"))
+        or subscription_id_do_invoice(object_data)
+    )
     subscription_obj = object_data.get("subscription")
     if isinstance(subscription_obj, dict):
         subscription_id = _norm_text(subscription_obj.get("id")) or subscription_id
@@ -3235,12 +3274,28 @@ def _enriquecer_invoice_paga_multiuser(
         sub_body, price_id_esperado=price_esperado or ""
     )
     item_id = _norm_text((item or {}).get("id"))
-    linha = selecionar_linha_contratual_multiuser(
-        object_data,
-        price_id_esperado=price_esperado or "",
-        subscription_id_esperado=subscription_id,
-        subscription_item_id_esperado=item_id,
-    )
+    try:
+        linha = selecionar_linha_contratual_multiuser(
+            object_data,
+            price_id_esperado=price_esperado or "",
+            subscription_id_esperado=subscription_id,
+            subscription_item_id_esperado=item_id,
+        )
+    except LinhaContratualMultiuserAusenteError:
+        invoice_id = _norm_text(ids.get("invoice_id")) or _norm_text(object_data.get("id"))
+        if ja_refetch or not invoice_id:
+            raise
+        fetched = _carregar_invoice_stripe_opcional(invoice_id)
+        if not fetched:
+            raise
+        mesclado = _mesclar_invoice_stripe_refetch(object_data, fetched)
+        return _enriquecer_invoice_paga_multiuser(
+            object_data=mesclado,
+            ids=ids,
+            correlacao=correlacao,
+            ciclo=ciclo,
+            ja_refetch=True,
+        )
     ids = dict(ids)
     ids["price_id"] = linha.price_id
     ids["quantity"] = linha.quantity
@@ -3251,7 +3306,7 @@ def _enriquecer_invoice_paga_multiuser(
         ciclo_out["inicio_ciclo"] = linha.inicio
         ciclo_out["fim_ciclo"] = linha.fim
         ciclo_out["fonte_ciclo"] = "stripe_linha_contratual_multiuser"
-    return ciclo_out, ids
+    return ciclo_out, ids, object_data
 
 
 def _preparar_invoice_paid_multiuser(
@@ -3261,13 +3316,15 @@ def _preparar_invoice_paid_multiuser(
     correlacao: dict[str, Any],
     ciclo: dict[str, Any],
     origem_fato: str,
-) -> tuple[dict[str, Any], dict[str, Any], bool]:
+) -> tuple[dict[str, Any], dict[str, Any], bool, dict[str, Any]]:
     """
     Seleciona a linha contratual e marca atraso pelo ciclo canônico ANTES
     de atualizar o vínculo monetário. Recusa fail-closed se a linha for inválida.
+    Retorna (ciclo, ids, recusada, object_data) — object_data pode ser a invoice
+    reobtida do Stripe quando o webhook chegou sem linha utilizável.
     """
     try:
-        ciclo_out, ids_out = _enriquecer_invoice_paga_multiuser(
+        ciclo_out, ids_out, object_out = _enriquecer_invoice_paga_multiuser(
             object_data=object_data,
             ids=ids,
             correlacao=correlacao,
@@ -3295,7 +3352,7 @@ def _preparar_invoice_paid_multiuser(
             snapshot_normalizado={"motivo": type(exc).__name__, "origem": origem_fato},
             payload_bruto_sanitizado={"origem": origem_fato},
         )
-        return dict(ciclo), ids, True
+        return dict(ciclo), ids, True, object_data
 
     ciclo_out = dict(ciclo_out)
     if correlacao.get("conta_id") is not None:
@@ -3310,7 +3367,7 @@ def _preparar_invoice_paid_multiuser(
         )
     else:
         ciclo_out["evento_atrasado_canonico"] = False
-    return ciclo_out, ids_out, False
+    return ciclo_out, ids_out, False, object_out
 
 
 def _aplicar_fato_contratual_multiuser(
@@ -4144,6 +4201,107 @@ def reprocessar_fato_pendente_correlacao_admin(
     }
 
 
+EVENTO_RECONCILIA_INVOICE_PAID_PREFIX = "stripe_reconcilia_invoice_paid:"
+
+
+def reconciliar_invoice_paga_multiuser_existente(
+    *,
+    invoice_id: str,
+    subscription_id: str | None = None,
+    correlation_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Reprocessa invoice.paid Multiuser já confirmada no Stripe.
+
+    GET da invoice existente. Não cria Subscription. Não cobra de novo.
+    Idempotente por invoice_id (ciclo Multiuser) e por event_id estável de reconciliação.
+    """
+    from app.services.conta_multiuser_invoice_linha_service import subscription_id_do_invoice
+    from app.services.conta_multiuser_checkout_intencao_service import (
+        buscar_intencao_por_correlation,
+    )
+
+    iid = _norm_text(invoice_id)
+    if not iid:
+        raise ValueError("invoice_id obrigatório para reconciliação Multiuser.")
+    invoice = _carregar_invoice_stripe_opcional(iid)
+    if not invoice:
+        raise ValueError("Invoice Stripe não recuperável para reconciliação Multiuser.")
+    status_n = (_norm_text(invoice.get("status")) or "").lower()
+    if status_n != "paid":
+        raise ValueError("Invoice Stripe não está paga; reconciliação recusada.")
+
+    sid_invoice = subscription_id_do_invoice(invoice)
+    sid_informado = _norm_text(subscription_id)
+    if sid_informado and sid_invoice and sid_informado != sid_invoice:
+        raise ValueError("Subscription informada diverge da invoice Stripe.")
+    sid = sid_invoice or sid_informado
+
+    object_data = dict(invoice)
+    if sid and not _id_de_ref_stripe(object_data.get("subscription")):
+        object_data["subscription"] = sid
+
+    metadata = _metadata_from_event_object(object_data)
+    if sid and not _correlation_id_de_metadata(metadata):
+        sub_body = _carregar_subscription_stripe_opcional(sid)
+        if isinstance(sub_body, dict) and sub_body:
+            sub_meta = (
+                sub_body.get("metadata")
+                if isinstance(sub_body.get("metadata"), dict)
+                else {}
+            )
+            object_meta = (
+                object_data.get("metadata")
+                if isinstance(object_data.get("metadata"), dict)
+                else {}
+            )
+            object_data["metadata"] = {**sub_meta, **object_meta}
+            metadata = _metadata_from_event_object(object_data)
+
+    cid_informado = _norm_text(correlation_id)
+    cid_stripe = _correlation_id_de_metadata(metadata)
+    if cid_informado and cid_stripe and cid_informado != cid_stripe:
+        raise ValueError("correlation_id informado diverge da invoice/assinatura Stripe.")
+    if cid_informado and not cid_stripe:
+        intencao = buscar_intencao_por_correlation(cid_informado)
+        if intencao is None:
+            raise ValueError(
+                "Intenção local não encontrada para o correlation_id informado."
+            )
+        object_meta = (
+            object_data.get("metadata")
+            if isinstance(object_data.get("metadata"), dict)
+            else {}
+        )
+        object_data["metadata"] = {
+            **object_meta,
+            "correlation_id": cid_informado,
+            "checkout_intent_id": cid_informado,
+        }
+
+    created = invoice.get("created")
+    transitions = invoice.get("status_transitions")
+    if isinstance(transitions, dict) and transitions.get("paid_at"):
+        created = transitions.get("paid_at")
+    evento = {
+        "id": f"{EVENTO_RECONCILIA_INVOICE_PAID_PREFIX}{iid}",
+        "type": "invoice.paid",
+        "created": created if created is not None else int(time.time()),
+        "data": {"object": object_data},
+    }
+    resultado = processar_evento_stripe(evento)
+    resultado["modo"] = "reconcilia_invoice_paga_multiuser"
+    resultado["invoice_id"] = iid
+    resultado["subscription_id"] = sid
+    return resultado
+
+
+def _id_de_ref_stripe(value: Any) -> str | None:
+    if isinstance(value, dict):
+        return _norm_text(value.get("id"))
+    return _norm_text(value)
+
+
 def _extrair_ids_externos_stripe(evento: dict[str, Any], objeto: dict[str, Any]) -> dict[str, Any]:
     obj_id = _norm_text(objeto.get("id"))
     event_type = (_norm_text(evento.get("type")) or "").lower()
@@ -4153,11 +4311,19 @@ def _extrair_ids_externos_stripe(evento: dict[str, Any], objeto: dict[str, Any])
     price_id = None
 
     if event_type.startswith("invoice."):
+        from app.services.conta_multiuser_invoice_linha_service import (
+            _price_id_da_linha,
+            subscription_id_do_invoice,
+        )
+
         invoice_id = obj_id or invoice_id
+        sid_invoice = subscription_id_do_invoice(objeto)
+        if sid_invoice:
+            subscription_id = sid_invoice
         lines = (objeto.get("lines") or {}).get("data") if isinstance(objeto.get("lines"), dict) else None
         if isinstance(lines, list) and lines:
             first = lines[0] if isinstance(lines[0], dict) else {}
-            price_id = _norm_text(((first.get("price") or {}).get("id")) if isinstance(first.get("price"), dict) else first.get("price"))
+            price_id = _norm_text(_price_id_da_linha(first if isinstance(first, dict) else {}))
             if not subscription_id:
                 for raw in lines:
                     sid_line = _subscription_id_from_invoice_line(

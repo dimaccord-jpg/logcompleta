@@ -30,6 +30,12 @@ def _norm(value: Any) -> str | None:
     return txt or None
 
 
+def _id_de_ref(value: Any) -> str | None:
+    if isinstance(value, dict):
+        return _norm(value.get("id"))
+    return _norm(value)
+
+
 def _to_int(value: Any) -> int | None:
     try:
         if value is None or isinstance(value, bool):
@@ -39,22 +45,42 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
-def _price_id_da_linha(linha: dict[str, Any]) -> str | None:
-    price = linha.get("price")
+def _price_id_from_price_field(price: Any) -> str | None:
     if isinstance(price, dict):
         return _norm(price.get("id"))
     return _norm(price)
 
 
+def _price_id_da_linha(linha: dict[str, Any]) -> str | None:
+    """
+    Price da linha contratual.
+
+    Schema legado: line.price.id
+    Schema Stripe atual (Basil): line.pricing.price_details.price
+    """
+    pid = _price_id_from_price_field(linha.get("price"))
+    if pid:
+        return pid
+    pricing = linha.get("pricing")
+    if not isinstance(pricing, dict):
+        return None
+    details = pricing.get("price_details")
+    if isinstance(details, dict):
+        pid = _price_id_from_price_field(details.get("price"))
+        if pid:
+            return pid
+    return _price_id_from_price_field(pricing.get("price"))
+
+
 def subscription_id_da_linha(linha: dict[str, Any]) -> str | None:
-    sid = _norm(linha.get("subscription"))
+    sid = _id_de_ref(linha.get("subscription"))
     if sid:
         return sid
     parent = linha.get("parent")
     if isinstance(parent, dict):
         details = parent.get("subscription_item_details")
         if isinstance(details, dict):
-            sid = _norm(details.get("subscription"))
+            sid = _id_de_ref(details.get("subscription"))
             if sid:
                 return sid
     return None
@@ -80,7 +106,45 @@ def _eh_linha_ajuste_ou_proration(linha: dict[str, Any]) -> bool:
     tipo = (_norm(linha.get("type")) or "").lower()
     if tipo in {"invoiceitem", "invoice_item"}:
         return True
+    parent = linha.get("parent")
+    if not isinstance(parent, dict):
+        return False
+    parent_type = (_norm(parent.get("type")) or "").lower()
+    if parent_type in {"invoice_item_details", "invoiceitem_details"}:
+        return True
+    details = parent.get("subscription_item_details")
+    if isinstance(details, dict) and details.get("proration") is True:
+        return True
+    inv_details = parent.get("invoice_item_details")
+    if isinstance(inv_details, dict) and inv_details.get("proration") is True:
+        return True
     return False
+
+
+def subscription_id_do_invoice(invoice: dict[str, Any] | None) -> str | None:
+    """
+    Subscription da invoice.
+
+    Schema legado: invoice.subscription
+    Schema Stripe atual (Basil): invoice.parent.subscription_details.subscription
+    """
+    if not isinstance(invoice, dict):
+        return None
+    sid = _id_de_ref(invoice.get("subscription"))
+    if sid:
+        return sid
+    parent = invoice.get("parent")
+    if isinstance(parent, dict):
+        details = parent.get("subscription_details")
+        if isinstance(details, dict):
+            sid = _id_de_ref(details.get("subscription"))
+            if sid:
+                return sid
+    for linha in _linhas_invoice(invoice):
+        sid = subscription_id_da_linha(linha)
+        if sid:
+            return sid
+    return None
 
 
 def _linhas_invoice(invoice: dict[str, Any]) -> list[dict[str, Any]]:

@@ -28,6 +28,7 @@ from app.services.cleiton_monetizacao_service import (
     listar_planos_contratacao_publica,
     processar_evento_stripe,
     processar_fato_stripe_conciliado,
+    reconciliar_invoice_paga_multiuser_existente,
 )
 from app.services.conta_multiuser_contratacao_service import (
     ConfiguracaoMultiuserIncompletaError,
@@ -284,6 +285,103 @@ def _evento_invoice_paid(
         "id": event_id,
         "type": "invoice.paid",
         "created": _unix_utc(inicio),
+        "data": {"object": objeto},
+    }
+
+
+def _linha_contratual_basil(
+    *,
+    quantity=5,
+    price_id=PRICE_MU,
+    subscription="sub_mu_1",
+    subscription_item="si_mu_1",
+    inicio=INICIO,
+    fim=FIM,
+    proration=False,
+):
+    return {
+        "id": "il_basil",
+        "quantity": quantity,
+        "period": {
+            "start": _unix_utc(inicio),
+            "end": _unix_utc(fim),
+        },
+        "pricing": {
+            "type": "price_details",
+            "price_details": {"price": price_id, "product": PRODUCT_MU},
+            "unit_amount_decimal": "4990",
+        },
+        "parent": {
+            "type": "subscription_item_details",
+            "subscription_item_details": {
+                "proration": proration,
+                "subscription": subscription,
+                "subscription_item": subscription_item,
+            },
+        },
+    }
+
+
+def _evento_invoice_paid_basil(
+    *,
+    conta_id,
+    franquia_id,
+    user_id,
+    invoice_id="in_basil_1",
+    event_id="evt_basil_paid_1",
+    quantity=5,
+    price_id=PRICE_MU,
+    customer="cus_mu_1",
+    subscription="sub_mu_1",
+    correlation_id=None,
+    empty_lines=False,
+):
+    if correlation_id is None:
+        pend = (
+            ContaMonetizacaoCheckoutIntencao.query.filter_by(
+                conta_id=conta_id,
+                estado=ContaMonetizacaoCheckoutIntencao.ESTADO_PENDENTE,
+            )
+            .order_by(ContaMonetizacaoCheckoutIntencao.id.asc())
+            .first()
+        )
+        if pend is not None:
+            correlation_id = pend.correlation_id
+    metadata = {
+        "conta_id": str(conta_id),
+        "franquia_id": str(franquia_id),
+        "usuario_id": str(user_id),
+        "plano_interno": "multiuser",
+        "quantity_solicitada": str(quantity),
+    }
+    if correlation_id:
+        metadata["correlation_id"] = correlation_id
+        metadata["checkout_intent_id"] = correlation_id
+    linhas = [] if empty_lines else [
+        _linha_contratual_basil(
+            quantity=quantity,
+            price_id=price_id,
+            subscription=subscription,
+        )
+    ]
+    objeto = {
+        "id": invoice_id,
+        "customer": customer,
+        "status": "paid",
+        "metadata": metadata,
+        "parent": {
+            "type": "subscription_details",
+            "subscription_details": {
+                "subscription": subscription,
+                "metadata": metadata,
+            },
+        },
+        "lines": {"object": "list", "data": linhas},
+    }
+    return {
+        "id": event_id,
+        "type": "invoice.paid",
+        "created": _unix_utc(INICIO),
         "data": {"object": objeto},
     }
 
@@ -1316,6 +1414,354 @@ def test_linha_ausente_fail_closed():
     invoice = {"lines": {"data": [{"quantity": 1, "price": {"id": "price_outro"}}]}}
     with pytest.raises(LinhaContratualMultiuserAusenteError):
         selecionar_linha_contratual_multiuser(invoice, price_id_esperado=PRICE_MU)
+
+
+def test_linha_contratual_schema_basil_sem_price_id():
+    from app.services.conta_multiuser_invoice_linha_service import (
+        selecionar_linha_contratual_multiuser,
+    )
+
+    invoice = {"lines": {"data": [_linha_contratual_basil(quantity=5)]}}
+    linha = selecionar_linha_contratual_multiuser(invoice, price_id_esperado=PRICE_MU)
+    assert linha.quantity == 5
+    assert linha.price_id == PRICE_MU
+    assert linha.subscription_id == "sub_mu_1"
+    assert linha.inicio == INICIO
+    assert linha.fim == FIM
+
+
+def test_intencao_multiuser_commitada_antes_do_checkout_stripe(app, monkeypatch):
+    with app.app_context():
+        _seed_gateway_multiuser()
+        conta, franquia = seed_conta_franquia_cliente(slug="int-before-stripe")
+        user = seed_usuario(franquia.id, conta.id, email="int-before@test.com")
+        visto = {}
+
+        def _fake_post(path, payload, idempotency_key=None):  # noqa: ARG001
+            pend = ContaMonetizacaoCheckoutIntencao.query.filter_by(
+                conta_id=conta.id,
+                estado=ContaMonetizacaoCheckoutIntencao.ESTADO_PENDENTE,
+            ).one()
+            visto["intencao_id"] = pend.id
+            visto["correlation_id"] = pend.correlation_id
+            visto["price_id"] = pend.price_id
+            visto["quantity"] = pend.quantity_solicitada
+            visto["path"] = path
+            return {
+                "id": "cs_before",
+                "client_secret": "secret_before",
+                "status": "open",
+                "expires_at": int(time.time()) + 3600,
+            }
+
+        from app.services import cleiton_monetizacao_service as monetizacao_service
+
+        monkeypatch.setattr(monetizacao_service, "_obter_publishable_key_stripe", lambda: "pk_test")
+        monkeypatch.setattr(monetizacao_service, "_obter_assinatura_stripe_ativa", lambda conta_id: None)
+        monkeypatch.setattr(monetizacao_service, "_stripe_post", _fake_post)
+        out = iniciar_jornada_assinatura_stripe(
+            user=user,
+            plano_codigo="multiuser",
+            quantity=5,
+            dados_empresariais=_dados_empresa(),
+        )
+        assert visto["path"] == "/checkout/sessions"
+        assert visto["price_id"] == PRICE_MU
+        assert visto["quantity"] == 5
+        rec = db.session.get(ContaMonetizacaoCheckoutIntencao, visto["intencao_id"])
+        assert rec is not None
+        assert rec.estado == ContaMonetizacaoCheckoutIntencao.ESTADO_PENDENTE
+        assert rec.correlation_id == out["correlation_id"]
+        assert rec.checkout_session_id == "cs_before"
+
+
+def test_invoice_paid_basil_imediato_ativa_multiuser(app):
+    with app.app_context():
+        _seed_gateway_multiuser()
+        conta, franquia, user, intencao = _preparar_conta_contratacao("basil-now")
+        intencao.checkout_session_id = None
+        db.session.add(intencao)
+        db.session.commit()
+        resultado = processar_evento_stripe(
+            _evento_invoice_paid_basil(
+                conta_id=conta.id,
+                franquia_id=franquia.id,
+                user_id=user.id,
+                quantity=5,
+            )
+        )
+        rec = db.session.get(Conta, conta.id)
+        user_rec = db.session.get(User, user.id)
+        assert resultado["efeito_operacional_aplicado"] is True
+        assert rec.multiuser_ativa is True
+        assert rec.quantidade_assentos_contratados == 5
+        assert user_rec.categoria == "multiuser"
+
+
+def test_invoice_paid_basil_replay_idempotente(app):
+    with app.app_context():
+        _seed_gateway_multiuser()
+        conta, franquia, user, _intencao = _preparar_conta_contratacao("basil-rp")
+        evento = _evento_invoice_paid_basil(
+            conta_id=conta.id, franquia_id=franquia.id, user_id=user.id
+        )
+        processar_evento_stripe(evento)
+        fr0 = Franquia.query.filter_by(conta_id=conta.id).order_by(Franquia.id.asc()).first()
+        fr0.consumo_acumulado = Decimal("42")
+        db.session.add(fr0)
+        db.session.commit()
+        replay = processar_evento_stripe(evento)
+        assert replay.get("replay") is True
+        rec = db.session.get(Conta, conta.id)
+        assert rec.quantidade_assentos_contratados == 5
+        fr1 = db.session.get(Franquia, fr0.id)
+        assert fr1.consumo_acumulado == Decimal("42")
+        assert ContaVinculoOrganizacional.query.filter_by(
+            conta_id=conta.id, estado=ESTADO_ATIVO
+        ).count() == 1
+
+
+def test_invoice_paid_basil_linha_ausente_continua_fail_closed(app, monkeypatch):
+    with app.app_context():
+        _seed_gateway_multiuser()
+        conta, franquia, user, _intencao = _preparar_conta_contratacao("basil-abs")
+        from app.services import cleiton_monetizacao_service as monetizacao_service
+
+        def _get(path, params=None):  # noqa: ARG001
+            path_s = str(path)
+            if path_s.startswith("/invoices/"):
+                return {
+                    "id": "in_basil_abs",
+                    "status": "paid",
+                    "lines": {
+                        "data": [
+                            _linha_contratual_basil(price_id="price_outro"),
+                        ]
+                    },
+                }
+            if path_s.startswith("/prices/"):
+                return dict(PRICE_STRIPE_OK)
+            if path_s.startswith("/subscriptions/"):
+                return {
+                    "id": "sub_mu_1",
+                    "status": "active",
+                    "items": {"data": [{"id": "si_mu_1", "quantity": 5, "price": {"id": PRICE_MU}}]},
+                }
+            raise AssertionError(f"GET Stripe inesperado: {path_s}")
+
+        monkeypatch.setattr(monetizacao_service, "_stripe_get", _get)
+        processar_evento_stripe(
+            _evento_invoice_paid_basil(
+                conta_id=conta.id,
+                franquia_id=franquia.id,
+                user_id=user.id,
+                price_id="price_outro",
+                invoice_id="in_basil_abs",
+                event_id="evt_basil_abs",
+            )
+        )
+        rec = db.session.get(Conta, conta.id)
+        assert rec.multiuser_ativa is False
+        assert rec.quantidade_assentos_contratados is None
+
+
+def test_invoice_paid_linhas_vazias_refetch_basil_ativa(app, monkeypatch):
+    with app.app_context():
+        _seed_gateway_multiuser()
+        conta, franquia, user, intencao = _preparar_conta_contratacao("basil-rf")
+        from app.services import cleiton_monetizacao_service as monetizacao_service
+
+        invoice_completa = _evento_invoice_paid_basil(
+            conta_id=conta.id,
+            franquia_id=franquia.id,
+            user_id=user.id,
+            invoice_id="in_basil_rf",
+            correlation_id=intencao.correlation_id,
+        )["data"]["object"]
+
+        def _get(path, params=None):  # noqa: ARG001
+            path_s = str(path)
+            if path_s.startswith("/invoices/"):
+                return invoice_completa
+            if path_s.startswith("/prices/"):
+                return dict(PRICE_STRIPE_OK)
+            if path_s.startswith("/subscriptions/"):
+                return {
+                    "id": "sub_mu_1",
+                    "status": "active",
+                    "metadata": {
+                        "plano_interno": "multiuser",
+                        "correlation_id": intencao.correlation_id,
+                    },
+                    "items": {"data": [{"id": "si_mu_1", "quantity": 5, "price": {"id": PRICE_MU}}]},
+                }
+            raise AssertionError(f"GET Stripe inesperado: {path_s}")
+
+        monkeypatch.setattr(monetizacao_service, "_stripe_get", _get)
+        resultado = processar_evento_stripe(
+            _evento_invoice_paid_basil(
+                conta_id=conta.id,
+                franquia_id=franquia.id,
+                user_id=user.id,
+                invoice_id="in_basil_rf",
+                event_id="evt_basil_rf",
+                empty_lines=True,
+            )
+        )
+        rec = db.session.get(Conta, conta.id)
+        assert resultado["efeito_operacional_aplicado"] is True
+        assert rec.multiuser_ativa is True
+        assert rec.quantidade_assentos_contratados == 5
+
+
+def test_reconciliar_invoice_paga_apos_webhook_sem_efeito(app, monkeypatch):
+    with app.app_context():
+        _seed_gateway_multiuser()
+        conta, franquia, user, intencao = _preparar_conta_contratacao("uat-rec")
+        invoice_id = "in_1UGnrl0inovgmnbK83Edm5vi"
+        subscription_id = "sub_1UGnrm0inovgmnbK32ooY0Nk"
+        event_id_original = "evt_uat_linha_ausente"
+        fato_bloqueado = MonetizacaoFato(
+            tipo_fato="stripe_invoice_paid",
+            status_tecnico="registrado_sem_efeito_operacional",
+            provider="stripe",
+            conta_id=conta.id,
+            franquia_id=franquia.id,
+            usuario_id=user.id,
+            idempotency_key=f"stripe_event:{event_id_original}:invoice.paid",
+            external_event_id=event_id_original,
+            invoice_id=invoice_id,
+            subscription_id=subscription_id,
+            snapshot_normalizado_json='{"motivo":"LinhaContratualMultiuserAusenteError"}',
+            payload_bruto_sanitizado_json="{}",
+        )
+        db.session.add(fato_bloqueado)
+        db.session.commit()
+
+        invoice_paga = _evento_invoice_paid_basil(
+            conta_id=conta.id,
+            franquia_id=franquia.id,
+            user_id=user.id,
+            invoice_id=invoice_id,
+            subscription=subscription_id,
+            correlation_id=intencao.correlation_id,
+            quantity=5,
+        )["data"]["object"]
+        invoice_paga["status"] = "paid"
+
+        from app.services import cleiton_monetizacao_service as monetizacao_service
+
+        posts = []
+
+        def _get(path, params=None):  # noqa: ARG001
+            path_s = str(path)
+            if path_s.startswith("/invoices/"):
+                return invoice_paga
+            if path_s.startswith("/prices/"):
+                return dict(PRICE_STRIPE_OK)
+            if path_s.startswith("/subscriptions/"):
+                return {
+                    "id": subscription_id,
+                    "status": "active",
+                    "metadata": {
+                        "plano_interno": "multiuser",
+                        "correlation_id": intencao.correlation_id,
+                        "conta_id": str(conta.id),
+                        "quantity_solicitada": "5",
+                    },
+                    "items": {
+                        "data": [
+                            {
+                                "id": "si_mu_1",
+                                "quantity": 5,
+                                "price": {"id": PRICE_MU},
+                            }
+                        ]
+                    },
+                }
+            raise AssertionError(f"GET Stripe inesperado: {path_s}")
+
+        def _post(path, payload, idempotency_key=None):  # noqa: ARG001
+            posts.append(path)
+            raise AssertionError("Reconciliação não pode cobrar nem criar Subscription.")
+
+        monkeypatch.setattr(monetizacao_service, "_stripe_get", _get)
+        monkeypatch.setattr(monetizacao_service, "_stripe_post", _post)
+
+        out1 = reconciliar_invoice_paga_multiuser_existente(
+            invoice_id=invoice_id,
+            subscription_id=subscription_id,
+            correlation_id=intencao.correlation_id,
+        )
+        rec = db.session.get(Conta, conta.id)
+        user_rec = db.session.get(User, user.id)
+        assert out1["efeito_operacional_aplicado"] is True
+        assert rec.multiuser_ativa is True
+        assert rec.quantidade_assentos_contratados == 5
+        assert user_rec.categoria == "multiuser"
+        assert posts == []
+
+        fr0 = Franquia.query.filter_by(conta_id=conta.id).order_by(Franquia.id.asc()).first()
+        fr0.consumo_acumulado = Decimal("17")
+        db.session.add(fr0)
+        db.session.commit()
+
+        out2 = reconciliar_invoice_paga_multiuser_existente(
+            invoice_id=invoice_id,
+            subscription_id=subscription_id,
+            correlation_id=intencao.correlation_id,
+        )
+        rec2 = db.session.get(Conta, conta.id)
+        assert out2.get("replay") is True or out2.get("efeito_operacional_aplicado") is False
+        assert rec2.quantidade_assentos_contratados == 5
+        fr1 = db.session.get(Franquia, fr0.id)
+        assert fr1.consumo_acumulado == Decimal("17")
+        assert ContaVinculoOrganizacional.query.filter_by(
+            conta_id=conta.id, estado=ESTADO_ATIVO
+        ).count() == 1
+        assert posts == []
+
+        replay_original = processar_evento_stripe(
+            {
+                "id": event_id_original,
+                "type": "invoice.paid",
+                "created": _unix_utc(INICIO),
+                "data": {"object": invoice_paga},
+            }
+        )
+        assert replay_original.get("replay") is True
+        rec3 = db.session.get(Conta, conta.id)
+        assert rec3.quantidade_assentos_contratados == 5
+        assert posts == []
+
+
+def test_sanitizer_preserva_pricing_basil():
+    from app.services.stripe_payload_sanitizer import sanitizar_payload_stripe
+
+    bruto = {
+        "id": "evt_basil_s",
+        "type": "invoice.paid",
+        "data": {
+            "object": {
+                "id": "in_s",
+                "customer": "cus_x",
+                "customer_email": "a@b.com",
+                "lines": {"data": [_linha_contratual_basil()]},
+                "parent": {
+                    "type": "subscription_details",
+                    "subscription_details": {
+                        "subscription": "sub_mu_1",
+                        "metadata": {"conta_id": "1", "plano_interno": "multiuser"},
+                    },
+                },
+            }
+        },
+    }
+    limpo = sanitizar_payload_stripe(bruto)
+    linha = limpo["data"]["object"]["lines"]["data"][0]
+    assert linha["pricing"]["price_details"]["price"] == PRICE_MU
+    assert linha["parent"]["subscription_item_details"]["subscription"] == "sub_mu_1"
+    assert "a@b.com" not in str(limpo).lower()
 
 
 def test_invoice_multiline_nao_ativa_com_ambiguidade(app):

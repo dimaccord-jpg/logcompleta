@@ -128,6 +128,34 @@ def _sanitizar_period(period: Any) -> dict[str, Any] | None:
     return out or None
 
 
+def _sanitizar_pricing(pricing: Any) -> dict[str, Any] | None:
+    if not isinstance(pricing, dict):
+        return None
+    out: dict[str, Any] = {}
+    if pricing.get("type") not in (None, ""):
+        out["type"] = pricing.get("type")
+    if pricing.get("unit_amount_decimal") not in (None, ""):
+        out["unit_amount_decimal"] = pricing.get("unit_amount_decimal")
+    details = pricing.get("price_details")
+    if isinstance(details, dict):
+        pd: dict[str, Any] = {}
+        price = details.get("price")
+        if isinstance(price, dict):
+            if price.get("id") not in (None, ""):
+                pd["price"] = price.get("id")
+        elif price not in (None, ""):
+            pd["price"] = price
+        product = details.get("product")
+        if isinstance(product, dict):
+            if product.get("id") not in (None, ""):
+                pd["product"] = product.get("id")
+        elif product not in (None, ""):
+            pd["product"] = product
+        if pd:
+            out["price_details"] = pd
+    return out or None
+
+
 def _sanitizar_parent(parent: Any) -> dict[str, Any] | None:
     if not isinstance(parent, dict):
         return None
@@ -137,11 +165,25 @@ def _sanitizar_parent(parent: Any) -> dict[str, Any] | None:
     details = parent.get("subscription_item_details")
     if isinstance(details, dict):
         det = {}
-        for key in ("subscription", "subscription_item", "invoice_item"):
+        for key in ("subscription", "subscription_item", "invoice_item", "proration"):
             if details.get(key) not in (None, ""):
                 det[key] = details[key]
         if det:
             out["subscription_item_details"] = det
+    sub_det = parent.get("subscription_details")
+    if isinstance(sub_det, dict):
+        sd: dict[str, Any] = {}
+        if sub_det.get("subscription") not in (None, ""):
+            sid = sub_det.get("subscription")
+            sd["subscription"] = sid.get("id") if isinstance(sid, dict) else sid
+        meta = _metadata_tecnica(sub_det.get("metadata"))
+        if meta:
+            sd["metadata"] = meta
+        if sd:
+            out["subscription_details"] = sd
+    inv_det = parent.get("invoice_item_details")
+    if isinstance(inv_det, dict) and inv_det.get("proration") is True:
+        out["invoice_item_details"] = {"proration": True}
     return out or None
 
 
@@ -155,6 +197,9 @@ def _sanitizar_linha(linha: Any) -> dict[str, Any] | None:
     price = _sanitizar_price(linha.get("price"))
     if price is not None:
         out["price"] = price
+    pricing = _sanitizar_pricing(linha.get("pricing"))
+    if pricing is not None:
+        out["pricing"] = pricing
     period = _sanitizar_period(linha.get("period"))
     if period:
         out["period"] = period
