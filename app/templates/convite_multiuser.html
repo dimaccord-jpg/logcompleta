@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Convite para Conta | Agente Frete</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-5" style="max-width: 640px;">
+    <div class="card shadow-sm border-0">
+        <div class="card-body p-4">
+            {% if invalido %}
+            <h4 class="mb-3">Convite inválido ou expirado</h4>
+            <p class="text-muted mb-0">Este link não pode ser utilizado. Solicite um novo convite ao Contratante, se necessário.</p>
+            {% else %}
+            <h4 class="mb-3">Convite para a Conta {{ contexto.empresa_nome }}</h4>
+            <p class="text-muted">Você foi convidado para participar desta Conta no Agente Frete. O convite é válido por 1 hora.</p>
+
+            {% if contexto.bloqueio == 'expirado' %}
+            <p class="alert alert-warning">Este convite expirou e não reserva mais um assento.</p>
+            {% elif contexto.bloqueio == 'aceito' %}
+            <p class="alert alert-info">Este convite já foi aceito.</p>
+            {% elif not contexto.autenticado %}
+            <p class="mb-3">Para aceitar, entre ou crie uma conta com o mesmo e-mail que recebeu o convite.</p>
+            <div class="d-flex gap-2 flex-wrap">
+                <a href="{{ login_url }}" class="btn btn-primary">Entrar</a>
+                <a href="{{ register_url }}" class="btn btn-outline-secondary">Criar conta</a>
+            </div>
+            {% elif contexto.bloqueio == 'email_divergente' %}
+            <p class="alert alert-danger">O e-mail da sua conta não corresponde a este convite.</p>
+            {% elif contexto.bloqueio == 'contratante_proprio' or contexto.bloqueio == 'ja_vinculado' %}
+            <p class="alert alert-info">Você já está vinculado a esta Conta.</p>
+            {% elif contexto.bloqueio == 'contrato_incompativel' or contexto.bloqueio == 'contratante_outra_conta' or contexto.bloqueio == 'membro_outra_conta' %}
+            <p class="alert alert-warning">Não é possível aceitar este convite com o contrato ou vínculo atual.</p>
+            {% else %}
+                {% if contexto.exige_transferencia %}
+                <p class="alert alert-warning">
+                    Ao aceitar, o acesso operacional passará para a organização convidante.
+                    Dados e documentos da Conta anterior permanecem na origem.
+                </p>
+                {% endif %}
+                <form method="post" action="{{ url_for('multiuser_convite.aceitar_convite_view', token=token) }}">
+                    <input type="hidden" name="csrf_token" value="{{ contexto.csrf_token }}">
+                    <button type="submit" class="btn btn-primary">Aceitar convite</button>
+                </form>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+</body>
+</html>

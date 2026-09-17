@@ -11,6 +11,11 @@ import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from app.cleiton_doc_escopo import (
+    operational_cache_payload_is_current,
+    stamp_operational_cache_payload,
+)
+
 
 ERROR_CORRECTION_INVALID_PAYLOAD = "cleide_audit_correction_invalid_payload"
 ERROR_CORRECTION_NO_TEMP_TABLE = "cleide_audit_correction_no_temp_table"
@@ -202,6 +207,7 @@ def _session_preview_store(session_obj) -> dict:
         for key, value in store.items()
         if isinstance(value, dict)
         and (_parse_iso(value.get("expires_at")) or now) > now
+        and operational_cache_payload_is_current(value)
     }
     session_obj[PREVIEW_SESSION_KEY] = cleaned
     return cleaned
@@ -212,7 +218,7 @@ def _store_preview_for_session(session_obj, *, preview: dict, suggestion: dict) 
     preview_id = preview.get("preview_id")
     if not preview_id:
         return
-    store[preview_id] = {
+    store[preview_id] = stamp_operational_cache_payload({
         "preview_id": preview_id,
         "suggestion_id": suggestion.get("suggestion_id"),
         "expires_at": preview.get("expires_at"),
@@ -221,7 +227,7 @@ def _store_preview_for_session(session_obj, *, preview: dict, suggestion: dict) 
         "constraints": copy.deepcopy(suggestion.get("constraints") or {}),
         "suggestion": copy.deepcopy(suggestion),
         "preview": copy.deepcopy(preview),
-    }
+    })
     ordered = sorted(
         store.items(),
         key=lambda item: item[1].get("stored_at") or "",

@@ -24,6 +24,7 @@ from app.cleiton_doc_contracts import (
     FIELD_SOURCE_AGENT,
     TMP_DIR_NAME,
 )
+from app.cleiton_doc_escopo import document_record_matches_operational_scope
 
 
 def _utcnow() -> datetime:
@@ -182,15 +183,16 @@ def document_record_matches_domain_scope(
     expected_source_agent: str,
     expected_session_key: str,
 ) -> bool:
-    """Confirma ownership documental antes de mutações destrutivas."""
+    """Confirma ownership documental (domínio + escopo operacional atual)."""
     if not isinstance(record, dict):
         return False
     source = str(record.get(FIELD_SOURCE_AGENT) or "").strip()
     session_key = str(record.get(FIELD_SESSION_KEY) or "").strip()
-    return (
-        source == (expected_source_agent or "").strip()
-        and session_key == (expected_session_key or "").strip()
-    )
+    if source != (expected_source_agent or "").strip():
+        return False
+    if session_key != (expected_session_key or "").strip():
+        return False
+    return document_record_matches_operational_scope(record)
 
 
 def peek_document_record(doc_id: str) -> dict | None:
@@ -229,6 +231,16 @@ def load_document_record(doc_id: str, *, ttl_hours: int) -> dict | None:
     except Exception:
         remove_document_record(doc_id)
         return None
+
+
+def load_authorized_document_record(doc_id: str, *, ttl_hours: int) -> dict | None:
+    """Carrega o JSON temporário somente se o escopo operacional atual autorizar."""
+    record = load_document_record(doc_id, ttl_hours=ttl_hours)
+    if record is None:
+        return None
+    if not document_record_matches_operational_scope(record):
+        return None
+    return record
 
 
 def remove_document_record(doc_id: str) -> dict:

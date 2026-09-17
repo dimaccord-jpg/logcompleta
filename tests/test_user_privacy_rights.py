@@ -232,6 +232,8 @@ def test_inventario_campos_user_esta_completo():
     known = set(USER_FIELDS_DEIDENTIFIED) | set(USER_FIELDS_PRESERVED)
     assert mapped == known
     assert not (set(USER_FIELDS_DEIDENTIFIED) & set(USER_FIELDS_PRESERVED))
+    assert "sessao_contexto_geracao" in USER_FIELDS_PRESERVED
+    assert "sessao_contexto_geracao" not in USER_FIELDS_DEIDENTIFIED
 
 
 def test_dry_run_nao_altera_nada(ctx):
@@ -294,6 +296,8 @@ def test_apply_preserva_accepted_terms_e_estruturais(ctx):
         categoria="starter",
     )
     uid = user.id
+    user.sessao_contexto_geracao = 3
+    db.session.commit()
     processar_exercicio_privacidade_usuario(user, apply=True)
     persisted = db.session.get(User, uid)
     assert persisted.accepted_terms_at == ACEITE_CONHECIDO
@@ -307,6 +311,7 @@ def test_apply_preserva_accepted_terms_e_estruturais(ctx):
     assert persisted.trial_start_date == TRIAL_CONHECIDO
     assert persisted.creditos == 42
     assert persisted.is_admin is False
+    assert persisted.sessao_contexto_geracao == 3
 
 
 def test_apply_preserva_conta_franquia_e_outro_user(ctx):

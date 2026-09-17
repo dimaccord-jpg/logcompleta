@@ -15,9 +15,12 @@ from werkzeug.datastructures import FileStorage
 
 from app.infra import carregar_localidades_por_chaves
 from app.roberto_upload_store import (
+    UPLOAD_EXPIRED,
+    UPLOAD_NOT_FOUND,
+    UPLOAD_OK,
     clear_upload_data as clear_upload_data_store,
+    inspect_upload_data,
     maybe_cleanup_expired_uploads,
-    read_upload_data,
     save_upload_data,
 )
 from app.services.roberto_config_service import get_roberto_config
@@ -420,15 +423,26 @@ def get_dados_upload_cliente() -> list[dict] | None:
     """
     Retorna os dados temporários do upload do cliente (lista de dicts com ids de cidade/UF
     e UF textual vindos de base_localidades). Retorna None se não houver dados ou se expirados (TTL).
+
+    MISS / SCOPE_MISMATCH não autorizam exclusão física.
     """
     upload_ref = session.get(SESSION_KEY_UPLOAD_REF)
     if not isinstance(upload_ref, str) or not upload_ref.strip():
         return None
     cfg = get_roberto_config()
-    dados = read_upload_data(upload_ref.strip(), cfg.upload_ttl_minutes)
-    if dados is None:
-        clear_upload_data()
-    return dados
+    outcome = inspect_upload_data(upload_ref.strip(), cfg.upload_ttl_minutes)
+    if outcome.status == UPLOAD_OK:
+        return outcome.rows
+    if outcome.status == UPLOAD_EXPIRED:
+        clear_upload_data_store(upload_ref.strip())
+        session.pop(SESSION_KEY_UPLOAD_REF, None)
+        session.modified = True
+        return None
+    if outcome.status == UPLOAD_NOT_FOUND:
+        session.pop(SESSION_KEY_UPLOAD_REF, None)
+        session.modified = True
+        return None
+    return None
 
 
 def clear_upload_data() -> None:

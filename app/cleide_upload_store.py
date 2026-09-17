@@ -8,6 +8,7 @@ Fase 3:
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import UTC, datetime, timedelta
@@ -16,6 +17,7 @@ from uuid import uuid4
 
 _VALID_SUFFIXES = {".csv", ".xlsx"}
 _CLEANUP_META_NAME = ".cleanup_meta"
+_SCOPE_SUFFIX = ".scope.json"
 
 def _resolve_data_root() -> str:
     try:
@@ -35,6 +37,11 @@ def get_cleide_upload_tmp_dir() -> str:
 
 def _now_utc_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _posix_mtime_utc_naive(path: Path) -> datetime:
+    """mtime POSIX comparado na mesma base UTC naive do deadline de TTL."""
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).replace(tzinfo=None)
 
 
 def _build_upload_name(*, original_filename: str, safe_filename: str) -> str:
@@ -62,6 +69,57 @@ def _upload_path_for_ref(upload_ref: str, *, ext_hint: str = ".csv") -> Path:
     return _build_safe_path(Path(get_cleide_upload_tmp_dir()), f"{ref}{ext}")
 
 
+def _scope_path_for_ref(upload_ref: str) -> Path:
+    ref = _clean_upload_ref(upload_ref)
+    return _build_safe_path(Path(get_cleide_upload_tmp_dir()), f"{ref}{_SCOPE_SUFFIX}")
+
+
+def _stamp_cleide_upload_scope(upload_ref: str) -> None:
+    from app.cleiton_doc_escopo import current_operational_scope, stamp_operational_cache_payload
+
+    if current_operational_scope() is None:
+        return
+    payload = stamp_operational_cache_payload({})
+    path = _scope_path_for_ref(upload_ref)
+    path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+
+
+def _cleide_upload_scope_allows(upload_ref: str) -> bool:
+    """
+    Autorização de leitura/remoção do arquivo real.
+
+    Sem operador autenticado: testes unitários do store sem login.
+    Runtime autenticado sem origem persistida: FAIL-CLOSED.
+    """
+    from app.cleiton_doc_escopo import current_operational_scope, operational_cache_payload_is_current
+
+    if current_operational_scope() is None:
+        return True
+    path = _scope_path_for_ref(upload_ref)
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return operational_cache_payload_is_current(payload)
+
+
+def _unlink_cleide_upload_artifacts(upload_ref: str) -> None:
+    ref = _clean_upload_ref(upload_ref)
+    base_dir = Path(get_cleide_upload_tmp_dir())
+    for ext in _VALID_SUFFIXES:
+        try:
+            p = _build_safe_path(base_dir, f"{ref}{ext}")
+        except ValueError:
+            continue
+        p.unlink(missing_ok=True)
+    try:
+        _scope_path_for_ref(ref).unlink(missing_ok=True)
+    except ValueError:
+        return
+
+
 def save_cleide_upload_file(*, file_storage, safe_filename: str) -> dict:
     upload_ref = uuid4().hex
     final_name = _build_upload_name(
@@ -79,6 +137,12 @@ def save_cleide_upload_file(*, file_storage, safe_filename: str) -> dict:
         if absolute_path.exists():
             absolute_path.unlink(missing_ok=True)
         raise
+    try:
+        _stamp_cleide_upload_scope(upload_ref)
+    except Exception:
+        if ref_path.exists():
+            ref_path.unlink(missing_ok=True)
+        raise
     return {
         "upload_ref": upload_ref,
         "absolute_path": str(ref_path),
@@ -92,19 +156,17 @@ def clear_cleide_upload_file(upload_ref: str | None) -> None:
     if not upload_ref:
         return
     ref = _clean_upload_ref(upload_ref)
-    base_dir = Path(get_cleide_upload_tmp_dir())
-    for ext in _VALID_SUFFIXES:
-        try:
-            p = _build_safe_path(base_dir, f"{ref}{ext}")
-        except ValueError:
-            continue
-        p.unlink(missing_ok=True)
+    if not _cleide_upload_scope_allows(ref):
+        return
+    _unlink_cleide_upload_artifacts(ref)
 
 
 def resolve_cleide_upload_file(upload_ref: str | None) -> Path | None:
     if not upload_ref:
         return None
     ref = _clean_upload_ref(upload_ref)
+    if not _cleide_upload_scope_allows(ref):
+        return None
     base_dir = Path(get_cleide_upload_tmp_dir())
     for ext in _VALID_SUFFIXES:
         p = _build_safe_path(base_dir, f"{ref}{ext}")
@@ -125,18 +187,21 @@ def cleanup_expired_cleide_uploads(ttl_minutes: int) -> int:
             continue
         if path.suffix.lower() not in _VALID_SUFFIXES:
             continue
-        mtime = datetime.fromtimestamp(path.stat().st_mtime)
+        mtime = _posix_mtime_utc_naive(path)
         if mtime < deadline:
             path.unlink(missing_ok=True)
+            try:
+                _build_safe_path(base_dir, f"{path.stem}{_SCOPE_SUFFIX}").unlink(missing_ok=True)
+            except ValueError:
+                pass
             removed += 1
     return removed
 
 
 def maybe_cleanup_expired_cleide_uploads(ttl_minutes: int, *, min_interval_seconds: int = 300) -> int:
     meta_path = _build_safe_path(Path(get_cleide_upload_tmp_dir()), _CLEANUP_META_NAME)
-    now = _now_utc_naive()
     if meta_path.exists():
-        elapsed = now.timestamp() - meta_path.stat().st_mtime
+        elapsed = time.time() - meta_path.stat().st_mtime
         if elapsed < max(30, int(min_interval_seconds)):
             return 0
     removed = cleanup_expired_cleide_uploads(ttl_minutes)

@@ -178,6 +178,44 @@ def seed_conta_franquia_cliente(slug="conta-cli"):
     return c, f
 
 
+def cnpj_valido_de_texto(texto: str) -> str:
+    """Gera CNPJ válido e estável a partir de um seed textual (testes)."""
+    import hashlib
+
+    from app.services.cnpj_service import _digito_verificador
+
+    digest = hashlib.md5((texto or "conta").encode("utf-8")).hexdigest()
+    n = (int(digest[:8], 16) % 90_000_000) + 10_000_000
+    base12 = f"{n:08d}0001"
+    d1 = _digito_verificador(base12, (5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2))
+    d2 = _digito_verificador(base12 + str(d1), (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2))
+    return base12 + str(d1) + str(d2)
+
+
+def preencher_dados_empresariais_minimos_teste(conta, seed: str | None = None):
+    """
+    Preenche FSD §5 para nova ativação Multiuser em testes.
+    Não ativa Multiuser e não chama Stripe.
+    """
+    from app.services.conta_organizacional_service import persistir_dados_empresariais_conta
+
+    slug = seed or getattr(conta, "slug", None) or f"conta-{conta.id}"
+    persistir_dados_empresariais_conta(
+        int(conta.id),
+        razao_social=f"Razao {slug} LTDA",
+        nome_fantasia=f"Fantasia {slug}",
+        cnpj=cnpj_valido_de_texto(str(slug)),
+        email_empresarial=f"financeiro.{slug.replace(' ', '-')}@example.test",
+        endereco_logradouro="Rua Teste",
+        endereco_numero="100",
+        endereco_cidade="Sao Paulo",
+        endereco_uf="SP",
+        endereco_cep="01001000",
+        commit=True,
+    )
+    return conta
+
+
 def seed_usuario(franquia_id: int, conta_id: int, email="u@test.com", categoria="free"):
     from app.models import User
 

@@ -72,6 +72,7 @@ from app.cleide_audit_doc_service import (
     upload_audit_batch_from_file,
     upload_coverage_table_from_file,
     get_cleide_audit_template_path,
+    cleide_audit_chat_idempotency_key,
 )
 from app.run_cleide_audit_temp_table import trigger_temp_table_extraction_for_session
 from app.run_cleide_audit_chat import (
@@ -96,6 +97,7 @@ from app.cleiton_doc_contracts import (
     ERROR_UPLOAD_DISABLED,
     ERROR_UPLOAD_FAILED,
 )
+from app import cleiton_doc_escopo as _cleiton_doc_escopo
 from app.cleiton_doc_prepare import CleitonDocSecurityError
 from app.cleiton_doc_service import CleitonDocSessionError
 from app.services.cleide_audit_config_service import get_cleide_audit_config
@@ -1095,6 +1097,16 @@ def cleide_audit_chat():
                 cached,
                 show_documents_used=audit_cfg.show_documents_used,
                 cached=True,
+            )
+        )
+    if _cleiton_doc_escopo.request_id_was_operationally_invalidated(
+        session, cleide_audit_chat_idempotency_key(request_id)
+    ):
+        return jsonify(
+            _chat_success_payload(
+                {"answer": "", "flow_type": CLEIDE_AUDIT_CHAT_FLOW_TYPE},
+                show_documents_used=audit_cfg.show_documents_used,
+                cached=False,
             )
         )
 

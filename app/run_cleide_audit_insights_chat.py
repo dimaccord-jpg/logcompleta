@@ -51,6 +51,10 @@ from app.run_cleide_audit_chat import (
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.cleide_audit_config_service import get_cleide_audit_config
 from app.services.external_ai_masking import mask_structured_for_external_ai
+from app.cleiton_doc_escopo import (
+    operational_cache_payload_is_current,
+    stamp_operational_cache_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +270,11 @@ def get_cached_insights_chat_response(session_obj, request_id: str, *, batch_sco
     if not isinstance(cache, dict):
         return None
     payload = cache.get(cleide_audit_insights_chat_idempotency_key(ref, batch_scope))
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if not operational_cache_payload_is_current(payload):
+        return None
+    return payload
 
 
 def cache_insights_chat_response(
@@ -286,12 +294,12 @@ def cache_insights_chat_response(
     # Guardrail terminal: resposta em cache já sem assinatura indevida.
     safe_answer = finalize_insights_answer(payload.get("answer") or "")
     payload["answer"] = safe_answer
-    cache_entry = {
+    cache_entry = stamp_operational_cache_payload({
         "answer": safe_answer,
         "flow_type": payload.get("flow_type") or CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE,
         "deterministic": bool(payload.get("deterministic")),
         "batch_scope": batch_scope,
-    }
+    })
     if cache_key in cache:
         del cache[cache_key]
     cache[cache_key] = cache_entry

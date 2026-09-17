@@ -34,6 +34,8 @@ def send_email(
 
     attachments/headers são opcionais e retrocompatíveis: callers existentes
     sem esses argumentos continuam inalterados.
+    Observabilidade: não registra destinatário completo, corpo do e-mail,
+    token/URL nem payload bruto do provider.
     """
     api_key = os.getenv("RESEND_API_KEY")
     if not api_key:
@@ -68,23 +70,21 @@ def send_email(
             json=payload,
             timeout=30,
         )
-    except requests.RequestException as e:
-        logger.exception("Erro de rede ao enviar e-mail via Resend: %s", e)
-        raise RuntimeError("Falha de rede ao enviar e-mail de recuperação de senha.") from e
+    except requests.RequestException as exc:
+        logger.error(
+            "provider=resend error_type=%s category=network_error",
+            type(exc).__name__,
+        )
+        raise RuntimeError("Falha de rede ao enviar e-mail.") from None
 
     if response.status_code >= 400:
         logger.error(
-            "Erro ao enviar e-mail via Resend: status=%s, body=%s",
+            "provider=resend category=http_error status_code=%s",
             response.status_code,
-            response.text,
         )
-        raise RuntimeError("Erro ao enviar e-mail de recuperação de senha.")
+        raise RuntimeError("Erro ao enviar e-mail de recuperação de senha.") from None
 
-    logger.info(
-        "E-mail de recuperação enviado via Resend para %s com assunto '%s'.",
-        to_email,
-        subject,
-    )
+    logger.info("E-mail transacional enviado via Resend.")
 
 
 def send_terms_updated_notification(

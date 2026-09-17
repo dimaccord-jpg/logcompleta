@@ -15,6 +15,10 @@ from flask import has_app_context
 
 from app.cleide_audit_doc_service import CLEIDE_AUDIT_CHAT_FLOW_TYPE, cleide_audit_chat_idempotency_key
 from app.cleide_audit_prompt import build_cleide_audit_system_prompt
+from app.cleiton_doc_escopo import (
+    operational_cache_payload_is_current,
+    stamp_operational_cache_payload,
+)
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.cleide_audit_config_service import get_cleide_audit_config
 
@@ -194,7 +198,11 @@ def get_cached_chat_response(session_obj, request_id: str) -> dict | None:
     if not isinstance(cache, dict):
         return None
     payload = cache.get(cleide_audit_chat_idempotency_key(ref))
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if not operational_cache_payload_is_current(payload):
+        return None
+    return payload
 
 
 def cache_chat_response(session_obj, request_id: str, payload: dict) -> None:
@@ -204,11 +212,13 @@ def cache_chat_response(session_obj, request_id: str, payload: dict) -> None:
     cache = session_obj.get(CHAT_IDEMPOTENCY_CACHE_SESSION_KEY)
     if not isinstance(cache, dict):
         cache = {}
-    cache[cleide_audit_chat_idempotency_key(ref)] = {
-        "answer": payload.get("answer"),
-        "documents_used": list(payload.get("documents_used") or []),
-        "flow_type": payload.get("flow_type") or CLEIDE_AUDIT_CHAT_FLOW_TYPE,
-    }
+    cache[cleide_audit_chat_idempotency_key(ref)] = stamp_operational_cache_payload(
+        {
+            "answer": payload.get("answer"),
+            "documents_used": list(payload.get("documents_used") or []),
+            "flow_type": payload.get("flow_type") or CLEIDE_AUDIT_CHAT_FLOW_TYPE,
+        }
+    )
     session_obj[CHAT_IDEMPOTENCY_CACHE_SESSION_KEY] = cache
     session_obj.modified = True
 

@@ -42,6 +42,8 @@ from app.agente_compara_routes import agente_compara_bp
 from app.cleide_audit_routes import cleide_audit_bp
 from app.cleide_routes import cleide_bp
 from app.julia_documents_routes import julia_documents_bp
+from app.conta_multiuser_convite_routes import convite_bp
+from app.conta_multiuser_painel_routes import painel_bp
 from app.infra import (
     load_user_for_flask_login,
     admin_required,
@@ -278,6 +280,8 @@ app.register_blueprint(cleide_audit_bp)
 app.register_blueprint(agente_compara_bp)
 app.register_blueprint(agente_compara_api_bp)
 app.register_blueprint(julia_documents_bp)
+app.register_blueprint(convite_bp)
+app.register_blueprint(painel_bp)
 
 @app.context_processor
 def inject_facebook_pixel_context():
@@ -306,9 +310,20 @@ def inject_facebook_pixel_context():
 
 @app.context_processor
 def inject_template_endpoint_helpers():
+    nao_lidas = 0
+    try:
+        from flask_login import current_user
+
+        if getattr(current_user, "is_authenticated", False):
+            from app.services.conta_multiuser_notificacao_service import contar_nao_lidas
+
+            nao_lidas = contar_nao_lidas(current_user._get_current_object())
+    except Exception:
+        nao_lidas = 0
     return {
         "has_endpoint": lambda endpoint_name: endpoint_name in app.view_functions,
         "user_is_admin": user_is_admin,
+        "notificacoes_nao_lidas": nao_lidas,
     }
 
 
@@ -351,7 +366,11 @@ def inject_falha_mensal_vigente_context():
 def _consumo_identidade_before_request():
     """Fase 2 etapa 1: injeta g.identidade em todo request HTTP (exceto static)."""
     from app.consumo_identidade import apply_consumo_identidade_before_request
+    from app.services.conta_multiuser_revogacao_service import (
+        aplicar_revogacao_contexto_sessao,
+    )
 
+    aplicar_revogacao_contexto_sessao()
     apply_consumo_identidade_before_request()
 
 
@@ -652,18 +671,44 @@ def _store_onboarding_julia_context(user_message: str, result: dict | None) -> N
 
     reply = (payload.get("reply") or "").strip()
     summary = reply[:420].strip() if reply else ""
-    session[_SESSION_ONBOARDING_JULIA_CONTEXT] = {
+    stored = {
         "source": "onboarding_discovery",
         "user_message": clean_message[:280],
         "summary": summary,
     }
+    from app.cleiton_doc_escopo import stamp_operational_cache_payload
+
+    session[_SESSION_ONBOARDING_JULIA_CONTEXT] = stamp_operational_cache_payload(stored)
     session.modified = True
 
 
 def _pop_onboarding_julia_context() -> dict | None:
     raw = session.pop(_SESSION_ONBOARDING_JULIA_CONTEXT, None)
     session.modified = True
-    return raw if isinstance(raw, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    from app.cleiton_doc_escopo import current_operational_scope
+
+    rec_conta = raw.get("conta_id")
+    rec_fr = raw.get("franquia_id")
+    try:
+        rec_conta_n = int(rec_conta) if rec_conta is not None and rec_conta != "" else None
+    except (TypeError, ValueError):
+        rec_conta_n = None
+    try:
+        rec_fr_n = int(rec_fr) if rec_fr is not None and rec_fr != "" else None
+    except (TypeError, ValueError):
+        rec_fr_n = None
+    # Origem anônima (discovery público) não carrega Conta/Franquia; handoff
+    # pós-login precisa continuar. Payload carimbado com escopo divergente é MISS.
+    if rec_conta_n is None and rec_fr_n is None:
+        return raw
+    scope = current_operational_scope()
+    if scope is None:
+        return raw
+    if rec_conta_n != scope["conta_id"] or rec_fr_n != scope["franquia_id"]:
+        return None
+    return raw
 
 
 FEED_EDITORIAL_LIMITE = 5

@@ -43,6 +43,10 @@ from app.run_agente_compara_insights_chat import (
 )
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.agente_compara_config_service import get_agente_compara_config
+from app.cleiton_doc_escopo import (
+    operational_cache_payload_is_current,
+    stamp_operational_cache_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +323,11 @@ def get_cached_comparison_chat_response(session_obj, request_id: str, *, scope_k
     if not isinstance(cache, dict):
         return None
     payload = cache.get(agente_compara_comparison_chat_idempotency_key(ref, scope_key))
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if not operational_cache_payload_is_current(payload):
+        return None
+    return payload
 
 
 def cache_comparison_chat_response(
@@ -340,7 +348,7 @@ def cache_comparison_chat_response(
         cache = {}
     cache_key = agente_compara_comparison_chat_idempotency_key(ref, scope_key)
     safe_answer = finalize_comparison_chat_answer(payload.get("answer") or "")
-    entry = {
+    entry = stamp_operational_cache_payload({
         "answer": safe_answer,
         "flow_type": payload.get("flow_type") or AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
         "deterministic": bool(payload.get("deterministic")),
@@ -348,7 +356,7 @@ def cache_comparison_chat_response(
         "basis": payload.get("basis") if isinstance(payload.get("basis"), dict) else {},
         "warnings": list(payload.get("warnings") or []),
         "scope_key": scope_key,
-    }
+    })
     if cache_key in cache:
         del cache[cache_key]
     cache[cache_key] = entry

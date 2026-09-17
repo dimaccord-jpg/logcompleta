@@ -65,6 +65,10 @@ from app.cleiton_doc_gemini_files import (
     upload_pdf_to_gemini_files_api,
 )
 from app.cleiton_doc_prepare import prepare_document
+from app.cleiton_doc_escopo import (
+    document_record_matches_operational_scope,
+    stamp_document_operational_scope,
+)
 from app.cleiton_doc_store import (
     cleanup_expired_document_records,
     load_document_record,
@@ -237,7 +241,7 @@ def get_active_documents_for_session() -> list[dict]:
 
     for doc_id in get_cleiton_doc_ids(session):
         record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
-        if record is None:
+        if record is None or not document_record_matches_operational_scope(record):
             stale_ids.append(doc_id)
             continue
         active.append(_public_record(record))
@@ -279,7 +283,9 @@ def _cleiton_document_owned_by_session(doc_id: str) -> bool:
     if not ref or ref not in get_cleiton_doc_ids(session):
         return False
     record = peek_document_record(ref)
-    return _record_belongs_to_julia_domain(record)
+    return _record_belongs_to_julia_domain(record) and document_record_matches_operational_scope(
+        record
+    )
 
 
 def register_document_placeholder(
@@ -354,6 +360,7 @@ def register_document_placeholder(
         FIELD_GEMINI_FILE_STATE: gemini_file_state,
         FIELD_GEMINI_UPLOADED_AT: gemini_uploaded_at,
     }
+    stamp_document_operational_scope(record)
 
     save_document_record(record)
     append_cleiton_doc_id(session, doc_id)

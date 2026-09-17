@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -25,8 +26,9 @@ import requests
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
-from app.models import ContaMonetizacaoVinculo, Franquia, MonetizacaoFato, User, utcnow_naive
+from app.models import Conta, ContaMonetizacaoVinculo, Franquia, MonetizacaoFato, User, utcnow_naive
 from app.services import plano_service
+from app.services.stripe_payload_sanitizer import sanitizar_payload_stripe
 from app.services.cleiton_ciclo_franquia_service import garantir_ciclo_operacional_franquia
 from app.services.cleiton_franquia_operacional_service import (
     aplicar_status_apos_mudanca_estrutural,
@@ -48,23 +50,47 @@ STRIPE_EVENTOS_RELEVANTES = {
     "customer.subscription.deleted",
 }
 
-HIERARQUIA_PLANOS = {"free": 0, "starter": 1, "pro": 2}
+HIERARQUIA_PLANOS = {"free": 0, "starter": 1, "pro": 2, "multiuser": 3}
 MUDANCA_PENDENTE_ORIGEM_USUARIO = "solicitacao_usuario"
+CODIGO_MULTIUSER = "multiuser"
+TIPOS_MUDANCA_PENDENTE = frozenset({"downgrade", "cancelamento"})
+
+
+class DadoFinanceiroInvalidoError(ValueError):
+    """Campo financeiro presente com tipo ou semântica inválida (F4 strict)."""
 
 
 def _json_dumps(payload: dict[str, Any] | None) -> str:
     return json.dumps(payload or {}, ensure_ascii=True, sort_keys=True, default=str)
 
 
-def _json_loads(payload: str | None) -> dict[str, Any]:
-    if not payload:
+def _json_loads(payload: str | None, *, strict: bool = False) -> dict[str, Any]:
+    """
+    Parser financeiro.
+
+    strict=False (default legado): JSON inválido/tipo inesperado vira {}.
+    strict=True (F4): exception / JSON inválido / tipo inesperado propaga.
+    Ausência legítima: None, string vazia/em branco, objeto JSON {}.
+    Tipos Python falsy inesperados (False, 0, []) NÃO são vazio legítimo.
+    """
+    if payload is None:
+        return {}
+    if not isinstance(payload, str):
+        if strict:
+            raise TypeError("payload JSON financeiro com tipo inesperado")
+        return {}
+    if not payload.strip():
         return {}
     try:
         parsed = json.loads(payload)
     except Exception:
+        if strict:
+            raise
         return {}
     if isinstance(parsed, dict):
         return parsed
+    if strict:
+        raise TypeError("JSON financeiro nao e objeto")
     return {}
 
 
@@ -78,23 +104,42 @@ def _json_loads_nullable(payload: str | None) -> dict[str, Any] | None:
     return {"_parse_error": "json_invalido_ou_nao_objeto", "_raw": txt}
 
 
-def _to_datetime_utc_naive(value: Any) -> datetime | None:
+def _to_datetime_utc_naive(value: Any, *, strict: bool = False) -> datetime | None:
+    """
+    Parser temporal financeiro.
+
+    strict=False (legado): erro/tipo inesperado vira None.
+    strict=True (F4): data malformada, exception interna ou tipo inesperado
+    propagam; ausência legítima (None / string vazia) continua None.
+    0, negativos, NaN e ±Infinity nunca viram None em strict.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
         if value.tzinfo is None:
             return value
         return value.astimezone(timezone.utc).replace(tzinfo=None)
+    if isinstance(value, bool):
+        if strict:
+            raise TypeError("datetime financeiro com tipo inesperado")
+        return None
     if isinstance(value, (int, float)):
-        if value <= 0:
+        num = float(value)
+        if not math.isfinite(num) or num <= 0:
+            if strict:
+                raise ValueError("datetime financeiro numerico invalido")
             return None
-        return datetime.fromtimestamp(float(value), tz=timezone.utc).replace(tzinfo=None)
+        try:
+            return datetime.fromtimestamp(num, tz=timezone.utc).replace(tzinfo=None)
+        except Exception:
+            if strict:
+                raise
+            return None
     if isinstance(value, str):
         txt = value.strip()
         if not txt:
             return None
         try:
-            # parse ISO na forma mais comum
             if txt.endswith("Z"):
                 txt = txt[:-1] + "+00:00"
             dt = datetime.fromisoformat(txt)
@@ -102,8 +147,72 @@ def _to_datetime_utc_naive(value: Any) -> datetime | None:
                 return dt
             return dt.astimezone(timezone.utc).replace(tzinfo=None)
         except Exception:
+            if strict:
+                raise
             return None
+    if strict:
+        raise TypeError("datetime financeiro com tipo inesperado")
     return None
+
+
+def require_optional_string_strict(value: Any, *, nome: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        txt = value.strip()
+        return txt or None
+    raise TypeError(f"{nome} presente com tipo invalido")
+
+
+def require_optional_bool_strict(value: Any, *, nome: str) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raise TypeError(f"{nome} presente com tipo invalido")
+
+
+def require_optional_identifier_strict(value: Any, *, nome: str) -> str | None:
+    return require_optional_string_strict(value, nome=nome)
+
+
+def require_optional_dict_strict(value: Any, *, nome: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    raise TypeError(f"{nome} presente com tipo invalido")
+
+
+def require_optional_datetime_strict(value: Any, *, nome: str) -> datetime | None:
+    return _to_datetime_utc_naive(value, strict=True)
+
+
+def require_optional_enum_strict(
+    value: Any, *, nome: str, permitidos: frozenset[str]
+) -> str | None:
+    txt = require_optional_string_strict(value, nome=nome)
+    if txt is None:
+        return None
+    chave = txt.lower()
+    if chave not in permitidos:
+        raise DadoFinanceiroInvalidoError(f"{nome} presente com valor invalido")
+    return chave
+
+
+def require_optional_plano_strict(value: Any, *, nome: str) -> str | None:
+    txt = require_optional_string_strict(value, nome=nome)
+    if txt is None:
+        return None
+    return _normalizar_plano_codigo(txt, strict=True)
+
+
+def _validar_identificadores_objeto_stripe(obj: dict[str, Any]) -> None:
+    for campo in ("customer", "subscription", "id", "invoice"):
+        if campo in obj:
+            require_optional_identifier_strict(obj[campo], nome=campo)
+    if "billing_reason" in obj:
+        require_optional_string_strict(obj["billing_reason"], nome="billing_reason")
 
 
 def _to_int_or_none(value: Any) -> int | None:
@@ -118,15 +227,93 @@ def _to_int_or_none(value: Any) -> int | None:
         return None
 
 
-def _norm_text(value: Any) -> str | None:
-    txt = (str(value).strip() if value is not None else "")
+def _norm_text(value: Any, *, strict: bool = False) -> str | None:
+    """
+    strict=False (legado): str() permissivo, inclusive []/False/0 → texto.
+    strict=True (F4): só string ou None. Tipo inválido presente RAISE.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        txt = value.strip()
+        return txt or None
+    if strict:
+        raise TypeError("texto financeiro presente com tipo invalido")
+    txt = str(value).strip()
     return txt or None
 
 
-def _normalizar_plano_codigo(plano_codigo: str | None) -> str | None:
-    plano_n = (plano_codigo or "").strip().lower()
+def _mapa_planos_reconhecidos_dominio() -> dict[str, str]:
+    """categoria/codigo → codigo canonico. Autoridade: plano_service.PLANOS_SAAS_ADMIN."""
+    mapa: dict[str, str] = {}
+    for plano in plano_service.PLANOS_SAAS_ADMIN:
+        codigo = str(plano.get("codigo") or "").strip().lower()
+        if not codigo:
+            continue
+        mapa[codigo] = codigo
+        for categoria in plano.get("categorias") or ():
+            chave = str(categoria).strip().lower()
+            if chave:
+                mapa[chave] = codigo
+    return mapa
+
+
+def _normalizar_plano_codigo(plano_codigo: str | None, *, strict: bool = False) -> str | None:
+    if plano_codigo is None:
+        return None
+    if not isinstance(plano_codigo, str):
+        if strict:
+            raise TypeError("plano presente com tipo invalido")
+        plano_codigo = plano_codigo or ""
+        if not isinstance(plano_codigo, str):
+            return None
+    plano_n = plano_codigo.strip().lower()
+    if not plano_n:
+        return None
     if plano_n in HIERARQUIA_PLANOS:
         return plano_n
+    if strict:
+        reconhecidos = _mapa_planos_reconhecidos_dominio()
+        if plano_n in reconhecidos:
+            return reconhecidos[plano_n]
+        raise DadoFinanceiroInvalidoError("plano presente com valor nao reconhecido")
+    return None
+
+
+def _plano_eh_multiuser(plano_codigo: str | None) -> bool:
+    return _normalizar_plano_codigo(plano_codigo) == CODIGO_MULTIUSER
+
+
+def _extrair_quantity_confirmada_stripe(objeto: dict[str, Any] | None) -> int | None:
+    if not isinstance(objeto, dict):
+        return None
+    for key in ("quantity",):
+        raw = objeto.get(key)
+        try:
+            if raw is None or isinstance(raw, bool):
+                continue
+            qtd = int(raw)
+            if qtd >= 1:
+                return qtd
+        except (TypeError, ValueError):
+            continue
+    items = objeto.get("items")
+    if isinstance(items, dict):
+        data = items.get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            qtd = _extrair_quantity_confirmada_stripe(data[0])
+            if qtd is not None:
+                return qtd
+    lines = objeto.get("lines")
+    if isinstance(lines, dict):
+        data = lines.get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            qtd = _extrair_quantity_confirmada_stripe(data[0])
+            if qtd is not None:
+                return qtd
+    nested = objeto.get("subscription")
+    if isinstance(nested, dict):
+        return _extrair_quantity_confirmada_stripe(nested)
     return None
 
 
@@ -630,14 +817,72 @@ def _limpar_mudanca_pendente_vinculo(vinculo: ContaMonetizacaoVinculo) -> None:
     db.session.add(vinculo)
 
 
-def _extrair_pendencia_downgrade_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
-    snap = dict(snapshot or {})
+def _extrair_pendencia_downgrade_snapshot(
+    snapshot: dict[str, Any] | None,
+    *,
+    strict: bool = False,
+) -> dict[str, Any] | None:
+    if snapshot is None:
+        snap: dict[str, Any] = {}
+    elif isinstance(snapshot, dict):
+        snap = snapshot
+    elif strict:
+        raise TypeError("snapshot de downgrade presente com tipo invalido")
+    else:
+        snap = {}
+
+    if strict:
+        if "atualizado_em" in snap:
+            require_optional_datetime_strict(snap["atualizado_em"], nome="atualizado_em")
+        mudanca = (
+            require_optional_bool_strict(snap["mudanca_pendente"], nome="mudanca_pendente")
+            if "mudanca_pendente" in snap
+            else None
+        )
+        tipo = (
+            require_optional_enum_strict(
+                snap["tipo_mudanca"],
+                nome="tipo_mudanca",
+                permitidos=TIPOS_MUDANCA_PENDENTE,
+            )
+            if "tipo_mudanca" in snap
+            else None
+        )
+        plano_futuro = (
+            require_optional_plano_strict(snap["plano_futuro"], nome="plano_futuro")
+            if "plano_futuro" in snap
+            else None
+        )
+        efetivar_em = (
+            require_optional_datetime_strict(snap["efetivar_em"], nome="efetivar_em")
+            if "efetivar_em" in snap
+            else None
+        )
+        origem = (
+            require_optional_string_strict(snap["origem"], nome="origem")
+            if "origem" in snap
+            else None
+        )
+        if mudanca is True:
+            if tipo is None or plano_futuro is None or efetivar_em is None:
+                raise DadoFinanceiroInvalidoError(
+                    "pendencia de mudanca presente com campos obrigatorios ausentes ou invalidos"
+                )
+            return {
+                "mudanca_pendente": True,
+                "tipo_mudanca": tipo,
+                "plano_futuro": plano_futuro,
+                "efetivar_em": efetivar_em.isoformat(),
+                "origem": origem or MUDANCA_PENDENTE_ORIGEM_USUARIO,
+            }
+        return None
+
     if not bool(snap.get("mudanca_pendente")):
         return None
     if (str(snap.get("tipo_mudanca") or "").strip().lower()) != "downgrade":
         return None
     plano_futuro = _normalizar_plano_codigo(snap.get("plano_futuro"))
-    efetivar_em = _to_datetime_utc_naive(snap.get("efetivar_em"))
+    efetivar_em = _to_datetime_utc_naive(snap.get("efetivar_em"), strict=strict)
     if plano_futuro is None or efetivar_em is None:
         return None
     return {
@@ -649,52 +894,55 @@ def _extrair_pendencia_downgrade_snapshot(snapshot: dict[str, Any] | None) -> di
     }
 
 
-def obter_pendencia_downgrade_conta_ativa(conta_id: int | None) -> dict[str, Any] | None:
+def obter_pendencia_downgrade_conta_ativa(
+    conta_id: int | None,
+    *,
+    strict: bool = False,
+) -> dict[str, Any] | None:
     """
     Le o estado real de downgrade pendente no vinculo Stripe ativo (sem inferir pelo checkout).
     Retorno alinhado ao contrato de conciliacao: mudanca_pendente, plano_pendente, efetivar_em,
     mais atualizado_em (ISO) quando presente no snapshot, para UX condicionar retorno recente.
+
+    strict=False (default legado): exception vira None (fail-open histórico).
+    strict=True (F4): exception propaga para o caller tratar como inconclusivo.
     """
     if conta_id is None:
         return None
     try:
         vinculo = _obter_vinculo_ativo_por_conta(int(conta_id))
+        if vinculo is None:
+            return None
+        raw_snap = vinculo.snapshot_normalizado_json
+        snap_full = _json_loads(raw_snap, strict=strict)
+        pend = _extrair_pendencia_downgrade_snapshot(snap_full, strict=strict)
+        atualizado = None
+        if "atualizado_em" in snap_full:
+            if strict:
+                parsed_atualizado = require_optional_datetime_strict(
+                    snap_full.get("atualizado_em"), nome="atualizado_em"
+                )
+                atualizado = parsed_atualizado.isoformat() if parsed_atualizado is not None else None
+            else:
+                atualizado = snap_full.get("atualizado_em")
+                if atualizado is not None and not isinstance(atualizado, str):
+                    atualizado = str(atualizado)
+        if pend is None:
+            return None
+        return {
+            "mudanca_pendente": True,
+            "plano_pendente": pend["plano_futuro"],
+            "efetivar_em": pend["efetivar_em"],
+            "atualizado_em": atualizado,
+        }
     except Exception:
+        if strict:
+            raise
         logger.exception(
-            "[StripeDebug][Pendencia] Falha de infraestrutura ao consultar vinculo ativo conta_id=%s",
+            "[StripeDebug][Pendencia] Falha ao consultar pendencia de downgrade conta_id=%s",
             conta_id,
         )
         return None
-    if vinculo is None:
-        return None
-    raw_snap = vinculo.snapshot_normalizado_json
-    try:
-        if (raw_snap or "").strip():
-            parsed = json.loads(raw_snap)
-            if not isinstance(parsed, dict):
-                raise TypeError("snapshot_normalizado_json nao e objeto JSON")
-            snap_full = parsed
-        else:
-            snap_full = {}
-    except Exception:
-        logger.exception(
-            "[StripeDebug][Pendencia] Falha de parse do snapshot_normalizado_json conta_id=%s vinculo_id=%s",
-            conta_id,
-            getattr(vinculo, "id", None),
-        )
-        return None
-    pend = _extrair_pendencia_downgrade_snapshot(snap_full)
-    if pend is None:
-        return None
-    atualizado = snap_full.get("atualizado_em")
-    if atualizado is not None and not isinstance(atualizado, str):
-        atualizado = str(atualizado)
-    return {
-        "mudanca_pendente": True,
-        "plano_pendente": pend["plano_futuro"],
-        "efetivar_em": pend["efetivar_em"],
-        "atualizado_em": atualizado,
-    }
 
 
 def _mesclar_pendencia_no_snapshot(
@@ -900,7 +1148,7 @@ def listar_planos_contratacao_publica() -> list[dict[str, Any]]:
     saida: list[dict[str, Any]] = []
     for plano in plano_service.listar_planos_saas_admin():
         codigo = (plano.get("codigo") or "").strip().lower()
-        if codigo not in ("free", "starter", "pro"):
+        if codigo not in ("free", "starter", "pro", "multiuser"):
             continue
         if codigo == "free":
             saida.append(
@@ -915,6 +1163,36 @@ def listar_planos_contratacao_publica() -> list[dict[str, Any]]:
                     ),
                     "habilitado_checkout": True,
                     "pendencias_gateway": [],
+                }
+            )
+            continue
+        if codigo == "multiuser":
+            from app.services.conta_multiuser_contratacao_service import (
+                multiuser_pronto_para_contratacao_publica,
+            )
+
+            gateway = plano.get("gateway_config") or {}
+            pronto = multiuser_pronto_para_contratacao_publica()
+            if not pronto:
+                continue
+            saida.append(
+                {
+                    "codigo": "multiuser",
+                    "nome": plano.get("nome") or "Multiuser",
+                    "valor_admin": (
+                        str(plano.get("valor_admin"))
+                        if plano.get("valor_admin") is not None
+                        else None
+                    ),
+                    "limite_franquia_referencia": (
+                        str(plano.get("franquia_referencia"))
+                        if plano.get("franquia_referencia") is not None
+                        else None
+                    ),
+                    "quantidade_minima": plano.get("quantidade_minima"),
+                    "exige_dados_empresariais": True,
+                    "habilitado_checkout": True,
+                    "pendencias_gateway": list(gateway.get("pendencias") or []),
                 }
             )
             continue
@@ -946,6 +1224,8 @@ def iniciar_jornada_assinatura_stripe(
     user,
     plano_codigo: str,
     site_origin: str | None = None,
+    quantity: int | None = None,
+    dados_empresariais: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Inicia checkout embedded Stripe para a tela oficial /contrate-um-plano.
@@ -1111,6 +1391,48 @@ def iniciar_jornada_assinatura_stripe(
     if not price_id:
         raise ValueError("Plano sem price_id Stripe configurado.")
 
+    quantity_checkout = 1
+    quantity_solicitada = None
+    if plano_n == CODIGO_MULTIUSER:
+        from app.services.conta_multiuser_contratacao_service import (
+            calcular_resumo_contratacao_multiuser,
+            persistir_perfil_empresarial_pre_checkout,
+            validar_quantity_solicitada,
+        )
+
+        if not dados_empresariais:
+            raise ValueError("Dados empresariais obrigatórios para contratação Multiusuário.")
+        persistir_perfil_empresarial_pre_checkout(
+            int(conta_id),
+            dados_empresariais,
+            commit=True,
+        )
+        quantity_solicitada = validar_quantity_solicitada(quantity)
+        resumo_mu = calcular_resumo_contratacao_multiuser(quantity_solicitada)
+        if (resumo_mu.price_id or "").strip() != price_id:
+            registrar_fato_monetizacao(
+                tipo_fato="stripe_multiuser_price_divergente",
+                status_tecnico=STATUS_TEC_SEM_EFEITO,
+                provider=PROVIDER_STRIPE,
+                conta_id=conta_id,
+                franquia_id=franquia_id,
+                usuario_id=usuario_id,
+                price_id=price_id,
+                idempotency_key=(
+                    f"stripe_multiuser_price_divergente:{conta_id}:{price_id}:{resumo_mu.price_id}"
+                )[:190],
+                snapshot_normalizado={
+                    "price_id_gateway": price_id,
+                    "price_id_resumo": resumo_mu.price_id,
+                },
+                payload_bruto_sanitizado={"origem": "iniciar_jornada_assinatura_stripe"},
+            )
+            db.session.commit()
+            raise ValueError(
+                "Price Stripe do Multiusuário diverge da configuração apresentada. Contratação bloqueada."
+            )
+        quantity_checkout = int(quantity_solicitada)
+
     publishable_key = _obter_publishable_key_stripe()
     if not publishable_key:
         raise ValueError("STRIPE_PUBLISHABLE_KEY ausente no ambiente.")
@@ -1141,6 +1463,32 @@ def iniciar_jornada_assinatura_stripe(
         db.session.commit()
         raise ValueError(msg_bloqueio_pendencia)
     if assinatura_existente is not None and _norm_text(assinatura_existente.get("subscription_id")):
+        if plano_n == CODIGO_MULTIUSER:
+            registrar_fato_monetizacao(
+                tipo_fato="stripe_multiuser_subscription_duplicada_bloqueada",
+                status_tecnico=STATUS_TEC_SEM_EFEITO,
+                provider=PROVIDER_STRIPE,
+                conta_id=conta_id,
+                franquia_id=franquia_id,
+                usuario_id=usuario_id,
+                subscription_id=_norm_text(assinatura_existente.get("subscription_id")),
+                customer_id=_norm_text(assinatura_existente.get("customer_id")),
+                idempotency_key=(
+                    f"stripe_multiuser_sub_dup:{conta_id}:"
+                    f"{assinatura_existente.get('subscription_id')}"
+                )[:190],
+                snapshot_normalizado={
+                    "motivo": "assinatura_ativa_existente",
+                    "plano_solicitado": CODIGO_MULTIUSER,
+                },
+                payload_bruto_sanitizado={"origem": "iniciar_jornada_assinatura_stripe"},
+            )
+            db.session.commit()
+            raise ValueError(
+                "Conta já possui assinatura Stripe ativa. "
+                "A contratação Multiusuário não cria segunda assinatura; "
+                "migração a partir de plano pago vigente depende de regularização operacional."
+            )
         plano_atual_u = _normalizar_plano_codigo(getattr(user, "categoria", None)) or "free"
         destino = plano_n
         if plano_atual_u == destino:
@@ -1243,18 +1591,78 @@ def iniciar_jornada_assinatura_stripe(
     success_url = _resolver_url_absoluta(site_origin, _obter_success_url_stripe())
     return_url = success_url
 
+    intencao_mu = None
+    if plano_n == CODIGO_MULTIUSER:
+        from app.services.conta_multiuser_contratacao_service import (
+            PriceStripeDivergenteError,
+            confrontar_price_stripe_multiuser_admin,
+        )
+        from app.services.conta_multiuser_checkout_intencao_service import (
+            adquirir_intencao_checkout_multiuser,
+            anexar_session_a_intencao,
+        )
+
+        try:
+            confrontar_price_stripe_multiuser_admin()
+        except PriceStripeDivergenteError as exc:
+            registrar_fato_monetizacao(
+                tipo_fato="stripe_multiuser_price_divergente",
+                status_tecnico=STATUS_TEC_SEM_EFEITO,
+                provider=PROVIDER_STRIPE,
+                conta_id=conta_id,
+                franquia_id=franquia_id,
+                usuario_id=usuario_id,
+                price_id=price_id,
+                idempotency_key=(
+                    f"stripe_multiuser_price_toctou:{conta_id}:{price_id}"
+                )[:190],
+                snapshot_normalizado={"motivo": str(exc)[:180]},
+                payload_bruto_sanitizado={"origem": "iniciar_jornada_assinatura_stripe"},
+            )
+            db.session.commit()
+            raise ValueError(
+                "Price Stripe do Multiusuário diverge da configuração apresentada. Contratação bloqueada."
+            ) from exc
+        adquirido = adquirir_intencao_checkout_multiuser(
+            conta_id=int(conta_id),
+            franquia_id=int(franquia_id),
+            usuario_id=usuario_id,
+            price_id=price_id,
+            quantity_solicitada=int(quantity_checkout),
+            customer_id=customer_id_existente,
+        )
+        intencao_mu = adquirido.intencao
+        db.session.commit()
+        correlation_id = intencao_mu.correlation_id
+        if not adquirido.nova_session_necessaria and intencao_mu.checkout_session_id:
+            session_reuso = adquirido.session if isinstance(adquirido.session, dict) else {}
+            return {
+                "checkout_session_id": _norm_text(session_reuso.get("id")) or intencao_mu.checkout_session_id,
+                "checkout_client_secret": _norm_text(session_reuso.get("client_secret")),
+                "publishable_key": publishable_key,
+                "plano_codigo": plano_n,
+                "quantity": int(quantity_checkout),
+                "correlation_id": correlation_id,
+            }
+    else:
+        correlation_id = uuid.uuid4().hex
     metadata = {
         "conta_id": str(conta_id),
         "franquia_id": str(franquia_id),
         "usuario_id": str(usuario_id or ""),
         "plano_interno": plano_n,
         "fluxo_origem": "contrate_um_plano",
+        "correlation_id": correlation_id,
     }
+    if intencao_mu is not None:
+        metadata["checkout_intent_id"] = intencao_mu.correlation_id
+    if quantity_solicitada is not None:
+        metadata["quantity_solicitada"] = str(int(quantity_solicitada))
     payload = {
         "mode": "subscription",
         "ui_mode": "embedded_page",
         "line_items[0][price]": price_id,
-        "line_items[0][quantity]": "1",
+        "line_items[0][quantity]": str(int(quantity_checkout)),
         "return_url": return_url,
         "client_reference_id": f"conta:{conta_id}:franquia:{franquia_id}",
         "metadata[conta_id]": metadata["conta_id"],
@@ -1262,12 +1670,20 @@ def iniciar_jornada_assinatura_stripe(
         "metadata[usuario_id]": metadata["usuario_id"],
         "metadata[plano_interno]": metadata["plano_interno"],
         "metadata[fluxo_origem]": metadata["fluxo_origem"],
+        "metadata[correlation_id]": metadata["correlation_id"],
         "subscription_data[metadata][conta_id]": metadata["conta_id"],
         "subscription_data[metadata][franquia_id]": metadata["franquia_id"],
         "subscription_data[metadata][usuario_id]": metadata["usuario_id"],
         "subscription_data[metadata][plano_interno]": metadata["plano_interno"],
         "subscription_data[metadata][fluxo_origem]": metadata["fluxo_origem"],
+        "subscription_data[metadata][correlation_id]": metadata["correlation_id"],
     }
+    if metadata.get("checkout_intent_id"):
+        payload["metadata[checkout_intent_id]"] = metadata["checkout_intent_id"]
+        payload["subscription_data[metadata][checkout_intent_id]"] = metadata["checkout_intent_id"]
+    if quantity_solicitada is not None:
+        payload["metadata[quantity_solicitada]"] = metadata["quantity_solicitada"]
+        payload["subscription_data[metadata][quantity_solicitada]"] = metadata["quantity_solicitada"]
     if customer_id_existente:
         payload["customer"] = customer_id_existente
 
@@ -1289,11 +1705,18 @@ def iniciar_jornada_assinatura_stripe(
             "Conta ja possui assinatura Stripe ativa; atualize o plano pela assinatura existente "
             "em vez de novo checkout."
         )
-    idempotency_key = f"stripe_checkout_start:{conta_id}:{franquia_id}:{plano_n}:{uuid.uuid4().hex}"
+    if intencao_mu is not None:
+        idempotency_key = intencao_mu.stripe_idempotency_key
+    else:
+        idempotency_key = f"stripe_checkout_start:{conta_id}:{franquia_id}:{plano_n}:{uuid.uuid4().hex}"
     response = _stripe_post("/checkout/sessions", payload, idempotency_key=idempotency_key)
     session_id = _norm_text(response.get("id"))
     if not session_id:
         raise ValueError("Resposta Stripe sem id de checkout session.")
+
+    if intencao_mu is not None:
+        anexar_session_a_intencao(intencao_mu, response)
+        db.session.commit()
 
     registrar_fato_monetizacao(
         tipo_fato="stripe_checkout_session_created",
@@ -1319,6 +1742,9 @@ def iniciar_jornada_assinatura_stripe(
             "franquia_id": franquia_id,
             "status": response.get("status"),
             "payment_status": response.get("payment_status"),
+            "quantity_checkout": int(quantity_checkout),
+            "quantity_solicitada": quantity_solicitada,
+            "correlation_id": correlation_id,
         },
         payload_bruto_sanitizado=response,
     )
@@ -1328,6 +1754,8 @@ def iniciar_jornada_assinatura_stripe(
         "checkout_client_secret": _norm_text(response.get("client_secret")),
         "publishable_key": publishable_key,
         "plano_codigo": plano_n,
+        "quantity": int(quantity_checkout),
+        "correlation_id": correlation_id,
     }
 
 
@@ -1561,7 +1989,9 @@ def registrar_vinculo_comercial_externo(
                 vigencia_externa_fim=vigencia_externa_fim,
                 ativo=True,
                 snapshot_normalizado_json=_json_dumps(snapshot_merged),
-                payload_bruto_sanitizado_json=_json_dumps(payload_bruto_sanitizado),
+                payload_bruto_sanitizado_json=_json_dumps(
+                    sanitizar_payload_stripe(payload_bruto_sanitizado)
+                ),
             )
             db.session.add(novo)
             db.session.flush()
@@ -1589,7 +2019,9 @@ def registrar_vinculo_comercial_externo(
             ativo_atual.vigencia_externa_inicio = vigencia_externa_inicio
             ativo_atual.vigencia_externa_fim = vigencia_externa_fim
             ativo_atual.snapshot_normalizado_json = _json_dumps(snapshot_merge_concorrencia)
-            ativo_atual.payload_bruto_sanitizado_json = _json_dumps(payload_bruto_sanitizado)
+            ativo_atual.payload_bruto_sanitizado_json = _json_dumps(
+                sanitizar_payload_stripe(payload_bruto_sanitizado)
+            )
             db.session.add(ativo_atual)
             db.session.flush()
             return ativo_atual
@@ -1660,7 +2092,9 @@ def registrar_fato_monetizacao(
                 invoice_id=(invoice_id or "").strip() or None,
                 identificadores_externos_json=_json_dumps(identificadores_externos),
                 snapshot_normalizado_json=_json_dumps(snapshot_normalizado),
-                payload_bruto_sanitizado_json=_json_dumps(payload_bruto_sanitizado),
+                payload_bruto_sanitizado_json=_json_dumps(
+                    sanitizar_payload_stripe(payload_bruto_sanitizado)
+                ),
             )
             db.session.add(row)
             db.session.flush()
@@ -1964,7 +2398,18 @@ def processar_fato_stripe_conciliado(
         "ciclo_ignorado_evento_antigo": False,
     }
     ignorar_atualizacao_vinculo_evento_antigo = False
-    if event_type_n == "invoice.paid":
+    invoice_multiuser_recusada = False
+    if _plano_eh_multiuser(plano_codigo) and event_type_n == "invoice.paid":
+        ciclo, ids, invoice_multiuser_recusada = _preparar_invoice_paid_multiuser(
+            object_data=object_payload,
+            ids=ids,
+            correlacao=correlacao,
+            ciclo=ciclo,
+            origem_fato="processar_fato_stripe_conciliado",
+        )
+        if invoice_multiuser_recusada or ciclo.get("evento_atrasado_canonico"):
+            ignorar_atualizacao_vinculo_evento_antigo = True
+    elif event_type_n == "invoice.paid":
         fr = db.session.get(Franquia, int(correlacao["franquia_id"]))
         if fr is not None:
             inicio_ciclo_evt = ciclo.get("inicio_ciclo")
@@ -2041,6 +2486,7 @@ def processar_fato_stripe_conciliado(
                 "pendencias": ciclo.get("pendencias"),
                 "status_contratual_externo": status_contratual,
                 "origem_ingestao": "conciliacao_checkout_session",
+                "quantity": ids.get("quantity"),
             },
             payload_bruto_sanitizado=object_payload,
         )
@@ -2070,7 +2516,7 @@ def processar_fato_stripe_conciliado(
         "invoice.payment_failed",
         "customer.subscription.updated",
         "customer.subscription.deleted",
-    } and not bloquear_promocao_vinculo_ids:
+    } and not bloquear_promocao_vinculo_ids and not invoice_multiuser_recusada:
         logging.info(
             "[StripeDebug][FatoConciliado] Antes aplicar_fato_contratual_em_franquia franquia_id=%s plano_codigo=%s event_type=%s status_contratual=%s",
             correlacao.get("franquia_id"),
@@ -2084,6 +2530,8 @@ def processar_fato_stripe_conciliado(
             event_type=event_type_n,
             status_contratual_externo=status_contratual,
             ciclo=ciclo,
+            object_data=object_payload,
+            ids=ids,
         )
         logging.info(
             "[StripeDebug][FatoConciliado] Depois aplicar_fato_contratual_em_franquia retorno=%s",
@@ -2182,6 +2630,24 @@ def processar_evento_stripe(
     )
     if not isinstance(object_data, dict):
         object_data = {}
+
+    from app.services.conta_multiuser_cobranca_extraordinaria_service import (
+        evento_eh_cobranca_extraordinaria_multiuser,
+        processar_evento_extraordinario_multiuser,
+    )
+
+    if evento_eh_cobranca_extraordinaria_multiuser(evento, object_data):
+        return processar_evento_extraordinario_multiuser(
+            evento,
+            reprocessamento_admin=reprocessamento_admin,
+        )
+
+    if event_type in {"invoice.created", "invoice.upcoming"}:
+        from app.services.conta_multiuser_reducao_service import (
+            tentar_preparar_reducao_antes_da_cobranca_por_evento,
+        )
+
+        tentar_preparar_reducao_antes_da_cobranca_por_evento(evento, object_data)
 
     idempotency_key = None
     if event_id and event_type:
@@ -2286,7 +2752,18 @@ def processar_evento_stripe(
         "ciclo_ignorado_evento_antigo": False,
     }
     ignorar_atualizacao_vinculo_evento_antigo = False
-    if event_type == "invoice.paid":
+    invoice_multiuser_recusada = False
+    if _plano_eh_multiuser(plano_codigo) and event_type == "invoice.paid":
+        ciclo, ids, invoice_multiuser_recusada = _preparar_invoice_paid_multiuser(
+            object_data=object_data,
+            ids=ids,
+            correlacao=correlacao,
+            ciclo=ciclo,
+            origem_fato="processar_evento_stripe",
+        )
+        if invoice_multiuser_recusada or ciclo.get("evento_atrasado_canonico"):
+            ignorar_atualizacao_vinculo_evento_antigo = True
+    elif event_type == "invoice.paid":
         fr = db.session.get(Franquia, int(correlacao["franquia_id"]))
         if fr is not None:
             inicio_ciclo_evt = ciclo.get("inicio_ciclo")
@@ -2349,6 +2826,7 @@ def processar_evento_stripe(
                 "confianca_ciclo": ciclo.get("fonte_ciclo"),
                 "pendencias": ciclo.get("pendencias"),
                 "status_contratual_externo": status_contratual,
+                "quantity": ids.get("quantity"),
             },
             payload_bruto_sanitizado=object_data,
         )
@@ -2358,13 +2836,15 @@ def processar_evento_stripe(
         "invoice.payment_failed",
         "customer.subscription.updated",
         "customer.subscription.deleted",
-    } and not bloquear_promocao_vinculo_ids:
+    } and not bloquear_promocao_vinculo_ids and not invoice_multiuser_recusada:
         efeito_operacional = aplicar_fato_contratual_em_franquia(
             franquia_id=int(correlacao["franquia_id"]),
             plano_codigo=plano_codigo,
             event_type=event_type,
             status_contratual_externo=status_contratual,
             ciclo=ciclo,
+            object_data=object_data,
+            ids=ids,
         )
     efeito_aplicado = bool(efeito_operacional.get("aplicado"))
 
@@ -2641,7 +3121,9 @@ def _persistir_fato_evento_stripe(
     fato_reprocessado.invoice_id = ids.get("invoice_id")
     fato_reprocessado.identificadores_externos_json = _json_dumps(ids)
     fato_reprocessado.snapshot_normalizado_json = _json_dumps(snapshot_normalizado)
-    fato_reprocessado.payload_bruto_sanitizado_json = _json_dumps(evento)
+    fato_reprocessado.payload_bruto_sanitizado_json = _json_dumps(
+        sanitizar_payload_stripe(evento)
+    )
     db.session.add(fato_reprocessado)
     db.session.flush()
     return fato_reprocessado
@@ -2707,6 +3189,398 @@ def _downgrade_pago_ja_vigente_ciclo_stripe(fr: Franquia, ciclo: dict[str, Any])
     return False
 
 
+def _carregar_subscription_stripe_opcional(subscription_id: str | None) -> dict[str, Any]:
+    sid = _norm_text(subscription_id)
+    if not sid:
+        return {}
+    try:
+        return _stripe_get(
+            f"/subscriptions/{sid}",
+            params=[("expand[]", "items.data.price")],
+        )
+    except Exception:
+        logger.info("Subscription Stripe não recuperável para correlação Multiuser")
+        return {}
+
+
+def _correlation_id_de_metadata(metadata: dict[str, Any]) -> str | None:
+    return _norm_text(metadata.get("correlation_id")) or _norm_text(
+        metadata.get("checkout_intent_id")
+    )
+
+
+def _enriquecer_invoice_paga_multiuser(
+    *,
+    object_data: dict[str, Any],
+    ids: dict[str, Any],
+    correlacao: dict[str, Any],
+    ciclo: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    from app.services.conta_multiuser_invoice_linha_service import (
+        selecionar_linha_contratual_multiuser,
+        subscription_item_multiuser_da_assinatura,
+    )
+    from app.services.plano_service import obter_configuracao_gateway_plano_admin
+
+    cfg = obter_configuracao_gateway_plano_admin(CODIGO_MULTIUSER) or {}
+    price_esperado = _norm_text(cfg.get("price_id")) or _norm_text(ids.get("price_id"))
+    subscription_id = _norm_text(ids.get("subscription_id"))
+    subscription_obj = object_data.get("subscription")
+    if isinstance(subscription_obj, dict):
+        subscription_id = _norm_text(subscription_obj.get("id")) or subscription_id
+        sub_body = subscription_obj
+    else:
+        sub_body = _carregar_subscription_stripe_opcional(subscription_id)
+    item = subscription_item_multiuser_da_assinatura(
+        sub_body, price_id_esperado=price_esperado or ""
+    )
+    item_id = _norm_text((item or {}).get("id"))
+    linha = selecionar_linha_contratual_multiuser(
+        object_data,
+        price_id_esperado=price_esperado or "",
+        subscription_id_esperado=subscription_id,
+        subscription_item_id_esperado=item_id,
+    )
+    ids = dict(ids)
+    ids["price_id"] = linha.price_id
+    ids["quantity"] = linha.quantity
+    ids["subscription_id"] = linha.subscription_id or subscription_id
+    ids["subscription_item_id"] = linha.subscription_item_id or item_id
+    ciclo_out = dict(ciclo)
+    if linha.inicio is not None and linha.fim is not None:
+        ciclo_out["inicio_ciclo"] = linha.inicio
+        ciclo_out["fim_ciclo"] = linha.fim
+        ciclo_out["fonte_ciclo"] = "stripe_linha_contratual_multiuser"
+    return ciclo_out, ids
+
+
+def _preparar_invoice_paid_multiuser(
+    *,
+    object_data: dict[str, Any],
+    ids: dict[str, Any],
+    correlacao: dict[str, Any],
+    ciclo: dict[str, Any],
+    origem_fato: str,
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """
+    Seleciona a linha contratual e marca atraso pelo ciclo canônico ANTES
+    de atualizar o vínculo monetário. Recusa fail-closed se a linha for inválida.
+    """
+    try:
+        ciclo_out, ids_out = _enriquecer_invoice_paga_multiuser(
+            object_data=object_data,
+            ids=ids,
+            correlacao=correlacao,
+            ciclo=ciclo,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Invoice Multiuser recusada conta_id=%s motivo=%s origem=%s",
+            correlacao.get("conta_id"),
+            type(exc).__name__,
+            origem_fato,
+        )
+        registrar_fato_monetizacao(
+            tipo_fato="stripe_multiuser_ativacao_bloqueada",
+            status_tecnico=STATUS_TEC_SEM_EFEITO,
+            provider=PROVIDER_STRIPE,
+            conta_id=correlacao.get("conta_id"),
+            franquia_id=correlacao.get("franquia_id"),
+            invoice_id=ids.get("invoice_id"),
+            price_id=ids.get("price_id"),
+            idempotency_key=(
+                f"stripe_multiuser_linha_bloq:{correlacao.get('conta_id')}:"
+                f"{ids.get('invoice_id') or 'sem_invoice'}:{type(exc).__name__}"
+            )[:190],
+            snapshot_normalizado={"motivo": type(exc).__name__, "origem": origem_fato},
+            payload_bruto_sanitizado={"origem": origem_fato},
+        )
+        return dict(ciclo), ids, True
+
+    ciclo_out = dict(ciclo_out)
+    if correlacao.get("conta_id") is not None:
+        from app.services.conta_multiuser_ciclo_service import (
+            evento_atrasado_relativo_ciclo_canonico,
+        )
+
+        ciclo_out["evento_atrasado_canonico"] = evento_atrasado_relativo_ciclo_canonico(
+            int(correlacao["conta_id"]),
+            ciclo_out.get("inicio_ciclo"),
+            ciclo_out.get("fim_ciclo"),
+        )
+    else:
+        ciclo_out["evento_atrasado_canonico"] = False
+    return ciclo_out, ids_out, False
+
+
+def _aplicar_fato_contratual_multiuser(
+    *,
+    franquia_id: int,
+    event_type: str,
+    status_contratual_externo: str | None,
+    ciclo: dict[str, Any],
+    object_data: dict[str, Any],
+    ids: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Multiuser: benefício operacional somente após invoice.paid confirmado.
+    subscription.updated/checkout não liberam capacity.
+    payment_failed preserva política coletiva sem bloqueio individual imediato.
+    """
+    vazio = {
+        "aplicado": False,
+        "consumo_reiniciado_renovacao": False,
+        "status_operacional_resultante": None,
+        "politica_payment_failed": None,
+        "ciclo_ignorado_evento_antigo": False,
+        "mudanca_pendente": False,
+        "plano_pendente": None,
+        "efetivar_em": None,
+        "quantity_confirmada": None,
+        "divergencia_quantity": False,
+    }
+    event_l = (event_type or "").strip().lower()
+    fr = db.session.get(Franquia, int(franquia_id))
+    if fr is None:
+        return vazio
+
+    if event_l == "invoice.payment_failed":
+        db.session.add(fr)
+        db.session.flush()
+        aplicar_status_apos_mudanca_estrutural(fr.id)
+        fr_refresh = db.session.get(Franquia, int(franquia_id))
+        registrar_fato_monetizacao(
+            tipo_fato="stripe_multiuser_payment_failed_coletivo",
+            status_tecnico=STATUS_TEC_SEM_EFEITO,
+            provider=PROVIDER_STRIPE,
+            conta_id=int(fr.conta_id),
+            franquia_id=int(fr.id),
+            customer_id=_norm_text(ids.get("customer_id")),
+            subscription_id=_norm_text(ids.get("subscription_id")),
+            invoice_id=_norm_text(ids.get("invoice_id")),
+            price_id=_norm_text(ids.get("price_id")),
+            idempotency_key=(
+                f"stripe_multiuser_payfail:{fr.conta_id}:{ids.get('invoice_id') or 'sem_invoice'}"
+            )[:190],
+            snapshot_normalizado={
+                "politica": "nao_bloqueio_imediato_reavaliacao_operacional",
+                "escopo": "conta",
+            },
+            payload_bruto_sanitizado={"origem": "aplicar_fato_contratual_multiuser"},
+        )
+        return {
+            **vazio,
+            "aplicado": True,
+            "politica_payment_failed": "nao_bloqueio_imediato_reavaliacao_operacional",
+            "status_operacional_resultante": (
+                fr_refresh.status if fr_refresh is not None else fr.status
+            ),
+        }
+
+    if event_l != "invoice.paid":
+        registrar_fato_monetizacao(
+            tipo_fato="stripe_multiuser_beneficio_nao_liberado",
+            status_tecnico=STATUS_TEC_SEM_EFEITO,
+            provider=PROVIDER_STRIPE,
+            conta_id=int(fr.conta_id),
+            franquia_id=int(fr.id),
+            customer_id=_norm_text(ids.get("customer_id")),
+            subscription_id=_norm_text(ids.get("subscription_id")),
+            price_id=_norm_text(ids.get("price_id")),
+            idempotency_key=(
+                f"stripe_multiuser_nao_libera:{event_l}:{fr.conta_id}:"
+                f"{ids.get('subscription_id') or ids.get('object_id') or 'sem_id'}"
+            )[:190],
+            snapshot_normalizado={
+                "event_type": event_l,
+                "motivo": "beneficio_multiuser_exige_confirmacao_financeira",
+            },
+            payload_bruto_sanitizado={"origem": "aplicar_fato_contratual_multiuser"},
+        )
+        return vazio
+
+    from app.services.conta_multiuser_contratacao_service import (
+        PriceMultiuserIncompativelError,
+        PeriodoFinanceiroInvalidoError,
+        QuantityMultiuserInvalidaError,
+        ativar_beneficio_multiuser_confirmado,
+    )
+    from app.services.cnpj_service import CnpjInvalidoError
+    from app.services.conta_organizacional_service import CnpjMultiuserDuplicadoError
+    from app.services.conta_multiuser_invoice_linha_service import (
+        LinhaContratualMultiuserAmbiguoError,
+        LinhaContratualMultiuserAusenteError,
+        selecionar_linha_contratual_multiuser,
+    )
+    from app.services.conta_multiuser_checkout_intencao_service import (
+        IntencaoCheckoutMultiuserInvalidaError,
+        exigir_intencao_pendente_correlacionada,
+    )
+    from app.services.conta_multiuser_ciclo_service import evento_atrasado_relativo_ciclo_canonico
+    from app.services.conta_multiuser_errors import DivergenciaImpeditivaError
+    from app.services.plano_service import obter_configuracao_gateway_plano_admin
+
+    cfg = obter_configuracao_gateway_plano_admin(CODIGO_MULTIUSER) or {}
+    price_esperado = _norm_text(cfg.get("price_id"))
+    try:
+        linha = selecionar_linha_contratual_multiuser(
+            object_data,
+            price_id_esperado=price_esperado or _norm_text(ids.get("price_id")) or "",
+            subscription_id_esperado=_norm_text(ids.get("subscription_id")),
+            subscription_item_id_esperado=_norm_text(ids.get("subscription_item_id")),
+        )
+    except (LinhaContratualMultiuserAusenteError, LinhaContratualMultiuserAmbiguoError) as exc:
+        registrar_fato_monetizacao(
+            tipo_fato="stripe_multiuser_ativacao_bloqueada",
+            status_tecnico=STATUS_TEC_SEM_EFEITO,
+            provider=PROVIDER_STRIPE,
+            conta_id=int(fr.conta_id),
+            franquia_id=int(fr.id),
+            invoice_id=_norm_text(ids.get("invoice_id")),
+            price_id=_norm_text(ids.get("price_id")),
+            idempotency_key=(
+                f"stripe_multiuser_ativacao_bloq:{fr.conta_id}:"
+                f"{ids.get('invoice_id') or 'sem_invoice'}:{type(exc).__name__}"
+            )[:190],
+            snapshot_normalizado={"motivo": type(exc).__name__},
+            payload_bruto_sanitizado={"origem": "aplicar_fato_contratual_multiuser"},
+        )
+        return vazio
+
+    quantity_stripe = linha.quantity
+    price_id = linha.price_id
+    inicio = linha.inicio if linha.inicio is not None else ciclo.get("inicio_ciclo")
+    fim = linha.fim if linha.fim is not None else ciclo.get("fim_ciclo")
+    metadata = _metadata_from_event_object(object_data)
+    subscription_id = linha.subscription_id or _norm_text(ids.get("subscription_id"))
+    if not _correlation_id_de_metadata(metadata) and subscription_id:
+        sub_body = object_data.get("subscription")
+        if not isinstance(sub_body, dict):
+            sub_body = _carregar_subscription_stripe_opcional(subscription_id)
+        if isinstance(sub_body, dict):
+            sub_meta = sub_body.get("metadata") if isinstance(sub_body.get("metadata"), dict) else {}
+            metadata = {**sub_meta, **metadata}
+    quantity_solicitada = _to_int_or_none(metadata.get("quantity_solicitada"))
+    if "evento_atrasado_canonico" in ciclo:
+        evento_atrasado = bool(ciclo.get("evento_atrasado_canonico"))
+    else:
+        evento_atrasado = evento_atrasado_relativo_ciclo_canonico(int(fr.conta_id), inicio, fim)
+
+    usuario_id = _to_int_or_none(metadata.get("usuario_id"))
+    if usuario_id is None:
+        u_ref = (
+            User.query.filter(User.franquia_id == int(fr.id))
+            .order_by(User.id.asc())
+            .first()
+        )
+        if u_ref is not None:
+            usuario_id = int(u_ref.id)
+
+    conta_row = db.session.get(Conta, int(fr.conta_id))
+    intencao_id = None
+    try:
+        if conta_row is None:
+            raise ValueError("Conta não encontrada.")
+        if not conta_row.multiuser_ativa:
+            correlation = _correlation_id_de_metadata(metadata)
+            intencao = exigir_intencao_pendente_correlacionada(
+                conta_id=int(fr.conta_id),
+                correlation_id=correlation,
+                price_id=price_id,
+            )
+            intencao_id = int(intencao.id)
+            quantity_solicitada = quantity_solicitada or int(intencao.quantity_solicitada)
+        resultado = ativar_beneficio_multiuser_confirmado(
+            conta_id=int(fr.conta_id),
+            user_id=usuario_id,
+            quantity_stripe=int(quantity_stripe),
+            quantity_solicitada=quantity_solicitada,
+            inicio_ciclo=inicio,
+            fim_ciclo=fim,
+            price_id=price_id,
+            invoice_id=_norm_text(ids.get("invoice_id")),
+            evento_atrasado=evento_atrasado,
+            intencao_id=intencao_id,
+            commit=False,
+        )
+    except (
+        PriceMultiuserIncompativelError,
+        PeriodoFinanceiroInvalidoError,
+        QuantityMultiuserInvalidaError,
+        CnpjInvalidoError,
+        CnpjMultiuserDuplicadoError,
+        IntencaoCheckoutMultiuserInvalidaError,
+        LinhaContratualMultiuserAusenteError,
+        LinhaContratualMultiuserAmbiguoError,
+        DivergenciaImpeditivaError,
+        ValueError,
+    ) as exc:
+        registrar_fato_monetizacao(
+            tipo_fato="stripe_multiuser_ativacao_bloqueada",
+            status_tecnico=STATUS_TEC_SEM_EFEITO,
+            provider=PROVIDER_STRIPE,
+            conta_id=int(fr.conta_id),
+            franquia_id=int(fr.id),
+            customer_id=_norm_text(ids.get("customer_id")),
+            subscription_id=_norm_text(ids.get("subscription_id")),
+            invoice_id=_norm_text(ids.get("invoice_id")),
+            price_id=price_id,
+            idempotency_key=(
+                f"stripe_multiuser_ativacao_bloq:{fr.conta_id}:"
+                f"{ids.get('invoice_id') or 'sem_invoice'}:{type(exc).__name__}"
+            )[:190],
+            snapshot_normalizado={
+                "motivo": type(exc).__name__,
+                "quantity_stripe": quantity_stripe,
+                "price_id": price_id,
+            },
+            payload_bruto_sanitizado={"origem": "aplicar_fato_contratual_multiuser"},
+        )
+        logger.warning(
+            "Ativação Multiuser bloqueada conta_id=%s motivo=%s",
+            fr.conta_id,
+            type(exc).__name__,
+        )
+        return vazio
+
+    if resultado.divergencia_quantity:
+        registrar_fato_monetizacao(
+            tipo_fato="stripe_multiuser_quantity_divergente",
+            status_tecnico=STATUS_TEC_SEM_EFEITO,
+            provider=PROVIDER_STRIPE,
+            conta_id=int(fr.conta_id),
+            franquia_id=int(fr.id),
+            invoice_id=_norm_text(ids.get("invoice_id")),
+            price_id=price_id,
+            idempotency_key=(
+                f"stripe_multiuser_qty_div:{fr.conta_id}:{ids.get('invoice_id') or 'sem_invoice'}"
+            )[:190],
+            snapshot_normalizado={
+                "quantity_stripe": resultado.quantity_confirmada,
+                "quantity_solicitada": resultado.quantity_solicitada_observada,
+                "acao": "aplicou_quantity_stripe_confirmada",
+            },
+            payload_bruto_sanitizado={"origem": "aplicar_fato_contratual_multiuser"},
+        )
+
+    fr_refresh = db.session.get(Franquia, int(franquia_id))
+    return {
+        "aplicado": not resultado.ciclo_ignorado_evento_antigo and not resultado.replay,
+        "consumo_reiniciado_renovacao": bool(resultado.consumo_resetado and not resultado.replay),
+        "status_operacional_resultante": (
+            fr_refresh.status if fr_refresh is not None else None
+        ),
+        "politica_payment_failed": None,
+        "ciclo_ignorado_evento_antigo": bool(resultado.ciclo_ignorado_evento_antigo),
+        "mudanca_pendente": False,
+        "plano_pendente": None,
+        "efetivar_em": None,
+        "quantity_confirmada": resultado.quantity_confirmada,
+        "divergencia_quantity": bool(resultado.divergencia_quantity),
+        "replay_multiuser": bool(resultado.replay),
+    }
+
+
 def aplicar_fato_contratual_em_franquia(
     *,
     franquia_id: int,
@@ -2714,10 +3588,21 @@ def aplicar_fato_contratual_em_franquia(
     event_type: str,
     status_contratual_externo: str | None,
     ciclo: dict[str, Any],
+    object_data: dict[str, Any] | None = None,
+    ids: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Aplica efeito contratual centralizado sobre Franquia.
     """
+    if _plano_eh_multiuser(plano_codigo):
+        return _aplicar_fato_contratual_multiuser(
+            franquia_id=franquia_id,
+            event_type=event_type,
+            status_contratual_externo=status_contratual_externo,
+            ciclo=ciclo,
+            object_data=object_data or {},
+            ids=ids or {},
+        )
     fr = db.session.get(Franquia, int(franquia_id))
     if fr is None:
         return {
@@ -3305,6 +4190,7 @@ def _extrair_ids_externos_stripe(evento: dict[str, Any], objeto: dict[str, Any])
         "subscription_id": subscription_id,
         "invoice_id": invoice_id,
         "price_id": price_id,
+        "quantity": _extrair_quantity_confirmada_stripe(objeto),
     }
 
 
@@ -3460,6 +4346,9 @@ def _resolver_correlacao_evento(
                 .all()
             )
             franquia_multiplas_na_conta = len(rows_franquia) > 1
+            conta_row = db.session.get(Conta, int(conta_id))
+            if conta_row is not None and bool(conta_row.multiuser_ativa):
+                franquia_id = _resolver_franquia_correlacao_multiuser(int(conta_id))
 
     correlacao_inequivoca = conta_id is not None and franquia_id is not None
     pendencias: list[str] = []
@@ -3495,6 +4384,35 @@ def _resolver_franquia_unica_da_conta(conta_id: int) -> int | None:
     )
     if len(rows) == 1:
         return int(rows[0].id)
+    return None
+
+
+def _resolver_franquia_correlacao_multiuser(conta_id: int) -> int | None:
+    """
+    Correlação de Conta Multiuser com N Franquias: Contratante ativo, senão a primeira Franquia.
+    O fan-out posterior cobre todas as unidades; este id é apenas âncora de evento.
+    """
+    from app.models import ContaVinculoOrganizacional
+    from app.services.conta_organizacional_rules import ESTADO_ATIVO, PAPEL_CONTRATANTE
+
+    contratante = (
+        ContaVinculoOrganizacional.query.filter_by(
+            conta_id=int(conta_id),
+            papel=PAPEL_CONTRATANTE,
+            estado=ESTADO_ATIVO,
+        )
+        .order_by(ContaVinculoOrganizacional.id.asc())
+        .first()
+    )
+    if contratante is not None:
+        return int(contratante.franquia_id)
+    primeira = (
+        Franquia.query.filter(Franquia.conta_id == int(conta_id))
+        .order_by(Franquia.id.asc())
+        .first()
+    )
+    if primeira is not None:
+        return int(primeira.id)
     return None
 
 
@@ -3904,33 +4822,109 @@ def _falha_mensal_vigente_inativa() -> dict[str, Any]:
     }
 
 
-def _extrair_objeto_stripe_evento(payload: dict[str, Any]) -> dict[str, Any]:
-    data = payload.get("data")
-    if not isinstance(data, dict):
+def _exigir_objeto_json_opcional(container: dict[str, Any], key: str, *, strict: bool, nome: str) -> dict[str, Any]:
+    if key not in container:
         return {}
-    obj = data.get("object")
-    if isinstance(obj, dict):
-        return obj
+    valor = container.get(key)
+    if valor is None:
+        return {}
+    if isinstance(valor, dict):
+        return valor
+    if strict:
+        raise TypeError(f"{nome} presente com tipo invalido")
     return {}
 
 
-def _extrair_billing_reason_invoice_evento(payload: dict[str, Any]) -> str | None:
-    obj = _extrair_objeto_stripe_evento(payload)
+def _extrair_objeto_stripe_evento(
+    payload: dict[str, Any],
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        if strict:
+            raise TypeError("payload de evento Stripe presente com tipo invalido")
+        return {}
+    if strict:
+        for campo in ("id", "customer", "subscription"):
+            if campo in payload:
+                require_optional_identifier_strict(payload[campo], nome=campo)
+    data = _exigir_objeto_json_opcional(payload, "data", strict=strict, nome="data")
+    obj = _exigir_objeto_json_opcional(data, "object", strict=strict, nome="data.object")
+    if strict:
+        _validar_identificadores_objeto_stripe(obj)
+    return obj
+
+
+def _extrair_billing_reason_invoice_evento(
+    payload: dict[str, Any],
+    *,
+    strict: bool = False,
+) -> str | None:
+    obj = _extrair_objeto_stripe_evento(payload, strict=strict)
+    if "billing_reason" not in obj:
+        return None
     reason = obj.get("billing_reason")
+    if strict:
+        return require_optional_string_strict(reason, nome="billing_reason")
+    if reason is None:
+        return None
     if isinstance(reason, str):
         txt = reason.strip()
-        if txt:
-            return txt
+        return txt or None
     return None
 
 
-def _resolver_invoice_id_fato_monetizacao(fato: MonetizacaoFato) -> str | None:
-    invoice_id = _norm_text(fato.invoice_id)
+def _resolver_invoice_id_fato_monetizacao(
+    fato: MonetizacaoFato,
+    *,
+    strict: bool = False,
+) -> str | None:
+    invoice_id = _norm_text(fato.invoice_id, strict=strict)
     if invoice_id:
         return invoice_id
-    payload = _json_loads(fato.payload_bruto_sanitizado_json)
-    obj = _extrair_objeto_stripe_evento(payload)
-    return _norm_text(obj.get("id"))
+    payload = _json_loads(fato.payload_bruto_sanitizado_json, strict=strict)
+    obj = _extrair_objeto_stripe_evento(payload, strict=strict)
+    if "id" in obj:
+        return require_optional_identifier_strict(obj.get("id"), nome="id") if strict else _norm_text(obj.get("id"))
+    return _norm_text(obj.get("id"), strict=strict)
+
+
+def _validar_estrutura_fato_monetizacao(fato: MonetizacaoFato, *, strict: bool) -> None:
+    """Valida payload e identificadores do fato antes de qualquer descarte por correlação."""
+    if not strict:
+        return
+    payload = _json_loads(fato.payload_bruto_sanitizado_json, strict=True)
+    _extrair_objeto_stripe_evento(payload, strict=True)
+    _norm_text(fato.customer_id, strict=True)
+    _norm_text(fato.subscription_id, strict=True)
+    if fato.invoice_id is not None:
+        _norm_text(fato.invoice_id, strict=True)
+
+
+def _validar_estrutura_vinculo_monetizacao(
+    vinculo: ContaMonetizacaoVinculo, *, strict: bool
+) -> None:
+    """
+    Valida payload bruto, snapshot e identificadores do vínculo presentes.
+
+    Mesmo contrato strict dos fatos: ausência legítima segue; PRESENTE inválido RAISE.
+    Não interpreta correlação nem benefício — só valida estado presente.
+    """
+    if not strict:
+        return
+    payload = _json_loads(vinculo.payload_bruto_sanitizado_json, strict=True)
+    _extrair_objeto_stripe_evento(payload, strict=True)
+    snap = _json_loads(vinculo.snapshot_normalizado_json, strict=True)
+    _extrair_pendencia_downgrade_snapshot(snap, strict=True)
+    require_optional_plano_strict(vinculo.plano_interno, nome="plano_interno")
+    _norm_text(vinculo.customer_id, strict=True)
+    _norm_text(vinculo.subscription_id, strict=True)
+    if vinculo.price_id is not None:
+        _norm_text(vinculo.price_id, strict=True)
+    if vinculo.status_contratual_externo is not None:
+        require_optional_string_strict(
+            vinculo.status_contratual_externo, nome="status_contratual_externo"
+        )
 
 
 def _fato_corresponde_vinculo_stripe(
@@ -3939,22 +4933,33 @@ def _fato_corresponde_vinculo_stripe(
     conta_id: int,
     customer_id: str,
     subscription_id: str,
+    strict: bool = False,
 ) -> bool:
     if fato.conta_id != int(conta_id):
         return False
-    fato_customer = _norm_text(fato.customer_id)
-    fato_subscription = _norm_text(fato.subscription_id)
+    payload = _json_loads(fato.payload_bruto_sanitizado_json, strict=strict)
+    obj = _extrair_objeto_stripe_evento(payload, strict=strict)
+    fato_customer = _norm_text(fato.customer_id, strict=strict)
+    fato_subscription = _norm_text(fato.subscription_id, strict=strict)
+    obj_customer = None
+    obj_subscription = None
+    if obj:
+        obj_customer = (
+            require_optional_identifier_strict(obj["customer"], nome="customer")
+            if strict and "customer" in obj
+            else _norm_text(obj.get("customer"), strict=strict)
+        )
+        obj_subscription = (
+            require_optional_identifier_strict(obj["subscription"], nome="subscription")
+            if strict and "subscription" in obj
+            else _norm_text(obj.get("subscription"), strict=strict)
+        )
     if fato_customer != customer_id or fato_subscription != subscription_id:
         return False
-    payload = _json_loads(fato.payload_bruto_sanitizado_json)
-    obj = _extrair_objeto_stripe_evento(payload)
-    if obj:
-        obj_customer = _norm_text(obj.get("customer"))
-        obj_subscription = _norm_text(obj.get("subscription"))
-        if obj_customer and obj_customer != customer_id:
-            return False
-        if obj_subscription and obj_subscription != subscription_id:
-            return False
+    if obj_customer and obj_customer != customer_id:
+        return False
+    if obj_subscription and obj_subscription != subscription_id:
+        return False
     return True
 
 
@@ -3969,30 +4974,24 @@ def montar_mensagem_renovacao_falha_mensal(plano_exibicao: str) -> str:
     )
 
 
-def resolver_falha_mensal_vigente_conta(conta_id: int | None) -> dict[str, Any]:
+def resolver_falha_mensal_vigente_conta(
+    conta_id: int | None,
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
     """
     Read-only: resolve falha vigente de renovação mensal (subscription_cycle) por conta.
+
+    strict=True: não engole Exception (uso F4). Default preserva fallback histórico.
     """
     try:
         if conta_id is None:
             return _falha_mensal_vigente_inativa()
 
-        vinculo = _obter_vinculo_ativo_por_conta(int(conta_id))
-        if vinculo is None:
-            return _falha_mensal_vigente_inativa()
-
-        plano_codigo = _normalizar_plano_codigo(vinculo.plano_interno)
-        if plano_codigo not in ("starter", "pro"):
-            return _falha_mensal_vigente_inativa()
-
-        customer_id = _norm_text(vinculo.customer_id)
-        subscription_id = _norm_text(vinculo.subscription_id)
-        if not customer_id or not subscription_id:
-            return _falha_mensal_vigente_inativa()
-
+        cid = int(conta_id)
         fatos = (
             MonetizacaoFato.query.filter(
-                MonetizacaoFato.conta_id == int(conta_id),
+                MonetizacaoFato.conta_id == cid,
                 MonetizacaoFato.tipo_fato.in_(
                     (TIPO_FATO_INVOICE_PAYMENT_FAILED, TIPO_FATO_INVOICE_PAID)
                 ),
@@ -4001,19 +5000,42 @@ def resolver_falha_mensal_vigente_conta(conta_id: int | None) -> dict[str, Any]:
             .all()
         )
 
+        vinculo = _obter_vinculo_ativo_por_conta(cid)
+        if vinculo is None:
+            if strict:
+                for fato in fatos:
+                    _validar_estrutura_fato_monetizacao(fato, strict=True)
+            return _falha_mensal_vigente_inativa()
+
+        plano_codigo = _normalizar_plano_codigo(vinculo.plano_interno, strict=strict)
+        if plano_codigo not in ("starter", "pro", "multiuser"):
+            if strict:
+                for fato in fatos:
+                    _validar_estrutura_fato_monetizacao(fato, strict=True)
+            return _falha_mensal_vigente_inativa()
+
+        customer_id = _norm_text(vinculo.customer_id, strict=strict)
+        subscription_id = _norm_text(vinculo.subscription_id, strict=strict)
+        if not customer_id or not subscription_id:
+            if strict:
+                for fato in fatos:
+                    _validar_estrutura_fato_monetizacao(fato, strict=True)
+            return _falha_mensal_vigente_inativa()
+
         invoices_pagas: set[str] = set()
         falhas_candidatas: list[tuple[MonetizacaoFato, str]] = []
 
         for fato in fatos:
             if not _fato_corresponde_vinculo_stripe(
                 fato,
-                conta_id=int(conta_id),
+                conta_id=cid,
                 customer_id=customer_id,
                 subscription_id=subscription_id,
+                strict=strict,
             ):
                 continue
 
-            invoice_id = _resolver_invoice_id_fato_monetizacao(fato)
+            invoice_id = _resolver_invoice_id_fato_monetizacao(fato, strict=strict)
             if not invoice_id:
                 continue
 
@@ -4024,8 +5046,8 @@ def resolver_falha_mensal_vigente_conta(conta_id: int | None) -> dict[str, Any]:
             if fato.tipo_fato != TIPO_FATO_INVOICE_PAYMENT_FAILED:
                 continue
 
-            payload = _json_loads(fato.payload_bruto_sanitizado_json)
-            billing_reason = _extrair_billing_reason_invoice_evento(payload)
+            payload = _json_loads(fato.payload_bruto_sanitizado_json, strict=strict)
+            billing_reason = _extrair_billing_reason_invoice_evento(payload, strict=strict)
             if billing_reason != FALHA_MENSAL_BILLING_REASON:
                 continue
 
@@ -4056,6 +5078,8 @@ def resolver_falha_mensal_vigente_conta(conta_id: int | None) -> dict[str, Any]:
             "customer_id": customer_id,
         }
     except Exception:
+        if strict:
+            raise
         logger.exception(
             "Falha ao resolver falha mensal vigente (conta_id=%s)",
             conta_id,

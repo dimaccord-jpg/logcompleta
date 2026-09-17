@@ -97,6 +97,7 @@ from app.agente_compara_doc_service import (
     upload_audit_batch_from_file,
     upload_coverage_table_from_file,
     get_agente_compara_template_path,
+    agente_compara_chat_idempotency_key,
 )
 from app.run_agente_compara_temp_table import trigger_temp_table_extraction_for_session
 from app.run_agente_compara_chat import (
@@ -106,6 +107,7 @@ from app.run_agente_compara_chat import (
     normalize_chat_request_id,
     sanitize_chat_history,
 )
+from app import cleiton_doc_escopo as _cleiton_doc_escopo
 from app.run_agente_compara_insights_chat import chat_agente_compara_insights_reply
 from app.agente_compara_chat_context_service import (
     CAPABILITY_LOCKED,
@@ -1719,6 +1721,16 @@ def agente_compara_chat():
                 cached,
                 show_documents_used=audit_cfg.show_documents_used,
                 cached=True,
+            )
+        )
+    if _cleiton_doc_escopo.request_id_was_operationally_invalidated(
+        session, agente_compara_chat_idempotency_key(request_id)
+    ):
+        return jsonify(
+            _chat_success_payload(
+                {"answer": "", "flow_type": AGENTE_COMPARA_CHAT_FLOW_TYPE},
+                show_documents_used=audit_cfg.show_documents_used,
+                cached=False,
             )
         )
 

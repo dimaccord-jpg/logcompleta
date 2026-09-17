@@ -295,6 +295,14 @@
                     <a href="{{ url_for('user.perfil') }}" class="flex-shrink-0 me-3 text-warning text-decoration-none" aria-label="Área do usuário">
                         <i class="bi bi-person-circle fs-3"></i>
                     </a>
+                    <a href="{{ url_for('user.perfil') }}#notificacoes" class="flex-shrink-0 me-3 text-white text-decoration-none position-relative" aria-label="Notificações">
+                        <i class="bi bi-bell"></i>
+                        {% if notificacoes_nao_lidas|default(0) %}
+                        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.55rem;">
+                            {{ notificacoes_nao_lidas }}
+                        </span>
+                        {% endif %}
+                    </a>
                     <div class="menu-text min-w-0 flex-grow-1">
                         <small class="d-block text-muted" style="font-size: 0.65rem;">BEM-VINDO</small>
                         <a href="{{ url_for('user.perfil') }}" class="d-block small fw-semibold text-white text-decoration-none text-truncate">
