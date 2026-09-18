@@ -487,25 +487,15 @@ def snapshot_capacidade(conta_id: int) -> SnapshotCapacidade:
 
 def limite_ocupacao_conta(conta: Conta) -> int | None:
     """
-    Teto de ocupação: min(quantity atual, quantity futura pendente).
-    Sem redução pendente, permanece a quantity contratada corrente.
+    Teto operacional do ciclo vigente: a quantity atual contratada.
+
+    Uma redução futura pendente é alvo do próximo corte e não reduz
+    antecipadamente os assentos que o cliente já contratou e está pagando.
     """
     qtd = conta.quantidade_assentos_contratados
     if qtd is None:
         return None
-    from app.models import ContaMultiuserReducaoQuantity
-
-    pendente = (
-        ContaMultiuserReducaoQuantity.query.filter_by(
-            conta_id=int(conta.id),
-            estado=ContaMultiuserReducaoQuantity.ESTADO_PENDENTE,
-        )
-        .order_by(ContaMultiuserReducaoQuantity.id.asc())
-        .first()
-    )
-    if pendente is None:
-        return int(qtd)
-    return min(int(qtd), int(pendente.quantity_futura))
+    return int(qtd)
 
 
 def _exigir_capacidade_livre(

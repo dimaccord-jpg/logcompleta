@@ -35,7 +35,11 @@ from app.services.conta_multiuser_aumento_service import gerar_csrf_token_aument
 from app.services.conta_multiuser_aumento_excepcional_service import (
     gerar_csrf_token_admin_multiuser,
 )
-from app.services.conta_multiuser_capacidade_service import ocupar_assento
+from app.services.conta_multiuser_capacidade_service import (
+    contar_capacidade_comprometida,
+    limite_ocupacao_conta,
+    ocupar_assento,
+)
 from app.services.conta_multiuser_convite_service import (
     aceitar_convite,
     criar_convite,
@@ -59,6 +63,7 @@ from app.services.conta_multiuser_notificacao_service import (
     marcar_como_lida,
 )
 from app.services.conta_multiuser_reducao_service import (
+    snapshot_reducao_para_painel,
     solicitar_reducao_quantity,
     tentar_efetivar_reducao_no_corte,
 )
@@ -443,15 +448,124 @@ def test_reducao_revalidacao_no_corte_nao_efetiva(app, monkeypatch):
         _ = membros
 
 
-def test_convite_respeita_quantity_futura(app, monkeypatch):
+def test_reducao_futura_nao_reduz_capacidade_do_ciclo_atual(app, monkeypatch):
+    """SCRUM-189: quantity atual 12 + futura 10 continua permitindo até 12 assentos."""
     with app.app_context():
-        conta, user = _preparar_conta_multiuser("f7-inv", qtd=10, email="f7inv@test.com")
-        _adicionar_membros(conta, 3, "f7invm")
-        _mock_stripe(monkeypatch, quantity=10)
-        solicitar_reducao_quantity(ator=user, quantity_futura=5, idempotency_key="red-inv")
-        criar_convite(ator=user, email_destino="f7novo1@test.com", enviar=False, commit=True)
-        with pytest.raises(CapacidadeEsgotadaError):
-            criar_convite(ator=user, email_destino="f7novo2@test.com", enviar=False, commit=True)
+        conta, user = _preparar_conta_multiuser("f7-189", qtd=12, email="f7189@test.com")
+        state = _mock_stripe(monkeypatch, quantity=12)
+        for i in range(9):
+            criar_convite(
+                ator=user,
+                email_destino=f"f7189p{i}@test.com",
+                enviar=False,
+                commit=True,
+            )
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="189-cap"
+        )
+        db.session.refresh(conta)
+        assert conta.quantidade_assentos_contratados == 12
+        assert limite_ocupacao_conta(conta) == 12
+        assert contar_capacidade_comprometida(conta.id) == 10
+
+        criar_convite(
+            ator=user, email_destino="f7189-11@test.com", enviar=False, commit=True
+        )
+        assert contar_capacidade_comprometida(conta.id) == 11
+        criar_convite(
+            ator=user, email_destino="f7189-12@test.com", enviar=False, commit=True
+        )
+        assert contar_capacidade_comprometida(conta.id) == 12
+        with pytest.raises(CapacidadeEsgotadaError) as exc:
+            criar_convite(
+                ator=user, email_destino="f7189-13@test.com", enviar=False, commit=True
+            )
+        assert "Não há assento livre para um novo convite." in str(exc.value)
+
+        db.session.refresh(conta)
+        assert conta.quantidade_assentos_contratados == 12
+        assert state["quantity"] == 12
+        assert state["posts"] == []
+        ativos_antes = ContaVinculoOrganizacional.query.filter_by(
+            conta_id=conta.id, estado=ESTADO_ATIVO
+        ).count()
+        assert ativos_antes == 1
+
+        out = tentar_efetivar_reducao_no_corte(conta.id, referencia=FIM, commit=True)
+        db.session.refresh(conta)
+        assert out.estado == "bloqueada_no_corte"
+        assert conta.quantidade_assentos_contratados == 12
+        assert state["quantity"] == 12
+        assert state["posts"] == []
+        assert (
+            ContaVinculoOrganizacional.query.filter_by(
+                conta_id=conta.id, estado=ESTADO_ATIVO
+            ).count()
+            == ativos_antes
+        )
+
+
+def test_reducao_futura_efetiva_quando_ocupacao_cabe_no_alvo(app, monkeypatch):
+    """SCRUM-189: no corte, ocupação <= quantity futura permite efetivar sem revogar."""
+    with app.app_context():
+        conta, user = _preparar_conta_multiuser("f7-189-ok", qtd=12, email="f7189ok@test.com")
+        state = _mock_stripe(monkeypatch, quantity=12)
+        for i in range(9):
+            criar_convite(
+                ator=user,
+                email_destino=f"f7189ok{i}@test.com",
+                enviar=False,
+                commit=True,
+            )
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="189-ok"
+        )
+        ativos_antes = ContaVinculoOrganizacional.query.filter_by(
+            conta_id=conta.id, estado=ESTADO_ATIVO
+        ).count()
+        assert ativos_antes == 1
+        assert contar_capacidade_comprometida(conta.id) == 10
+        out = tentar_efetivar_reducao_no_corte(conta.id, referencia=FIM, commit=True)
+        db.session.refresh(conta)
+        assert out.estado == "efetivada"
+        assert conta.quantidade_assentos_contratados == 10
+        assert state["quantity"] == 10
+        assert (
+            ContaVinculoOrganizacional.query.filter_by(
+                conta_id=conta.id, estado=ESTADO_ATIVO
+            ).count()
+            == ativos_antes
+        )
+
+
+def test_painel_mensagem_reducao_futura_exige_adequacao_antes_do_corte(app, monkeypatch):
+    """SCRUM-189: UI informa alvo, data limite (corte-1 dia) e cobrança mantida."""
+    with app.app_context():
+        conta, user = _preparar_conta_multiuser(
+            "f7-189-ui", qtd=12, email="f7189ui@test.com"
+        )
+        _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="189-ui"
+        )
+        snap = snapshot_reducao_para_painel(int(conta.id))
+        data_limite = FIM - timedelta(days=1)
+        rotulo_limite = data_limite.strftime("%d/%m/%Y")
+        assert snap["quantity_futura"] == 10
+        assert snap["quantity_atual_no_pedido"] == 12
+        assert snap["data_limite_adequacao_rotulo"] == rotulo_limite
+        assert snap["efetivar_em_rotulo"] == FIM.strftime("%d/%m/%Y")
+        assert rotulo_limite != snap["efetivar_em_rotulo"]
+
+        client = _build_client(app)
+        _login(client, user)
+        html = " ".join(client.get("/gestao-multiuser").get_data(as_text=True).split())
+        assert "Para efetivar a redução futura para <strong>10</strong> assentos" in html
+        assert "manter no máximo <strong>10</strong> usuários ativos" in html
+        assert f"até <strong>{rotulo_limite}</strong>" in html
+        assert "a redução não será efetivada" in html
+        assert "a cobrança permanecerá em <strong>12</strong> assentos" in html
+        assert "A quantity atual permanece" not in html
 
 
 def test_reducao_idempotente_double_click(app, monkeypatch):

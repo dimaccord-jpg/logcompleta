@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -89,11 +90,16 @@ def snapshot_reducao_para_painel(conta_id: int) -> dict | None:
         return None
     from app.services.conta_multiuser_aumento_service import formatar_data_br
 
+    data_limite = None
+    if row.efetivar_em is not None:
+        data_limite = row.efetivar_em - timedelta(days=1)
     return {
         "quantity_futura": int(row.quantity_futura),
         "quantity_atual_no_pedido": int(row.quantity_atual_no_pedido),
         "efetivar_em": row.efetivar_em.isoformat() if row.efetivar_em else None,
         "efetivar_em_rotulo": formatar_data_br(row.efetivar_em),
+        "data_limite_adequacao": data_limite.isoformat() if data_limite else None,
+        "data_limite_adequacao_rotulo": formatar_data_br(data_limite),
         "estado": row.estado,
     }
 

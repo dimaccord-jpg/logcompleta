@@ -123,9 +123,11 @@
             <h5 class="fw-bold mb-3">Reduzir assentos</h5>
             {% if painel.reducao %}
             <div class="alert alert-info py-2 small">
-                Redução futura para <strong>{{ painel.reducao.quantity_futura }}</strong> assentos.
-                A quantity atual permanece <strong>{{ painel.assentos_contratados }}</strong> até
-                <strong>{{ painel.reducao.efetivar_em_rotulo or painel.reducao.efetivar_em }}</strong>.
+                Para efetivar a redução futura para <strong>{{ painel.reducao.quantity_futura }}</strong> assentos,
+                certifique-se de manter no máximo <strong>{{ painel.reducao.quantity_futura }}</strong> usuários ativos até
+                <strong>{{ painel.reducao.data_limite_adequacao_rotulo }}</strong>.
+                Caso contrário, a redução não será efetivada e a cobrança permanecerá em
+                <strong>{{ painel.assentos_contratados }}</strong> assentos.
             </div>
             {% else %}
             <p class="small text-muted">
