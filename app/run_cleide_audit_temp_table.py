@@ -31,6 +31,10 @@ from app.cleide_audit_prompt import (
 )
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.cleide_audit_config_service import get_active_calculation_bases_for_runtime
+from app.cleiton_doc_escopo import (
+    operational_cache_payload_is_current,
+    stamp_operational_cache_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +276,11 @@ def _get_cached_extraction(session_obj, source_doc_ids: list[str]) -> dict | Non
         return None
     key = cleide_audit_temp_table_extraction_idempotency_key(source_doc_ids)
     payload = cache.get(key)
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if not operational_cache_payload_is_current(payload):
+        return None
+    return payload
 
 
 def _cache_extraction_result(session_obj, source_doc_ids: list[str], record: dict) -> None:
@@ -282,11 +290,11 @@ def _cache_extraction_result(session_obj, source_doc_ids: list[str], record: dic
     if not isinstance(cache, dict):
         cache = {}
     key = cleide_audit_temp_table_extraction_idempotency_key(source_doc_ids)
-    cache[key] = {
+    cache[key] = stamp_operational_cache_payload({
         "temp_table_id": record.get("temp_table_id"),
         "status": record.get("status"),
         "version_marker": TEMP_TABLE_VERSION_MARKER,
-    }
+    })
     session_obj[TEMP_TABLE_EXTRACTION_IDEMPOTENCY_CACHE_KEY] = cache
     session_obj.modified = True
 

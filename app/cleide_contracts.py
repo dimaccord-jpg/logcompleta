@@ -31,13 +31,19 @@ def get_cleide_dataset_context(session_obj) -> dict | None:
     raw = session_obj.get(SESSION_KEY_CLEIDE_DATASET_CONTEXT)
     if not isinstance(raw, dict):
         return None
+    from app.cleiton_doc_escopo import operational_cache_payload_is_current
+
+    if not operational_cache_payload_is_current(raw):
+        return None
     return raw
 
 
 def set_cleide_dataset_context(session_obj, context: dict) -> None:
     if not isinstance(context, dict):
         raise ValueError("cleide_dataset_context invalido.")
-    session_obj[SESSION_KEY_CLEIDE_DATASET_CONTEXT] = context
+    from app.cleiton_doc_escopo import stamp_operational_cache_payload
+
+    session_obj[SESSION_KEY_CLEIDE_DATASET_CONTEXT] = stamp_operational_cache_payload(dict(context))
 
 
 def clear_cleide_dataset_context(session_obj) -> None:

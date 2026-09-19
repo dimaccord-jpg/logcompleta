@@ -31,7 +31,7 @@ from app.cleiton_doc_gemini_files import (
     build_gemini_file_part_for_generate,
     pdf_context_ready_from_record,
 )
-from app.cleiton_doc_store import load_document_record
+from app.cleiton_doc_store import load_authorized_document_record
 from app.services.cleide_audit_config_service import get_cleide_audit_config
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
 from app.services.external_ai_masking import (
@@ -172,7 +172,9 @@ def build_cleide_audit_document_context_for_chat(session_obj) -> dict:
     warnings: list[str] = []
 
     for doc_id in doc_ids:
-        record = load_document_record(doc_id, ttl_hours=cleiton_cfg.upload_ttl_hours)
+        record = load_authorized_document_record(
+            doc_id, ttl_hours=cleiton_cfg.upload_ttl_hours
+        )
         if record is None:
             warnings.append(
                 f"Documento {doc_id[:12]}... expirado ou indisponivel; nao considerado no contexto."

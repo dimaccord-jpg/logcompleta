@@ -35,7 +35,7 @@ from app.cleiton_doc_service import (
     cleanup_expired_documents_for_session,
     maybe_cleanup_expired_cleiton_docs,
 )
-from app.cleiton_doc_store import load_document_record
+from app.cleiton_doc_store import load_authorized_document_record
 from app.prompts import JULIA_CHAT_DOCUMENTAL_GUIDANCE
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
 from app.services.external_ai_masking import (
@@ -166,7 +166,7 @@ def build_julia_document_context_for_chat() -> dict:
 
     active_records: list[dict] = []
     for doc_id in doc_ids:
-        record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
+        record = load_authorized_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
         if record is not None:
             active_records.append(record)
 

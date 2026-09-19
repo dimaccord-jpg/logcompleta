@@ -39,6 +39,10 @@ from app.agente_compara_prompt import (
 )
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.agente_compara_config_service import get_active_calculation_bases_for_runtime
+from app.cleiton_doc_escopo import (
+    operational_cache_payload_is_current,
+    stamp_operational_cache_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +358,11 @@ def _get_cached_extraction(
         table_id=table_id,
     )
     payload = cache.get(key)
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if not operational_cache_payload_is_current(payload):
+        return None
+    return payload
 
 
 def _cache_extraction_result(
@@ -375,13 +383,13 @@ def _cache_extraction_result(
         comparison_id=comparison_id,
         table_id=table_id,
     )
-    cache[key] = {
+    cache[key] = stamp_operational_cache_payload({
         "temp_table_id": record.get("temp_table_id"),
         "status": record.get("status"),
         "version_marker": TEMP_TABLE_VERSION_MARKER,
         "comparison_id": comparison_id,
         "table_id": table_id,
-    }
+    })
     session_obj[TEMP_TABLE_EXTRACTION_IDEMPOTENCY_CACHE_KEY] = cache
     session_obj.modified = True
 

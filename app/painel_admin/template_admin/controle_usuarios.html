@@ -115,6 +115,194 @@
                 </div>
             </div>
         </div>
+
+        <div class="col-lg-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h6 class="fw-bold mb-3">
+                        <i class="bi bi-heart-pulse-fill me-2 text-secondary"></i>Saúde Multiuser
+                    </h6>
+                    <p class="small text-muted">
+                        Metadados administrativos da organização. Sem chats, documentos, uploads ou resultados operacionais.
+                    </p>
+                    {% set saude = saude_multiuser or {} %}
+                    <div class="row g-3 small">
+                        <div class="col-6 col-md-3">Contas ativas: <strong>{{ saude.contas_ativas or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Quantity total: <strong>{{ saude.quantidade_contratada_total or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Memberships ativos: <strong>{{ saude.memberships_ativos or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Convites pendentes: <strong>{{ saude.convites_pendentes or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Reduções pendentes: <strong>{{ saude.reducoes_pendentes or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Reduções bloqueadas: <strong>{{ saude.reducoes_bloqueadas or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Excepcionais em análise: <strong>{{ saude.aumentos_excepcionais_em_analise or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Pagamentos extraordinários: <strong>{{ saude.pagamentos_extraordinarios_pendentes or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Reconciliação necessária: <strong>{{ saude.operacoes_reconciliacao_necessaria or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Revogações: <strong>{{ saude.revogacoes or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Titularidades: <strong>{{ saude.transferencias_titularidade or 0 }}</strong></div>
+                        <div class="col-6 col-md-3">Divergências: <strong>{{ saude.divergencias_detectadas or 0 }}</strong></div>
+                    </div>
+                    {% if saude.contas_divergentes %}
+                    <div class="table-responsive mt-3">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Conta</th>
+                                    <th>Status</th>
+                                    <th>Tipos</th>
+                                    <th>Detectado em</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in saude.contas_divergentes %}
+                                <tr>
+                                    <td>{{ item.conta_nome }} (#{{ item.conta_id }})</td>
+                                    <td>{{ item.status }}</td>
+                                    <td class="small">{{ item.tipos }}</td>
+                                    <td>{{ item.detectado_em }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h6 class="fw-bold mb-3">
+                        <i class="bi bi-people-fill me-2 text-warning"></i>Aumento excepcional de assentos
+                    </h6>
+                    {% if solicitacoes_excepcionais %}
+                    <div class="table-responsive">
+                        <table class="table align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Conta</th>
+                                    <th>CNPJ</th>
+                                    <th>Solicitante</th>
+                                    <th>Quantity atual</th>
+                                    <th>Quantidade solicitada</th>
+                                    <th>Acumulado do ciclo</th>
+                                    <th>Ciclo</th>
+                                    <th>Estado</th>
+                                    <th>Data</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in solicitacoes_excepcionais %}
+                                <tr>
+                                    <td>{{ item.conta_nome }}</td>
+                                    <td>{{ item.conta_cnpj or '—' }}</td>
+                                    <td>{{ item.solicitante_email or '—' }}</td>
+                                    <td>{{ item.quantity_atual }}</td>
+                                    <td>{{ item.quantidade_solicitada }}</td>
+                                    <td>{{ item.acumulado_automatico_ciclo }}</td>
+                                    <td>{{ item.ciclo_rotulo }}</td>
+                                    <td>{{ item.estado_rotulo }}</td>
+                                    <td>{{ item.created_at_rotulo }}</td>
+                                    <td style="min-width: 16rem;">
+                                        {% if item.em_analise %}
+                                        {% if item.preview %}
+                                        <div class="small text-muted mb-2">
+                                            Preview: {{ item.preview.preco_unitario_rotulo }} × {{ item.preview.quantidade_aprovada }}
+                                            · {{ item.preview.dias_restantes }}/{{ item.preview.dias_totais }} dias
+                                            · {{ item.preview.valor_rotulo }}
+                                            · validade {{ item.preview.expires_at_rotulo }}
+                                        </div>
+                                        {% endif %}
+                                        <form method="post" action="{{ url_for('admin.controle_usuarios_aumento_excepcional_decidir', excepcional_id=item.id) }}" class="d-flex flex-wrap gap-1">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token_multiuser }}">
+                                            <input type="hidden" name="versao" value="{{ item.versao }}">
+                                            <button type="submit" name="decisao" value="gratuita" class="btn btn-success btn-sm">Aprovar grátis</button>
+                                            <button type="submit" name="decisao" value="paga" class="btn btn-primary btn-sm">Aprovar com cobrança</button>
+                                            <button type="submit" name="decisao" value="rejeitada" class="btn btn-outline-danger btn-sm">Rejeitar</button>
+                                        </form>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhuma solicitação excepcional no momento.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h6 class="fw-bold mb-3">
+                        <i class="bi bi-arrow-left-right me-2 text-info"></i>Transferência de titularidade Multiuser
+                    </h6>
+                    <p class="small text-muted">
+                        Somente suporte/admin. Não altera Customer, Subscription, quantity, ciclo nem User.is_admin.
+                    </p>
+                    <form method="post" action="{{ url_for('admin.controle_usuarios_titularidade_solicitar') }}" class="row g-2 align-items-end mb-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token_multiuser }}">
+                        <div class="col-md-2">
+                            <label class="form-label small fw-bold" for="titularidade_conta_id">Conta ID</label>
+                            <input type="number" min="1" class="form-control" id="titularidade_conta_id" name="conta_id" required>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-bold" for="titularidade_candidato_id">Candidato (User ID)</label>
+                            <input type="number" min="1" class="form-control" id="titularidade_candidato_id" name="candidato_id" required>
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label small fw-bold" for="titularidade_motivo">Motivo</label>
+                            <input type="text" class="form-control" id="titularidade_motivo" name="motivo" maxlength="500" required>
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-outline-primary w-100">Solicitar</button>
+                        </div>
+                    </form>
+                    {% if solicitacoes_titularidade %}
+                    <div class="table-responsive">
+                        <table class="table align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Conta</th>
+                                    <th>Titular atual</th>
+                                    <th>Candidato</th>
+                                    <th>Estado</th>
+                                    <th>Data</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in solicitacoes_titularidade %}
+                                <tr>
+                                    <td>{{ item.conta_nome }}</td>
+                                    <td>{{ item.titular_email or '—' }}</td>
+                                    <td>{{ item.candidato_email or '—' }}</td>
+                                    <td>{{ item.estado_rotulo }}</td>
+                                    <td>{{ item.created_at_rotulo }}</td>
+                                    <td>
+                                        {% if item.pendente %}
+                                        <form method="post" action="{{ url_for('admin.controle_usuarios_titularidade_decidir', solicitacao_id=item.id) }}" class="d-flex flex-wrap gap-1">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token_multiuser }}">
+                                            <input type="hidden" name="versao" value="{{ item.versao }}">
+                                            <button type="submit" name="decisao" value="aprovada" class="btn btn-success btn-sm">Aprovar</button>
+                                            <button type="submit" name="decisao" value="rejeitada" class="btn btn-outline-danger btn-sm">Rejeitar</button>
+                                        </form>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nenhuma solicitação de titularidade no momento.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 

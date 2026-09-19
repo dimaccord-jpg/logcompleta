@@ -1,0 +1,436 @@
+{% extends "base.html" %}
+
+{% block title %}Gestão da equipe | AgenteFrete{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row mb-4 align-items-center">
+        <div class="col-12">
+            <a href="{{ url_for('user.perfil') }}" class="small text-muted text-decoration-none">
+                <i class="bi bi-arrow-left me-1"></i>Área do Usuário
+            </a>
+            <h2 class="fw-bold mb-1 mt-2">Gestão da equipe</h2>
+            <p class="text-muted mb-0">Acompanhe assentos contratados, reduza quantity no próximo corte e gerencie membros.</p>
+        </div>
+    </div>
+
+    {% if not autorizado %}
+    <div class="alert alert-warning">
+        Somente o Contratante ativo da Conta pode acessar a gestão de assentos.
+    </div>
+    {% elif painel %}
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-lg-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="small text-muted">Assentos contratados</div>
+                    <div class="fs-3 fw-bold">{{ painel.assentos_contratados }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="small text-muted">Usuários ativos</div>
+                    <div class="fs-3 fw-bold">{{ painel.usuarios_ativos }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="small text-muted">Convites pendentes</div>
+                    <div class="fs-3 fw-bold">{{ painel.convites_pendentes }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="small text-muted">Assentos disponíveis</div>
+                    <div class="fs-3 fw-bold">{{ painel.assentos_disponiveis }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="fw-bold mb-3">Ciclo atual</h5>
+                    <ul class="list-unstyled mb-0">
+                        <li class="mb-2">Aumento automático já utilizado: <strong>{{ painel.aumento_automatico_utilizado }}</strong></li>
+                        <li class="mb-2">Saldo de aumento automático restante: <strong>{{ painel.aumento_automatico_restante }}</strong></li>
+                        <li class="mb-2">Próxima cobrança: <strong>{{ painel.proxima_cobranca_rotulo or '—' }}</strong></li>
+                        <li>Valor mensal atual: <strong>{{ painel.valor_mensal_atual_rotulo }}</strong></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="fw-bold mb-3">Aumentar assentos</h5>
+                    <p class="small text-muted">
+                        Aumentos automáticos não geram cobrança hoje. O novo valor entra na próxima renovação.
+                    </p>
+                    <form id="form-aumento-multiuser" class="mb-0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="idempotency_key" id="aumento-idempotency" value="{{ idempotency_key }}">
+                        <label class="form-label small fw-bold" for="quantidade-adicional">Quantidade adicional</label>
+                        <div class="input-group mb-3">
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                class="form-control"
+                                id="quantidade-adicional"
+                                name="quantidade"
+                                required
+                            >
+                            <button type="button" class="btn btn-outline-secondary" id="btn-preview-aumento">
+                                Calcular
+                            </button>
+                        </div>
+                    </form>
+                    <div id="preview-aumento" class="border rounded p-3 d-none">
+                        <div class="small mb-1" id="preview-unitario"></div>
+                        <div class="small mb-1" id="preview-qtd-atual"></div>
+                        <div class="small mb-1" id="preview-delta"></div>
+                        <div class="small mb-1" id="preview-resultante"></div>
+                        <div class="small mb-1" id="preview-mensal-atual"></div>
+                        <div class="small mb-1" id="preview-hoje"></div>
+                        <div class="small mb-1" id="preview-renovacao"></div>
+                        <div class="small mb-1" id="preview-mensal"></div>
+                        <div class="small mb-1" id="preview-impacto"></div>
+                        <div class="small mb-3" id="preview-proxima"></div>
+                        <div id="preview-analise" class="alert alert-warning py-2 small d-none">
+                            Esta solicitação requer análise.
+                        </div>
+                        <button type="button" class="btn btn-dark btn-sm" id="btn-confirmar-aumento">
+                            Confirmar aumento
+                        </button>
+                    </div>
+                    <div id="resultado-aumento" class="alert mt-3 d-none"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="fw-bold mb-3">Reduzir assentos</h5>
+            {% if painel.reducao %}
+            <div class="alert alert-info py-2 small">
+                Para efetivar a redução futura para <strong>{{ painel.reducao.quantity_futura }}</strong> assentos,
+                certifique-se de manter no máximo <strong>{{ painel.reducao.quantity_futura }}</strong> usuários ativos até
+                <strong>{{ painel.reducao.data_limite_adequacao_rotulo }}</strong>.
+                Caso contrário, a redução não será efetivada e a cobrança permanecerá em
+                <strong>{{ painel.assentos_contratados }}</strong> assentos.
+            </div>
+            {% else %}
+            <p class="small text-muted">
+                A redução vale só no próximo corte do ciclo. Não gera crédito, reembolso nem cobrança hoje.
+            </p>
+            <form id="form-reducao-multiuser" class="mb-0">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="idempotency_key" id="reducao-idempotency" value="{{ idempotency_key }}-red">
+                <label class="form-label small fw-bold" for="quantity-futura">Quantity futura</label>
+                <div class="input-group" style="max-width: 22rem;">
+                    <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        class="form-control"
+                        id="quantity-futura"
+                        name="quantity_futura"
+                        required
+                    >
+                    <button type="button" class="btn btn-outline-dark" id="btn-solicitar-reducao">
+                        Solicitar redução
+                    </button>
+                </div>
+            </form>
+            <div id="resultado-reducao" class="alert mt-3 d-none"></div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if solicitacoes_excepcionais %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="fw-bold mb-3">Solicitação de aumento</h5>
+            {% for item in solicitacoes_excepcionais %}
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                <div>
+                    <span class="fw-bold">{{ item.estado_rotulo }}</span>
+                    <span class="text-muted small ms-2">+{{ item.quantidade_solicitada }} assento(s)</span>
+                </div>
+                {% if item.pode_pagar and item.checkout_url %}
+                <a class="btn btn-dark btn-sm" href="{{ url_for('multiuser_painel.pagar_aumento_excepcional', excepcional_id=item.id) }}">
+                    Pagar
+                </a>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% elif painel.solicitacao_analise_pendente %}
+    <div class="alert alert-warning">
+        Há uma solicitação de aumento que requer análise. Nenhum assento adicional foi liberado.
+    </div>
+    {% endif %}
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="fw-bold mb-3">Convidar membro</h5>
+            <p class="small text-muted">
+                O convite reserva um assento e envia o link de aceite. A capacidade é validada no servidor.
+            </p>
+            <form id="form-convite-multiuser" class="mb-0">
+                <input type="hidden" name="csrf_token" id="csrf-convite" value="{{ csrf_token_convite }}">
+                <label class="form-label small fw-bold" for="convite-email">E-mail do destinatário</label>
+                <div class="input-group" style="max-width: 28rem;">
+                    <input
+                        type="email"
+                        class="form-control"
+                        id="convite-email"
+                        name="email"
+                        required
+                        autocomplete="off"
+                    >
+                    <button type="button" class="btn btn-dark" id="btn-convidar-membro">
+                        Convidar membro
+                    </button>
+                </div>
+            </form>
+            <div id="resultado-convite" class="alert mt-3 d-none"></div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <h5 class="fw-bold mb-3">Membros e assentos</h5>
+            <div class="table-responsive">
+                <table class="table align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Nome</th>
+                            <th>E-mail</th>
+                            <th>Papel</th>
+                            <th>Estado</th>
+                            <th>Assento</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for membro in painel.membros %}
+                        <tr>
+                            <td>{{ membro.nome or '—' }}</td>
+                            <td>{{ membro.email or '—' }}</td>
+                            <td>{{ membro.papel or '—' }}</td>
+                            <td>{{ membro.estado_gerencial_rotulo }}</td>
+                            <td>{{ 'Ocupado' if membro.ocupa_assento else 'Livre' }}</td>
+                            <td>
+                                {% if membro.papel == 'membro' and membro.ocupa_assento and membro.user_id %}
+                                <button
+                                    type="button"
+                                    class="btn btn-outline-danger btn-sm btn-revogar-membro"
+                                    data-user-id="{{ membro.user_id }}"
+                                >
+                                    Encerrar acesso
+                                </button>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% elif erro %}
+    <div class="alert alert-danger">{{ erro }}</div>
+    {% endif %}
+</div>
+<script>
+(function () {
+    var form = document.getElementById("form-aumento-multiuser");
+    if (!form) return;
+    var previewBox = document.getElementById("preview-aumento");
+    var resultado = document.getElementById("resultado-aumento");
+    var btnPreview = document.getElementById("btn-preview-aumento");
+    var btnConfirm = document.getElementById("btn-confirmar-aumento");
+    var previewAnalise = document.getElementById("preview-analise");
+    var csrf = form.querySelector("[name=csrf_token]").value;
+    var idem = document.getElementById("aumento-idempotency").value;
+
+    function payload() {
+        return {
+            csrf_token: csrf,
+            idempotency_key: idem,
+            quantidade: document.getElementById("quantidade-adicional").value
+        };
+    }
+
+    function mostrarErro(msg) {
+        resultado.className = "alert alert-danger mt-3";
+        resultado.textContent = msg;
+        resultado.classList.remove("d-none");
+    }
+
+    btnPreview.addEventListener("click", function () {
+        resultado.classList.add("d-none");
+        fetch("{{ url_for('multiuser_painel.api_preview_aumento') }}", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload())
+        }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+          .then(function (res) {
+            if (!res.ok || !res.d.ok) {
+                mostrarErro((res.d && res.d.mensagem) || "Não foi possível calcular o preview.");
+                return;
+            }
+            document.getElementById("preview-unitario").textContent = res.d.preco_unitario_rotulo;
+            document.getElementById("preview-qtd-atual").textContent = res.d.quantity_atual_rotulo;
+            document.getElementById("preview-delta").textContent = res.d.quantidade_solicitada_rotulo;
+            document.getElementById("preview-resultante").textContent = res.d.nova_quantity_rotulo;
+            document.getElementById("preview-mensal-atual").textContent = res.d.valor_mensal_atual_rotulo;
+            document.getElementById("preview-hoje").textContent = res.d.valor_hoje_rotulo;
+            document.getElementById("preview-renovacao").textContent = res.d.aumento_renovacao_rotulo;
+            document.getElementById("preview-mensal").textContent = res.d.valor_mensal_projetado_rotulo;
+            document.getElementById("preview-impacto").textContent = res.d.impacto_imediato_rotulo;
+            document.getElementById("preview-proxima").textContent = "Próxima cobrança: " + res.d.proxima_cobranca_rotulo;
+            previewAnalise.classList.toggle("d-none", !res.d.requer_analise);
+            btnConfirm.textContent = res.d.requer_analise ? "Enviar para análise" : "Confirmar aumento";
+            btnConfirm.classList.remove("d-none");
+            previewBox.classList.remove("d-none");
+          }).catch(function () {
+            mostrarErro("Não foi possível calcular o preview.");
+          });
+    });
+
+    btnConfirm.addEventListener("click", function () {
+        if (btnConfirm.disabled) return;
+        btnConfirm.disabled = true;
+        fetch("{{ url_for('multiuser_painel.api_confirmar_aumento') }}", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload())
+        }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+          .then(function (res) {
+            if (!res.ok || !res.d.ok) {
+                btnConfirm.disabled = false;
+                mostrarErro((res.d && res.d.mensagem) || "Não foi possível confirmar o aumento.");
+                return;
+            }
+            if (res.d.requer_analise) {
+                resultado.className = "alert alert-warning mt-3";
+                resultado.textContent = res.d.mensagem || "Esta solicitação requer análise.";
+            } else {
+                resultado.className = "alert alert-success mt-3";
+                resultado.textContent = res.d.mensagem || "Assentos adicionados.";
+            }
+            resultado.classList.remove("d-none");
+            window.setTimeout(function () { window.location.reload(); }, 800);
+          }).catch(function () {
+            btnConfirm.disabled = false;
+            mostrarErro("Não foi possível confirmar o aumento.");
+          });
+    });
+})();
+(function () {
+    var csrfEl = document.querySelector("[name=csrf_token]");
+    var csrf = csrfEl ? csrfEl.value : "";
+    var btnReducao = document.getElementById("btn-solicitar-reducao");
+    var resultadoReducao = document.getElementById("resultado-reducao");
+    if (btnReducao && resultadoReducao) {
+        btnReducao.addEventListener("click", function () {
+            var idemEl = document.getElementById("reducao-idempotency");
+            fetch("{{ url_for('multiuser_painel.api_solicitar_reducao') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    csrf_token: csrf,
+                    idempotency_key: idemEl ? idemEl.value : "",
+                    quantity_futura: document.getElementById("quantity-futura").value
+                })
+            }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+              .then(function (res) {
+                if (!res.ok || !res.d.ok) {
+                    resultadoReducao.className = "alert alert-danger mt-3";
+                    resultadoReducao.textContent = (res.d && res.d.mensagem) || "Não foi possível solicitar a redução.";
+                    resultadoReducao.classList.remove("d-none");
+                    return;
+                }
+                resultadoReducao.className = "alert alert-success mt-3";
+                resultadoReducao.textContent = res.d.mensagem || "Redução futura registrada.";
+                resultadoReducao.classList.remove("d-none");
+                window.setTimeout(function () { window.location.reload(); }, 800);
+              }).catch(function () {
+                resultadoReducao.className = "alert alert-danger mt-3";
+                resultadoReducao.textContent = "Não foi possível solicitar a redução.";
+                resultadoReducao.classList.remove("d-none");
+              });
+        });
+    }
+    document.querySelectorAll(".btn-revogar-membro").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            var uid = btn.getAttribute("data-user-id");
+            fetch("/api/multiuser/membros/" + uid + "/revogar", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ csrf_token: csrf })
+            }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+              .then(function (res) {
+                if (!res.ok || !res.d.ok) {
+                    window.alert((res.d && res.d.mensagem) || "Não foi possível encerrar o acesso.");
+                    return;
+                }
+                window.location.reload();
+              }).catch(function () {
+                window.alert("Não foi possível encerrar o acesso.");
+              });
+        });
+    });
+    var btnConvite = document.getElementById("btn-convidar-membro");
+    var resultadoConvite = document.getElementById("resultado-convite");
+    var csrfConviteEl = document.getElementById("csrf-convite");
+    if (btnConvite && resultadoConvite && csrfConviteEl) {
+        btnConvite.addEventListener("click", function () {
+            if (btnConvite.disabled) return;
+            btnConvite.disabled = true;
+            fetch("{{ url_for('multiuser_convite.api_criar_convite') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    csrf_token: csrfConviteEl.value,
+                    email: document.getElementById("convite-email").value
+                })
+            }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+              .then(function (res) {
+                if (!res.ok || !res.d.ok) {
+                    btnConvite.disabled = false;
+                    resultadoConvite.className = "alert alert-danger mt-3";
+                    resultadoConvite.textContent = (res.d && res.d.mensagem) || "Não foi possível enviar o convite.";
+                    resultadoConvite.classList.remove("d-none");
+                    return;
+                }
+                resultadoConvite.className = "alert alert-success mt-3";
+                resultadoConvite.textContent = res.d.reutilizado
+                    ? "Convite reenviado."
+                    : "Convite enviado.";
+                resultadoConvite.classList.remove("d-none");
+                window.setTimeout(function () { window.location.reload(); }, 800);
+              }).catch(function () {
+                btnConvite.disabled = false;
+                resultadoConvite.className = "alert alert-danger mt-3";
+                resultadoConvite.textContent = "Não foi possível enviar o convite.";
+                resultadoConvite.classList.remove("d-none");
+              });
+        });
+    }
+})();
+</script>
+{% endblock %}

@@ -208,6 +208,9 @@ def _normalize_comparison_state(raw: dict | None) -> dict | None:
     }
     if comparison_calculation is not None:
         payload["comparison_calculation"] = copy.deepcopy(comparison_calculation)
+    for field in ("conta_id", "franquia_id", "usuario_id"):
+        if field in raw and raw.get(field) is not None:
+            payload[field] = raw.get(field)
     return payload
 
 
@@ -218,7 +221,13 @@ def get_comparison_state(session_obj=None) -> dict | None:
     else:
         sess = session_obj
     raw = sess.get(AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY)
-    return _normalize_comparison_state(raw if isinstance(raw, dict) else None)
+    if not isinstance(raw, dict):
+        return None
+    from app.cleiton_doc_escopo import operational_cache_payload_is_current
+
+    if not operational_cache_payload_is_current(raw):
+        return None
+    return _normalize_comparison_state(raw)
 
 
 def set_comparison_state(state: dict, *, session_obj=None) -> dict:
@@ -230,6 +239,9 @@ def set_comparison_state(state: dict, *, session_obj=None) -> dict:
     normalized = _normalize_comparison_state(state)
     if normalized is None:
         raise ValueError("Estado de comparação inválido.")
+    from app.cleiton_doc_escopo import stamp_operational_cache_payload
+
+    normalized = stamp_operational_cache_payload(normalized)
     sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = normalized
     _mark_session_modified(sess if session_obj is None else session_obj)
     return normalized

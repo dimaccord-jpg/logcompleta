@@ -77,6 +77,10 @@ from app.cleiton_doc_gemini_files import (
 )
 from app.cleiton_doc_prepare import prepare_document
 from app.cleiton_doc_service import CleitonDocSessionError, maybe_cleanup_expired_cleiton_docs
+from app.cleiton_doc_escopo import (
+    document_record_matches_operational_scope,
+    stamp_document_operational_scope,
+)
 from app.cleiton_doc_store import (
     document_record_matches_domain_scope,
     get_cleiton_doc_tmp_dir,
@@ -696,7 +700,7 @@ def get_active_documents_for_session() -> list[dict]:
 
     for doc_id in get_cleide_audit_doc_ids(session):
         record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
-        if record is None:
+        if record is None or not document_record_matches_operational_scope(record):
             stale_ids.append(doc_id)
             continue
         active.append(_public_record(record))
@@ -826,6 +830,7 @@ def _register_document_record(
         FIELD_GEMINI_FILE_STATE: gemini_file_state,
         FIELD_GEMINI_UPLOADED_AT: gemini_uploaded_at,
     }
+    stamp_document_operational_scope(record)
 
     save_document_record(record)
     append_cleide_audit_doc_id(session, doc_id)

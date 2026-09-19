@@ -52,9 +52,44 @@
                             </small>
                         </div>
 
-                        {% if plano.codigo in ["starter", "pro"] %}
+                        {% if plano.codigo == "multiuser" %}
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">Quantidade mínima (assentos)</label>
+                            <input
+                                type="number"
+                                step="1"
+                                min="1"
+                                class="form-control"
+                                name="quantidade_minima"
+                                value="{{ plano.quantidade_minima if plano.quantidade_minima is not none else '' }}"
+                                placeholder="Mínimo comercial de assentos"
+                                required
+                            >
+                            <small class="text-muted">
+                                Configuração administrativa persistida. Não representa cobrança nem Checkout.
+                            </small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">Limite de aumento automático por ciclo</label>
+                            <input
+                                type="number"
+                                step="1"
+                                min="1"
+                                class="form-control"
+                                name="limite_aumento_automatico_ciclo"
+                                value="{{ plano.limite_aumento_automatico_ciclo if plano.limite_aumento_automatico_ciclo is not none else '' }}"
+                                placeholder="Assentos cumulativos aprovados automaticamente no ciclo"
+                            >
+                            <small class="text-muted">
+                                Autoridade única do aumento automático F5. Persistida em ConfigRegras.
+                                Não cobra proporcionalmente no ciclo atual.
+                            </small>
+                        </div>
+                        {% endif %}
+
+                        {% if plano.codigo in ["starter", "pro", "multiuser"] %}
                         <hr>
-                        <p class="small fw-bold mb-2">Configuração externa (Fase 1 Stripe-ready)</p>
+                        <p class="small fw-bold mb-2">Configuração externa (Stripe)</p>
 
                         <div class="mb-2">
                             <label class="form-label small fw-bold">Provider externo</label>
@@ -62,7 +97,7 @@
                                 type="text"
                                 class="form-control"
                                 name="gateway_provider"
-                                value="{{ plano.gateway_config.provider if plano.gateway_config else '' }}"
+                                value="{{ (plano.gateway_config.provider or '') if plano.gateway_config else '' }}"
                                 placeholder="stripe"
                             >
                         </div>
@@ -73,7 +108,7 @@
                                 type="text"
                                 class="form-control"
                                 name="gateway_product_id"
-                                value="{{ plano.gateway_config.product_id if plano.gateway_config else '' }}"
+                                value="{{ (plano.gateway_config.product_id or '') if plano.gateway_config else '' }}"
                                 placeholder="prod_xxx"
                             >
                         </div>
@@ -84,7 +119,7 @@
                                 type="text"
                                 class="form-control"
                                 name="gateway_price_id"
-                                value="{{ plano.gateway_config.price_id if plano.gateway_config else '' }}"
+                                value="{{ (plano.gateway_config.price_id or '') if plano.gateway_config else '' }}"
                                 placeholder="price_xxx"
                             >
                         </div>
@@ -96,7 +131,7 @@
                                     type="text"
                                     class="form-control"
                                     name="gateway_currency"
-                                    value="{{ plano.gateway_config.currency if plano.gateway_config else '' }}"
+                                    value="{{ (plano.gateway_config.currency or '') if plano.gateway_config else '' }}"
                                     placeholder="brl"
                                 >
                             </div>
@@ -106,7 +141,7 @@
                                     type="text"
                                     class="form-control"
                                     name="gateway_interval"
-                                    value="{{ plano.gateway_config.interval if plano.gateway_config else '' }}"
+                                    value="{{ (plano.gateway_config.interval or '') if plano.gateway_config else '' }}"
                                     placeholder="month"
                                 >
                             </div>

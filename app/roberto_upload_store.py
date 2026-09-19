@@ -8,8 +8,21 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+
+UPLOAD_OK = "ok"
+UPLOAD_NOT_FOUND = "not_found"
+UPLOAD_EXPIRED = "expired"
+UPLOAD_INVALID = "invalid"
+UPLOAD_SCOPE_MISMATCH = "scope_mismatch"
+
+
+@dataclass(frozen=True)
+class UploadReadOutcome:
+    status: str
+    rows: list[dict] | None = None
 
 
 def _utcnow_iso() -> str:
@@ -115,38 +128,90 @@ def save_upload_data(rows: list[dict]) -> str:
         "created_at": _utcnow_iso(),
         "rows": rows,
     }
+    try:
+        from app.cleiton_doc_escopo import stamp_operational_cache_payload
+
+        payload = stamp_operational_cache_payload(payload)
+    except Exception:
+        pass
     path = _file_path(upload_id)
     _write_json_atomic(path, payload)
     return upload_id
 
 
-def read_upload_data(upload_id: str, ttl_minutes: int) -> list[dict] | None:
+def _payload_owned_by_current_scope(payload: dict) -> bool:
+    from app.cleiton_doc_escopo import current_operational_scope, operational_cache_payload_is_current
+
+    if current_operational_scope() is None:
+        return True
+    return operational_cache_payload_is_current(payload)
+
+
+def inspect_upload_data(upload_id: str, ttl_minutes: int) -> UploadReadOutcome:
+    """
+    Distingue MISS, expirado, inválido e SCOPE_MISMATCH.
+    SCOPE_MISMATCH nunca autoriza exclusão física.
+    """
     if not upload_id:
-        return None
+        return UploadReadOutcome(UPLOAD_NOT_FOUND)
     path = _file_path(upload_id)
     if not os.path.exists(path):
-        return None
+        return UploadReadOutcome(UPLOAD_NOT_FOUND)
     try:
         with open(path, "r", encoding="utf-8") as f:
             payload = json.load(f)
+        if not isinstance(payload, dict):
+            return UploadReadOutcome(UPLOAD_INVALID)
+        from app.cleiton_doc_escopo import current_operational_scope, operational_cache_payload_is_current
+
+        if current_operational_scope() is not None and not operational_cache_payload_is_current(
+            payload
+        ):
+            return UploadReadOutcome(UPLOAD_SCOPE_MISMATCH)
         created_at = _parse_iso(payload.get("created_at"))
         if created_at is None or _is_expired(created_at, ttl_minutes):
-            clear_upload_data(upload_id)
-            return None
+            return UploadReadOutcome(UPLOAD_EXPIRED)
         rows = payload.get("rows")
-        return rows if isinstance(rows, list) else None
+        if not isinstance(rows, list):
+            return UploadReadOutcome(UPLOAD_INVALID)
+        return UploadReadOutcome(UPLOAD_OK, rows=rows)
     except Exception:
-        return None
+        return UploadReadOutcome(UPLOAD_INVALID)
 
 
-def clear_upload_data(upload_id: str) -> None:
+def read_upload_data(upload_id: str, ttl_minutes: int) -> list[dict] | None:
+    outcome = inspect_upload_data(upload_id, ttl_minutes)
+    if outcome.status == UPLOAD_OK:
+        return outcome.rows
+    if outcome.status == UPLOAD_EXPIRED:
+        clear_upload_data(upload_id)
+    return None
+
+
+def clear_upload_data(upload_id: str) -> bool:
+    """
+    Exclui somente com prova de ownership do escopo operacional atual.
+    Sem prova (scope mismatch, legado autenticado, JSON ilegível autenticado): não apaga.
+    """
     if not upload_id:
-        return
+        return False
     path = _file_path(upload_id)
+    if not os.path.exists(path):
+        return True
     try:
-        _safe_remove_file(path)
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict) or not _payload_owned_by_current_scope(payload):
+            return False
     except Exception:
-        pass
+        from app.cleiton_doc_escopo import current_operational_scope
+
+        if current_operational_scope() is not None:
+            return False
+    try:
+        return bool(_safe_remove_file(path))
+    except Exception:
+        return False
 
 
 def cleanup_expired_uploads(ttl_minutes: int) -> int:

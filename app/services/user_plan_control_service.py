@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import re
 import secrets
-import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -24,6 +23,10 @@ from app.services.conta_franquia_service import (
     criar_conta_franquia_para_cadastro,
     get_sistema_interno_ids,
 )
+from app.services.conta_multiuser_capacidade_service import (
+    aplicar_atribuicao_plano_multiuser_admin,
+)
+from app.services.conta_multiuser_errors import CapacidadeEsgotadaError, DivergenciaImpeditivaError
 
 PLANO_FREE = "free"
 PLANO_STARTER = "starter"
@@ -147,67 +150,21 @@ def _create_code_for_franquia(
     raise ValueError("Não foi possível gerar código único de acesso para Multiuser.")
 
 
-def _ensure_multiuser_franquias(
+def _codigos_para_franquias_criadas(
     *,
-    user: User,
-    quantidade_franquias: int,
-    limite_referencia: Decimal | None,
+    conta_id: int,
+    franquias_criadas: list[Franquia],
     admin_user_id: int | None,
-) -> tuple[list[Franquia], list[str]]:
-    conta, _fr = _ensure_commercial_structure(user)
-    franquias_conta = (
-        Franquia.query.filter_by(conta_id=conta.id)
-        .order_by(Franquia.id.asc())
-        .all()
-    )
-    criadas: list[Franquia] = []
+) -> list[str]:
     codigos: list[str] = []
-
-    if len(franquias_conta) < quantidade_franquias:
-        faltantes = quantidade_franquias - len(franquias_conta)
-        idx_base = len(franquias_conta)
-        for i in range(faltantes):
-            idx = idx_base + i + 1
-            slug = f"multiuser-{idx}"
-            if Franquia.query.filter_by(conta_id=conta.id, slug=slug).first():
-                slug = f"multiuser-{idx}-{uuid.uuid4().hex[:6]}"[:80]
-            fr = Franquia(
-                conta_id=conta.id,
-                nome=f"Franquia {idx}",
-                slug=slug,
-                status=Franquia.STATUS_ACTIVE,
-            )
-            db.session.add(fr)
-            db.session.flush()
-            criadas.append(fr)
-        franquias_conta = (
-            Franquia.query.filter_by(conta_id=conta.id)
-            .order_by(Franquia.id.asc())
-            .all()
-        )
-
-    # Aplica limite de referência em todas as franquias operacionais da conta Multiuser.
-    for fr in franquias_conta:
-        fr.limite_total = limite_referencia
-        db.session.add(fr)
-
-    # Mantém usuário master apontando para a primeira franquia da conta.
-    if franquias_conta:
-        user.franquia_id = franquias_conta[0].id
-    user.conta_id = conta.id
-    user.categoria = PLANO_MULTIUSER
-    db.session.add(user)
-    db.session.flush()
-
-    for fr in criadas:
+    for fr in franquias_criadas:
         code = _create_code_for_franquia(
-            conta_id=conta.id,
+            conta_id=conta_id,
             franquia_id=fr.id,
             admin_user_id=admin_user_id,
         )
         codigos.append(code)
-
-    return franquias_conta, codigos
+    return codigos
 
 
 def _alinhar_governanca_franquias(franquias: list[Franquia]) -> None:
@@ -263,14 +220,36 @@ def atribuir_plano_para_usuario(
             raise ValueError("Quantidade de franquias inválida para Multiuser.")
         if qtd <= 0:
             raise ValueError("Quantidade de franquias deve ser maior que zero.")
-        franquias, codigos = _ensure_multiuser_franquias(
-            user=user,
-            quantidade_franquias=qtd,
-            limite_referencia=limite_referencia,
-            admin_user_id=admin_user_id,
-        )
-        db.session.commit()
-        _alinhar_governanca_franquias(franquias)
+        _ensure_commercial_structure(user)
+        try:
+            governado = aplicar_atribuicao_plano_multiuser_admin(
+                user=user,
+                quantidade_assentos=qtd,
+                limite_referencia=limite_referencia,
+                admin_user_id=admin_user_id,
+                commit=False,
+            )
+            codigos = _codigos_para_franquias_criadas(
+                conta_id=governado.conta_id,
+                franquias_criadas=governado.franquias_criadas,
+                admin_user_id=admin_user_id,
+            )
+            db.session.commit()
+        except (CapacidadeEsgotadaError, DivergenciaImpeditivaError):
+            db.session.rollback()
+            user_atualizado = db.session.get(User, user.id)
+            return ResultadoAtribuicaoPlano(
+                user_email=user_atualizado.email,
+                plano_anterior=plano_anterior,
+                plano_novo=plano_anterior,
+                franquia_id=user_atualizado.franquia_id,
+                conta_id=user_atualizado.conta_id,
+                franquias_multiuser_criadas=0,
+                codigos_gerados=(),
+            )
+        except Exception:
+            db.session.rollback()
+            raise
         user_atualizado = db.session.get(User, user.id)
         return ResultadoAtribuicaoPlano(
             user_email=user_atualizado.email,

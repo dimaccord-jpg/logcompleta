@@ -121,10 +121,56 @@
                         <li><i class="bi bi-check-circle text-success me-2"></i>Centralização de avisos importantes</li>
                         <li><i class="bi bi-check-circle text-success me-2"></i>Adequado para equipes de logística</li>
                     </ul>
+                    <div id="notificacoes">
+                        {% if notificacoes_internas %}
+                        <ul class="list-unstyled small mb-0">
+                            {% for item in notificacoes_internas %}
+                            <li class="mb-2 {% if not item.lida %}fw-semibold{% endif %}">
+                                {{ item.mensagem }}
+                                {% if item.cta_url %}
+                                <a href="{{ item.cta_url }}" class="ms-1">Abrir</a>
+                                {% endif %}
+                                {% if not item.lida %}
+                                <form method="post" action="{{ url_for('multiuser_painel.api_marcar_notificacao_lida', notificacao_id=item.id) }}" class="d-inline">
+                                    <button type="submit" class="btn btn-link btn-sm p-0 align-baseline">Marcar como lida</button>
+                                </form>
+                                {% endif %}
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <p class="small text-muted mb-0">Nenhuma notificação interna no momento.</p>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </div>
     </div>
+
+    {% if eh_contratante_multiuser|default(false) %}
+    <div class="row g-4 mt-1">
+        <div class="col-12">
+            <a href="{{ url_for('multiuser_painel.gestao_multiuser') }}" class="text-decoration-none text-reset d-block">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <div class="d-flex align-items-center mb-2">
+                        <div class="bg-primary bg-opacity-10 text-primary rounded-circle d-inline-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
+                            <i class="bi bi-people-fill"></i>
+                        </div>
+                        <div>
+                            <h5 class="card-title mb-0">Gestão da equipe</h5>
+                            <small class="text-muted">Assentos, convites e aumento automático</small>
+                        </div>
+                    </div>
+                    <p class="card-text text-muted mb-0">
+                        Consulte assentos contratados, ocupados e disponíveis. Solicite aumento automático no ciclo atual sem cobrança proporcional hoje.
+                    </p>
+                </div>
+            </div>
+            </a>
+        </div>
+    </div>
+    {% endif %}
 
     {% if current_user.is_authenticated and current_user.is_admin %}
     <div class="row mt-4">

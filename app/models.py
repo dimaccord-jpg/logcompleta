@@ -11,9 +11,28 @@ def utcnow_naive() -> datetime:
 class Conta(db.Model):
     """
     Raiz contratual/comercial. Uma conta agrega uma ou mais franquias (unidades operacionais).
+    No Multiuser V1 a própria Conta representa a empresa/organização contratante.
+    Campos empresariais e quantity local são nullable para preservar contas legadas.
     """
 
     __tablename__ = "conta"
+    __table_args__ = (
+        db.Index(
+            "uq_conta_cnpj_multiuser_ativa",
+            "cnpj",
+            unique=True,
+            postgresql_where=db.text(
+                "cnpj IS NOT NULL AND multiuser_ativa AND status = 'ativa'"
+            ),
+            sqlite_where=db.text(
+                "cnpj IS NOT NULL AND multiuser_ativa AND status = 'ativa'"
+            ),
+        ),
+        db.CheckConstraint(
+            "quantidade_assentos_contratados IS NULL OR quantidade_assentos_contratados >= 1",
+            name="ck_conta_qtd_assentos_positiva",
+        ),
+    )
 
     SLUG_SISTEMA = "sistema-interno"
 
@@ -23,7 +42,25 @@ class Conta(db.Model):
     status = db.Column(db.String(30), nullable=False, default="ativa", index=True)
     created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
 
+    razao_social = db.Column(db.String(255), nullable=True)
+    nome_fantasia = db.Column(db.String(255), nullable=True)
+    cnpj = db.Column(db.String(14), nullable=True)
+    email_empresarial = db.Column(db.String(150), nullable=True)
+    endereco_logradouro = db.Column(db.String(255), nullable=True)
+    endereco_numero = db.Column(db.String(20), nullable=True)
+    endereco_complemento = db.Column(db.String(120), nullable=True)
+    endereco_bairro = db.Column(db.String(120), nullable=True)
+    endereco_cidade = db.Column(db.String(120), nullable=True)
+    endereco_uf = db.Column(db.String(2), nullable=True)
+    endereco_cep = db.Column(db.String(8), nullable=True)
+
+    # Quantity comercial local (assentos contratados). Não sincroniza Stripe nesta fase.
+    quantidade_assentos_contratados = db.Column(db.Integer, nullable=True)
+    # Marca de uso/ativação Multiuser na raiz contratual; não substitui User.categoria.
+    multiuser_ativa = db.Column(db.Boolean, nullable=False, default=False, index=True)
+
     STATUS_ATIVA = "ativa"
+    STATUS_INATIVA = "inativa"
 
 
 class Franquia(db.Model):
@@ -80,6 +117,8 @@ class User(db.Model, UserMixin):
     # Fase 2 etapa 2: vínculo de negócio (conta / franquia operacional padrão do operador)
     conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
     franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=False, index=True)
+    # Geração de contexto de sessão: incrementada na revogação Multiuser.
+    sessao_contexto_geracao = db.Column(db.Integer, nullable=False, default=0)
     conta = db.relationship("Conta", foreign_keys=[conta_id], backref=db.backref("usuarios", lazy="dynamic"))
     franquia = db.relationship("Franquia", foreign_keys=[franquia_id], backref=db.backref("usuarios_operadores", lazy="dynamic"))
 
@@ -110,6 +149,116 @@ class MultiuserFranquiaCodigo(db.Model):
     conta = db.relationship("Conta", backref=db.backref("codigos_multiuser", lazy="dynamic"))
     franquia = db.relationship("Franquia", backref=db.backref("codigos_acesso_multiuser", lazy="dynamic"))
     criado_por = db.relationship("User", foreign_keys=[criado_por_user_id], backref=db.backref("codigos_multiuser_criados", lazy="dynamic"))
+
+
+class ContaVinculoOrganizacional(db.Model):
+    """
+    Vínculo associativo User–Conta–Franquia para governança Multiuser.
+    Preserva histórico (encerramento não apaga a row). Não substitui User.conta_id/franquia_id.
+    """
+
+    __tablename__ = "conta_vinculo_organizacional"
+    __table_args__ = (
+        db.CheckConstraint(
+            "papel IN ('contratante', 'membro')",
+            name="ck_conta_vinculo_org_papel",
+        ),
+        db.CheckConstraint(
+            "estado IN ('ativo', 'encerrado')",
+            name="ck_conta_vinculo_org_estado",
+        ),
+        db.CheckConstraint(
+            "((papel = 'contratante' AND titular) OR (papel = 'membro' AND NOT titular))",
+            name="ck_conta_vinculo_org_papel_titular",
+        ),
+        db.CheckConstraint(
+            "("
+            "(estado = 'ativo' AND encerrado_em IS NULL) "
+            "OR (estado = 'encerrado' AND encerrado_em IS NOT NULL)"
+            ")",
+            name="ck_conta_vinculo_org_encerramento",
+        ),
+        db.Index(
+            "uq_conta_vinculo_org_user_ativo",
+            "user_id",
+            unique=True,
+            postgresql_where=db.text("estado = 'ativo'"),
+            sqlite_where=db.text("estado = 'ativo'"),
+        ),
+        db.Index(
+            "uq_conta_vinculo_org_franquia_ativo",
+            "franquia_id",
+            unique=True,
+            postgresql_where=db.text("estado = 'ativo'"),
+            sqlite_where=db.text("estado = 'ativo'"),
+        ),
+        db.Index(
+            "uq_conta_vinculo_org_contratante_ativo",
+            "conta_id",
+            unique=True,
+            postgresql_where=db.text("estado = 'ativo' AND papel = 'contratante'"),
+            sqlite_where=db.text("estado = 'ativo' AND papel = 'contratante'"),
+        ),
+        db.Index("ix_conta_vinculo_org_conta_estado", "conta_id", "estado"),
+    )
+
+    PAPEL_CONTRATANTE = "contratante"
+    PAPEL_MEMBRO = "membro"
+    PAPEIS_V1 = (PAPEL_CONTRATANTE, PAPEL_MEMBRO)
+
+    ESTADO_ATIVO = "ativo"
+    ESTADO_ENCERRADO = "encerrado"
+    ESTADOS_V1 = (ESTADO_ATIVO, ESTADO_ENCERRADO)
+
+    ORIGEM_BACKFILL_LEGADO = "backfill_legado"
+    ORIGEM_DOMINIO = "dominio"
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=False, index=True)
+    papel = db.Column(db.String(20), nullable=False, index=True)
+    estado = db.Column(db.String(20), nullable=False, default=ESTADO_ATIVO, index=True)
+    titular = db.Column(db.Boolean, nullable=False, default=False)
+    origem = db.Column(db.String(40), nullable=False, default=ORIGEM_DOMINIO)
+    criado_por_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+    iniciado_em = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    encerrado_em = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("vinculos_organizacionais", lazy="dynamic"),
+    )
+    user = db.relationship(
+        "User",
+        foreign_keys=[user_id],
+        backref=db.backref("vinculos_organizacionais", lazy="dynamic"),
+    )
+    franquia = db.relationship(
+        "Franquia",
+        backref=db.backref("vinculos_organizacionais", lazy="dynamic"),
+    )
+    criado_por = db.relationship(
+        "User",
+        foreign_keys=[criado_por_user_id],
+        backref=db.backref("vinculos_organizacionais_criados", lazy="dynamic"),
+    )
+
+
+class ContaOrganizacionalBackfillInconsistencia(db.Model):
+    """Registro determinístico de legado Multiuser que não pôde ser associado com segurança."""
+
+    __tablename__ = "conta_organizacional_backfill_inconsistencia"
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, nullable=True, index=True)
+    franquia_id = db.Column(db.Integer, nullable=True, index=True)
+    user_id = db.Column(db.Integer, nullable=True, index=True)
+    codigo = db.Column(db.String(80), nullable=False, index=True)
+    detalhe = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
 
 
 class TermsOfUse(db.Model):
@@ -765,6 +914,616 @@ class MonetizacaoFato(db.Model):
     conta = db.relationship("Conta", backref=db.backref("fatos_monetizacao", lazy="dynamic"))
     franquia = db.relationship("Franquia", backref=db.backref("fatos_monetizacao", lazy="dynamic"))
     usuario = db.relationship("User", backref=db.backref("fatos_monetizacao", lazy="dynamic"))
+
+
+class ContaMonetizacaoCheckoutIntencao(db.Model):
+    """
+    Intenção exclusiva de Checkout Multiuser por Conta.
+
+    Não é vínculo comercial ativo. Não guarda PII nem dados de pagamento.
+    MonetizacaoFato permanece append-only; ContaMonetizacaoVinculo permanece o contrato confirmado.
+    """
+
+    __tablename__ = "conta_monetizacao_checkout_intencao"
+    __table_args__ = (
+        db.CheckConstraint(
+            "estado IN ('pendente', 'consumida', 'expirada')",
+            name="ck_conta_checkout_intencao_estado",
+        ),
+        db.Index(
+            "uq_conta_checkout_intencao_pendente_multiuser",
+            "conta_id",
+            unique=True,
+            postgresql_where=db.text(
+                "estado = 'pendente' AND plano_interno = 'multiuser'"
+            ),
+            sqlite_where=db.text(
+                "estado = 'pendente' AND plano_interno = 'multiuser'"
+            ),
+        ),
+        db.Index(
+            "uq_conta_checkout_intencao_correlation",
+            "correlation_id",
+            unique=True,
+        ),
+    )
+
+    ESTADO_PENDENTE = "pendente"
+    ESTADO_CONSUMIDA = "consumida"
+    ESTADO_EXPIRADA = "expirada"
+    PLANO_MULTIUSER = "multiuser"
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=True, index=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+    plano_interno = db.Column(db.String(40), nullable=False, default=PLANO_MULTIUSER, index=True)
+    estado = db.Column(db.String(20), nullable=False, default=ESTADO_PENDENTE, index=True)
+    correlation_id = db.Column(db.String(64), nullable=False)
+    stripe_idempotency_key = db.Column(db.String(200), nullable=False)
+    checkout_session_id = db.Column(db.String(200), nullable=True, index=True)
+    checkout_status = db.Column(db.String(40), nullable=True)
+    checkout_expires_at = db.Column(db.DateTime, nullable=True)
+    price_id = db.Column(db.String(160), nullable=False)
+    quantity_solicitada = db.Column(db.Integer, nullable=False)
+    customer_id = db.Column(db.String(160), nullable=True)
+    subscription_id = db.Column(db.String(160), nullable=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+    consumida_em = db.Column(db.DateTime, nullable=True)
+    expirada_em = db.Column(db.DateTime, nullable=True)
+
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("checkout_intencoes_monetizacao", lazy="dynamic"),
+    )
+
+
+class ContaMultiuserConvite(db.Model):
+    """
+    Convite organizacional Multiuser (Fase 4).
+
+    Reserva uma Franquia livre enquanto pendente e válido. Não ocupa User.
+    Token assinado não é persistido. MultiuserFranquiaCodigo permanece legado.
+    """
+
+    __tablename__ = "conta_multiuser_convite"
+    __table_args__ = (
+        db.CheckConstraint(
+            "estado IN ('pendente', 'aceito', 'expirado')",
+            name="ck_conta_multiuser_convite_estado",
+        ),
+        db.Index(
+            "uq_conta_convite_franquia_pendente",
+            "franquia_id",
+            unique=True,
+            postgresql_where=db.text("estado = 'pendente'"),
+            sqlite_where=db.text("estado = 'pendente'"),
+        ),
+        db.Index(
+            "uq_conta_convite_conta_email_pendente",
+            "conta_id",
+            "email_destino",
+            unique=True,
+            postgresql_where=db.text("estado = 'pendente'"),
+            sqlite_where=db.text("estado = 'pendente'"),
+        ),
+    )
+
+    ESTADO_PENDENTE = "pendente"
+    ESTADO_ACEITO = "aceito"
+    ESTADO_EXPIRADO = "expirado"
+    ESTADOS_V1 = (ESTADO_PENDENTE, ESTADO_ACEITO, ESTADO_EXPIRADO)
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=False, index=True)
+    criado_por_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    email_destino = db.Column(db.String(150), nullable=False, index=True)
+    estado = db.Column(db.String(20), nullable=False, default=ESTADO_PENDENTE, index=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    enviado_em = db.Column(db.DateTime, nullable=True)
+    reenviado_em = db.Column(db.DateTime, nullable=True)
+    accepted_at = db.Column(db.DateTime, nullable=True)
+    accepted_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("convites_multiuser", lazy="dynamic"),
+    )
+    franquia = db.relationship(
+        "Franquia",
+        backref=db.backref("convites_multiuser", lazy="dynamic"),
+    )
+    criado_por = db.relationship(
+        "User",
+        foreign_keys=[criado_por_user_id],
+        backref=db.backref("convites_multiuser_criados", lazy="dynamic"),
+    )
+    accepted_user = db.relationship(
+        "User",
+        foreign_keys=[accepted_user_id],
+        backref=db.backref("convites_multiuser_aceitos", lazy="dynamic"),
+    )
+
+
+class ContaMultiuserCicloAumento(db.Model):
+    """
+    Contador cumulativo de aumento automático no ciclo comercial da Conta (Fase 5).
+
+    Não deriva de quantity_atual - quantity_original. Reset só na virada
+    legítima do ciclo canônico (novo par inicio/fim).
+    """
+
+    __tablename__ = "conta_multiuser_ciclo_aumento"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "conta_id",
+            "ciclo_inicio",
+            "ciclo_fim",
+            name="uq_conta_multiuser_ciclo_aumento_ciclo",
+        ),
+        db.CheckConstraint(
+            "acumulado_automatico >= 0",
+            name="ck_conta_multiuser_ciclo_aumento_acumulado",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    ciclo_inicio = db.Column(db.DateTime, nullable=False)
+    ciclo_fim = db.Column(db.DateTime, nullable=False)
+    acumulado_automatico = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("aumentos_automaticos_ciclo", lazy="dynamic"),
+    )
+
+
+class ContaMultiuserAumentoOperacao(db.Model):
+    """
+    Operação de aumento de assentos (Fase 5).
+
+    Estados mínimos F5: iniciado | stripe_enviado | aprovado_automatico |
+    enviado_analise | falha_reconciliacao.
+    Não implementa a máquina da Fase 6 (pagamento extraordinário/aprovação ADM).
+    """
+
+    __tablename__ = "conta_multiuser_aumento_operacao"
+    __table_args__ = (
+        db.CheckConstraint(
+            "estado IN ("
+            "'iniciado', 'stripe_enviado', 'aprovado_automatico', "
+            "'enviado_analise', 'falha_reconciliacao'"
+            ")",
+            name="ck_conta_multiuser_aumento_operacao_estado",
+        ),
+        db.CheckConstraint(
+            "quantidade_solicitada >= 1",
+            name="ck_conta_multiuser_aumento_operacao_qtd",
+        ),
+        db.Index(
+            "uq_conta_multiuser_aumento_operacao_idempotency",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
+
+    ESTADO_INICIADO = "iniciado"
+    ESTADO_STRIPE_ENVIADO = "stripe_enviado"
+    ESTADO_APROVADO_AUTOMATICO = "aprovado_automatico"
+    ESTADO_ENVIADO_ANALISE = "enviado_analise"
+    ESTADO_FALHA_RECONCILIACAO = "falha_reconciliacao"
+    ESTADOS_V1 = (
+        ESTADO_INICIADO,
+        ESTADO_STRIPE_ENVIADO,
+        ESTADO_APROVADO_AUTOMATICO,
+        ESTADO_ENVIADO_ANALISE,
+        ESTADO_FALHA_RECONCILIACAO,
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    solicitado_por_user_id = db.Column(
+        db.Integer, db.ForeignKey("user.id"), nullable=False, index=True
+    )
+    idempotency_key = db.Column(db.String(200), nullable=False)
+    correlation_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    quantidade_solicitada = db.Column(db.Integer, nullable=False)
+    quantity_anterior = db.Column(db.Integer, nullable=False)
+    quantity_nova = db.Column(db.Integer, nullable=True)
+    estado = db.Column(db.String(40), nullable=False, index=True)
+    stripe_customer_id = db.Column(db.String(160), nullable=True)
+    stripe_subscription_id = db.Column(db.String(160), nullable=True)
+    stripe_subscription_item_id = db.Column(db.String(160), nullable=True)
+    stripe_quantity_enviada = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("aumentos_assentos_operacoes", lazy="dynamic"),
+    )
+    solicitado_por = db.relationship(
+        "User",
+        foreign_keys=[solicitado_por_user_id],
+        backref=db.backref("aumentos_multiuser_solicitados", lazy="dynamic"),
+    )
+
+
+class ContaMultiuserAumentoExcepcional(db.Model):
+    """
+    Governança comercial da solicitação excepcional (Fase 6).
+
+    Complementa ContaMultiuserAumentoOperacao (F5) em 1:1. Não altera a
+    máquina automática F5. MonetizacaoFato permanece append-only.
+    """
+
+    __tablename__ = "conta_multiuser_aumento_excepcional"
+    __table_args__ = (
+        db.CheckConstraint(
+            "estado IN ("
+            "'em_analise', 'rejeitada', 'aprovada_gratuita', "
+            "'aguardando_pagamento', 'pagamento_confirmado', 'liberada', "
+            "'expirada', 'reconciliacao_necessaria'"
+            ")",
+            name="ck_conta_multiuser_aumento_excepcional_estado",
+        ),
+        db.CheckConstraint(
+            "quantidade_solicitada >= 1",
+            name="ck_conta_multiuser_aumento_excepcional_qtd_sol",
+        ),
+        db.CheckConstraint(
+            "quantidade_aprovada IS NULL OR "
+            "(quantidade_aprovada >= 1 AND quantidade_aprovada <= quantidade_solicitada)",
+            name="ck_conta_multiuser_aumento_excepcional_qtd_apr",
+        ),
+        db.CheckConstraint(
+            "versao >= 1",
+            name="ck_conta_multiuser_aumento_excepcional_versao",
+        ),
+        db.UniqueConstraint(
+            "operacao_id",
+            name="uq_conta_multiuser_aumento_excepcional_operacao",
+        ),
+        db.UniqueConstraint(
+            "correlation_id",
+            name="uq_conta_multiuser_aumento_excepcional_correlation",
+        ),
+        db.Index(
+            "uq_conta_multiuser_aumento_excepcional_decisao_idem",
+            "decisao_idempotency_key",
+            unique=True,
+            postgresql_where=db.text("decisao_idempotency_key IS NOT NULL"),
+            sqlite_where=db.text("decisao_idempotency_key IS NOT NULL"),
+        ),
+        db.Index(
+            "uq_conta_multiuser_aumento_excepcional_checkout",
+            "stripe_checkout_session_id",
+            unique=True,
+            postgresql_where=db.text("stripe_checkout_session_id IS NOT NULL"),
+            sqlite_where=db.text("stripe_checkout_session_id IS NOT NULL"),
+        ),
+    )
+
+    ESTADO_EM_ANALISE = "em_analise"
+    ESTADO_REJEITADA = "rejeitada"
+    ESTADO_APROVADA_GRATUITA = "aprovada_gratuita"
+    ESTADO_AGUARDANDO_PAGAMENTO = "aguardando_pagamento"
+    ESTADO_PAGAMENTO_CONFIRMADO = "pagamento_confirmado"
+    ESTADO_LIBERADA = "liberada"
+    ESTADO_EXPIRADA = "expirada"
+    ESTADO_RECONCILIACAO_NECESSARIA = "reconciliacao_necessaria"
+    ESTADOS_V1 = (
+        ESTADO_EM_ANALISE,
+        ESTADO_REJEITADA,
+        ESTADO_APROVADA_GRATUITA,
+        ESTADO_AGUARDANDO_PAGAMENTO,
+        ESTADO_PAGAMENTO_CONFIRMADO,
+        ESTADO_LIBERADA,
+        ESTADO_EXPIRADA,
+        ESTADO_RECONCILIACAO_NECESSARIA,
+    )
+
+    DECISAO_GRATUITA = "gratuita"
+    DECISAO_PAGA = "paga"
+    DECISAO_REJEITADA = "rejeitada"
+
+    id = db.Column(db.Integer, primary_key=True)
+    operacao_id = db.Column(
+        db.Integer,
+        db.ForeignKey("conta_multiuser_aumento_operacao.id"),
+        nullable=False,
+        index=True,
+    )
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    solicitante_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    administrador_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+    ciclo_inicio = db.Column(db.DateTime, nullable=False)
+    ciclo_fim = db.Column(db.DateTime, nullable=False)
+    quantity_atual = db.Column(db.Integer, nullable=False)
+    quantidade_solicitada = db.Column(db.Integer, nullable=False)
+    quantidade_aprovada = db.Column(db.Integer, nullable=True)
+    acumulado_automatico_ciclo = db.Column(db.Integer, nullable=False, default=0)
+    estado = db.Column(db.String(40), nullable=False, index=True)
+    decisao = db.Column(db.String(20), nullable=True)
+    decidido_em = db.Column(db.DateTime, nullable=True)
+    decisao_idempotency_key = db.Column(db.String(200), nullable=True)
+    correlation_id = db.Column(db.String(64), nullable=False)
+    request_id = db.Column(db.String(64), nullable=False, index=True)
+    versao = db.Column(db.Integer, nullable=False, default=1)
+    preco_unitario_centavos = db.Column(db.Integer, nullable=True)
+    instante_calculo = db.Column(db.DateTime, nullable=True)
+    timezone_calculo = db.Column(db.String(40), nullable=True)
+    dias_totais = db.Column(db.Integer, nullable=True)
+    dias_restantes = db.Column(db.Integer, nullable=True)
+    valor_calculado_centavos = db.Column(db.Integer, nullable=True)
+    versao_formula = db.Column(db.String(40), nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=True, index=True)
+    stripe_checkout_session_id = db.Column(db.String(200), nullable=True)
+    stripe_payment_intent_id = db.Column(db.String(200), nullable=True, index=True)
+    stripe_checkout_url = db.Column(db.String(500), nullable=True)
+    stripe_customer_id = db.Column(db.String(160), nullable=True)
+    liberado_em = db.Column(db.DateTime, nullable=True)
+    quantity_nova = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+
+    operacao = db.relationship(
+        "ContaMultiuserAumentoOperacao",
+        backref=db.backref("aumento_excepcional", uselist=False),
+    )
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("aumentos_excepcionais", lazy="dynamic"),
+    )
+    solicitante = db.relationship(
+        "User",
+        foreign_keys=[solicitante_id],
+        backref=db.backref("aumentos_excepcionais_solicitados", lazy="dynamic"),
+    )
+    administrador = db.relationship(
+        "User",
+        foreign_keys=[administrador_id],
+        backref=db.backref("aumentos_excepcionais_decididos", lazy="dynamic"),
+    )
+
+
+class ContaMultiuserReducaoQuantity(db.Model):
+    """
+    Redução futura de quantity Multiuser (Fase 7).
+
+    Não altera quantity/Stripe no pedido. Efeito somente no corte canônico.
+    Uma única redução pendente por Conta.
+    """
+
+    __tablename__ = "conta_multiuser_reducao_quantity"
+    __table_args__ = (
+        db.CheckConstraint(
+            "estado IN ('pendente', 'efetivada', 'bloqueada_no_corte')",
+            name="ck_conta_multiuser_reducao_estado",
+        ),
+        db.CheckConstraint(
+            "quantity_atual_no_pedido >= 1 AND quantity_futura >= 1 "
+            "AND quantity_futura < quantity_atual_no_pedido",
+            name="ck_conta_multiuser_reducao_qtd",
+        ),
+        db.CheckConstraint(
+            "versao >= 1",
+            name="ck_conta_multiuser_reducao_versao",
+        ),
+        db.Index(
+            "uq_conta_multiuser_reducao_pendente",
+            "conta_id",
+            unique=True,
+            postgresql_where=db.text("estado = 'pendente'"),
+            sqlite_where=db.text("estado = 'pendente'"),
+        ),
+        db.Index(
+            "uq_conta_multiuser_reducao_idempotency",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
+
+    ESTADO_PENDENTE = "pendente"
+    ESTADO_EFETIVADA = "efetivada"
+    ESTADO_BLOQUEADA_NO_CORTE = "bloqueada_no_corte"
+    ESTADOS_V1 = (ESTADO_PENDENTE, ESTADO_EFETIVADA, ESTADO_BLOQUEADA_NO_CORTE)
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    solicitado_por_user_id = db.Column(
+        db.Integer, db.ForeignKey("user.id"), nullable=False, index=True
+    )
+    quantity_atual_no_pedido = db.Column(db.Integer, nullable=False)
+    quantity_futura = db.Column(db.Integer, nullable=False)
+    solicitado_em = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    efetivar_em = db.Column(db.DateTime, nullable=False, index=True)
+    estado = db.Column(db.String(40), nullable=False, default=ESTADO_PENDENTE, index=True)
+    idempotency_key = db.Column(db.String(200), nullable=False)
+    correlation_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    versao = db.Column(db.Integer, nullable=False, default=1)
+    stripe_customer_id = db.Column(db.String(160), nullable=True)
+    stripe_subscription_id = db.Column(db.String(160), nullable=True)
+    stripe_subscription_item_id = db.Column(db.String(160), nullable=True)
+    efetivada_em = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("reducoes_quantity", lazy="dynamic"),
+    )
+    solicitado_por = db.relationship(
+        "User",
+        foreign_keys=[solicitado_por_user_id],
+        backref=db.backref("reducoes_multiuser_solicitadas", lazy="dynamic"),
+    )
+
+
+class NotificacaoInterna(db.Model):
+    """Notificação interna mínima V1 (Fase 7). Privada por User. Sem URL externa."""
+
+    __tablename__ = "notificacao_interna"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "user_id",
+            "dedup_key",
+            name="uq_notificacao_interna_user_dedup",
+        ),
+        db.Index("ix_notificacao_interna_user_created", "user_id", "created_at"),
+        db.Index("ix_notificacao_interna_user_unread", "user_id", "read_at"),
+    )
+
+    TIPO_MEMBERSHIP_REVOGADO = "membership_revogado"
+    TIPO_REDUCAO_SOLICITADA = "reducao_solicitada"
+    TIPO_REDUCAO_EFETIVADA = "reducao_efetivada"
+    TIPO_REDUCAO_NAO_EFETIVADA = "reducao_nao_efetivada"
+    TIPO_TITULARIDADE_SOLICITADA = "titularidade_solicitada"
+    TIPO_TITULARIDADE_APROVADA = "titularidade_aprovada"
+    TIPO_TITULARIDADE_REJEITADA = "titularidade_rejeitada"
+    TIPO_EXCEPCIONAL_ENVIADO_ANALISE = "excepcional_enviado_analise"
+    TIPO_EXCEPCIONAL_APROVADO_GRATUITO = "excepcional_aprovado_gratuito"
+    TIPO_EXCEPCIONAL_AGUARDANDO_PAGAMENTO = "excepcional_aguardando_pagamento"
+    TIPO_EXCEPCIONAL_REJEITADO = "excepcional_rejeitado"
+    TIPO_EXCEPCIONAL_PAGAMENTO_CONFIRMADO = "excepcional_pagamento_confirmado"
+    TIPO_EXCEPCIONAL_LIBERADO = "excepcional_liberado"
+    TIPO_EXCEPCIONAL_EXPIRADO = "excepcional_expirado"
+    TIPO_EXCEPCIONAL_RECONCILIACAO = "excepcional_reconciliacao_necessaria"
+    TIPO_CONVITE_RELEVANTE = "convite_relevante"
+    TIPOS_V1 = (
+        TIPO_MEMBERSHIP_REVOGADO,
+        TIPO_REDUCAO_SOLICITADA,
+        TIPO_REDUCAO_EFETIVADA,
+        TIPO_REDUCAO_NAO_EFETIVADA,
+        TIPO_TITULARIDADE_SOLICITADA,
+        TIPO_TITULARIDADE_APROVADA,
+        TIPO_TITULARIDADE_REJEITADA,
+        TIPO_EXCEPCIONAL_ENVIADO_ANALISE,
+        TIPO_EXCEPCIONAL_APROVADO_GRATUITO,
+        TIPO_EXCEPCIONAL_AGUARDANDO_PAGAMENTO,
+        TIPO_EXCEPCIONAL_REJEITADO,
+        TIPO_EXCEPCIONAL_PAGAMENTO_CONFIRMADO,
+        TIPO_EXCEPCIONAL_LIBERADO,
+        TIPO_EXCEPCIONAL_EXPIRADO,
+        TIPO_EXCEPCIONAL_RECONCILIACAO,
+        TIPO_CONVITE_RELEVANTE,
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=True, index=True)
+    tipo = db.Column(db.String(60), nullable=False, index=True)
+    mensagem = db.Column(db.String(500), nullable=False)
+    cta_interno = db.Column(db.String(80), nullable=True)
+    referencia_dominio = db.Column(db.String(120), nullable=True)
+    dedup_key = db.Column(db.String(200), nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    read_at = db.Column(db.DateTime, nullable=True)
+
+    user = db.relationship(
+        "User",
+        backref=db.backref("notificacoes_internas", lazy="dynamic"),
+    )
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("notificacoes_internas", lazy="dynamic"),
+    )
+
+
+class ContaMultiuserTitularidadeSolicitacao(db.Model):
+    """
+    Transferência administrativa de titularidade Multiuser (Fase 7).
+
+    Não é self-service. State machine própria; AuditoriaGerencial é trilha, não o estado.
+    """
+
+    __tablename__ = "conta_multiuser_titularidade_solicitacao"
+    __table_args__ = (
+        db.CheckConstraint(
+            "estado IN ('solicitada', 'aprovada', 'rejeitada')",
+            name="ck_conta_multiuser_titularidade_estado",
+        ),
+        db.CheckConstraint(
+            "titular_atual_id != candidato_id",
+            name="ck_conta_multiuser_titularidade_distintos",
+        ),
+        db.CheckConstraint(
+            "versao >= 1",
+            name="ck_conta_multiuser_titularidade_versao",
+        ),
+        db.Index(
+            "uq_conta_multiuser_titularidade_solicitada",
+            "conta_id",
+            unique=True,
+            postgresql_where=db.text("estado = 'solicitada'"),
+            sqlite_where=db.text("estado = 'solicitada'"),
+        ),
+        db.Index(
+            "uq_conta_multiuser_titularidade_idempotency",
+            "idempotency_key",
+            unique=True,
+        ),
+        db.Index(
+            "uq_conta_multiuser_titularidade_decisao_idem",
+            "decisao_idempotency_key",
+            unique=True,
+            postgresql_where=db.text("decisao_idempotency_key IS NOT NULL"),
+            sqlite_where=db.text("decisao_idempotency_key IS NOT NULL"),
+        ),
+    )
+
+    ESTADO_SOLICITADA = "solicitada"
+    ESTADO_APROVADA = "aprovada"
+    ESTADO_REJEITADA = "rejeitada"
+    ESTADOS_V1 = (ESTADO_SOLICITADA, ESTADO_APROVADA, ESTADO_REJEITADA)
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False, index=True)
+    titular_atual_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    candidato_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    solicitante_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    motivo = db.Column(db.String(500), nullable=False)
+    estado = db.Column(db.String(20), nullable=False, default=ESTADO_SOLICITADA, index=True)
+    administrador_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+    decidido_em = db.Column(db.DateTime, nullable=True)
+    idempotency_key = db.Column(db.String(200), nullable=False)
+    correlation_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    decisao_idempotency_key = db.Column(db.String(200), nullable=True)
+    versao = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
+
+    conta = db.relationship(
+        "Conta",
+        backref=db.backref("solicitacoes_titularidade", lazy="dynamic"),
+    )
+    titular_atual = db.relationship(
+        "User",
+        foreign_keys=[titular_atual_id],
+        backref=db.backref("titularidades_como_titular", lazy="dynamic"),
+    )
+    candidato = db.relationship(
+        "User",
+        foreign_keys=[candidato_id],
+        backref=db.backref("titularidades_como_candidato", lazy="dynamic"),
+    )
+    solicitante = db.relationship(
+        "User",
+        foreign_keys=[solicitante_id],
+        backref=db.backref("titularidades_solicitadas", lazy="dynamic"),
+    )
+    administrador = db.relationship(
+        "User",
+        foreign_keys=[administrador_id],
+        backref=db.backref("titularidades_decididas", lazy="dynamic"),
+    )
 
 
 class HomeCtaExperimentEvent(db.Model):

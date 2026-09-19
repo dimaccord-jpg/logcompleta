@@ -77,6 +77,12 @@ from app.cleiton_doc_gemini_files import (
 )
 from app.cleiton_doc_prepare import prepare_document
 from app.cleiton_doc_service import CleitonDocSessionError, maybe_cleanup_expired_cleiton_docs
+from app.cleiton_doc_escopo import (
+    document_record_matches_operational_scope,
+    operational_cache_payload_is_current,
+    stamp_document_operational_scope,
+    stamp_operational_cache_payload,
+)
 from app.cleiton_doc_store import (
     document_record_matches_domain_scope,
     get_cleiton_doc_tmp_dir,
@@ -664,7 +670,11 @@ def get_cached_temp_table_save_response(session_obj, cache_key: str) -> dict | N
     if not isinstance(cache, dict):
         return None
     payload = cache.get(cache_key)
-    return copy.deepcopy(payload) if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if not operational_cache_payload_is_current(payload):
+        return None
+    return copy.deepcopy(payload)
 
 
 def find_temp_table_save_replay_by_execution_id(
@@ -689,7 +699,7 @@ def find_temp_table_save_replay_by_execution_id(
     for key, payload in cache.items():
         if not isinstance(key, str) or not key.startswith(prefix) or not key.endswith(suffix):
             continue
-        if isinstance(payload, dict):
+        if isinstance(payload, dict) and operational_cache_payload_is_current(payload):
             return copy.deepcopy(payload)
     return None
 
@@ -700,7 +710,7 @@ def cache_temp_table_save_response(session_obj, cache_key: str, public: dict) ->
     cache = session_obj.get(TEMP_TABLE_SAVE_IDEMPOTENCY_CACHE_SESSION_KEY)
     if not isinstance(cache, dict):
         cache = {}
-    cache[cache_key] = copy.deepcopy(public)
+    cache[cache_key] = stamp_operational_cache_payload(copy.deepcopy(public))
     session_obj[TEMP_TABLE_SAVE_IDEMPOTENCY_CACHE_SESSION_KEY] = cache
     session_obj.modified = True
 
@@ -1345,7 +1355,7 @@ def get_active_documents_for_session(*, table_id: str | None = None) -> list[dic
 
     for doc_id in get_agente_compara_doc_ids(session, table_id=table_id):
         record = load_document_record(doc_id, ttl_hours=cfg.upload_ttl_hours)
-        if record is None:
+        if record is None or not document_record_matches_operational_scope(record):
             stale_ids.append(doc_id)
             continue
         active.append(_public_record(record))
@@ -1542,6 +1552,7 @@ def _register_document_record(
         for key, value in retry_metadata.items():
             if value is not None:
                 record[key] = value
+    stamp_document_operational_scope(record)
     save_document_record(record)
     append_agente_compara_doc_id(session, doc_id, table_id=table_id)
     _sync_legacy_doc_ids_mirror(session)

@@ -126,6 +126,26 @@ def _erro_admin_validacao_payload(erro: str, codigo_erro: str) -> dict:
     }
 
 
+def _exigir_csrf_admin_multiuser():
+    from app.services.conta_multiuser_aumento_excepcional_service import (
+        validar_csrf_token_admin_multiuser,
+    )
+
+    payload = request.get_json(silent=True) or {}
+    token = (
+        payload.get("csrf_token")
+        or request.form.get("csrf_token")
+        or request.headers.get("X-CSRF-Token")
+        or ""
+    ).strip()
+    if not validar_csrf_token_admin_multiuser(token, int(current_user.id)):
+        if request.is_json or "application/json" in (request.headers.get("Accept") or ""):
+            return jsonify(_erro_admin_validacao_payload("CSRF inválido.", "csrf_invalido")), 403
+        flash("Não foi possível validar a solicitação.", "danger")
+        return redirect(url_for("admin.controle_usuarios"))
+    return None
+
+
 def _handle_desktop_access_admin_test_post():
     """
     POST da Homologação E2E no /admin/dashboard.
@@ -1340,7 +1360,251 @@ def gestao_planos():
 def controle_usuarios():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
-    return render_template("controle_usuarios.html")
+    from app.services.conta_multiuser_aumento_excepcional_service import (
+        gerar_csrf_token_admin_multiuser,
+        listar_para_admin,
+    )
+    from app.services.conta_multiuser_bi_service import projetar_saude_multiuser_admin
+    from app.services.conta_multiuser_titularidade_service import (
+        listar_para_admin as listar_titularidade_admin,
+    )
+
+    return render_template(
+        "controle_usuarios.html",
+        solicitacoes_excepcionais=listar_para_admin(),
+        solicitacoes_titularidade=listar_titularidade_admin(),
+        saude_multiuser=projetar_saude_multiuser_admin().para_template(),
+        csrf_token_multiuser=gerar_csrf_token_admin_multiuser(int(current_user.id)),
+    )
+
+
+@admin_bp.route(
+    "/controle-usuarios/aumento-excepcional/<int:excepcional_id>/preview",
+    methods=["GET"],
+)
+@login_required
+def controle_usuarios_aumento_excepcional_preview(excepcional_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services.conta_multiuser_aumento_excepcional_service import (
+        calcular_preview_decisao_paga,
+    )
+    from app.services.conta_multiuser_errors import (
+        AumentoExcepcionalInvalidoError,
+        AumentoMultiuserCicloIndeterminadoError,
+    )
+
+    try:
+        preview = calcular_preview_decisao_paga(int(excepcional_id))
+    except (AumentoExcepcionalInvalidoError, AumentoMultiuserCicloIndeterminadoError) as exc:
+        return jsonify(_erro_admin_validacao_payload(str(exc), "preview_indisponivel")), 400
+    return jsonify({"ok": True, **preview})
+
+
+@admin_bp.route(
+    "/controle-usuarios/aumento-excepcional/<int:excepcional_id>/decidir",
+    methods=["POST"],
+)
+@login_required
+def controle_usuarios_aumento_excepcional_decidir(excepcional_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    csrf_block = _exigir_csrf_admin_multiuser()
+    if csrf_block is not None:
+        return csrf_block
+    from app.services.conta_multiuser_aumento_excepcional_service import (
+        decidir_solicitacao_excepcional,
+        site_origin_padrao,
+    )
+    from app.services.conta_multiuser_errors import (
+        AumentoExcepcionalConflitoError,
+        AumentoExcepcionalInvalidoError,
+        AumentoExcepcionalNaoAutorizadoError,
+        AumentoMultiuserCicloIndeterminadoError,
+        AumentoMultiuserDivergenteError,
+    )
+
+    payload = request.get_json(silent=True) or {}
+    decisao = (
+        payload.get("decisao")
+        or request.form.get("decisao")
+        or ""
+    ).strip()
+    versao_raw = payload.get("versao") or request.form.get("versao")
+    try:
+        versao = int(versao_raw) if versao_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        versao = None
+    try:
+        resultado = decidir_solicitacao_excepcional(
+            current_user._get_current_object(),
+            int(excepcional_id),
+            decisao=decisao,
+            versao_esperada=versao,
+            idempotency_key=payload.get("idempotency_key")
+            or request.form.get("idempotency_key"),
+            quantidade_aprovada=payload.get("quantidade_aprovada")
+            or request.form.get("quantidade_aprovada"),
+            site_origin=request.host_url.rstrip("/") if request.host_url else site_origin_padrao(),
+        )
+    except AumentoExcepcionalNaoAutorizadoError as exc:
+        return jsonify(_erro_admin_validacao_payload(str(exc), "nao_autorizado")), 403
+    except AumentoExcepcionalConflitoError as exc:
+        return jsonify(_erro_admin_validacao_payload(str(exc), "conflito_decisao")), 409
+    except (
+        AumentoExcepcionalInvalidoError,
+        AumentoMultiuserCicloIndeterminadoError,
+        AumentoMultiuserDivergenteError,
+    ) as exc:
+        return jsonify(_erro_admin_validacao_payload(str(exc), "decisao_invalida")), 400
+    except Exception:
+        _log.exception("Falha ao decidir aumento excepcional id=%s", excepcional_id)
+        return jsonify(
+            _erro_admin_validacao_payload(
+                "Não foi possível concluir a decisão.",
+                "falha_decisao",
+            )
+        ), 500
+    if request.is_json or request.headers.get("Accept", "").find("application/json") >= 0:
+        return jsonify(
+            {
+                "ok": True,
+                "estado": resultado.estado,
+                "decisao": resultado.decisao,
+                "replay": resultado.replay,
+                "versao": resultado.versao,
+                "mensagem": resultado.mensagem,
+                "checkout_url": resultado.checkout_url,
+            }
+        )
+    flash(resultado.mensagem or "Decisão registrada.", "success")
+    return redirect(url_for("admin.controle_usuarios"))
+
+
+@admin_bp.route("/controle-usuarios/titularidade/solicitar", methods=["POST"])
+@login_required
+def controle_usuarios_titularidade_solicitar():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    csrf_block = _exigir_csrf_admin_multiuser()
+    if csrf_block is not None:
+        return csrf_block
+    from app.services.conta_multiuser_titularidade_service import solicitar_titularidade
+    from app.services.conta_multiuser_errors import (
+        TitularidadeConflitoError,
+        TitularidadeInvalidaError,
+        TitularidadeNaoAutorizadaError,
+    )
+
+    payload = request.get_json(silent=True) or {}
+    conta_id = payload.get("conta_id") or request.form.get("conta_id")
+    candidato_id = payload.get("candidato_id") or request.form.get("candidato_id")
+    motivo = payload.get("motivo") or request.form.get("motivo") or ""
+    try:
+        resultado = solicitar_titularidade(
+            admin=current_user._get_current_object(),
+            conta_id=int(conta_id),
+            candidato_id=int(candidato_id),
+            motivo=motivo,
+            idempotency_key=payload.get("idempotency_key") or request.form.get("idempotency_key"),
+            commit=True,
+        )
+    except TitularidadeNaoAutorizadaError as exc:
+        if request.is_json:
+            return jsonify(_erro_admin_validacao_payload(str(exc), "nao_autorizado")), 403
+        flash(str(exc), "danger")
+        return redirect(url_for("admin.controle_usuarios"))
+    except TitularidadeInvalidaError as exc:
+        if request.is_json:
+            return jsonify(_erro_admin_validacao_payload(str(exc), "titularidade_invalida")), 400
+        flash(str(exc), "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    except TitularidadeConflitoError as exc:
+        if request.is_json:
+            return jsonify(_erro_admin_validacao_payload(str(exc), "conflito")), 409
+        flash(str(exc), "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    except (TypeError, ValueError):
+        if request.is_json:
+            return jsonify(_erro_admin_validacao_payload("Dados inválidos.", "dados_invalidos")), 400
+        flash("Informe Conta e candidato válidos.", "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    if request.is_json:
+        return jsonify(
+            {
+                "ok": True,
+                "estado": resultado.estado,
+                "replay": resultado.replay,
+                "solicitacao_id": resultado.solicitacao_id,
+                "versao": resultado.versao,
+                "mensagem": resultado.mensagem,
+            }
+        )
+    flash(resultado.mensagem, "success")
+    return redirect(url_for("admin.controle_usuarios"))
+
+
+@admin_bp.route(
+    "/controle-usuarios/titularidade/<int:solicitacao_id>/decidir",
+    methods=["POST"],
+)
+@login_required
+def controle_usuarios_titularidade_decidir(solicitacao_id):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    csrf_block = _exigir_csrf_admin_multiuser()
+    if csrf_block is not None:
+        return csrf_block
+    from app.services.conta_multiuser_titularidade_service import decidir_titularidade
+    from app.services.conta_multiuser_errors import (
+        TitularidadeConflitoError,
+        TitularidadeInvalidaError,
+        TitularidadeNaoAutorizadaError,
+    )
+
+    payload = request.get_json(silent=True) or {}
+    decisao = (payload.get("decisao") or request.form.get("decisao") or "").strip()
+    versao_raw = payload.get("versao") or request.form.get("versao")
+    try:
+        versao = int(versao_raw) if versao_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        versao = None
+    try:
+        resultado = decidir_titularidade(
+            admin=current_user._get_current_object(),
+            solicitacao_id=int(solicitacao_id),
+            decisao=decisao,
+            versao=versao,
+            idempotency_key=payload.get("idempotency_key") or request.form.get("idempotency_key"),
+            commit=True,
+        )
+    except TitularidadeNaoAutorizadaError as exc:
+        if request.is_json:
+            return jsonify(_erro_admin_validacao_payload(str(exc), "nao_autorizado")), 403
+        flash(str(exc), "danger")
+        return redirect(url_for("admin.controle_usuarios"))
+    except TitularidadeConflitoError as exc:
+        if request.is_json:
+            return jsonify(_erro_admin_validacao_payload(str(exc), "conflito")), 409
+        flash(str(exc), "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    except TitularidadeInvalidaError as exc:
+        if request.is_json:
+            return jsonify(_erro_admin_validacao_payload(str(exc), "titularidade_invalida")), 400
+        flash(str(exc), "warning")
+        return redirect(url_for("admin.controle_usuarios"))
+    if request.is_json:
+        return jsonify(
+            {
+                "ok": True,
+                "estado": resultado.estado,
+                "replay": resultado.replay,
+                "versao": resultado.versao,
+                "mensagem": resultado.mensagem,
+            }
+        )
+    flash(resultado.mensagem, "success")
+    return redirect(url_for("admin.controle_usuarios"))
 
 
 @admin_bp.route("/controle-usuarios/convidar-adm", methods=["POST"])
@@ -1556,6 +1820,10 @@ def planos_saas_salvar():
     gateway_currency = (request.form.get("gateway_currency") or "").strip()
     gateway_interval = (request.form.get("gateway_interval") or "").strip()
     gateway_pronto = bool(request.form.get("gateway_pronto"))
+    quantidade_minima = (request.form.get("quantidade_minima") or "").strip()
+    limite_aumento_automatico = (
+        request.form.get("limite_aumento_automatico_ciclo") or ""
+    ).strip()
     try:
         resultado = plano_service.atualizar_parametros_plano_admin(
             plano_codigo=plano_codigo,
@@ -1567,6 +1835,8 @@ def planos_saas_salvar():
             gateway_currency_raw=gateway_currency or None,
             gateway_interval_raw=gateway_interval or None,
             gateway_pronto_raw=gateway_pronto,
+            quantidade_minima_raw=quantidade_minima or None,
+            limite_aumento_automatico_raw=limite_aumento_automatico or None,
         )
         trial_salvo = None
         if plano_codigo.lower() == "free" and freemium_trial_dias:
@@ -1590,6 +1860,11 @@ def planos_saas_salvar():
                 f"Plano {resultado['plano_nome']} salvo com valor R$ {resultado['valor_plano']} "
                 f"e franquia "
                 f"{resultado['franquia_limite_total']} créditos. "
+                + (
+                    f"Quantidade mínima: {resultado['quantidade_minima']} assentos. "
+                    if resultado.get("quantidade_minima") is not None
+                    else ""
+                )
                 + (
                     (
                         "Trial atualizado para ilimitado. "

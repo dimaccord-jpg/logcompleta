@@ -7,6 +7,10 @@ from decimal import Decimal, InvalidOperation
 
 from app.extensions import db
 from app.models import ConfigRegras, Conta, Franquia, User
+from app.services.conta_organizacional_rules import (
+    CHAVE_LIMITE_AUMENTO_AUTOMATICO_CICLO,
+    LIMITE_AUMENTO_AUTOMATICO_CICLO_V1,
+)
 from app.infra import (
     get_freemium_trial_dias,
     CHAVE_JULIA_CHAT_MAX_HISTORY,
@@ -34,6 +38,18 @@ PLANOS_SAAS_ADMIN = (
 )
 _PLANOS_POR_CODIGO = {p["codigo"]: p for p in PLANOS_SAAS_ADMIN}
 PLANOS_GATEWAY_MONETIZACAO = ("starter", "pro")
+# Multiuser entra no gateway somente quando a configuração administrativa
+# (Product/Price/currency/interval/pronto + valor + mínimo) estiver completa.
+# A constante acima permanece a allowlist sempre-on da Fase 1.
+PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS = ("starter", "pro", "multiuser")
+PLANOS_COM_QUANTIDADE_MINIMA_ADMIN = ("multiuser",)
+
+CHAVE_QUANTIDADE_MINIMA_MULTIUSER = "plano_quantidade_minima_admin_multiuser"
+DESCRICAO_QUANTIDADE_MINIMA_MULTIUSER = "Quantidade mínima de assentos do plano Multiuser"
+CHAVE_LIMITE_AUMENTO_AUTOMATICO_CICLO_MULTIUSER = CHAVE_LIMITE_AUMENTO_AUTOMATICO_CICLO
+DESCRICAO_LIMITE_AUMENTO_AUTOMATICO_CICLO = (
+    "Limite cumulativo de aumento automático de assentos por ciclo comercial Multiuser"
+)
 
 _GATEWAY_PROVIDER_OPCOES = {"stripe"}
 _GATEWAY_INTERVALO_OPCOES = {"month", "year"}
@@ -62,6 +78,108 @@ def _parse_franquia_limite_raw(raw: str | None) -> Decimal:
     if valor <= 0:
         raise ValueError("Franquia deve ser maior que zero.")
     return valor.quantize(Decimal("0.000001"))
+
+
+def _parse_quantidade_minima_raw(raw: str | None) -> int:
+    txt = (raw or "").strip()
+    if not txt:
+        raise ValueError("Informe a quantidade mínima de assentos do plano Multiuser.")
+    try:
+        valor = int(txt)
+    except (TypeError, ValueError):
+        raise ValueError("Quantidade mínima inválida. Use um inteiro positivo.")
+    if valor < 1:
+        raise ValueError("Quantidade mínima deve ser maior ou igual a 1.")
+    return valor
+
+
+def plano_gateway_admin_configuravel(plano_codigo: str | None) -> bool:
+    return (plano_codigo or "").strip().lower() in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS
+
+
+def obter_valor_admin_plano(
+    plano_codigo: str,
+    *,
+    exigir_configurado: bool = True,
+) -> Decimal | None:
+    """
+    Porta canônica do valor comercial administrativo (R$).
+    Fonte: ConfigRegras. Sem fallback hardcoded.
+    """
+    codigo = (plano_codigo or "").strip().lower()
+    plano = _PLANOS_POR_CODIGO.get(codigo)
+    if not plano:
+        raise ValueError(f"Plano '{plano_codigo}' não encontrado na configuração administrativa.")
+    cfg = ConfigRegras.query.filter_by(chave=_config_key_valor_plano(codigo)).first()
+    valor = _to_decimal(cfg.valor_real) if cfg and cfg.valor_real is not None else None
+    if valor is None and cfg is not None and cfg.valor_texto:
+        valor = _to_decimal(cfg.valor_texto)
+    if exigir_configurado and valor is None:
+        raise ValueError(
+            f"Valor administrativo do plano {codigo} não está configurado em /admin/planos."
+        )
+    return valor
+
+
+def _parse_limite_aumento_automatico_raw(raw: str | None) -> int:
+    txt = (raw or "").strip()
+    if not txt:
+        raise ValueError(
+            "Informe o limite de aumento automático por ciclo do plano Multiuser."
+        )
+    try:
+        valor = int(txt)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Limite de aumento automático inválido. Use um inteiro positivo."
+        )
+    if valor < 1:
+        raise ValueError(
+            "Limite de aumento automático deve ser maior ou igual a 1."
+        )
+    return valor
+
+
+def obter_limite_aumento_automatico_ciclo_multiuser(
+    *,
+    exigir_configurado: bool = False,
+) -> int:
+    """
+    Porta canônica do limite de aumento automático cumulativo por ciclo.
+
+    Fonte: ConfigRegras (/admin/planos). Sem espalhar o valor normativo
+    pelos services/templates/tests. Se a chave ainda não existir, devolve
+    a autoridade V1 centralizada em conta_organizacional_rules.
+    """
+    cfg = ConfigRegras.query.filter_by(
+        chave=CHAVE_LIMITE_AUMENTO_AUTOMATICO_CICLO_MULTIUSER
+    ).first()
+    if cfg is None or cfg.valor_inteiro is None:
+        if exigir_configurado:
+            raise ValueError(
+                "Limite de aumento automático do plano Multiuser não está "
+                "configurado em /admin/planos."
+            )
+        return int(LIMITE_AUMENTO_AUTOMATICO_CICLO_V1)
+    return int(cfg.valor_inteiro)
+
+
+def obter_quantidade_minima_multiuser_admin(
+    *,
+    exigir_configurado: bool = False,
+) -> int | None:
+    """
+    Porta canônica da quantidade mínima Multiuser.
+    Fonte: ConfigRegras. Sem fallback hardcoded.
+    """
+    cfg = ConfigRegras.query.filter_by(chave=CHAVE_QUANTIDADE_MINIMA_MULTIUSER).first()
+    if cfg is None or cfg.valor_inteiro is None:
+        if exigir_configurado:
+            raise ValueError(
+                "Quantidade mínima do plano Multiuser não está configurada em /admin/planos."
+            )
+        return None
+    return int(cfg.valor_inteiro)
 
 
 def _parse_valor_plano_raw(raw: str | None) -> Decimal:
@@ -113,6 +231,14 @@ def _config_key_gateway_ready(plano_codigo: str) -> str:
     return f"plano_gateway_ready_admin_{plano_codigo}"
 
 
+def _config_key_quantidade_minima(plano_codigo: str) -> str:
+    return (
+        CHAVE_QUANTIDADE_MINIMA_MULTIUSER
+        if plano_codigo == "multiuser"
+        else f"plano_quantidade_minima_admin_{plano_codigo}"
+    )
+
+
 def _bool_from_raw(raw: str | bool | None) -> bool:
     if isinstance(raw, bool):
         return raw
@@ -121,6 +247,12 @@ def _bool_from_raw(raw: str | bool | None) -> bool:
 
 
 def _normalizar_gateway_provider(raw: str | None) -> str | None:
+    """Provider externo é opcional na etapa administrativa.
+
+    Vazio/None = configuração externa ainda não informada (pendente).
+    Só aplica a allowlist quando um provider foi de fato preenchido.
+    Nesta fase, o único valor aceito é stripe.
+    """
     txt = (raw or "").strip().lower()
     if not txt:
         return None
@@ -157,6 +289,32 @@ def _normalizar_gateway_interval(raw: str | None) -> str | None:
     if txt not in _GATEWAY_INTERVALO_OPCOES:
         raise ValueError("Periodicidade inválida para gateway. Use month ou year.")
     return txt
+
+
+def _normalizar_overlay_gateway_admin(
+    *,
+    provider_raw: str | None,
+    product_id_raw: str | None,
+    price_id_raw: str | None,
+    currency_raw: str | None,
+    interval_raw: str | None,
+    pronto_raw: str | bool | None,
+) -> dict:
+    """Overlay opcional de configuração externa.
+
+    Independente dos parâmetros administrativos. Ausência de
+    provider/Product/Price/moeda/periodicidade não é erro de cadastro:
+    o estado permanece pendente e a prontidão real é calculada em
+    `_ler_config_gateway_plano`. Provider, se informado, deve ser stripe.
+    """
+    return {
+        "provider": _normalizar_gateway_provider(provider_raw),
+        "product_id": _normalizar_gateway_product_id(product_id_raw),
+        "price_id": _normalizar_gateway_price_id(price_id_raw),
+        "currency": _normalizar_gateway_currency(currency_raw),
+        "interval": _normalizar_gateway_interval(interval_raw),
+        "pronto": _bool_from_raw(pronto_raw),
+    }
 
 
 def _obter_cfg_map(chaves: list[str]) -> dict[str, ConfigRegras]:
@@ -200,8 +358,11 @@ def _ler_config_gateway_plano(cfg_map: dict[str, ConfigRegras], plano_codigo: st
     pronto = bool(cfg_ready and (cfg_ready.valor_inteiro or 0) == 1)
 
     pendencias: list[str] = []
-    if not provider:
+    provider_n = (provider or "").strip().lower()
+    if not provider_n:
         pendencias.append("gateway_provider_nao_configurado")
+    elif provider_n not in _GATEWAY_PROVIDER_OPCOES:
+        pendencias.append("gateway_provider_invalido")
     if not product_id:
         pendencias.append("gateway_product_id_nao_configurado")
     if not price_id:
@@ -213,7 +374,9 @@ def _ler_config_gateway_plano(cfg_map: dict[str, ConfigRegras], plano_codigo: st
     if not pronto:
         pendencias.append("gateway_pronto_desmarcado")
 
-    configuracao_valida = len(pendencias) == 0
+    configuracao_valida = (
+        len(pendencias) == 0 and provider_n in _GATEWAY_PROVIDER_OPCOES
+    )
     return {
         "provider": provider,
         "product_id": product_id,
@@ -324,7 +487,10 @@ def listar_planos_saas_admin() -> list[dict]:
     for p in PLANOS_SAAS_ADMIN:
         cfg_keys.append(_config_key_valor_plano(p["codigo"]))
         cfg_keys.append(_config_key_franquia_ref(p["codigo"]))
-        if p["codigo"] in PLANOS_GATEWAY_MONETIZACAO:
+        if p["codigo"] in PLANOS_COM_QUANTIDADE_MINIMA_ADMIN:
+            cfg_keys.append(_config_key_quantidade_minima(p["codigo"]))
+            cfg_keys.append(CHAVE_LIMITE_AUMENTO_AUTOMATICO_CICLO_MULTIUSER)
+        if p["codigo"] in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
             cfg_keys.extend(
                 [
                     _config_key_gateway_provider(p["codigo"]),
@@ -366,6 +532,17 @@ def listar_planos_saas_admin() -> list[dict]:
             if valor is not None
         ]
         limite_referencia = max(limites) if limites else None
+        quantidade_minima = None
+        limite_aumento_automatico_ciclo = None
+        if p["codigo"] in PLANOS_COM_QUANTIDADE_MINIMA_ADMIN:
+            cfg_min = cfg_map.get(_config_key_quantidade_minima(p["codigo"]))
+            if cfg_min is not None and cfg_min.valor_inteiro is not None:
+                quantidade_minima = int(cfg_min.valor_inteiro)
+            cfg_limite_auto = cfg_map.get(CHAVE_LIMITE_AUMENTO_AUTOMATICO_CICLO_MULTIUSER)
+            if cfg_limite_auto is not None and cfg_limite_auto.valor_inteiro is not None:
+                limite_aumento_automatico_ciclo = int(cfg_limite_auto.valor_inteiro)
+            else:
+                limite_aumento_automatico_ciclo = int(LIMITE_AUMENTO_AUTOMATICO_CICLO_V1)
         planos.append(
             {
                 "codigo": p["codigo"],
@@ -374,9 +551,11 @@ def listar_planos_saas_admin() -> list[dict]:
                 "franquias_vinculadas": len(franquias),
                 "franquias_com_limite": len(limites),
                 "franquia_referencia": limite_referencia,
+                "quantidade_minima": quantidade_minima,
+                "limite_aumento_automatico_ciclo": limite_aumento_automatico_ciclo,
                 "gateway_config": (
                     _ler_config_gateway_plano(cfg_map, p["codigo"])
-                    if p["codigo"] in PLANOS_GATEWAY_MONETIZACAO
+                    if p["codigo"] in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS
                     else None
                 ),
             }
@@ -394,11 +573,18 @@ def atualizar_parametros_plano_admin(
     gateway_currency_raw: str | None = None,
     gateway_interval_raw: str | None = None,
     gateway_pronto_raw: str | bool | None = None,
+    quantidade_minima_raw: str | None = None,
+    limite_aumento_automatico_raw: str | None = None,
 ) -> dict:
     """
     Atualiza parâmetros administrativos do plano:
     - valor comercial admin em ConfigRegras
     - franquia operacional em Franquia.limite_total
+    - quantidade mínima e limite de aumento automático (Multiuser)
+
+    A configuração externa Stripe é overlay independente nesta etapa.
+    Pode permanecer vazia (pendente) sem bloquear a persistência
+    administrativa. Checkout continua gated por configuracao_valida.
     """
     codigo = (plano_codigo or "").strip().lower()
     plano = _PLANOS_POR_CODIGO.get(codigo)
@@ -407,12 +593,32 @@ def atualizar_parametros_plano_admin(
 
     valor_plano = _parse_valor_plano_raw(valor_plano_raw)
     novo_limite = _parse_franquia_limite_raw(franquia_limite_total_raw)
-    gateway_provider = _normalizar_gateway_provider(gateway_provider_raw)
-    gateway_product_id = _normalizar_gateway_product_id(gateway_product_id_raw)
-    gateway_price_id = _normalizar_gateway_price_id(gateway_price_id_raw)
-    gateway_currency = _normalizar_gateway_currency(gateway_currency_raw)
-    gateway_interval = _normalizar_gateway_interval(gateway_interval_raw)
-    gateway_pronto = _bool_from_raw(gateway_pronto_raw)
+    quantidade_minima = None
+    limite_aumento_automatico = None
+    if codigo in PLANOS_COM_QUANTIDADE_MINIMA_ADMIN:
+        quantidade_minima = _parse_quantidade_minima_raw(quantidade_minima_raw)
+        if limite_aumento_automatico_raw is not None and str(
+            limite_aumento_automatico_raw
+        ).strip():
+            limite_aumento_automatico = _parse_limite_aumento_automatico_raw(
+                limite_aumento_automatico_raw
+            )
+    gateway_overlay = None
+    if codigo in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
+        gateway_overlay = _normalizar_overlay_gateway_admin(
+            provider_raw=gateway_provider_raw,
+            product_id_raw=gateway_product_id_raw,
+            price_id_raw=gateway_price_id_raw,
+            currency_raw=gateway_currency_raw,
+            interval_raw=gateway_interval_raw,
+            pronto_raw=gateway_pronto_raw,
+        )
+    gateway_provider = (gateway_overlay or {}).get("provider")
+    gateway_product_id = (gateway_overlay or {}).get("product_id")
+    gateway_price_id = (gateway_overlay or {}).get("price_id")
+    gateway_currency = (gateway_overlay or {}).get("currency")
+    gateway_interval = (gateway_overlay or {}).get("interval")
+    gateway_pronto = bool((gateway_overlay or {}).get("pronto"))
     categorias = tuple(c.lower() for c in plano["categorias"])
     franquias = (
         db.session.query(Franquia)
@@ -436,7 +642,7 @@ def atualizar_parametros_plano_admin(
     cfg.valor_inteiro = None
 
     gateway_cfg_chaves = []
-    if codigo in PLANOS_GATEWAY_MONETIZACAO:
+    if codigo in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
         gateway_cfg_chaves = [
             _config_key_gateway_provider(codigo),
             _config_key_gateway_product_id(codigo),
@@ -504,7 +710,43 @@ def atualizar_parametros_plano_admin(
                 db.session.add(fr)
                 atualizadas += 1
 
-        if codigo in PLANOS_GATEWAY_MONETIZACAO:
+        if quantidade_minima is not None:
+            cfg_min_key = _config_key_quantidade_minima(codigo)
+            cfg_min = ConfigRegras.query.filter_by(chave=cfg_min_key).first()
+            if not cfg_min:
+                cfg_min = ConfigRegras(
+                    chave=cfg_min_key,
+                    descricao=DESCRICAO_QUANTIDADE_MINIMA_MULTIUSER,
+                )
+                db.session.add(cfg_min)
+            cfg_min.valor_inteiro = int(quantidade_minima)
+            cfg_min.valor_texto = str(quantidade_minima)
+            cfg_min.valor_real = None
+            db.session.add(cfg_min)
+            logger.info(
+                "Configuração administrativa Multiuser: quantidade_minima=%s",
+                quantidade_minima,
+            )
+        if limite_aumento_automatico is not None:
+            cfg_limite = ConfigRegras.query.filter_by(
+                chave=CHAVE_LIMITE_AUMENTO_AUTOMATICO_CICLO_MULTIUSER
+            ).first()
+            if not cfg_limite:
+                cfg_limite = ConfigRegras(
+                    chave=CHAVE_LIMITE_AUMENTO_AUTOMATICO_CICLO_MULTIUSER,
+                    descricao=DESCRICAO_LIMITE_AUMENTO_AUTOMATICO_CICLO,
+                )
+                db.session.add(cfg_limite)
+            cfg_limite.valor_inteiro = int(limite_aumento_automatico)
+            cfg_limite.valor_texto = str(limite_aumento_automatico)
+            cfg_limite.valor_real = None
+            db.session.add(cfg_limite)
+            logger.info(
+                "Configuração administrativa Multiuser: limite_aumento_automatico_ciclo=%s",
+                limite_aumento_automatico,
+            )
+
+        if codigo in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
             _upsert_cfg_texto(
                 gateway_cfg_map,
                 _config_key_gateway_provider(codigo),
@@ -553,7 +795,7 @@ def atualizar_parametros_plano_admin(
         raise
 
     gateway_config = None
-    if codigo in PLANOS_GATEWAY_MONETIZACAO:
+    if codigo in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
         gateway_config = _ler_config_gateway_plano(
             _obter_cfg_map(gateway_cfg_chaves),
             codigo,
@@ -563,6 +805,8 @@ def atualizar_parametros_plano_admin(
         "plano_nome": plano["nome"],
         "valor_plano": valor_plano,
         "franquia_limite_total": novo_limite,
+        "quantidade_minima": quantidade_minima,
+        "limite_aumento_automatico_ciclo": limite_aumento_automatico,
         "franquias_total": len(franquias_para_aplicar),
         "franquias_atualizadas": atualizadas,
         "gateway_config": gateway_config,
@@ -582,13 +826,13 @@ def obter_config_planos():
 
 def listar_pendencias_gateway_monetizacao_admin() -> list[dict]:
     """
-    Retorna pendencias explicitas de configuracao de gateway para starter/pro.
+    Retorna pendencias explicitas de configuracao de gateway para starter/pro/multiuser.
     Nao bloqueia operacao; apenas sinaliza estado administrativo.
     """
     planos = listar_planos_saas_admin()
     pendencias: list[dict] = []
     for plano in planos:
-        if plano["codigo"] not in PLANOS_GATEWAY_MONETIZACAO:
+        if plano["codigo"] not in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
             continue
         gateway = plano.get("gateway_config") or {}
         for pendencia in gateway.get("pendencias", []):
@@ -607,10 +851,10 @@ def listar_pendencias_gateway_monetizacao_por_plano_admin(
 ) -> list[dict]:
     """
     Retorna pendencias de configuracao externa apenas do plano informado.
-    Se o plano nao participa do escopo Stripe da fase 1, retorna lista vazia.
+    Se o plano nao participa do escopo Stripe administrativo, retorna lista vazia.
     """
     codigo = (plano_codigo or "").strip().lower()
-    if codigo not in PLANOS_GATEWAY_MONETIZACAO:
+    if codigo not in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
         return []
     planos = listar_planos_saas_admin()
     for plano in planos:
@@ -640,7 +884,7 @@ def obter_configuracao_gateway_plano_admin(plano_codigo: str | None) -> dict | N
     Retorna None quando o plano nao participa do escopo de monetizacao recorrente.
     """
     codigo = (plano_codigo or "").strip().lower()
-    if codigo not in PLANOS_GATEWAY_MONETIZACAO:
+    if codigo not in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
         return None
     planos = listar_planos_saas_admin()
     for plano in planos:
@@ -666,7 +910,7 @@ def resolver_plano_por_gateway_price_id_admin(
     if provider_n != "stripe" or not price_id_n:
         return None
     for plano in listar_planos_saas_admin():
-        if plano.get("codigo") not in PLANOS_GATEWAY_MONETIZACAO:
+        if plano.get("codigo") not in PLANOS_GATEWAY_ADMIN_CONFIGURAVEIS:
             continue
         gateway = plano.get("gateway_config") or {}
         if (gateway.get("provider") or "").strip().lower() != provider_n:

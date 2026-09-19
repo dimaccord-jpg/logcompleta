@@ -8,7 +8,8 @@ from flask import Blueprint, current_app, flash, jsonify, render_template, redir
 from flask_login import login_required, current_user, logout_user
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from app.models import User
+from app.extensions import db
+from app.models import User, Conta
 from app.services.user_lifecycle_service import encerrar_vinculo_operacional_usuario
 from app.services.cleiton_monetizacao_service import (
     conciliar_checkout_session_stripe,
@@ -19,11 +20,14 @@ from app.services.cleiton_monetizacao_service import (
     resolver_falha_mensal_vigente_conta,
 )
 from app.services.plano_service import obter_nome_exibivel_plano
+from app.services.conta_organizacional_service import snapshot_dados_empresariais
 
 logger = logging.getLogger(__name__)
-HIERARQUIA_PLANOS = {"free": 0, "starter": 1, "pro": 2}
+HIERARQUIA_PLANOS = {"free": 0, "starter": 1, "pro": 2, "multiuser": 3}
 _CSRF_REGULARIZAR_SALT = "regularizar-pagamento-csrf"
+_CSRF_CONTRATACAO_SALT = "contratacao-stripe-csrf"
 _CSRF_REGULARIZAR_MAX_AGE = 3600
+_CSRF_CONTRATACAO_MAX_AGE = 3600
 _STRIPE_PORTAL_ALLOWED_HOSTS = frozenset({"billing.stripe.com"})
 
 # Contexto leve da jornada embedded (evita falso positivo de UX com pendencia antiga).
@@ -52,6 +56,28 @@ def validar_csrf_token_regularizar_pagamento(token: str | None, user_id: int) ->
         valor = _csrf_regularizar_serializer().loads(
             token,
             max_age=_CSRF_REGULARIZAR_MAX_AGE,
+        )
+    except (BadSignature, SignatureExpired):
+        return False
+    return valor == str(int(user_id))
+
+
+def _csrf_contratacao_serializer() -> URLSafeTimedSerializer:
+    secret_key = current_app.config["SECRET_KEY"]
+    return URLSafeTimedSerializer(secret_key, salt=_CSRF_CONTRATACAO_SALT)
+
+
+def gerar_csrf_token_contratacao(user_id: int) -> str:
+    return _csrf_contratacao_serializer().dumps(str(int(user_id)))
+
+
+def validar_csrf_token_contratacao(token: str | None, user_id: int) -> bool:
+    if not token:
+        return False
+    try:
+        valor = _csrf_contratacao_serializer().loads(
+            token,
+            max_age=_CSRF_CONTRATACAO_MAX_AGE,
         )
     except (BadSignature, SignatureExpired):
         return False
@@ -197,7 +223,15 @@ def perfil():
     permanece delegada ao Flask-Login e ao modelo User, evitando hardcodes.
     """
     assert isinstance(current_user._get_current_object(), User)  # type: ignore[attr-defined]
-    return render_template("user_area.html")
+    from app.services.conta_multiuser_aumento_service import user_eh_contratante_ativo
+    from app.services.conta_multiuser_notificacao_service import listar_notificacoes_do_user
+
+    user_obj = current_user._get_current_object()
+    return render_template(
+        "user_area.html",
+        eh_contratante_multiuser=user_eh_contratante_ativo(user_obj),
+        notificacoes_internas=listar_notificacoes_do_user(user_obj),
+    )
 
 
 @user_bp.route("/contrate-um-plano")
@@ -335,6 +369,13 @@ def contrate_plano():
         getattr(current_user, "id", None),
         getattr(current_user, "categoria", None),
     )
+    conta_id = getattr(user_obj, "conta_id", None)
+    dados_empresariais = None
+    if conta_id is not None:
+        conta_row = db.session.get(Conta, int(conta_id))
+        if conta_row is not None:
+            dados_empresariais = snapshot_dados_empresariais(conta_row)
+    csrf_contratacao = gerar_csrf_token_contratacao(int(user_obj.id))
     return render_template(
         "contrate_plano.html",
         planos_contratacao=planos_filtrados,
@@ -342,7 +383,16 @@ def contrate_plano():
         plano_atual_codigo=plano_atual,
         data_vencimento_atual=data_vencimento_iso,
         pixel_subscribe_event=pixel_subscribe_event,
+        dados_empresariais=dados_empresariais or {},
+        csrf_contratacao=csrf_contratacao,
     )
+
+
+def _extrair_payload_contratacao() -> dict:
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    return payload
 
 
 def _extrair_plano_codigo_contratacao() -> str:
@@ -350,9 +400,7 @@ def _extrair_plano_codigo_contratacao() -> str:
     Resolve plano_codigo com prioridade para JSON, mantendo fallback para form/query
     para clientes não-frontend.
     """
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, dict):
-        payload = {}
+    payload = _extrair_payload_contratacao()
     plano_codigo = (payload.get("plano_codigo") or "").strip()
     if not plano_codigo:
         plano_codigo = (request.form.get("plano_codigo") or "").strip()
@@ -383,6 +431,45 @@ def _erro_contratacao_payload(erro: str, codigo_erro: str) -> dict:
         "codigo_erro": codigo_erro,
         "error": erro,  # alias retrocompatível para consumidores não padronizados.
     }
+
+
+@user_bp.route("/api/contratacao/multiuser/resumo", methods=["POST"])
+@login_required
+def resumo_contratacao_multiuser():
+    """Cálculo canônico da mensalidade Multiuser. Conta derivada do usuário autenticado."""
+    user = current_user._get_current_object()
+    if not isinstance(user, User):
+        return jsonify(
+            _erro_contratacao_payload(
+                "usuario_invalido",
+                "contratacao_stripe_usuario_invalido",
+            )
+        ), 401
+    payload = _extrair_payload_contratacao()
+    csrf_token = (payload.get("csrf_token") or "").strip()
+    if not validar_csrf_token_contratacao(csrf_token, int(user.id)):
+        return jsonify(
+            _erro_contratacao_payload(
+                "csrf_invalido",
+                "contratacao_stripe_csrf_invalido",
+            )
+        ), 400
+    from app.services.conta_multiuser_contratacao_service import (
+        ConfiguracaoMultiuserIncompletaError,
+        QuantityMultiuserInvalidaError,
+        resumo_contratacao_multiuser_para_api,
+    )
+
+    try:
+        out = resumo_contratacao_multiuser_para_api(payload.get("quantity", payload.get("quantidade")))
+        return jsonify({"ok": True, **out})
+    except (ValueError, ConfiguracaoMultiuserIncompletaError, QuantityMultiuserInvalidaError) as exc:
+        return jsonify(
+            _erro_contratacao_payload(
+                str(exc),
+                "contratacao_multiuser_resumo_invalido",
+            )
+        ), 400
 
 
 @user_bp.route("/api/contratacao/stripe/iniciar", methods=["POST"])
@@ -422,12 +509,39 @@ def iniciar_contratacao_stripe():
                 "contratacao_stripe_confirmacao_downgrade_obrigatoria",
             )
         ), 400
+    payload = _extrair_payload_contratacao()
+    quantity = payload.get("quantity", payload.get("quantidade"))
+    dados_empresariais = None
+    if plano_codigo == "multiuser":
+        csrf_token = (payload.get("csrf_token") or "").strip()
+        if not validar_csrf_token_contratacao(csrf_token, int(user.id)):
+            return jsonify(
+                _erro_contratacao_payload(
+                    "csrf_invalido",
+                    "contratacao_stripe_csrf_invalido",
+                )
+            ), 400
+        dados_empresariais = {
+            "razao_social": payload.get("razao_social"),
+            "nome_fantasia": payload.get("nome_fantasia"),
+            "cnpj": payload.get("cnpj"),
+            "email_empresarial": payload.get("email_empresarial"),
+            "endereco_logradouro": payload.get("endereco_logradouro"),
+            "endereco_numero": payload.get("endereco_numero"),
+            "endereco_complemento": payload.get("endereco_complemento"),
+            "endereco_bairro": payload.get("endereco_bairro"),
+            "endereco_cidade": payload.get("endereco_cidade"),
+            "endereco_uf": payload.get("endereco_uf"),
+            "endereco_cep": payload.get("endereco_cep"),
+        }
     try:
         site_origin = request.host_url.rstrip("/")
         out = iniciar_jornada_assinatura_stripe(
             user=user,
             plano_codigo=plano_codigo,
             site_origin=site_origin,
+            quantity=quantity,
+            dados_empresariais=dados_empresariais,
         )
         if out.get("checkout_client_secret"):
             session[_SESSION_CONTRATACAO_EMBED_PLANO] = plano_codigo

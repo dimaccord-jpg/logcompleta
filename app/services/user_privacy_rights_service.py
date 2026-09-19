@@ -61,6 +61,7 @@ USER_FIELDS_PRESERVED = (
     "trial_start_date",
     "conta_id",
     "franquia_id",
+    "sessao_contexto_geracao",
 )
 
 PRESERVED_CATEGORIES = (

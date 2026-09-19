@@ -52,6 +52,10 @@
                                 class="btn btn-dark btn-sm w-100 js-iniciar-checkout"
                                 data-plano-codigo="{{ plano.codigo }}"
                                 data-plano-nome="{{ plano.nome }}"
+                                {% if plano.codigo == "multiuser" %}
+                                data-quantidade-minima="{{ plano.quantidade_minima or '' }}"
+                                data-valor-unitario="{{ plano.valor_admin or '' }}"
+                                {% endif %}
                             >
                                 {% if plano.codigo == "free" %}
                                 Migrar para {{ plano.nome }}
@@ -87,6 +91,65 @@
                     <div id="checkout-status" class="alert alert-light border small mb-3">
                         Selecione um plano para iniciar a jornada de contratacao.
                     </div>
+                    <form id="form-multiuser" class="border rounded p-3 mb-3 d-none" autocomplete="organization">
+                        <input type="hidden" id="csrf-contratacao" value="{{ csrf_contratacao or '' }}">
+                        <h6 class="fw-bold mb-3">Contratação Multiusuário</h6>
+                        <p class="small text-muted">Informe os dados empresariais da Conta. O benefício só é ativado após confirmação financeira.</p>
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold" for="mu-razao-social">Razão social</label>
+                                <input class="form-control form-control-sm" id="mu-razao-social" name="razao_social" value="{{ dados_empresariais.razao_social or '' }}" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold" for="mu-nome-fantasia">Nome fantasia</label>
+                                <input class="form-control form-control-sm" id="mu-nome-fantasia" name="nome_fantasia" value="{{ dados_empresariais.nome_fantasia or '' }}" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold" for="mu-cnpj">CNPJ</label>
+                                <input class="form-control form-control-sm" id="mu-cnpj" name="cnpj" value="{{ dados_empresariais.cnpj or '' }}" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold" for="mu-email">E-mail empresarial</label>
+                                <input class="form-control form-control-sm" id="mu-email" type="email" name="email_empresarial" value="{{ dados_empresariais.email_empresarial or '' }}" required>
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label small fw-bold" for="mu-logradouro">Logradouro</label>
+                                <input class="form-control form-control-sm" id="mu-logradouro" name="endereco_logradouro" value="{{ dados_empresariais.endereco_logradouro or '' }}" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold" for="mu-numero">Número</label>
+                                <input class="form-control form-control-sm" id="mu-numero" name="endereco_numero" value="{{ dados_empresariais.endereco_numero or '' }}" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold" for="mu-complemento">Complemento</label>
+                                <input class="form-control form-control-sm" id="mu-complemento" name="endereco_complemento" value="{{ dados_empresariais.endereco_complemento or '' }}">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold" for="mu-bairro">Bairro</label>
+                                <input class="form-control form-control-sm" id="mu-bairro" name="endereco_bairro" value="{{ dados_empresariais.endereco_bairro or '' }}">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold" for="mu-cidade">Cidade</label>
+                                <input class="form-control form-control-sm" id="mu-cidade" name="endereco_cidade" value="{{ dados_empresariais.endereco_cidade or '' }}" required>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small fw-bold" for="mu-uf">UF</label>
+                                <input class="form-control form-control-sm" id="mu-uf" name="endereco_uf" maxlength="2" value="{{ dados_empresariais.endereco_uf or '' }}" required>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small fw-bold" for="mu-cep">CEP</label>
+                                <input class="form-control form-control-sm" id="mu-cep" name="endereco_cep" value="{{ dados_empresariais.endereco_cep or '' }}" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold" for="mu-quantity">Acessos</label>
+                                <input class="form-control form-control-sm" id="mu-quantity" name="quantity" type="number" min="1" step="1" required>
+                            </div>
+                        </div>
+                        <div id="mu-resumo" class="alert alert-secondary small mt-3 mb-3">
+                            Informe a quantidade de acessos para calcular o total mensal.
+                        </div>
+                        <button type="submit" class="btn btn-dark btn-sm" id="btn-confirmar-multiuser">Ir para o checkout</button>
+                    </form>
                     <div id="checkout-embed" class="border rounded p-2" style="min-height: 420px;"></div>
                 </div>
             </div>
@@ -103,8 +166,13 @@
     const contextoEl = document.getElementById("plano-contexto");
     const planoAtual = (contextoEl?.getAttribute("data-plano-atual") || "free").toLowerCase();
     const vencimentoAtual = contextoEl?.getAttribute("data-vencimento-atual") || "";
-    const ordemPlanos = { free: 0, starter: 1, pro: 2 };
-    const nomesExibicaoPlano = { free: "Free", starter: "Starter", pro: "Pro" };
+    const ordemPlanos = { free: 0, starter: 1, pro: 2, multiuser: 3 };
+    const nomesExibicaoPlano = { free: "Free", starter: "Starter", pro: "Pro", multiuser: "Multiusuário" };
+    const formMultiuser = document.getElementById("form-multiuser");
+    const resumoEl = document.getElementById("mu-resumo");
+    const qtyEl = document.getElementById("mu-quantity");
+    const csrfEl = document.getElementById("csrf-contratacao");
+    const urlResumo = "{{ url_for('user.resumo_contratacao_multiuser') }}";
     let embeddedCheckout = null;
     let confirmacaoPendente = null;
     let checkoutInFlight = false;
@@ -162,7 +230,7 @@
         return true;
     }
 
-    async function iniciarCheckout(planoCodigo, confirmarDowngrade = false) {
+    async function iniciarCheckout(planoCodigo, confirmarDowngrade = false, extra = {}) {
         if (checkoutInFlight) {
             return;
         }
@@ -171,13 +239,15 @@
         statusEl.className = "alert alert-info small mb-3";
         statusEl.textContent = "Iniciando jornada de contratacao...";
         try {
+            const body = {
+                plano_codigo: planoCodigo,
+                confirmar_downgrade: confirmarDowngrade,
+                ...extra,
+            };
             const resp = await fetch("{{ url_for('user.iniciar_contratacao_stripe') }}", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    plano_codigo: planoCodigo,
-                    confirmar_downgrade: confirmarDowngrade,
-                }),
+                body: JSON.stringify(body),
             });
             const payload = await resp.json();
             if (!resp.ok || !payload.ok) {
@@ -231,12 +301,80 @@
         }
     }
 
+    function coletarDadosMultiuser() {
+        return {
+            csrf_token: csrfEl ? csrfEl.value : "",
+            quantity: qtyEl ? qtyEl.value : "",
+            razao_social: document.getElementById("mu-razao-social")?.value || "",
+            nome_fantasia: document.getElementById("mu-nome-fantasia")?.value || "",
+            cnpj: document.getElementById("mu-cnpj")?.value || "",
+            email_empresarial: document.getElementById("mu-email")?.value || "",
+            endereco_logradouro: document.getElementById("mu-logradouro")?.value || "",
+            endereco_numero: document.getElementById("mu-numero")?.value || "",
+            endereco_complemento: document.getElementById("mu-complemento")?.value || "",
+            endereco_bairro: document.getElementById("mu-bairro")?.value || "",
+            endereco_cidade: document.getElementById("mu-cidade")?.value || "",
+            endereco_uf: document.getElementById("mu-uf")?.value || "",
+            endereco_cep: document.getElementById("mu-cep")?.value || "",
+        };
+    }
+
+    async function atualizarResumoMultiuser() {
+        if (!resumoEl || !qtyEl) {
+            return;
+        }
+        const quantity = qtyEl.value;
+        if (!quantity) {
+            resumoEl.textContent = "Informe a quantidade de acessos para calcular o total mensal.";
+            return;
+        }
+        try {
+            const resp = await fetch(urlResumo, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    csrf_token: csrfEl ? csrfEl.value : "",
+                    quantity,
+                }),
+            });
+            const payload = await resp.json();
+            if (!resp.ok || !payload.ok) {
+                throw new Error(payload.erro || "Não foi possível calcular o total.");
+            }
+            resumoEl.innerHTML =
+                `<strong>Resumo</strong><br>` +
+                `Plano: ${payload.plano}<br>` +
+                `Acessos: ${payload.acessos}<br>` +
+                `Valor por acesso: R$ ${payload.valor_por_acesso}<br>` +
+                `Total mensal: R$ ${payload.total_mensal}`;
+        } catch (err) {
+            resumoEl.textContent = err && err.message ? err.message : "Falha ao calcular o total mensal.";
+        }
+    }
+
     botoes.forEach((btn) => {
         btn.addEventListener("click", () => {
             const planoCodigo = btn.getAttribute("data-plano-codigo");
             const planoNome = btn.getAttribute("data-plano-nome") || (planoCodigo || "").toUpperCase();
             if (!planoCodigo) {
                 return;
+            }
+            if ((planoCodigo || "").toLowerCase() === "multiuser") {
+                if (formMultiuser) {
+                    formMultiuser.classList.remove("d-none");
+                    const minimo = btn.getAttribute("data-quantidade-minima");
+                    if (qtyEl && minimo && !qtyEl.value) {
+                        qtyEl.min = minimo;
+                        qtyEl.value = minimo;
+                    }
+                    atualizarResumoMultiuser();
+                    statusEl.className = "alert alert-info small mb-3";
+                    statusEl.textContent = "Preencha os dados empresariais e a quantidade de acessos para continuar.";
+                }
+                return;
+            }
+            if (formMultiuser) {
+                formMultiuser.classList.add("d-none");
             }
             if (ehDowngrade(planoCodigo)) {
                 abrirConfirmacaoDowngrade(planoCodigo, planoNome);
@@ -245,6 +383,17 @@
             iniciarCheckout(planoCodigo, false);
         });
     });
+
+    if (formMultiuser) {
+        formMultiuser.addEventListener("submit", (ev) => {
+            ev.preventDefault();
+            iniciarCheckout("multiuser", false, coletarDadosMultiuser());
+        });
+    }
+    if (qtyEl) {
+        qtyEl.addEventListener("change", atualizarResumoMultiuser);
+        qtyEl.addEventListener("input", atualizarResumoMultiuser);
+    }
 
     document.addEventListener("DOMContentLoaded", () => {
         const modalDowngradeEl = document.getElementById("modal-confirmar-downgrade");
