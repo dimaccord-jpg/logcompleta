@@ -14,13 +14,28 @@ from collections import defaultdict
 from typing import Any
 
 from app.extensions import db
-from app.models import ConfigRegras, ContaMonetizacaoVinculo, Franquia, MonetizacaoFato, User
+from app.models import (
+    ConfigRegras,
+    Conta,
+    ContaMonetizacaoVinculo,
+    Franquia,
+    MonetizacaoFato,
+    User,
+)
 from app.services.admin_dashboard_service import _apply_dashboard_filters
 from app.services.cleiton_franquia_operacional_service import (
     classificar_estado_operacional_franquia,
 )
 from app.services.cleiton_monetizacao_service import STATUS_TEC_APLICADO
 from app.services.cleiton_plano_resolver import resolver_plano_operacional_para_franquia
+from app.services.conta_multiuser_diagnostico_service import (
+    DiagnosticoContaMultiuser,
+    diagnosticar_conta_multiuser,
+)
+from app.services.conta_organizacional_rules import (
+    SLUG_CONTA_SISTEMA,
+    STATUS_DIAG_RECONCILIACAO_NECESSARIA,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +162,9 @@ CSV_COLUMNS = [
     "flag_price_id_incompativel_plano",
     "nivel_risco_auditoria",
     "flag_requer_revisao_manual",
+    "multiuser_status_diagnostico",
+    "multiuser_achado_codigo",
+    "multiuser_achado_detalhe",
 ]
 
 ACTIVE_EXTERNAL_STATUS = {"active", "trialing", "paid", "past_due"}
@@ -389,6 +407,64 @@ def _correlacionar_fato_pendencia(
     return None, "ausente"
 
 
+def _carregar_diagnosticos_multiuser(
+    conta_ids: list[int],
+) -> dict[int, DiagnosticoContaMultiuser]:
+    """Diagnóstico oficial uma vez por Conta Multiuser. Read-only; não persiste snapshot."""
+    if not conta_ids:
+        return {}
+    contas = (
+        Conta.query.filter(
+            Conta.id.in_(conta_ids),
+            Conta.multiuser_ativa.is_(True),
+        )
+        .filter(Conta.slug != SLUG_CONTA_SISTEMA)
+        .all()
+    )
+    out: dict[int, DiagnosticoContaMultiuser] = {}
+    for conta in contas:
+        cid = int(conta.id)
+        try:
+            out[cid] = diagnosticar_conta_multiuser(cid, consultar_stripe=True)
+        except Exception:
+            logger.exception(
+                "Falha no diagnostico Multiuser do CSV admin conta_id=%s",
+                cid,
+            )
+    return out
+
+
+def _campos_csv_diagnostico_multiuser(
+    diag: DiagnosticoContaMultiuser | None,
+) -> tuple[str, str, str]:
+    if diag is None:
+        return "", "", ""
+    status = diag.status or ""
+    achado_codigo = ""
+    achado_detalhe = ""
+    if diag.achados:
+        escolhido = next(
+            (a for a in diag.achados if a.classificacao == diag.status),
+            diag.achados[0],
+        )
+        achado_codigo = escolhido.codigo or ""
+        achado_detalhe = escolhido.detalhe or ""
+    return status, achado_codigo, achado_detalhe
+
+
+def _compor_risco_com_diagnostico_multiuser(
+    nivel_risco_auditoria: str,
+    flag_requer_revisao_manual: bool,
+    status_diagnostico: str,
+) -> tuple[str, bool]:
+    """RECONCILIACAO_NECESSARIA eleva risco a no mínimo atenção; não reduz severidade maior."""
+    if status_diagnostico != STATUS_DIAG_RECONCILIACAO_NECESSARIA:
+        return nivel_risco_auditoria, flag_requer_revisao_manual
+    if nivel_risco_auditoria == "ok":
+        nivel_risco_auditoria = "atenção"
+    return nivel_risco_auditoria, True
+
+
 def gerar_csv_auditoria_clientes(filtros: dict[str, str | None]) -> tuple[str, int]:
     categoria = (filtros.get("categoria") or "").strip() or None
     franquia_status = (filtros.get("franquia_status") or "").strip() or None
@@ -443,6 +519,8 @@ def gerar_csv_auditoria_clientes(filtros: dict[str, str | None]) -> tuple[str, i
         )
         for f in fatos_lote:
             fatos_por_conta[int(f.conta_id)].append(f)
+
+    diagnostico_por_conta = _carregar_diagnosticos_multiuser(conta_ids)
 
     for user in usuarios:
         franquia = user.franquia
@@ -763,6 +841,19 @@ def gerar_csv_auditoria_clientes(filtros: dict[str, str | None]) -> tuple[str, i
         nivel_risco_auditoria = "crítico" if criticos else ("atenção" if atencao else "ok")
         flag_requer_revisao_manual = criticos or atencao
 
+        (
+            multiuser_status_diagnostico,
+            multiuser_achado_codigo,
+            multiuser_achado_detalhe,
+        ) = _campos_csv_diagnostico_multiuser(diagnostico_por_conta.get(conta_id))
+        nivel_risco_auditoria, flag_requer_revisao_manual = (
+            _compor_risco_com_diagnostico_multiuser(
+                nivel_risco_auditoria,
+                flag_requer_revisao_manual,
+                multiuser_status_diagnostico,
+            )
+        )
+
         writer.writerow(
             {
                 "user_id": user.id,
@@ -1011,6 +1102,9 @@ def gerar_csv_auditoria_clientes(filtros: dict[str, str | None]) -> tuple[str, i
                 ),
                 "nivel_risco_auditoria": nivel_risco_auditoria,
                 "flag_requer_revisao_manual": _csv_bool(flag_requer_revisao_manual),
+                "multiuser_status_diagnostico": multiuser_status_diagnostico,
+                "multiuser_achado_codigo": multiuser_achado_codigo,
+                "multiuser_achado_detalhe": multiuser_achado_detalhe,
             }
         )
 
