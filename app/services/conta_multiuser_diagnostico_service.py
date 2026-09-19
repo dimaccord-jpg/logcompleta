@@ -293,8 +293,8 @@ def _classificar_quantity(
     """
     Precedência: Stripe indisponível → F6/F5 legítimos e causalmente
     correlacionados → local×Stripe atual → redução (só explica atual×futura
-    ou Stripe já preparada na futura). Estado transitório não mascara
-    divergência sem causalidade demonstrada.
+    ou Stripe já preparada na futura pela MESMA correlation). Estado
+    transitório não mascara divergência sem causalidade demonstrada.
     """
     if stripe_consulta == STRIPE_CONSULTA_INDISPONIVEL:
         return [
@@ -345,19 +345,55 @@ def _classificar_quantity(
 
     out: list[AchadoDiagnostico] = []
     if _local_diverge_de_stripe(local, stripe):
-        stripe_preparada_reducao = (
+        from app.services.conta_multiuser_reducao_service import (
+            _efeito_stripe_desta_reducao,
+        )
+
+        efeito_desta = (
+            _efeito_stripe_desta_reducao(reducao.correlation_id)
+            if reducao is not None
+            else None
+        )
+        stripe_nesta_futura = (
             reducao is not None
             and stripe is not None
             and int(stripe) == int(reducao.quantity_futura)
+        )
+        evidencia_desta_reducao = (
+            stripe_nesta_futura
+            and efeito_desta is not None
+            and int(efeito_desta) == int(stripe)
+        )
+        no_corte = (
+            reducao is not None
+            and reducao.efetivar_em is not None
+            and reducao.efetivar_em <= utcnow_naive()
+        )
+        stripe_preparada_legitima = (
+            evidencia_desta_reducao
+            and not no_corte
             and local is not None
             and int(local) == int(reducao.quantity_atual_no_pedido)
         )
-        if stripe_preparada_reducao:
+        if stripe_preparada_legitima:
             out.append(
                 AchadoDiagnostico(
                     codigo=CODIGO_DIAG_REDUCAO_PENDENTE,
                     classificacao=STATUS_DIAG_PENDENTE_ESPERADO,
                     detalhe="stripe_preparada_na_quantity_futura_antes_da_cobranca",
+                    acao="observar",
+                )
+            )
+        elif stripe_nesta_futura:
+            out.append(
+                AchadoDiagnostico(
+                    codigo=CODIGO_DIAG_REDUCAO_PENDENTE,
+                    classificacao=STATUS_DIAG_RECONCILIACAO_NECESSARIA,
+                    detalhe=(
+                        "stripe_na_futura_apos_corte_desta_reducao"
+                        if evidencia_desta_reducao
+                        else "stripe_na_futura_sem_evidencia_desta_reducao"
+                    ),
                     acao="observar",
                 )
             )

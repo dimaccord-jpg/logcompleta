@@ -13,6 +13,8 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from flask import Flask
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.pool import NullPool
 
 from app.extensions import db, login_manager
 from app.infra import get_user_by_id
@@ -62,10 +64,13 @@ from app.services.conta_multiuser_notificacao_service import (
     listar_notificacoes_do_user,
     marcar_como_lida,
 )
+from app.services.conta_multiuser_diagnostico_service import diagnosticar_conta_multiuser
 from app.services.conta_multiuser_reducao_service import (
+    EvidenciaCausalReducaoNaoPersistidaError,
     snapshot_reducao_para_painel,
     solicitar_reducao_quantity,
     tentar_efetivar_reducao_no_corte,
+    tentar_recuperar_reducao_parcial,
 )
 from app.services.conta_multiuser_revogacao_service import (
     SESSION_GERACAO_KEY,
@@ -76,7 +81,13 @@ from app.services.conta_multiuser_titularidade_service import (
     decidir_titularidade,
     solicitar_titularidade,
 )
-from app.services.conta_organizacional_rules import ESTADO_ATIVO, PAPEL_CONTRATANTE, PAPEL_MEMBRO
+from app.services.conta_organizacional_rules import (
+    ESTADO_ATIVO,
+    PAPEL_CONTRATANTE,
+    PAPEL_MEMBRO,
+    STATUS_DIAG_PENDENTE_ESPERADO,
+    STATUS_DIAG_RECONCILIACAO_NECESSARIA,
+)
 from app.services.user_plan_control_service import atribuir_plano_para_usuario
 from app.conta_multiuser_convite_routes import convite_bp
 from app.conta_multiuser_painel_routes import painel_bp
@@ -577,6 +588,563 @@ def test_reducao_idempotente_double_click(app, monkeypatch):
         assert a.replay is False
         assert b.replay is True
         assert ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).count() == 1
+
+
+@pytest.fixture
+def app_sqlite_isolado(tmp_path):
+    """SQLite em arquivo + NullPool: conexão/transação independente real."""
+    flask_app = Flask(__name__)
+    db_file = tmp_path / "scrum190_isolado.sqlite"
+    flask_app.config["SQLALCHEMY_DATABASE_URI"] = (
+        f"sqlite:///{db_file.resolve().as_posix()}"
+    )
+    flask_app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    flask_app.config["TESTING"] = True
+    flask_app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "poolclass": NullPool,
+        "connect_args": {"check_same_thread": False, "timeout": 30},
+    }
+    db.init_app(flask_app)
+    with flask_app.app_context():
+        import app.models  # noqa: F401
+
+        db.create_all()
+    yield flask_app
+    with flask_app.app_context():
+        db.session.remove()
+        db.drop_all()
+        engine = getattr(db, "engine", None)
+        if engine is not None:
+            engine.dispose()
+
+
+def _fato_qty_desta_reducao(conta, row, *, quantity, correlation=None):
+    cid = correlation or row.correlation_id
+    db.session.add(
+        MonetizacaoFato(
+            tipo_fato="reducao_quantity_stripe_atualizada",
+            status_tecnico="stripe_ok",
+            conta_id=int(conta.id),
+            usuario_id=int(row.solicitado_por_user_id),
+            idempotency_key=f"mu_reducao_stripe_qty:{cid}",
+            correlation_key=cid,
+            snapshot_normalizado_json=json.dumps(
+                {
+                    "quantity": int(quantity),
+                    "quantity_local": int(row.quantity_atual_no_pedido),
+                    "quantity_futura": int(quantity),
+                    "proration_behavior": "none",
+                }
+            ),
+        )
+    )
+    db.session.commit()
+
+
+def _fato_stripe_desta_reducao(conta, row, *, quantity, correlation=None):
+    cid = correlation or row.correlation_id
+    db.session.add(
+        MonetizacaoFato(
+            tipo_fato="reducao_quantity_stripe_preparada",
+            status_tecnico="stripe_ok",
+            conta_id=int(conta.id),
+            usuario_id=int(row.solicitado_por_user_id),
+            idempotency_key=f"mu_reducao_stripe_prep:{cid}",
+            correlation_key=cid,
+            snapshot_normalizado_json=json.dumps(
+                {
+                    "quantity_local": int(row.quantity_atual_no_pedido),
+                    "quantity_futura": int(quantity),
+                    "proration_behavior": "none",
+                }
+            ),
+        )
+    )
+    db.session.commit()
+
+
+def test_scrum190_stripe_desta_reducao_rollback_local_recupera(app, monkeypatch):
+    """Stripe já na futura pela mesma redução + rollback local → recovery conclui."""
+    with app.app_context():
+        conta, user = _preparar_conta_multiuser(
+            "f7-190", qtd=12, email="f7190@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-rec"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        _fato_stripe_desta_reducao(conta, row, quantity=10)
+        state["quantity"] = 10
+        state["posts"].clear()
+        db.session.refresh(conta)
+        assert conta.quantidade_assentos_contratados == 12
+        assert row.estado == "pendente"
+        antes = _consumos(conta.id)
+        ativos_antes = ContaVinculoOrganizacional.query.filter_by(
+            conta_id=conta.id, estado=ESTADO_ATIVO
+        ).count()
+
+        out = tentar_recuperar_reducao_parcial(conta.id, referencia=FIM, commit=True)
+        db.session.refresh(conta)
+        db.session.refresh(row)
+        assert out.estado == "efetivada"
+        assert out.stripe_escrito is False
+        assert conta.quantidade_assentos_contratados == 10
+        assert state["quantity"] == 10
+        assert state["posts"] == []
+        assert row.estado == "efetivada"
+        assert _consumos(conta.id) == antes
+        assert (
+            ContaVinculoOrganizacional.query.filter_by(
+                conta_id=conta.id, estado=ESTADO_ATIVO
+            ).count()
+            == ativos_antes
+        )
+        assert MonetizacaoFato.query.filter_by(
+            tipo_fato="reducao_quantity_recuperada",
+            correlation_key=row.correlation_id,
+        ).count() == 1
+
+
+def test_scrum190_recovery_replay_seguro(app, monkeypatch):
+    with app.app_context():
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-rp", qtd=12, email="f7190rp@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-rp"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        _fato_stripe_desta_reducao(conta, row, quantity=10)
+        state["quantity"] = 10
+        state["posts"].clear()
+        primeiro = tentar_recuperar_reducao_parcial(
+            conta.id, referencia=FIM, commit=True
+        )
+        assert primeiro.estado == "efetivada"
+        assert primeiro.replay is False
+        replay = tentar_recuperar_reducao_parcial(conta.id, referencia=FIM, commit=True)
+        db.session.refresh(conta)
+        assert replay.replay is True
+        assert replay.estado == "efetivada"
+        assert conta.quantidade_assentos_contratados == 10
+        assert state["posts"] == []
+        assert MonetizacaoFato.query.filter_by(
+            tipo_fato="reducao_quantity_recuperada"
+        ).count() == 1
+        assert ContaMultiuserReducaoQuantity.query.filter_by(
+            conta_id=conta.id, estado="efetivada"
+        ).count() == 1
+
+
+def test_scrum190_stripe_futura_correlacao_alheia_nao_recupera(app, monkeypatch):
+    with app.app_context():
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-al", qtd=12, email="f7190al@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-al"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        _fato_stripe_desta_reducao(
+            conta, row, quantity=10, correlation="correlacao-alheia"
+        )
+        state["quantity"] = 10
+        state["posts"].clear()
+        out = tentar_recuperar_reducao_parcial(conta.id, referencia=FIM, commit=True)
+        db.session.refresh(conta)
+        db.session.refresh(row)
+        assert out.estado == "reconciliacao_necessaria"
+        assert row.estado == "pendente"
+        assert conta.quantidade_assentos_contratados == 12
+        assert state["posts"] == []
+        diag = diagnosticar_conta_multiuser(int(conta.id), consultar_stripe=True)
+        assert diag.status == STATUS_DIAG_RECONCILIACAO_NECESSARIA
+        assert diag.status != STATUS_DIAG_PENDENTE_ESPERADO
+        assert any(
+            a.detalhe == "stripe_na_futura_sem_evidencia_desta_reducao"
+            for a in diag.achados
+        )
+
+
+def test_scrum190_evidencia_insuficiente_reconciliacao(app, monkeypatch):
+    with app.app_context():
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-ev", qtd=12, email="f7190ev@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-ev"
+        )
+        state["quantity"] = 10
+        state["posts"].clear()
+        db.session.refresh(conta)
+        out = tentar_efetivar_reducao_no_corte(conta.id, referencia=FIM, commit=True)
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        db.session.refresh(conta)
+        assert out.estado == "reconciliacao_necessaria"
+        assert row.estado == "pendente"
+        assert row.estado != "bloqueada_no_corte"
+        assert conta.quantidade_assentos_contratados == 12
+        assert state["posts"] == []
+        assert MonetizacaoFato.query.filter_by(
+            tipo_fato="reducao_quantity_reconciliacao_necessaria"
+        ).count() == 1
+        diag = diagnosticar_conta_multiuser(int(conta.id), consultar_stripe=True)
+        assert diag.status == STATUS_DIAG_RECONCILIACAO_NECESSARIA
+        assert diag.status != STATUS_DIAG_PENDENTE_ESPERADO
+
+
+def test_scrum190_efetivar_recupera_quando_fato_desta_reducao(app, monkeypatch):
+    """Reexecutar o corte recupera em vez de bloquear quando a evidência é desta redução."""
+    with app.app_context():
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-ef", qtd=12, email="f7190ef@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-ef"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        _fato_stripe_desta_reducao(conta, row, quantity=10)
+        state["quantity"] = 10
+        state["posts"].clear()
+        out = tentar_efetivar_reducao_no_corte(conta.id, referencia=FIM, commit=True)
+        db.session.refresh(conta)
+        db.session.refresh(row)
+        assert out.estado == "efetivada"
+        assert out.stripe_escrito is False
+        assert row.estado == "efetivada"
+        assert conta.quantidade_assentos_contratados == 10
+        assert state["posts"] == []
+
+
+def test_scrum190_rollback_real_preserva_evidencia_e_recupera(
+    app_sqlite_isolado, monkeypatch
+):
+    """Stripe escrito, sentinela local, rollback: evidência sobrevive e o recovery conclui."""
+    with app_sqlite_isolado.app_context():
+        from app.services import conta_multiuser_reducao_service as reducao_mod
+        from app.services.conta_organizacional_service import (
+            persistir_quantidade_assentos_contratados as persistir_real,
+        )
+
+        persist_src = inspect.getsource(reducao_mod._persistir_fato_efeito_stripe_isolado)
+        registrar_src = inspect.getsource(reducao_mod._registrar_efeito_stripe_reducao)
+        assert "db.session.get_bind()" not in persist_src
+        assert "db.session.commit()" not in persist_src
+        assert "db.session.commit()" not in registrar_src
+        assert "engine.connect()" in persist_src
+        assert "connection.begin()" in persist_src
+
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-rb", qtd=12, email="f7190rb@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-rb"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        correlation = row.correlation_id
+        reducao_id = int(row.id)
+        conta_id = int(conta.id)
+        assert row.quantity_atual_no_pedido == 12
+        assert (
+            MonetizacaoFato.query.filter_by(
+                idempotency_key=f"mu_reducao_stripe_qty:{correlation}"
+            ).first()
+            is None
+        )
+
+        commits_durante_efetivar = {"n": 0}
+        commit_real = db.session.commit
+
+        def _spy_commit():
+            commits_durante_efetivar["n"] += 1
+            return commit_real()
+
+        def _sentinela_depois_explode(*_a, **_k):
+            alvo = db.session.get(ContaMultiuserReducaoQuantity, reducao_id)
+            alvo.quantity_atual_no_pedido = 99
+            db.session.add(alvo)
+            db.session.flush()
+            raise RuntimeError("falha local apos sentinela")
+
+        monkeypatch.setattr(db.session, "commit", _spy_commit)
+        monkeypatch.setattr(
+            reducao_mod, "persistir_quantidade_assentos_contratados", _sentinela_depois_explode
+        )
+        with pytest.raises(RuntimeError, match="falha local apos sentinela"):
+            tentar_efetivar_reducao_no_corte(conta_id, referencia=FIM, commit=True)
+        assert commits_durante_efetivar["n"] == 0
+        db.session.rollback()
+
+        conta = db.session.get(Conta, conta_id)
+        row = db.session.get(ContaMultiuserReducaoQuantity, reducao_id)
+        assert conta.quantidade_assentos_contratados == 12
+        assert row.estado == "pendente"
+        assert row.quantity_atual_no_pedido == 12
+        assert row.quantity_atual_no_pedido != 99
+        assert row.efetivada_em is None
+        assert state["quantity"] == 10
+        fato = MonetizacaoFato.query.filter_by(
+            idempotency_key=f"mu_reducao_stripe_qty:{correlation}"
+        ).one()
+        assert fato.correlation_key == correlation
+        assert fato.tipo_fato == "reducao_quantity_stripe_atualizada"
+        posts_apos_falha = list(state["posts"])
+        assert posts_apos_falha
+        assert posts_apos_falha[0]["path"] == f"/subscription_items/{ITEM}"
+        assert posts_apos_falha[0]["payload"]["quantity"] == "10"
+
+        monkeypatch.setattr(db.session, "commit", commit_real)
+        monkeypatch.setattr(
+            reducao_mod, "persistir_quantidade_assentos_contratados", persistir_real
+        )
+        out = tentar_recuperar_reducao_parcial(conta_id, referencia=FIM, commit=True)
+        db.session.refresh(conta)
+        row = db.session.get(ContaMultiuserReducaoQuantity, reducao_id)
+        assert out.estado == "efetivada"
+        assert out.stripe_escrito is False
+        assert out.replay is False
+        assert conta.quantidade_assentos_contratados == 10
+        assert state["quantity"] == 10
+        assert state["posts"] == posts_apos_falha
+        assert row.estado == "efetivada"
+        assert row.efetivada_em is not None
+
+
+def test_scrum190_evidencia_isolada_nao_commita_mutacao_pendente(
+    app_sqlite_isolado, monkeypatch
+):
+    """Helper isolado não commita mutação pendente da sessão principal."""
+    with app_sqlite_isolado.app_context():
+        from app.services import conta_multiuser_reducao_service as reducao_mod
+
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-iso", qtd=12, email="f7190iso@test.com"
+        )
+        _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-iso"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        correlation = row.correlation_id
+        reducao_id = int(row.id)
+        row.quantity_atual_no_pedido = 77
+        db.session.add(row)
+
+        def _forbid_commit():
+            raise AssertionError("helper não pode commitar a sessão principal")
+
+        monkeypatch.setattr(db.session, "commit", _forbid_commit)
+        reducao_mod._registrar_efeito_stripe_reducao(
+            row,
+            futura=10,
+            local=12,
+            customer_id=CUSTOMER,
+            subscription_id=SUBSCRIPTION,
+            item_id=ITEM,
+        )
+        db.session.rollback()
+
+        row = db.session.get(ContaMultiuserReducaoQuantity, reducao_id)
+        assert row.quantity_atual_no_pedido == 12
+        assert row.quantity_atual_no_pedido != 77
+        fato = MonetizacaoFato.query.filter_by(
+            idempotency_key=f"mu_reducao_stripe_qty:{correlation}"
+        ).one()
+        assert fato.correlation_key == correlation
+
+
+def test_scrum190_integrity_error_com_fato_duravel_replay_seguro(
+    app_sqlite_isolado, monkeypatch
+):
+    with app_sqlite_isolado.app_context():
+        from app.services import conta_multiuser_reducao_service as reducao_mod
+
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-ie-ok", qtd=12, email="f7190ieok@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-ie-ok"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        _fato_qty_desta_reducao(conta, row, quantity=10)
+
+        def _raise_integrity(*_a, **_k):
+            raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+
+        monkeypatch.setattr(
+            reducao_mod, "_persistir_fato_efeito_stripe_isolado", _raise_integrity
+        )
+        out = tentar_efetivar_reducao_no_corte(conta.id, referencia=FIM, commit=True)
+        db.session.refresh(conta)
+        db.session.refresh(row)
+        assert out.estado == "efetivada"
+        assert conta.quantidade_assentos_contratados == 10
+        assert row.estado == "efetivada"
+        assert state["quantity"] == 10
+        assert len(state["posts"]) == 1
+
+
+def test_scrum190_integrity_error_sem_fato_duravel_nao_sucesso(app, monkeypatch):
+    with app.app_context():
+        from app.services import conta_multiuser_reducao_service as reducao_mod
+
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-ie-no", qtd=12, email="f7190ieno@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-ie-no"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        correlation = row.correlation_id
+        reducao_id = int(row.id)
+        conta_id = int(conta.id)
+
+        def _raise_integrity(*_a, **_k):
+            raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+
+        monkeypatch.setattr(
+            reducao_mod, "_persistir_fato_efeito_stripe_isolado", _raise_integrity
+        )
+        with pytest.raises(EvidenciaCausalReducaoNaoPersistidaError):
+            tentar_efetivar_reducao_no_corte(conta_id, referencia=FIM, commit=True)
+        db.session.rollback()
+
+        conta = db.session.get(Conta, conta_id)
+        row = db.session.get(ContaMultiuserReducaoQuantity, reducao_id)
+        assert conta.quantidade_assentos_contratados == 12
+        assert row.estado == "pendente"
+        assert row.efetivada_em is None
+        assert state["quantity"] == 10
+        assert (
+            MonetizacaoFato.query.filter_by(
+                idempotency_key=f"mu_reducao_stripe_qty:{correlation}"
+            ).first()
+            is None
+        )
+        assert MonetizacaoFato.query.filter_by(
+            tipo_fato="reducao_quantity_efetivada",
+            correlation_key=correlation,
+        ).first() is None
+
+
+def test_scrum190_sqlite_memory_integrity_fato_da_sessao_nao_e_duravel(
+    app, monkeypatch
+):
+    """IntegrityError + fato só na sessão corrente do :memory: é fail-closed."""
+    with app.app_context():
+        from app.services import conta_multiuser_reducao_service as reducao_mod
+
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-ie-sess", qtd=12, email="f7190iesess@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-ie-sess"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        correlation = row.correlation_id
+        reducao_id = int(row.id)
+        conta_id = int(conta.id)
+        db.session.add(
+            MonetizacaoFato(
+                tipo_fato="reducao_quantity_stripe_atualizada",
+                status_tecnico="stripe_ok",
+                conta_id=int(conta.id),
+                usuario_id=int(row.solicitado_por_user_id),
+                idempotency_key=f"mu_reducao_stripe_qty:{correlation}",
+                correlation_key=correlation,
+                snapshot_normalizado_json=json.dumps(
+                    {
+                        "quantity": 10,
+                        "quantity_local": 12,
+                        "quantity_futura": 10,
+                        "proration_behavior": "none",
+                    }
+                ),
+            )
+        )
+        db.session.flush()
+        assert (
+            MonetizacaoFato.query.filter_by(
+                idempotency_key=f"mu_reducao_stripe_qty:{correlation}"
+            ).first()
+            is not None
+        )
+
+        def _raise_integrity(*_a, **_k):
+            raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+
+        monkeypatch.setattr(
+            reducao_mod, "_persistir_fato_efeito_stripe_isolado", _raise_integrity
+        )
+        with pytest.raises(EvidenciaCausalReducaoNaoPersistidaError):
+            tentar_efetivar_reducao_no_corte(conta_id, referencia=FIM, commit=True)
+        db.session.rollback()
+
+        conta = db.session.get(Conta, conta_id)
+        row = db.session.get(ContaMultiuserReducaoQuantity, reducao_id)
+        assert conta.quantidade_assentos_contratados == 12
+        assert row.estado == "pendente"
+        assert row.estado != "efetivada"
+        assert row.efetivada_em is None
+        assert state["quantity"] == 10
+        assert (
+            MonetizacaoFato.query.filter_by(
+                idempotency_key=f"mu_reducao_stripe_qty:{correlation}"
+            ).first()
+            is None
+        )
+        assert MonetizacaoFato.query.filter_by(
+            tipo_fato="reducao_quantity_efetivada",
+            correlation_key=correlation,
+        ).first() is None
+
+
+def test_scrum190_excecao_generica_evidencia_nao_conclui_local(app, monkeypatch):
+    with app.app_context():
+        from app.services import conta_multiuser_reducao_service as reducao_mod
+
+        conta, user = _preparar_conta_multiuser(
+            "f7-190-ex", qtd=12, email="f7190ex@test.com"
+        )
+        state = _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="190-ex"
+        )
+        row = ContaMultiuserReducaoQuantity.query.filter_by(conta_id=conta.id).one()
+        correlation = row.correlation_id
+        reducao_id = int(row.id)
+        conta_id = int(conta.id)
+
+        def _raise_generic(*_a, **_k):
+            raise RuntimeError("falha ao gravar evidencia")
+
+        monkeypatch.setattr(
+            reducao_mod, "_persistir_fato_efeito_stripe_isolado", _raise_generic
+        )
+        with pytest.raises(EvidenciaCausalReducaoNaoPersistidaError):
+            tentar_efetivar_reducao_no_corte(conta_id, referencia=FIM, commit=True)
+        db.session.rollback()
+
+        conta = db.session.get(Conta, conta_id)
+        row = db.session.get(ContaMultiuserReducaoQuantity, reducao_id)
+        assert conta.quantidade_assentos_contratados == 12
+        assert row.estado == "pendente"
+        assert row.efetivada_em is None
+        assert state["quantity"] == 10
+        assert MonetizacaoFato.query.filter_by(
+            tipo_fato="reducao_quantity_efetivada",
+            correlation_key=correlation,
+        ).first() is None
 
 
 def test_revogacao_membro_libera_capacidade_sem_stripe(app, monkeypatch):

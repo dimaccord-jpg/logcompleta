@@ -1,6 +1,7 @@
 """Redução futura de quantity Multiuser (Fase 7). Sem pró-rata, sem refund, sem revogar membros."""
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from app.models import (
     ContaMonetizacaoVinculo,
     ContaMultiuserReducaoQuantity,
     ContaVinculoOrganizacional,
+    MonetizacaoFato,
     User,
     utcnow_naive,
 )
@@ -49,6 +51,11 @@ from app.services.plano_service import obter_quantidade_minima_multiuser_admin
 logger = logging.getLogger(__name__)
 
 PRORATION_BEHAVIOR_NONE = "none"
+ESTADO_RECONCILIACAO_NECESSARIA = "reconciliacao_necessaria"
+_CHAVES_EFEITO_STRIPE_REDUCAO = (
+    "mu_reducao_stripe_prep:{correlation_id}",
+    "mu_reducao_stripe_qty:{correlation_id}",
+)
 
 
 @dataclass
@@ -137,6 +144,337 @@ def _to_int_quantity(value) -> int:
             "A redução não pode ser usada para zerar ou cancelar o contrato."
         )
     return int(value)
+
+
+def _quantity_do_snapshot_fato(fato: MonetizacaoFato) -> int | None:
+    try:
+        snap = json.loads(fato.snapshot_normalizado_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(snap, dict):
+        return None
+    raw = snap.get("quantity_futura")
+    if raw is None:
+        raw = snap.get("quantity")
+    try:
+        qtd = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return qtd if qtd >= 1 else None
+
+
+def _efeito_stripe_desta_reducao(correlation_id: str) -> int | None:
+    """Quantity Stripe persistida por fato da MESMA redução/correlation."""
+    cid = (correlation_id or "").strip()
+    if not cid:
+        return None
+    for template in _CHAVES_EFEITO_STRIPE_REDUCAO:
+        fato = MonetizacaoFato.query.filter_by(
+            idempotency_key=template.format(correlation_id=cid)
+        ).first()
+        if fato is None:
+            continue
+        qtd = _quantity_do_snapshot_fato(fato)
+        if qtd is not None:
+            return qtd
+    return None
+
+
+def _evidencia_stripe_desta_reducao(
+    correlation_id: str,
+    *,
+    qtd_stripe: int | None,
+    futura: int,
+) -> bool:
+    if qtd_stripe is None:
+        return False
+    efeito = _efeito_stripe_desta_reducao(correlation_id)
+    if efeito is None:
+        return False
+    return int(efeito) == int(futura) and int(qtd_stripe) == int(efeito)
+
+
+class EvidenciaCausalReducaoNaoPersistidaError(RuntimeError):
+    """Stripe já pode ter sido alterado; a evidência causal não ficou durável."""
+
+
+def _snapshot_json_fato(snapshot: dict) -> str:
+    return json.dumps(snapshot or {}, ensure_ascii=True, sort_keys=True, default=str)
+
+
+def _fato_por_idempotency(chave: str) -> MonetizacaoFato | None:
+    return MonetizacaoFato.query.filter_by(idempotency_key=chave).first()
+
+
+def _obter_engine():
+    """Engine da aplicação. Nunca a Connection da transação corrente."""
+    engine = getattr(db, "engine", None)
+    if engine is not None and not hasattr(engine, "pool"):
+        inner = getattr(engine, "engine", None)
+        if inner is not None and hasattr(inner, "connect"):
+            engine = inner
+    if engine is None or not hasattr(engine, "connect"):
+        raise EvidenciaCausalReducaoNaoPersistidaError(
+            "Engine SQLAlchemy indisponível para evidência causal isolada."
+        )
+    return engine
+
+
+def _engine_nao_oferece_transacao_independente(engine) -> bool:
+    """
+    StaticPool / SQLite :memory: devolve a mesma Connection da sessão
+    principal. Commit nessa Connection commitaria mutações locais pendentes.
+    Postgres (e SQLite em arquivo) admitem conexão/transação nova.
+    """
+    dialect = str(getattr(getattr(engine, "dialect", None), "name", "") or "")
+    if dialect != "sqlite":
+        return False
+    pool = getattr(engine, "pool", None)
+    if type(pool).__name__ == "StaticPool":
+        return True
+    url = str(getattr(engine, "url", "") or "")
+    return ":memory:" in url and "cache=shared" not in url
+
+
+def _novo_fato_efeito_stripe(
+    *,
+    tipo_fato: str,
+    status_tecnico: str,
+    conta_id: int,
+    usuario_id: int,
+    customer_id: str | None,
+    subscription_id: str | None,
+    idempotency_key: str,
+    correlation_key: str,
+    snapshot: dict,
+) -> MonetizacaoFato:
+    return MonetizacaoFato(
+        tipo_fato=tipo_fato,
+        status_tecnico=status_tecnico,
+        idempotency_key=idempotency_key,
+        correlation_key=correlation_key,
+        timestamp_interno=utcnow_naive(),
+        conta_id=int(conta_id),
+        usuario_id=int(usuario_id),
+        customer_id=(customer_id or "").strip() or None,
+        subscription_id=(subscription_id or "").strip() or None,
+        snapshot_normalizado_json=_snapshot_json_fato(snapshot),
+    )
+
+
+def _fato_snapshot_equivalente(fato: MonetizacaoFato, snapshot: dict) -> bool:
+    qtd = _quantity_do_snapshot_fato(fato)
+    if qtd is None:
+        return False
+    esperado = snapshot.get("quantity_futura")
+    if esperado is None:
+        esperado = snapshot.get("quantity")
+    try:
+        return int(qtd) == int(esperado)
+    except (TypeError, ValueError):
+        return False
+
+
+def _confirmar_fato_equivalente_duravel(idempotency_key: str, snapshot: dict) -> bool:
+    """Confirma o equivalente numa conexão nova; não reutiliza a transação principal."""
+    engine = _obter_engine()
+    if _engine_nao_oferece_transacao_independente(engine):
+        # :memory:/StaticPool não prova persistência independente.
+        # Fato visível só na sessão corrente não é durável.
+        return False
+
+    from sqlalchemy.orm import Session
+
+    connection = engine.connect()
+    isolada = None
+    try:
+        isolada = Session(bind=connection)
+        fato = isolada.query(MonetizacaoFato).filter_by(
+            idempotency_key=idempotency_key
+        ).first()
+        if fato is None:
+            return False
+        return _fato_snapshot_equivalente(fato, snapshot)
+    finally:
+        if isolada is not None:
+            isolada.close()
+        connection.close()
+
+
+def _inserir_fato_efeito_stripe_unidade_corrente_sem_commit(
+    *,
+    tipo_fato: str,
+    status_tecnico: str,
+    conta_id: int,
+    usuario_id: int,
+    customer_id: str | None,
+    subscription_id: str | None,
+    idempotency_key: str,
+    correlation_key: str,
+    snapshot: dict,
+) -> None:
+    """
+    Fallback só para SQLite :memory:/StaticPool de teste: insere na UoW
+    corrente e NÃO commita a sessão principal. Não é a semântica de
+    produção — Postgres persiste em transação independente.
+    """
+    existente = _fato_por_idempotency(idempotency_key)
+    if existente is not None:
+        if _fato_snapshot_equivalente(existente, snapshot):
+            return
+        raise EvidenciaCausalReducaoNaoPersistidaError(
+            "Fato causal existente não é equivalente ao efeito Stripe desta redução."
+        )
+    with db.session.begin_nested():
+        db.session.add(
+            _novo_fato_efeito_stripe(
+                tipo_fato=tipo_fato,
+                status_tecnico=status_tecnico,
+                conta_id=conta_id,
+                usuario_id=usuario_id,
+                customer_id=customer_id,
+                subscription_id=subscription_id,
+                idempotency_key=idempotency_key,
+                correlation_key=correlation_key,
+                snapshot=snapshot,
+            )
+        )
+        db.session.flush()
+
+
+def _persistir_fato_efeito_stripe_isolado(
+    *,
+    tipo_fato: str,
+    status_tecnico: str,
+    conta_id: int,
+    usuario_id: int,
+    customer_id: str | None,
+    subscription_id: str | None,
+    idempotency_key: str,
+    correlation_key: str,
+    snapshot: dict,
+) -> None:
+    """
+    Produção (Postgres): Engine → conexão nova → transação nova →
+    Session vinculada a essa conexão → commit independente.
+    Não reutiliza a Connection da transação principal.
+    """
+    engine = _obter_engine()
+    if _engine_nao_oferece_transacao_independente(engine):
+        _inserir_fato_efeito_stripe_unidade_corrente_sem_commit(
+            tipo_fato=tipo_fato,
+            status_tecnico=status_tecnico,
+            conta_id=conta_id,
+            usuario_id=usuario_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            idempotency_key=idempotency_key,
+            correlation_key=correlation_key,
+            snapshot=snapshot,
+        )
+        return
+
+    from sqlalchemy.orm import Session
+
+    connection = engine.connect()
+    isolada = None
+    transacao = None
+    try:
+        transacao = connection.begin()
+        isolada = Session(bind=connection)
+        existente = isolada.query(MonetizacaoFato).filter_by(
+            idempotency_key=idempotency_key
+        ).first()
+        if existente is not None:
+            if _fato_snapshot_equivalente(existente, snapshot):
+                return
+            raise EvidenciaCausalReducaoNaoPersistidaError(
+                "Fato causal existente não é equivalente ao efeito Stripe desta redução."
+            )
+        isolada.add(
+            _novo_fato_efeito_stripe(
+                tipo_fato=tipo_fato,
+                status_tecnico=status_tecnico,
+                conta_id=conta_id,
+                usuario_id=usuario_id,
+                customer_id=customer_id,
+                subscription_id=subscription_id,
+                idempotency_key=idempotency_key,
+                correlation_key=correlation_key,
+                snapshot=snapshot,
+            )
+        )
+        isolada.flush()
+        transacao.commit()
+        transacao = None
+    except Exception:
+        if transacao is not None and transacao.is_active:
+            transacao.rollback()
+        raise
+    finally:
+        if isolada is not None:
+            isolada.close()
+        connection.close()
+
+
+def _registrar_efeito_stripe_reducao(
+    row: ContaMultiuserReducaoQuantity,
+    *,
+    futura: int,
+    local: int,
+    customer_id: str | None,
+    subscription_id: str | None,
+    item_id: str | None,
+) -> None:
+    """
+    Evidência causal do update Stripe desta redução. Obrigatória após o
+    POST Stripe e isolada da transação local que ainda vai concluir.
+    """
+    chave = f"mu_reducao_stripe_qty:{row.correlation_id}"
+    snapshot = {
+        "quantity": int(futura),
+        "quantity_local": int(local),
+        "quantity_futura": int(futura),
+        "proration_behavior": PRORATION_BEHAVIOR_NONE,
+        "subscription_item_id": item_id,
+    }
+    payload = {
+        "tipo_fato": "reducao_quantity_stripe_atualizada",
+        "status_tecnico": "stripe_ok",
+        "conta_id": int(row.conta_id),
+        "usuario_id": int(row.solicitado_por_user_id),
+        "customer_id": customer_id,
+        "subscription_id": subscription_id,
+        "idempotency_key": chave,
+        "correlation_key": row.correlation_id,
+        "snapshot": snapshot,
+    }
+    try:
+        _persistir_fato_efeito_stripe_isolado(**payload)
+    except IntegrityError:
+        if _confirmar_fato_equivalente_duravel(chave, snapshot):
+            logger.info(
+                "evento=evidencia_causal_reducao_replay_seguro correlation_id=%s",
+                row.correlation_id,
+            )
+            return
+        logger.exception(
+            "evento=evidencia_causal_reducao_integrity_sem_fato_duravel correlation_id=%s",
+            row.correlation_id,
+        )
+        raise EvidenciaCausalReducaoNaoPersistidaError(
+            "A evidência causal do update Stripe não ficou durável."
+        )
+    except EvidenciaCausalReducaoNaoPersistidaError:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "evento=evidencia_causal_reducao_persistencia_falhou correlation_id=%s",
+            row.correlation_id,
+        )
+        raise EvidenciaCausalReducaoNaoPersistidaError(
+            "Falha ao persistir a evidência causal após o update Stripe."
+        ) from exc
 
 
 def _vinculo_monetario_ativo(conta_id: int) -> ContaMonetizacaoVinculo:
@@ -489,12 +827,17 @@ def tentar_efetivar_reducao_no_corte(
         )
 
     if stripe_ja_na_futura and local != futura:
-        return _bloquear_reducao_invoice_inconsistente(
+        return _resolver_stripe_ja_na_futura(
             row,
             conta,
+            vinculo=vinculo,
             futura=futura,
             local=local,
-            motivo="invoice_nao_confirmada_na_quantity_futura",
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            item_id=item_id,
+            contratante=contratante,
+            agora=agora,
             commit=commit,
         )
 
@@ -504,6 +847,94 @@ def tentar_efetivar_reducao_no_corte(
             nova_quantity=futura,
             idempotency_key=f"mu_reducao_qty:{row.correlation_id}",
         )
+        _registrar_efeito_stripe_reducao(
+            row,
+            futura=futura,
+            local=local,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            item_id=item_id,
+        )
+    return _concluir_efetivacao_local_reducao(
+        row,
+        conta,
+        vinculo=vinculo,
+        futura=futura,
+        customer_id=customer_id,
+        subscription_id=subscription_id,
+        item_id=item_id,
+        contratante=contratante,
+        agora=agora,
+        commit=commit,
+        recuperacao=False,
+        stripe_escrito=not stripe_ja_na_futura,
+        mensagem="Redução efetivada no corte.",
+    )
+
+
+def _resolver_stripe_ja_na_futura(
+    row: ContaMultiuserReducaoQuantity,
+    conta: Conta,
+    *,
+    vinculo: ContaMonetizacaoVinculo,
+    futura: int,
+    local: int,
+    customer_id: str | None,
+    subscription_id: str | None,
+    item_id: str | None,
+    contratante: ContaVinculoOrganizacional | None,
+    agora,
+    commit: bool,
+) -> ResultadoReducaoQuantity:
+    """
+    Stripe já está na futura. Só conclui o local se a MESMA redução
+    tiver evidência durável (correlation/idempotency). Senão, reconciliação.
+    """
+    if _evidencia_stripe_desta_reducao(
+        row.correlation_id, qtd_stripe=futura, futura=futura
+    ):
+        return _concluir_efetivacao_local_reducao(
+            row,
+            conta,
+            vinculo=vinculo,
+            futura=futura,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            item_id=item_id,
+            contratante=contratante,
+            agora=agora,
+            commit=commit,
+            recuperacao=True,
+            stripe_escrito=False,
+            mensagem="Redução recuperada: Stripe desta operação já estava na quantity futura.",
+        )
+    return _marcar_reconciliacao_necessaria(
+        row,
+        conta,
+        futura=futura,
+        local=local,
+        qtd_stripe=futura,
+        motivo="stripe_na_futura_sem_evidencia_desta_reducao",
+        commit=commit,
+    )
+
+
+def _concluir_efetivacao_local_reducao(
+    row: ContaMultiuserReducaoQuantity,
+    conta: Conta,
+    *,
+    vinculo: ContaMonetizacaoVinculo,
+    futura: int,
+    customer_id: str | None,
+    subscription_id: str | None,
+    item_id: str | None,
+    contratante: ContaVinculoOrganizacional | None,
+    agora,
+    commit: bool,
+    recuperacao: bool,
+    stripe_escrito: bool,
+    mensagem: str,
+) -> ResultadoReducaoQuantity:
     persistir_quantidade_assentos_contratados(int(conta.id), futura, commit=False)
     db.session.refresh(conta)
     _atualizar_snapshot_quantity_vinculo(vinculo, futura)
@@ -530,8 +961,25 @@ def tentar_efetivar_reducao_no_corte(
             "quantity_nova": futura,
             "proration_behavior": PRORATION_BEHAVIOR_NONE,
             "subscription_item_id": item_id,
+            "recuperacao": recuperacao,
         },
     )
+    if recuperacao:
+        registrar_fato_monetizacao(
+            tipo_fato="reducao_quantity_recuperada",
+            status_tecnico="aplicado",
+            conta_id=int(conta.id),
+            usuario_id=int(row.solicitado_por_user_id),
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            idempotency_key=f"mu_reducao_recuperada:{row.correlation_id}",
+            correlation_key=row.correlation_id,
+            snapshot_normalizado={
+                "quantity_nova": futura,
+                "origem": "stripe_desta_reducao",
+                "subscription_item_id": item_id,
+            },
+        )
     if contratante is not None:
         criar_notificacao(
             user_id=int(contratante.user_id),
@@ -544,7 +992,8 @@ def tentar_efetivar_reducao_no_corte(
             commit=False,
         )
     logger.info(
-        "evento=reducao_quantity_efetivada conta_id=%s quantity_nova=%s item=%s",
+        "evento=%s conta_id=%s quantity_nova=%s item=%s",
+        "reducao_quantity_recuperada" if recuperacao else "reducao_quantity_efetivada",
         conta.id,
         futura,
         item_id,
@@ -570,8 +1019,194 @@ def tentar_efetivar_reducao_no_corte(
         correlation_id=row.correlation_id,
         reducao_id=int(row.id),
         proration_behavior=PRORATION_BEHAVIOR_NONE,
-        stripe_escrito=True,
-        mensagem="Redução efetivada no corte.",
+        stripe_escrito=stripe_escrito,
+        mensagem=mensagem,
+    )
+
+
+def _marcar_reconciliacao_necessaria(
+    row: ContaMultiuserReducaoQuantity,
+    conta: Conta,
+    *,
+    futura: int,
+    local: int,
+    qtd_stripe: int | None,
+    motivo: str,
+    commit: bool,
+) -> ResultadoReducaoQuantity:
+    """Estado acionável: Stripe na futura sem evidência desta redução. Não conclui local."""
+    registrar_fato_monetizacao(
+        tipo_fato="reducao_quantity_reconciliacao_necessaria",
+        status_tecnico=motivo,
+        conta_id=int(conta.id),
+        usuario_id=int(row.solicitado_por_user_id),
+        customer_id=row.stripe_customer_id,
+        subscription_id=row.stripe_subscription_id,
+        idempotency_key=f"mu_reducao_recon:{row.correlation_id}",
+        correlation_key=row.correlation_id,
+        snapshot_normalizado={
+            "quantity_local": local,
+            "quantity_futura": futura,
+            "quantity_stripe": qtd_stripe,
+            "motivo": motivo,
+        },
+    )
+    logger.info(
+        "evento=reducao_quantity_reconciliacao_necessaria conta_id=%s motivo=%s local=%s futura=%s",
+        conta.id,
+        motivo,
+        local,
+        futura,
+    )
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
+    return ResultadoReducaoQuantity(
+        estado=ESTADO_RECONCILIACAO_NECESSARIA,
+        replay=False,
+        conta_id=int(conta.id),
+        quantity_atual=local,
+        quantity_futura=futura,
+        efetivar_em=row.efetivar_em.isoformat() if row.efetivar_em else "",
+        correlation_id=row.correlation_id,
+        reducao_id=int(row.id),
+        proration_behavior=PRORATION_BEHAVIOR_NONE,
+        stripe_escrito=False,
+        mensagem="Reconciliação necessária: Stripe na quantity futura sem evidência desta redução.",
+    )
+
+
+def tentar_recuperar_reducao_parcial(
+    conta_id: int,
+    *,
+    referencia=None,
+    commit: bool = False,
+) -> ResultadoReducaoQuantity | None:
+    """
+    Recupera redução pendente quando Stripe já está na futura por efeito
+    comprovado da mesma redução. Não reenvia Stripe. Replay-safe.
+    """
+    conta = bloquear_conta_para_capacidade(int(conta_id))
+    row = reducao_pendente_da_conta(int(conta.id))
+    if row is None:
+        recente = (
+            ContaMultiuserReducaoQuantity.query.filter_by(conta_id=int(conta.id))
+            .order_by(ContaMultiuserReducaoQuantity.id.desc())
+            .first()
+        )
+        if recente is None:
+            return None
+        if recente.estado == ContaMultiuserReducaoQuantity.ESTADO_EFETIVADA:
+            return ResultadoReducaoQuantity(
+                estado=recente.estado,
+                replay=True,
+                conta_id=int(conta.id),
+                quantity_atual=int(conta.quantidade_assentos_contratados or 0),
+                quantity_futura=int(recente.quantity_futura),
+                efetivar_em=recente.efetivar_em.isoformat() if recente.efetivar_em else "",
+                correlation_id=recente.correlation_id,
+                reducao_id=int(recente.id),
+                proration_behavior=PRORATION_BEHAVIOR_NONE,
+                stripe_escrito=False,
+                mensagem="Redução já efetivada.",
+            )
+        return None
+
+    momento = referencia or utcnow_naive()
+    if row.efetivar_em is not None and row.efetivar_em > momento:
+        return None
+
+    agora = utcnow_naive()
+    liberar_reservas_expiradas_conta(conta.id, agora)
+    comprometido = contar_capacidade_comprometida(int(conta.id), agora)
+    ativos = ContaVinculoOrganizacional.query.filter_by(
+        conta_id=int(conta.id), estado=ESTADO_ATIVO
+    ).count()
+    futura = int(row.quantity_futura)
+    minimo = obter_quantidade_minima_multiuser_admin(exigir_configurado=False)
+    if minimo is not None and futura < int(minimo):
+        return _marcar_reconciliacao_necessaria(
+            row,
+            conta,
+            futura=futura,
+            local=int(conta.quantidade_assentos_contratados or 0),
+            qtd_stripe=None,
+            motivo="capacidade_incompativel_na_recuperacao",
+            commit=commit,
+        )
+    if futura < int(ativos) or futura < int(comprometido):
+        return _marcar_reconciliacao_necessaria(
+            row,
+            conta,
+            futura=futura,
+            local=int(conta.quantidade_assentos_contratados or 0),
+            qtd_stripe=None,
+            motivo="capacidade_incompativel_na_recuperacao",
+            commit=commit,
+        )
+
+    contratante = ContaVinculoOrganizacional.query.filter_by(
+        conta_id=int(conta.id),
+        estado=ESTADO_ATIVO,
+        papel="contratante",
+    ).first()
+    vinculo = _vinculo_monetario_ativo(int(conta.id))
+    customer_id, subscription_id = _extrair_ids_vinculo(vinculo)
+    if not subscription_id:
+        raise ReducaoMultiuserInvalidaError(
+            "Subscription ausente para recuperar a redução."
+        )
+    if row.stripe_subscription_id and row.stripe_subscription_id != subscription_id:
+        raise ReducaoMultiuserInvalidaError(
+            "A redução deve usar a mesma Subscription do pedido."
+        )
+    if row.stripe_customer_id and customer_id and row.stripe_customer_id != customer_id:
+        raise ReducaoMultiuserInvalidaError(
+            "A redução deve usar o mesmo Customer do pedido."
+        )
+
+    assinatura = _carregar_assinatura_stripe(subscription_id)
+    qtd_stripe, item_id = _ler_quantity_stripe_assinatura(assinatura)
+    local = int(conta.quantidade_assentos_contratados or 0)
+    if qtd_stripe is None or int(qtd_stripe) != futura:
+        return _marcar_reconciliacao_necessaria(
+            row,
+            conta,
+            futura=futura,
+            local=local,
+            qtd_stripe=qtd_stripe,
+            motivo="stripe_nao_esta_na_quantity_futura",
+            commit=commit,
+        )
+    if local == futura:
+        return _concluir_efetivacao_local_reducao(
+            row,
+            conta,
+            vinculo=vinculo,
+            futura=futura,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            item_id=item_id,
+            contratante=contratante,
+            agora=agora,
+            commit=commit,
+            recuperacao=True,
+            stripe_escrito=False,
+            mensagem="Redução recuperada: estado local já coincidia com a futura.",
+        )
+    return _resolver_stripe_ja_na_futura(
+        row,
+        conta,
+        vinculo=vinculo,
+        futura=futura,
+        local=local,
+        customer_id=customer_id,
+        subscription_id=subscription_id,
+        item_id=item_id,
+        contratante=contratante,
+        agora=agora,
+        commit=commit,
     )
 
 
@@ -864,6 +1499,14 @@ def preparar_reducao_stripe_antes_da_cobranca(
         item_id=item_id,
         nova_quantity=futura,
         idempotency_key=f"mu_reducao_qty:{row.correlation_id}",
+    )
+    _registrar_efeito_stripe_reducao(
+        row,
+        futura=futura,
+        local=local,
+        customer_id=customer_id,
+        subscription_id=subscription_id,
+        item_id=item_id,
     )
     if isinstance(invoice_payload, dict):
         invoice_ok = _alinhar_quantity_invoice_rascunho(

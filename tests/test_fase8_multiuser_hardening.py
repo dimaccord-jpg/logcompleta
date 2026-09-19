@@ -604,6 +604,34 @@ def test_falha_stripe_inconclusivo_sem_mutacao(app, monkeypatch):
         assert _consumos(conta.id) == antes_c
 
 
+def test_stripe_na_futura_sem_evidencia_desta_reducao_exige_reconciliacao(app, monkeypatch):
+    from app.services.conta_multiuser_reducao_service import solicitar_reducao_quantity
+
+    with app.app_context():
+        conta, user = _preparar_conta_multiuser(
+            "f8-190", qtd=12, email="f8190@test.com"
+        )
+        _adicionar_membros(conta, 4, "f8190")
+        _mock_stripe(monkeypatch, quantity=12)
+        solicitar_reducao_quantity(
+            ator=user, quantity_futura=10, idempotency_key="f8-190", commit=True
+        )
+        _mock_stripe(monkeypatch, quantity=10)
+        diag = diagnosticar_conta_multiuser(int(conta.id), consultar_stripe=True)
+        assert diag.status == STATUS_DIAG_RECONCILIACAO_NECESSARIA
+        assert diag.status != STATUS_DIAG_PENDENTE_ESPERADO
+        assert diag.quantity_local == 12
+        assert diag.quantity_stripe == 10
+        assert diag.quantity_futura == 10
+        assert any(
+            a.detalhe == "stripe_na_futura_sem_evidencia_desta_reducao"
+            for a in diag.achados
+        )
+        assert diag.mutou_estado_comercial is False
+        db.session.refresh(conta)
+        assert conta.quantidade_assentos_contratados == 12
+
+
 def test_reducao_pendente_nao_mascara_divergencia_stripe_local(app, monkeypatch):
     from app.services.conta_multiuser_reducao_service import solicitar_reducao_quantity
 
