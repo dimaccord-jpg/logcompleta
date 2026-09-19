@@ -1,11 +1,26 @@
 {% extends "base.html" %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/user_area_perfil.css') }}">
+{% endblock %}
+
 {% block content %}
-<div class="container py-4">
+{% set ia_status = ai_data_protection_status or {} %}
+{% macro profile_status_item(value, label, active_label) %}
+{% set is_active = value == 'active' %}
+<div class="profile-security-status-item{% if is_active %} is-active{% endif %}">
+    <span class="profile-security-status-icon" aria-hidden="true">
+        <i class="bi {% if is_active %}bi-check-circle-fill{% else %}bi-dash-circle{% endif %}"></i>
+    </span>
+    <span class="profile-security-status-label">{{ label }}</span>
+    <span class="profile-security-status-value">{% if is_active %}{{ active_label }}{% else %}Indisponível{% endif %}</span>
+</div>
+{% endmacro %}
+<div class="container py-4 af-profile-page">
     <div class="row mb-4 align-items-center">
         <div class="col-md-8 col-12">
             <div class="d-flex flex-column">
-                <div class="d-flex align-items-center justify-content-between gap-3">
+                <div class="d-flex align-items-center justify-content-between gap-3 profile-page-header-bar">
                     <h2 class="fw-bold mb-0">
                         Área do Usuário
                     </h2>
@@ -17,7 +32,7 @@
                 <p class="mb-0 mt-2 fw-semibold">
                     Bem-vindo, {{ current_user.full_name or current_user.email }}
                 </p>
-                <p class="text-muted mb-0">
+                <p class="profile-page-lede mb-0">
                     Gerencie segurança da sua conta, preferências de pagamento e notificações.
                 </p>
             </div>
@@ -25,123 +40,150 @@
     </div>
 
     <div class="row g-4">
-        <!-- Card Segurança -->
-        <div class="col-md-4">
-            <div class="card shadow-sm h-100">
+        <!-- Central de Segurança e Conta -->
+        <div class="col-12">
+            <div class="card shadow-sm profile-security-card">
                 <div class="card-body">
-                    <div class="d-flex align-items-center mb-3">
-                        <div class="bg-primary bg-opacity-10 text-primary rounded-circle d-inline-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
+                    <div class="profile-security-header">
+                        <div class="profile-security-icon bg-primary bg-opacity-10 text-primary rounded-circle d-inline-flex align-items-center justify-content-center">
                             <i class="bi bi-shield-lock-fill"></i>
                         </div>
-                        <div>
-                            <h5 class="card-title mb-0">Segurança</h5>
-                            <small class="text-muted">Proteção de acesso e credenciais</small>
+                        <div class="profile-security-heading">
+                            <h5 class="card-title mb-0">Segurança e Conta</h5>
+                            <p class="profile-security-subtitle mb-0">Proteção, acesso e configurações da sua conta</p>
                         </div>
                     </div>
-                    <p class="card-text text-muted mb-3">
-                        Revise configurações de acesso, políticas de senha e dispositivos conectados para manter sua conta segura.
-                    </p>
-                    <ul class="list-unstyled small text-muted mb-3">
-                        <li><i class="bi bi-check-circle text-success me-2"></i>Login protegido por credenciais seguras</li>
-                        <li><i class="bi bi-check-circle text-success me-2"></i>Controle de sessão autenticada</li>
-                    </ul>
-                    <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#modalEncerrarContrato">
-                        <i class="bi bi-x-circle me-1"></i>Encerrar Contrato / Cancelar Registro
-                    </button>
-                </div>
-            </div>
-        </div>
 
-        <!-- Modal de confirmação: Encerrar Contrato -->
-        <div class="modal fade" id="modalEncerrarContrato" tabindex="-1" aria-labelledby="modalEncerrarContratoLabel" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="modalEncerrarContratoLabel">Encerrar contrato</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                    <div class="profile-security-grid">
+                        <section class="profile-security-status" aria-labelledby="profile-status-heading">
+                            <h6 class="profile-security-section-title" id="profile-status-heading">Status de proteção</h6>
+                            <div class="profile-security-status-list" role="list">
+                                {{ profile_status_item(ia_status.get('data_protection_in_ai'), 'Proteção de dados em IA', 'Ativa') }}
+                                {{ profile_status_item(ia_status.get('contextual_minimization'), 'Minimização contextual', 'Ativa') }}
+                                {{ profile_status_item(ia_status.get('credential_protection'), 'Proteção de credenciais', 'Ativa') }}
+                                {{ profile_status_item(ia_status.get('data_isolation'), 'Isolamento de dados', 'Ativo') }}
+                            </div>
+                        </section>
+
+                        <section class="profile-security-access" aria-labelledby="profile-access-heading">
+                            <h6 class="profile-security-section-title" id="profile-access-heading">Acesso e credenciais</h6>
+                            <ul class="profile-security-access-list list-unstyled mb-0">
+                                <li>
+                                    <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                    <span>Login protegido por credenciais seguras</span>
+                                </li>
+                                <li>
+                                    <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                    <span>Controle de sessão autenticada</span>
+                                </li>
+                            </ul>
+                            <a href="{{ url_for('request_password_reset') }}" class="btn btn-outline-secondary btn-sm profile-end-contract-btn mt-3">
+                                <i class="bi bi-key me-1" aria-hidden="true"></i>Alterar senha
+                            </a>
+                        </section>
                     </div>
-                    <div class="modal-body">
-                        <p class="mb-0">
-                            Tem certeza que deseja encerrar seu contrato e cancelar seu registro? Seus dados serão anonimizados e você será deslogado imediatamente. Esta ação não pode ser desfeita.
+
+                    <section class="profile-security-account" aria-labelledby="profile-account-heading">
+                        <h6 class="profile-security-section-title" id="profile-account-heading">Conta</h6>
+                        <p class="profile-security-account-copy mb-3">
+                            Encerrar o contrato cancela o registro operacional desta conta. A ação é permanente e encerra o acesso imediatamente.
                         </p>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                        <form action="{{ url_for('user.encerrar_contrato_route') }}" method="POST" class="d-inline">
-                            <button type="submit" class="btn btn-danger">Sim, encerrar e sair</button>
-                        </form>
-                    </div>
+                        <button type="button" class="btn btn-outline-danger btn-sm profile-end-contract-btn" data-bs-toggle="modal" data-bs-target="#modalEncerrarContrato">
+                            <i class="bi bi-x-circle me-1"></i>Encerrar Contrato / Cancelar Registro
+                        </button>
+                    </section>
                 </div>
             </div>
         </div>
+    </div>
 
-        <!-- Card Pagamento -->
-        <div class="col-md-4">
-            <a href="{{ url_for('user.contrate_plano') }}" class="text-decoration-none text-reset d-block h-100">
-            <div class="card shadow-sm h-100">
-                <div class="card-body">
-                    <div class="d-flex align-items-center mb-3">
-                        <div class="bg-success bg-opacity-10 text-success rounded-circle d-inline-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
-                            <i class="bi bi-credit-card-2-front-fill"></i>
-                        </div>
-                        <div>
-                            <h5 class="card-title mb-0">Pagamento</h5>
-                            <small class="text-muted">Planos e faturamento</small>
-                        </div>
-                    </div>
-                    <p class="card-text text-muted mb-3">
-                        Consulte informações de plano, limites de uso e condições de upgrade de forma centralizada.
+    <!-- Modal de confirmação: Encerrar Contrato -->
+    <div class="modal fade" id="modalEncerrarContrato" tabindex="-1" aria-labelledby="modalEncerrarContratoLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalEncerrarContratoLabel">Encerrar contrato</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-0">
+                        Tem certeza que deseja encerrar seu contrato e cancelar seu registro? Seus dados serão anonimizados e você será deslogado imediatamente. Esta ação não pode ser desfeita.
                     </p>
-                    <ul class="list-unstyled small text-muted mb-3">
-                        <li><i class="bi bi-check-circle text-success me-2"></i>Visão consolidada de créditos</li>
-                        <li><i class="bi bi-check-circle text-success me-2"></i>Transparência em condições de uso</li>
-                    </ul>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <form action="{{ url_for('user.encerrar_contrato_route') }}" method="POST" class="d-inline">
+                        <button type="submit" class="btn btn-danger">Sim, encerrar e sair</button>
+                    </form>
                 </div>
             </div>
-            </a>
         </div>
+    </div>
+
+    <div class="profile-secondary-grid">
+        <!-- Card Pagamento -->
+        <a href="{{ url_for('user.contrate_plano') }}" class="text-decoration-none text-reset d-block h-100 profile-payment-link">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-3">
+                    <div class="profile-card-icon bg-success bg-opacity-10 text-success rounded-circle d-inline-flex align-items-center justify-content-center me-3">
+                        <i class="bi bi-credit-card-2-front-fill"></i>
+                    </div>
+                    <div>
+                        <h5 class="card-title mb-0">Pagamento</h5>
+                        <small class="profile-card-kicker">Planos e faturamento</small>
+                    </div>
+                </div>
+                <p class="card-text profile-card-copy mb-3">
+                    Consulte informações de plano, limites de uso e condições de upgrade de forma centralizada.
+                </p>
+                <ul class="list-unstyled small profile-card-copy mb-3">
+                    <li><i class="bi bi-check-circle text-success me-2"></i>Visão consolidada de créditos</li>
+                    <li><i class="bi bi-check-circle text-success me-2"></i>Transparência em condições de uso</li>
+                </ul>
+            </div>
+        </div>
+        </a>
 
         <!-- Card Notificações -->
-        <div class="col-md-4">
-            <div class="card shadow-sm h-100">
-                <div class="card-body">
-                    <div class="d-flex align-items-center mb-3">
-                        <div class="bg-warning bg-opacity-10 text-warning rounded-circle d-inline-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
-                            <i class="bi bi-bell-fill"></i>
-                        </div>
-                        <div>
-                            <h5 class="card-title mb-0">Notificações</h5>
-                            <small class="text-muted">Alertas e comunicação</small>
-                        </div>
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-3">
+                    <div class="profile-card-icon bg-warning bg-opacity-10 text-warning rounded-circle d-inline-flex align-items-center justify-content-center me-3">
+                        <i class="bi bi-bell-fill"></i>
                     </div>
-                    <p class="card-text text-muted mb-3">
-                        Defina como prefere receber alertas operacionais, comunicados de produto e novidades da plataforma.
-                    </p>
-                    <ul class="list-unstyled small text-muted mb-3">
-                        <li><i class="bi bi-check-circle text-success me-2"></i>Centralização de avisos importantes</li>
-                        <li><i class="bi bi-check-circle text-success me-2"></i>Adequado para equipes de logística</li>
+                    <div>
+                        <h5 class="card-title mb-0">Notificações</h5>
+                        <small class="profile-card-kicker">Alertas e comunicação</small>
+                    </div>
+                </div>
+                <p class="card-text profile-card-copy mb-3">
+                    Defina como prefere receber alertas operacionais, comunicados de produto e novidades da plataforma.
+                </p>
+                <ul class="list-unstyled small profile-card-copy mb-3">
+                    <li><i class="bi bi-check-circle text-success me-2"></i>Centralização de avisos importantes</li>
+                    <li><i class="bi bi-check-circle text-success me-2"></i>Adequado para equipes de logística</li>
+                </ul>
+                <div id="notificacoes">
+                    {% if notificacoes_internas %}
+                    <ul class="list-unstyled small mb-0">
+                        {% for item in notificacoes_internas %}
+                        <li class="mb-2 {% if not item.lida %}fw-semibold{% endif %}">
+                            {{ item.mensagem }}
+                            {% if item.cta_url %}
+                            <a href="{{ item.cta_url }}" class="ms-1">Abrir</a>
+                            {% endif %}
+                            {% if not item.lida %}
+                            <form method="post" action="{{ url_for('multiuser_painel.api_marcar_notificacao_lida', notificacao_id=item.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-link btn-sm p-0 align-baseline">Marcar como lida</button>
+                            </form>
+                            {% endif %}
+                        </li>
+                        {% endfor %}
                     </ul>
-                    <div id="notificacoes">
-                        {% if notificacoes_internas %}
-                        <ul class="list-unstyled small mb-0">
-                            {% for item in notificacoes_internas %}
-                            <li class="mb-2 {% if not item.lida %}fw-semibold{% endif %}">
-                                {{ item.mensagem }}
-                                {% if item.cta_url %}
-                                <a href="{{ item.cta_url }}" class="ms-1">Abrir</a>
-                                {% endif %}
-                                {% if not item.lida %}
-                                <form method="post" action="{{ url_for('multiuser_painel.api_marcar_notificacao_lida', notificacao_id=item.id) }}" class="d-inline">
-                                    <button type="submit" class="btn btn-link btn-sm p-0 align-baseline">Marcar como lida</button>
-                                </form>
-                                {% endif %}
-                            </li>
-                            {% endfor %}
-                        </ul>
-                        {% else %}
-                        <p class="small text-muted mb-0">Nenhuma notificação interna no momento.</p>
-                        {% endif %}
-                    </div>
+                    {% else %}
+                    <p class="small profile-card-copy mb-0">Nenhuma notificação interna no momento.</p>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -154,15 +196,15 @@
             <div class="card shadow-sm">
                 <div class="card-body">
                     <div class="d-flex align-items-center mb-2">
-                        <div class="bg-primary bg-opacity-10 text-primary rounded-circle d-inline-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
+                        <div class="profile-card-icon bg-primary bg-opacity-10 text-primary rounded-circle d-inline-flex align-items-center justify-content-center me-3">
                             <i class="bi bi-people-fill"></i>
                         </div>
                         <div>
                             <h5 class="card-title mb-0">Gestão da equipe</h5>
-                            <small class="text-muted">Assentos, convites e aumento automático</small>
+                            <small class="profile-card-kicker">Assentos, convites e aumento automático</small>
                         </div>
                     </div>
-                    <p class="card-text text-muted mb-0">
+                    <p class="card-text profile-card-copy mb-0">
                         Consulte assentos contratados, ocupados e disponíveis. Solicite aumento automático no ciclo atual sem cobrança proporcional hoje.
                     </p>
                 </div>
@@ -175,11 +217,11 @@
     {% if current_user.is_authenticated and current_user.is_admin %}
     <div class="row mt-4">
         <div class="col-12">
-            <div class="alert alert-dark d-flex justify-content-between align-items-center shadow-sm">
+            <div class="alert alert-dark profile-admin-banner shadow-sm">
                 <div>
                     <span class="badge bg-warning text-dark me-2">Admin</span>
                     <strong>Acesso rápido ao Painel ADM</strong>
-                    <span class="text-muted ms-2 small">Gerencie operações avançadas e configurações estratégicas.</span>
+                    <span class="profile-admin-copy ms-2 small">Gerencie operações avançadas e configurações estratégicas.</span>
                 </div>
                 <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-warning btn-sm">
                     <i class="bi bi-speedometer2 me-1"></i> Painel ADM
@@ -190,4 +232,3 @@
     {% endif %}
 </div>
 {% endblock %}
-

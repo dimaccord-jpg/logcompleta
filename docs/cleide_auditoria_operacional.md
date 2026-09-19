@@ -106,3 +106,7 @@ Comportamento atual:
 - `tests/test_cleide_audit_insights_chat.py`
 - `tests/test_cleide_isolation.py`
 - `tests/test_cleide_analytics.py`
+
+## Privacidade Multiuser
+
+O Multiuser V1 mantém documentos, uploads, auditorias, tabelas, resultados e chats privados por usuário e escopo autorizado. Compartilhar Conta não autoriza consultar o lote ou a memória de outro membro. A infraestrutura Cleiton é comum, mas não compartilha conteúdo automaticamente. Ver [contrato de privacidade Multiuser](multiuser_v1.md#privacidade-entre-membros).

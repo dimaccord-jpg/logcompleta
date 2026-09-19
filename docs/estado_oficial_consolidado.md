@@ -1,16 +1,10 @@
-# Estado Oficial Consolidado
+# Estado oficial consolidado — redirecionamento
 
-Este arquivo foi mantido como ponto de entrada histórico.
+Este caminho permanece para compatibilidade com links antigos. Não mantém uma segunda descrição do sistema.
 
-A consolidação operacional atual foi movida para:
+A documentação canônica vigente é:
 
-- `docs/estado_producao.md`
-- `docs/agente_compara_estado_oficial.md`
-- `docs/lgpd_governanca_tecnica.md`
-- `docs/comunicacoes_newsletter_suppression.md`
-- `docs/integracoes_ia_privacidade.md`
-
-Motivo da mudança:
-
-- o estado atual passou a incluir privacidade, lifecycle, suppression, newsletter, masking, retenção e rollout de produção com detalhamento próprio;
-- manter tudo em um único documento estava gerando mistura entre arquitetura, operação e políticas técnicas.
+- [Estado de produção](estado_producao.md): release implantado, pendências e limites de evidência.
+- [Arquitetura](arquitetura_oficial.md): domínios, infraestrutura e isolamento.
+- [Multiuser V1](multiuser_v1.md): organização, Stripe e lifecycle.
+- [Índice documental](indice_documentacao.md): guias vivos, material histórico e arquivos funcionais excluídos de revisão documental.

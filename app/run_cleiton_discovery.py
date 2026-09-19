@@ -28,6 +28,14 @@ from app.run_cleiton_gemini_governance import STATUS_SUCCESS_NO_METRICS
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.run_cleiton_gemini_governance import register_internal_ia_event
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
+from app.services.cleiton_ai_data_governance import (
+    CleitonAiGovernanceBlockedError,
+    PURPOSE_DISCOVERY,
+    USER_SAFE_PREPARATION_FAILED,
+    govern_history_messages,
+    govern_or_raise,
+    project_safe_error,
+)
 from app.utils.onboarding_text_normalization import (
     extract_user_terms_normalized,
     sanitize_user_message,
@@ -636,10 +644,10 @@ def _attach_onboarding_audit(
 
 def _log_pipeline_trace(message: str, trace: dict[str, Any]) -> None:
     logger.info(
-        "Copilot pipeline | msg=%r | capabilities_loaded=%s | doc_len=%s | "
+        "Copilot pipeline | msg_len=%s | purpose=discovery | capabilities_loaded=%s | doc_len=%s | "
         "api_key=%s | client=%s | gemini_called=%s | parse_error=%s | "
-        "fallback_reason=%s | reply_preview=%r",
-        message[:80],
+        "fallback_reason=%s | reply_len=%s | governance=%s",
+        len(message or ""),
         trace.get("capabilities_doc_loaded"),
         trace.get("capabilities_doc_len"),
         trace.get("gemini_api_key_present"),
@@ -647,7 +655,8 @@ def _log_pipeline_trace(message: str, trace: dict[str, Any]) -> None:
         trace.get("gemini_called"),
         trace.get("parse_error"),
         trace.get("fallback_reason"),
-        (trace.get("reply_preview") or "")[:120],
+        len(trace.get("reply_preview") or "") if isinstance(trace.get("reply_preview"), str) else int(trace.get("reply_len") or 0),
+        trace.get("governance_decision") or "-",
     )
 
 
@@ -708,6 +717,49 @@ def cleiton_discovery_reply(
     client = _get_client()
     pipeline_trace["gemini_client_present"] = client is not None
 
+    try:
+        history_list = govern_history_messages(
+            history_list,
+            purpose=PURPOSE_DISCOVERY,
+            agent=AGENT_CLEITON,
+        )
+        governed = govern_or_raise(
+            clean_message,
+            purpose=PURPOSE_DISCOVERY,
+            content_type="text",
+            agent=AGENT_CLEITON,
+            provider="gemini",
+        )
+        clean_message = str(governed.safe_content)
+        pipeline_trace["governance_decision"] = governed.decision
+    except CleitonAiGovernanceBlockedError:
+        pipeline_trace["governance_decision"] = "blocked"
+        pipeline_trace["fallback_reason"] = "ai_data_governance_blocked"
+        blocked = {
+            "reply": USER_SAFE_PREPARATION_FAILED,
+            "recommended_agent": None,
+            "handoff": None,
+            "handoffs": [],
+            "refinement_options": [],
+            "destination_candidates": [],
+            "discovery": {
+                "confidence": "low",
+                "next_action": "converse",
+                "recommended_agent": None,
+                "reason": "ai_data_governance_blocked",
+                "capability_candidates": [],
+                "needs_login": False,
+                "pipeline": pipeline_trace,
+            },
+        }
+        _log_pipeline_trace(clean_message, pipeline_trace)
+        return _attach_onboarding_audit(
+            blocked,
+            user_message="",
+            cta_id=cta_id,
+            history_turns=history_turns,
+        )
+
     if not client:
         fallback_reason = "no_gemini_key" if not _gemini_api_key() else "client_init_failed"
         pipeline_trace["fallback_reason"] = fallback_reason
@@ -724,7 +776,7 @@ def cleiton_discovery_reply(
             fallback_reason,
         )
         result = _local_fallback_response(clean_message, reason=fallback_reason)
-        pipeline_trace["reply_preview"] = result.get("reply")
+        pipeline_trace["reply_len"] = len(str(result.get("reply") or ""))
         _log_pipeline_trace(clean_message, {**pipeline_trace, **(result.get("discovery", {}).get("pipeline") or {})})
         return _attach_onboarding_audit(
             result,
@@ -754,24 +806,57 @@ def cleiton_discovery_reply(
             )
             raw_response_text = (response.text or "").strip()
             pipeline_trace["raw_response_len"] = len(raw_response_text)
-            pipeline_trace["raw_response_preview"] = raw_response_text[:240]
             parsed, parse_error = _parse_gemini_response(raw_response_text)
             pipeline_trace["parse_error"] = parse_error
             if parsed:
                 pipeline_trace["parse_mode"] = "json" if parse_error is None else parse_error
                 break
             last_error = ValueError(parse_error or "Resposta JSON vazia ou inválida")
+        except CleitonAiGovernanceBlockedError:
+            pipeline_trace["governance_decision"] = "blocked"
+            pipeline_trace["fallback_reason"] = "ai_data_governance_blocked"
+            blocked = {
+                "reply": USER_SAFE_PREPARATION_FAILED,
+                "recommended_agent": None,
+                "handoff": None,
+                "handoffs": [],
+                "refinement_options": [],
+                "destination_candidates": [],
+                "discovery": {
+                    "confidence": "low",
+                    "next_action": "converse",
+                    "recommended_agent": None,
+                    "reason": "ai_data_governance_blocked",
+                    "capability_candidates": [],
+                    "needs_login": False,
+                    "pipeline": pipeline_trace,
+                },
+            }
+            _log_pipeline_trace(clean_message, pipeline_trace)
+            return _attach_onboarding_audit(
+                blocked,
+                user_message="",
+                cta_id=cta_id,
+                history_turns=history_turns,
+            )
         except Exception as e:
             last_error = e
-            pipeline_trace["parse_error"] = str(e)[:200]
-            logger.warning("Copilot Discovery modelo %s: %s", model, e)
+            pipeline_trace["parse_error"] = e.__class__.__name__
+            logger.warning(
+                "Copilot Discovery modelo %s: %s",
+                model,
+                project_safe_error(e, stage="discovery", provider="gemini"),
+            )
 
     if not parsed:
         if last_error:
-            logger.exception("Copilot Discovery falhou: %s", last_error)
+            logger.warning(
+                "Copilot Discovery falhou: %s",
+                project_safe_error(last_error, stage="discovery_fallback", provider="gemini"),
+            )
         pipeline_trace["fallback_reason"] = "gemini_parse_failed"
         result = _local_fallback_response(clean_message, reason="gemini_parse_failed")
-        pipeline_trace["reply_preview"] = result.get("reply")
+        pipeline_trace["reply_len"] = len(str(result.get("reply") or ""))
         discovery = dict(result.get("discovery") or {})
         discovery["pipeline"] = {**(discovery.get("pipeline") or {}), **pipeline_trace}
         result["discovery"] = discovery
@@ -784,7 +869,7 @@ def cleiton_discovery_reply(
         )
 
     result = _apply_guardrails(parsed, clean_message, pipeline=pipeline_trace)
-    pipeline_trace["reply_preview"] = result.get("reply")
+    pipeline_trace["reply_len"] = len(str(result.get("reply") or ""))
     _log_pipeline_trace(clean_message, pipeline_trace)
     return _attach_onboarding_audit(
         result,

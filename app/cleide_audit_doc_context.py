@@ -33,6 +33,11 @@ from app.cleiton_doc_gemini_files import (
 )
 from app.cleiton_doc_store import load_authorized_document_record
 from app.services.cleide_audit_config_service import get_cleide_audit_config
+from app.services.cleiton_ai_data_governance import (
+    PURPOSE_AUDITORIA_FRETE,
+    safe_outbound_document_text,
+)
+from app.services.cleiton_ai_safe_context import CleitonAiAliasSession
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
 from app.services.external_ai_masking import (
     ExternalAiMaskingSession,
@@ -134,8 +139,16 @@ def _format_document_block(index: int, record: dict) -> str:
         lines.append(_format_gemini_file_block(record).rstrip())
     elif kind == CONTEXT_KIND_TEXT:
         content = (record.get(FIELD_PREPARED_CONTEXT) or "").strip()
-        lines.append("- Conteudo preparado:")
-        lines.append(content if content else "(vazio)")
+        if (record.get(FIELD_DOC_TYPE) or "").strip() == "pdf" and not content:
+            lines.append(
+                '- Observacoes: PDF recebido, mas nao ficou legivel para analise nesta sessao. '
+                "Informe isso com clareza e oriente reenviar em Excel, CSV ou PDF com texto selecionavel."
+            )
+            lines.append("- Conteudo preparado:")
+            lines.append("  (Nenhum conteudo textual confiavel foi disponibilizado para este anexo.)")
+        else:
+            lines.append("- Conteudo preparado:")
+            lines.append(content if content else "(vazio)")
     else:
         lines.append("- Conteudo preparado:")
         lines.append("(contexto indisponivel para este tipo nesta fase)")
@@ -144,16 +157,8 @@ def _format_document_block(index: int, record: dict) -> str:
 
 
 def _collect_gemini_file_parts(records: list[dict]) -> list:
-    parts: list = []
-    for record in records:
-        if (record.get(FIELD_CONTEXT_KIND) or "").strip() != CONTEXT_KIND_GEMINI_FILE:
-            continue
-        if not pdf_context_ready_from_record(record):
-            continue
-        part = build_gemini_file_part_for_generate(record)
-        if part is not None:
-            parts.append(part)
-    return parts
+    """SCRUM-75: PDF original não segue para o provider via Files API."""
+    return []
 
 
 def build_cleide_audit_document_context_for_chat(session_obj) -> dict:
@@ -201,14 +206,28 @@ def build_cleide_audit_document_context_for_chat(session_obj) -> dict:
     context_truncated = False
 
     outbound_session = ExternalAiMaskingSession()
+    alias_session = CleitonAiAliasSession()
     for idx, record in enumerate(considered, start=1):
         outbound_record = mask_structured_for_external_ai(
             record, session=outbound_session
         )
+        prepared = outbound_record.get(FIELD_PREPARED_CONTEXT)
+        if isinstance(prepared, str) and prepared.strip():
+            safe_text, blocked = safe_outbound_document_text(
+                prepared,
+                purpose=PURPOSE_AUDITORIA_FRETE,
+                agent="cleide",
+                alias_session=alias_session,
+            )
+            if blocked:
+                outbound_record[FIELD_PREPARED_CONTEXT] = ""
+                outbound_record[FIELD_STATUS] = STATUS_ERROR
+            else:
+                outbound_record[FIELD_PREPARED_CONTEXT] = safe_text
         blocks.append(_format_document_block(idx, outbound_record))
         status = (record.get(FIELD_STATUS) or "").strip().lower()
         if status == STATUS_ERROR:
-            display = record.get(FIELD_DISPLAY_NAME) or "documento"
+            display = outbound_record.get(FIELD_DISPLAY_NAME) or "documento"
             warnings.append(f'Documento "{display}" registrado com erro; contexto limitado.')
 
     body = "".join(blocks)
@@ -221,6 +240,10 @@ def build_cleide_audit_document_context_for_chat(session_obj) -> dict:
     gemini_file_parts = _collect_gemini_file_parts(considered)
     pdf_ready_count = sum(1 for record in considered if pdf_context_ready_from_record(record))
     doc_summary = [_safe_document_summary(record) for record in considered]
+    logged_summary = [
+        _safe_document_summary(mask_structured_for_external_ai(record, session=outbound_session))
+        for record in considered
+    ]
 
     logger.info(
         "Cleide audit doc context: files_total_active=%s files_considered=%s pdf_files_ready=%s gemini_file_parts=%s context_truncated=%s prompt_chars_used=%s docs=%s",
@@ -230,7 +253,7 @@ def build_cleide_audit_document_context_for_chat(session_obj) -> dict:
         len(gemini_file_parts),
         context_truncated,
         len(context_block),
-        doc_summary,
+        logged_summary,
     )
 
     return {

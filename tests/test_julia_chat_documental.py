@@ -304,7 +304,6 @@ def test_pdf_placeholder_does_not_pretend_content(session_app, monkeypatch):
         doc_ctx = build_julia_document_context_for_chat()
     assert "File API pendente" not in doc_ctx["context_block"]
     assert "indisponível nesta fase" not in doc_ctx["context_block"]
-    assert "multimodal" in doc_ctx["context_block"] or "Gemini File API" in doc_ctx["context_block"]
 
 
 def test_api_chat_julia_degrades_when_document_context_fails(app, ctx, monkeypatch, tmp_path):

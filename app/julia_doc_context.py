@@ -37,6 +37,11 @@ from app.cleiton_doc_service import (
 )
 from app.cleiton_doc_store import load_authorized_document_record
 from app.prompts import JULIA_CHAT_DOCUMENTAL_GUIDANCE
+from app.services.cleiton_ai_data_governance import (
+    PURPOSE_CHAT_LOGISTICO,
+    safe_outbound_document_text,
+)
+from app.services.cleiton_ai_safe_context import CleitonAiAliasSession
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
 from app.services.external_ai_masking import (
     ExternalAiMaskingSession,
@@ -125,8 +130,16 @@ def _format_document_block(index: int, record: dict) -> str:
         lines.append(_format_gemini_file_block(record).rstrip())
     elif kind == CONTEXT_KIND_TEXT:
         content = (record.get(FIELD_PREPARED_CONTEXT) or "").strip()
-        lines.append("- Conteúdo preparado:")
-        lines.append(content if content else "(vazio)")
+        if (record.get(FIELD_DOC_TYPE) or "").strip() == "pdf" and not content:
+            lines.append(
+                "- Observações: PDF recebido, mas não ficou legível para análise nesta sessão. "
+                "Reenvie em Excel, CSV ou PDF com texto selecionável."
+            )
+            lines.append("- Conteúdo preparado:")
+            lines.append("(vazio)")
+        else:
+            lines.append("- Conteúdo preparado:")
+            lines.append(content if content else "(vazio)")
     else:
         lines.append("- Conteúdo preparado:")
         lines.append("(contexto indisponível para este tipo nesta fase)")
@@ -135,16 +148,8 @@ def _format_document_block(index: int, record: dict) -> str:
 
 
 def _collect_gemini_file_parts(records: list[dict]) -> list:
-    parts: list = []
-    for record in records:
-        if (record.get(FIELD_CONTEXT_KIND) or "").strip() != CONTEXT_KIND_GEMINI_FILE:
-            continue
-        if not pdf_context_ready_from_record(record):
-            continue
-        part = build_gemini_file_part_for_generate(record)
-        if part is not None:
-            parts.append(part)
-    return parts
+    """SCRUM-75: PDF original não segue para o provider via Files API."""
+    return []
 
 
 def build_julia_document_context_for_chat() -> dict:
@@ -187,10 +192,24 @@ def build_julia_document_context_for_chat() -> dict:
     context_truncated = False
 
     outbound_session = ExternalAiMaskingSession()
+    alias_session = CleitonAiAliasSession()
     for idx, record in enumerate(considered, start=1):
         outbound_record = mask_structured_for_external_ai(
             record, session=outbound_session
         )
+        prepared = outbound_record.get(FIELD_PREPARED_CONTEXT)
+        if isinstance(prepared, str) and prepared.strip():
+            safe_text, blocked = safe_outbound_document_text(
+                prepared,
+                purpose=PURPOSE_CHAT_LOGISTICO,
+                agent="julia",
+                alias_session=alias_session,
+            )
+            if blocked:
+                outbound_record[FIELD_PREPARED_CONTEXT] = ""
+                outbound_record[FIELD_STATUS] = STATUS_ERROR
+            else:
+                outbound_record[FIELD_PREPARED_CONTEXT] = safe_text
         blocks.append(_format_document_block(idx, outbound_record))
 
     body = "".join(blocks)
@@ -204,13 +223,14 @@ def build_julia_document_context_for_chat() -> dict:
     pdf_ready_count = sum(1 for r in considered if pdf_context_ready_from_record(r))
     doc_summary = []
     for record in considered:
+        logged = mask_structured_for_external_ai(record, session=outbound_session)
         doc_summary.append(
             {
-                "display_name": (record.get(FIELD_DISPLAY_NAME) or "documento")[:120],
+                "display_name": (logged.get(FIELD_DISPLAY_NAME) or "documento")[:120],
                 "doc_type": (record.get(FIELD_DOC_TYPE) or "")[:20],
                 "context_kind": (record.get(FIELD_CONTEXT_KIND) or "")[:40],
                 "status": (record.get(FIELD_STATUS) or "")[:20],
-                "pdf_ready": pdf_context_ready_from_record(record),
+                "pdf_ready": False,
             }
         )
     logger.info(

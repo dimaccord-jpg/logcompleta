@@ -390,15 +390,15 @@ def test_docx_zip_bomb_blocked_before_document_load(doc_cfg, monkeypatch):
 # --- PDF ---
 
 
-def test_valid_pdf_prepares_gemini_placeholder(doc_cfg):
+def test_valid_pdf_prepares_local_text(doc_cfg):
     result = prepare_document(
         display_name="manual.pdf",
         file_bytes=make_minimal_pdf(pages=2),
         mime_type="application/pdf",
     )
     assert result[FIELD_DOC_TYPE] == "pdf"
-    assert result[FIELD_CONTEXT_KIND] == CONTEXT_KIND_GEMINI_FILE
-    assert "gemini_file_api" in result[FIELD_PREPARED_CONTEXT]
+    assert result[FIELD_CONTEXT_KIND] == CONTEXT_KIND_TEXT
+    assert "gemini_file_api" not in (result[FIELD_PREPARED_CONTEXT] or "")
     assert result[FIELD_PAGE_COUNT] == 2
 
 
@@ -412,14 +412,14 @@ def test_pdf_too_large_blocked(doc_cfg, monkeypatch):
     assert exc.value.error_code == ERROR_FILE_TOO_LARGE
 
 
-def test_pdf_no_local_ocr_or_text_extraction(doc_cfg):
+def test_pdf_uses_local_text_extraction_not_original_upload(doc_cfg):
     result = prepare_document(
         display_name="scan.pdf",
         file_bytes=make_minimal_pdf(),
         mime_type="application/pdf",
     )
-    assert "local_text_extraction" in result[FIELD_PREPARED_CONTEXT]
-    assert '"local_text_extraction": false' in result[FIELD_PREPARED_CONTEXT].lower()
+    assert result[FIELD_CONTEXT_KIND] == CONTEXT_KIND_TEXT
+    assert "pdf_local_text_extraction" in " ".join(result.get("warnings") or []) or result[FIELD_PREPARED_CONTEXT] == ""
 
 
 def test_pdf_page_count_indeterminate_documents_warning(doc_cfg):

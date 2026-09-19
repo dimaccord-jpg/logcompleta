@@ -169,6 +169,12 @@ def _build_client(app: Flask):
         def logout():  # noqa: ARG001
             return "logout"
 
+    if "request_password_reset" not in app.view_functions:
+
+        @app.route("/request-password-reset")
+        def request_password_reset():  # noqa: ARG001
+            return "request-password-reset"
+
     if "feed" not in app.view_functions:
 
         @app.route("/feed")
@@ -414,7 +420,10 @@ def test_painel_perfil_atalho_so_contratante(app):
         _login(client, contratante)
         resp = client.get("/perfil")
         assert resp.status_code == 200
-        assert "Gestão da equipe" in resp.get_data(as_text=True)
+        html = resp.get_data(as_text=True)
+        assert "Gestão da equipe" in html
+        assert "Alterar senha" in html
+        assert 'href="/request-password-reset"' in html
 
 
 @pytest.mark.parametrize("qtd", [1, 3, 5])

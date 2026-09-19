@@ -1,6 +1,6 @@
 # AgenteFrete
 
-Mapa documental auditado em 2026-09-04 a partir do código atual. A consolidação operacional está em `docs/estado_producao.md` e `docs/arquitetura_oficial.md`.
+Guia do release Multiuser V1 em produção, revisado em 2026-09-19 contra `origin/producao` (`f28f28e`). Comece pelo [estado de produção](docs/estado_producao.md), pela [arquitetura](docs/arquitetura_oficial.md) e pelo [inventário documental](docs/indice_documentacao.md).
 
 ## Visão do produto
 
@@ -38,7 +38,8 @@ O AgenteFrete operacional também oferece orientação determinística para ferr
 - `/agente-compara`: comparação multitabela.
 - `/fretes`: Roberto BI e chat quantitativo.
 - `/feed`: feed editorial misto de artigos e insights.
-- `/contrate-um-plano`, `/perfil`, `/perfil/regularizar-pagamento`: billing e área do usuário.
+- `/contrate-um-plano`, `/perfil`, `/perfil/regularizar-pagamento`: planos Free, Starter, Pro e Multiuser, billing e área do usuário.
+- `/gestao-multiuser` e `/convite/<token>`: gestão do contratante e aceite de convite.
 - `/termos-de-uso` e `/politica-de-privacidade`: documentos legais ativos.
 
 ## Principais agentes
@@ -58,7 +59,10 @@ O AgenteFrete operacional também oferece orientação determinística para ferr
 - comparação multitabela em `/agente-compara`;
 - BI de fretes em `/fretes`;
 - feed editorial em `/feed`;
-- billing, área do usuário, termos e política de privacidade.
+- billing, área do usuário, termos e política de privacidade;
+- Multiuser V1 implantado: contratação Stripe, convites, aumento automático/excepcional, redução futura, revogação, transferência administrativa de titularidade e diagnóstico read-only.
+
+O contrato da Conta não compartilha artefatos privados entre membros. O contratante ocupa assento, cada usuário usa uma Franquia individual e o ciclo é comum à Conta. Regras comerciais e limites estão no [guia Multiuser](docs/multiuser_v1.md).
 
 ## Estrutura do projeto
 
@@ -70,7 +74,7 @@ O AgenteFrete operacional também oferece orientação determinística para ferr
 
 ## Banco e migrations
 
-- migration head atual no repositório: `z0a1b2c3d4e5`
+- migration head atual: `f7g8h9i0j1k2` (lifecycle Multiuser); cadeia em [Banco e Migrations](docs/DATABASE_AND_MIGRATIONS.md)
 - a migration `z0a1b2c3d4e5_home_cta_experiment_event.py` adiciona a tabela `home_cta_experiment_event`
 - o guard operacional em `app/db_operational_safety.py` bloqueia downgrade sem confirmação explícita
 - `upgrade` normal não é bloqueado por esse guard
@@ -105,7 +109,9 @@ Detalhes em `docs/DEPLOYMENT.md` e `app/README_DEPLOY.md`.
 - agentes e identidades: `docs/AGENTS.md`
 - banco e migrations: `docs/DATABASE_AND_MIGRATIONS.md`
 - deploy e promoção: `docs/DEPLOYMENT.md`
-- estado de produção: `docs/estado_producao.md`
+- estado de produção: [estado_producao.md](docs/estado_producao.md)
+- Multiuser V1: [multiuser_v1.md](docs/multiuser_v1.md)
+- onboarding técnico: [onboarding_tecnico.md](docs/onboarding_tecnico.md)
 - AgenteAudita: `docs/cleide_auditoria_operacional.md`
 - AgenteCompara: `docs/agente_compara_estado_oficial.md`
 - monetização e franquias: `docs/guia_monetizacao_franquias.md`

@@ -128,3 +128,9 @@ Também há compatibilidade de limpeza no AgenteCompara para artefatos legados b
 - storage controlado por fornecedor externo
 
 Esses pontos dependem de política operacional ou do provedor e não devem ser descritos como TTL automático já implementado.
+
+## Multiuser: revogar vínculo não é encerrar a pessoa
+
+No [Multiuser V1](multiuser_v1.md), a revogação encerra o vínculo organizacional e invalida seu contexto de acesso. O User não é desidentificado por esse fluxo; volta a contexto individual elegível, com criação de contexto de retorno quando necessário. Vínculos históricos, Franquia e consumo são preservados. Reentrada por convite/aceite não é cadastro de uma nova pessoa nem reset de consumo.
+
+Isso é distinto do encerramento/desidentificação descrito acima. Membros da mesma Conta não compartilham documentos, uploads, auditorias, chats, tabelas, resultados ou memória privada. `conta_id` não substitui ownership do usuário e escopo da sessão. Preservar histórico não elimina os TTLs técnicos já descritos.

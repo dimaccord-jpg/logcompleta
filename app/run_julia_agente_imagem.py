@@ -19,6 +19,7 @@ from app.run_cleiton_gemini_governance import (
     cleiton_governed_generate_content,
     cleiton_governed_generate_images,
 )
+from app.services.cleiton_ai_data_governance import project_safe_error
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,7 @@ def gerar_imagem_publicavel(prompt_imagem: str) -> dict[str, str]:
                     "provider": "gemini",
                 }
         except Exception as e:
-            logger.exception("Falha inesperada ao gerar imagem Gemini: %s", e)
+            logger.exception("Falha inesperada ao gerar imagem Gemini: %s", e.__class__.__name__)
             motivo = f"gemini_exception_{e.__class__.__name__.lower()}"
         else:
             motivo = "gemini_sem_resultado"
@@ -289,14 +290,16 @@ def _gerar_via_gemini_imagen(prompt_imagem: str, key: str) -> str | None:
                 operation="generate_images",
                 attempt=tentativa,
                 duration_ms=int((time.monotonic() - started) * 1000),
-                error_summary=str(e),
+                error_summary=project_safe_error(
+                    e, stage="image_provider", provider="gemini", retry=True
+                ),
             )
             logger.warning(
                 "Imagen indisponivel (%s) tentativa %d/%d: %s",
                 _get_model_image(),
                 tentativa,
                 tentativas,
-                e,
+                project_safe_error(e, stage="imagen", provider="gemini", retry=tentativa < tentativas),
             )
             if tentativa < tentativas:
                 time.sleep((backoff_ms * tentativa) / 1000.0)
@@ -338,14 +341,16 @@ def _gerar_via_gemini_multimodal(prompt_imagem: str, key: str, model_override: s
                 operation="generate_content",
                 attempt=tentativa,
                 duration_ms=int((time.monotonic() - started) * 1000),
-                error_summary=str(e),
+                error_summary=project_safe_error(
+                    e, stage="image_provider", provider="gemini", retry=True
+                ),
             )
             logger.warning(
                 "Gemini multimodal imagem indisponivel (%s) tentativa %d/%d: %s",
                 _get_model_image_fallback(),
                 tentativa,
                 tentativas,
-                e,
+                project_safe_error(e, stage="imagen_multimodal", provider="gemini", retry=tentativa < tentativas),
             )
             if tentativa < tentativas:
                 time.sleep((backoff_ms * tentativa) / 1000.0)

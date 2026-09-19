@@ -1,6 +1,6 @@
 # Banco e Migrations
 
-Documentação auditada em 2026-09-04 a partir de `app/models.py`, `migrations/env.py`, `app/db_operational_safety.py`, `start.sh` e da migration `z0a1b2c3d4e5`.
+Documentação revisada em 2026-09-19 contra `origin/producao` (`f28f28e`), models e cadeia física Alembic.
 
 ## Fonte de verdade
 
@@ -11,8 +11,26 @@ Documentação auditada em 2026-09-04 a partir de `app/models.py`, `migrations/e
 
 ## Head atual
 
-- head atual versionado no repositório: `z0a1b2c3d4e5`
-- `down_revision` da migration nova: `y9z0a1b2c3d4`
+- head versionado: `f7g8h9i0j1k2`
+- `down_revision`: `e6f7a8b9c0d1`
+- arquivo: `f7g8h9i0j1k2_fase7_lifecycle_comercial.py`
+
+## Cadeia Multiuser implantada
+
+| Fase de origem | Revisão | Revisão anterior | Conteúdo |
+|---|---|---|---|
+| Fase 1 | `a2b3c4d5e6f7` | `z0a1b2c3d4e5` | Fundação persistente e backfill |
+| Fase 3 | `b3c4d5e6f7a8` | `a2b3c4d5e6f7` | Intenção de checkout |
+| Fase 4 | `c4d5e6f7a8b9` | `b3c4d5e6f7a8` | Convites e reservas |
+| Fase 5 | `d5e6f7a8b9c0` | `c4d5e6f7a8b9` | Aumento automático |
+| Fase 6 | `e6f7a8b9c0d1` | `d5e6f7a8b9c0` | Aumento excepcional e cobrança extraordinária |
+| Fase 7 | `f7g8h9i0j1k2` | `e6f7a8b9c0d1` | Lifecycle comercial |
+
+Os nomes das fases identificam a origem das migrations, não trabalho futuro. Fase 2 e hardening Fase 8 não possuem migrations próprias nessa cadeia.
+
+`Conta` governa organização/capacidade; `ContaVinculoOrganizacional` preserva vínculos ativos e encerrados. Os modelos de intenção, convite, aumentos, redução e titularidade suportam idempotência e correlação. Ver [Multiuser V1](multiuser_v1.md).
+
+A revisão `z0a1b2c3d4e5`, anterior ao Multiuser V1, permanece responsável pela telemetria da home descrita a seguir. O head versionado não substitui uma leitura operacional de `alembic_version`; esta revisão documental não consultou o banco de produção.
 
 ## Tabela `home_cta_experiment_event`
 

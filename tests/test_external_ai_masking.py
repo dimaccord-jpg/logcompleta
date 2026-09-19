@@ -16,6 +16,7 @@ import app.services.external_ai_masking as masking_mod
 from app.cleiton_doc_store import peek_document_record
 from app.julia_doc_context import build_julia_document_context_for_chat
 from app.run_julia_chat import chat_julia_reply
+from app.services.cleiton_ai_data_governance import govern_or_raise
 from app.services.external_ai_masking import (
     ExternalAiMaskingSession,
     MASKABLE_FIELD_KEYS,
@@ -106,7 +107,6 @@ def test_logistics_and_commercial_fields_stay_intact():
     assert masked["cidade"] == "Campinas"
     assert masked["UF"] == "SP"
     assert masked["transportadora"] == "GBEX"
-    assert masked["cnpj"] == "12.345.678/0001-90"
     assert masked["preco"] == 150.75
     assert masked["tarifa"] == 12.3
     assert masked["nested"]["cidade"] == "Santos"
@@ -114,6 +114,12 @@ def test_logistics_and_commercial_fields_stay_intact():
     assert masked["nested"]["rows"][0]["destination_uf"] == "SP"
     assert masked["nested"]["rows"][0]["carrier"] == "GBEX"
     assert masked["nested"]["rows"][0]["charged_freight"] == 99.9
+    governed = govern_or_raise(original, purpose="auditoria_frete", agent="cleide")
+    safe = governed.safe_content
+    assert safe["cidade"] == "Campinas"
+    assert safe["transportadora"] == "GBEX"
+    assert safe["preco"] == 150.75
+    assert "12.345.678/0001-90" not in str(safe["cnpj"])
 
 
 def test_structured_email_is_masked_stably():
@@ -133,14 +139,23 @@ def test_structured_phone_and_cpf_are_masked():
     assert masked["cpf"] == "[CPF_1]"
 
 
-def test_free_text_email_and_cpf_are_not_changed():
+def test_free_text_email_and_cpf_are_minimized_by_governance():
     original = _sample_payload()
-    masked = mask_structured_for_external_ai(original)
-    assert masked["notes"] == original["notes"]
-    assert masked["prepared_context"] == original["prepared_context"]
-    assert mask_structured_for_external_ai("email ana@cliente.com cpf 123.456.789-00") == (
-        "email ana@cliente.com cpf 123.456.789-00"
-    )
+    field_only = mask_structured_for_external_ai(original)
+    assert field_only["notes"] == original["notes"]
+    governed = govern_or_raise(original, purpose="chat_logistico", agent="julia")
+    safe = governed.safe_content
+    assert "ana@cliente.com" not in safe["notes"]
+    assert "123.456.789-00" not in safe["notes"]
+    assert "ana@cliente.com" not in safe["prepared_context"]
+    text = govern_or_raise(
+        "email ana@cliente.com cpf 123.456.789-00 cidade Campinas",
+        purpose="chat_logistico",
+        agent="julia",
+    ).safe_content
+    assert "ana@cliente.com" not in text
+    assert "123.456.789-00" not in text
+    assert "Campinas" in text
 
 
 def test_ambiguous_identity_fields_are_not_masked():
@@ -217,7 +232,7 @@ def test_helper_is_field_aware_not_content_aware():
     assert r"\d{11}" not in source
 
 
-def test_pdf_bytes_remain_identical_and_gemini_display_name_is_neutral(monkeypatch):
+def test_pdf_original_bytes_are_not_uploaded_and_display_name_is_neutral(monkeypatch):
     captured = {}
     original_bytes = make_minimal_pdf()
 
@@ -238,10 +253,10 @@ def test_pdf_bytes_remain_identical_and_gemini_display_name_is_neutral(monkeypat
         display_name="contrato_joao.pdf",
         client=client,
     )
-    assert result.ok is True
-    assert captured["bytes"] == original_bytes
-    assert captured["display_name"] == "[ARQUIVO_1].pdf"
-    assert "joao" not in captured["display_name"].lower()
+    assert result.ok is False
+    assert result.error_summary == "original_pdf_upload_blocked_by_governance"
+    client.files.upload.assert_not_called()
+    assert captured == {}
     assert original_bytes == make_minimal_pdf()
 
 
@@ -273,8 +288,8 @@ def test_stored_document_keeps_original_display_name(session_app, monkeypatch):
         )
     record = peek_document_record(public["doc_id"])
     assert record["display_name"] == "contrato_joao.pdf"
-    assert captured["display_name"] == "[ARQUIVO_1].pdf"
-    assert captured["bytes"] == original_bytes
+    assert captured == {}
+    client.files.upload.assert_not_called()
 
 
 def test_julia_keeps_message_history_and_prepared_text(session_app, monkeypatch):
@@ -305,13 +320,16 @@ def test_julia_keeps_message_history_and_prepared_text(session_app, monkeypatch)
         )
         stored = peek_document_record(registered["doc_id"])
     contents = capture["contents"]
-    assert "meu email e user@test.com" in contents
-    assert "cpf 999.888.777-66 na conversa" in contents
-    assert "cidade Campinas email hidden@x.com" in contents
+    assert "meu email e user@test.com" not in contents
+    assert "cpf 999.888.777-66 na conversa" not in contents
+    assert "user@test.com" not in contents
+    assert "999.888.777-66" not in contents
+    assert "Campinas" in contents
     assert "contrato_joao.txt" not in contents
     assert "[ARQUIVO_1].txt" in contents
     assert stored["display_name"] == "contrato_joao.txt"
-    assert doc_ctx["context_block"].count("contrato_joao.txt") == 0
+    assert "hidden@x.com" not in contents
+    assert stored.get("prepared_context") == "cidade Campinas email hidden@x.com"
 
 
 def test_cleide_keeps_logistics_fields_on_structured_payload():

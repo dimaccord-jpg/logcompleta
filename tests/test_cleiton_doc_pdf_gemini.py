@@ -11,6 +11,7 @@ import app.cleiton_doc_gemini_files as gemini_files
 import app.cleiton_doc_service as svc
 from app.cleiton_doc_contracts import (
     CONTEXT_KIND_GEMINI_FILE,
+    CONTEXT_KIND_TEXT,
     FIELD_CONTEXT_KIND,
     FIELD_GEMINI_FILE_NAME,
     FIELD_GEMINI_FILE_STATE,
@@ -88,10 +89,11 @@ def test_normalize_gemini_file_state(raw, expected, active):
 
 
 def test_upload_pdf_with_sdk_file_state_enum_is_ready(session_app, monkeypatch):
+    client = _fake_gemini_client(upload_state=_SdkFileStateEnum("ACTIVE"))
     monkeypatch.setattr(
         gemini_files,
         "get_cleiton_gemini_client",
-        lambda: _fake_gemini_client(upload_state=_SdkFileStateEnum("ACTIVE")),
+        lambda: client,
     )
     with session_app.test_request_context("/"):
         public = svc.prepare_and_register_document(
@@ -100,9 +102,10 @@ def test_upload_pdf_with_sdk_file_state_enum_is_ready(session_app, monkeypatch):
             mime_type="application/pdf",
         )
     assert public[FIELD_STATUS] == STATUS_ACTIVE
-    assert public[FIELD_PDF_CONTEXT_READY] is True
+    assert public[FIELD_PDF_CONTEXT_READY] is False
     record = peek_document_record(public["doc_id"])
-    assert record[FIELD_GEMINI_FILE_STATE] == GEMINI_FILE_STATE_ACTIVE
+    assert record[FIELD_CONTEXT_KIND] == CONTEXT_KIND_TEXT
+    client.files.upload.assert_not_called()
 
 
 def test_pdf_context_ready_from_record_accepts_file_state_enum():
@@ -141,7 +144,7 @@ def test_upload_pdf_with_file_state_active_string_is_ready(session_app, monkeypa
             mime_type="application/pdf",
         )
     assert public[FIELD_STATUS] == STATUS_ACTIVE
-    assert public[FIELD_PDF_CONTEXT_READY] is True
+    assert public[FIELD_PDF_CONTEXT_READY] is False
 
 
 def test_upload_pdf_processing_stays_error(session_app, monkeypatch):
@@ -156,7 +159,7 @@ def test_upload_pdf_processing_stays_error(session_app, monkeypatch):
             file_bytes=make_minimal_pdf(),
             mime_type="application/pdf",
         )
-    assert public[FIELD_STATUS] == STATUS_ERROR
+    assert public[FIELD_STATUS] == STATUS_ACTIVE
     assert public[FIELD_PDF_CONTEXT_READY] is False
 
 
@@ -169,12 +172,12 @@ def test_upload_pdf_saves_gemini_reference_not_in_public(session_app, monkeypatc
             mime_type="application/pdf",
         )
     assert public[FIELD_STATUS] == STATUS_ACTIVE
-    assert public[FIELD_PDF_CONTEXT_READY] is True
+    assert public[FIELD_PDF_CONTEXT_READY] is False
     assert public.get(FIELD_GEMINI_FILE_NAME) is None
     assert public.get(FIELD_GEMINI_FILE_URI) is None
     record = peek_document_record(public["doc_id"])
-    assert record[FIELD_GEMINI_FILE_NAME] == "files/test-pdf-abc"
-    assert record[FIELD_GEMINI_FILE_STATE] == GEMINI_FILE_STATE_ACTIVE
+    assert not record.get(FIELD_GEMINI_FILE_NAME)
+    assert record[FIELD_CONTEXT_KIND] == CONTEXT_KIND_TEXT
 
 
 def test_delete_removes_gemini_reference(session_app, monkeypatch):
@@ -187,7 +190,7 @@ def test_delete_removes_gemini_reference(session_app, monkeypatch):
             mime_type="application/pdf",
         )
         svc.remove_document_from_session(doc["doc_id"])
-    client.files.delete.assert_called()
+    client.files.delete.assert_not_called()
 
 
 def test_clear_removes_gemini_references(session_app, monkeypatch):
@@ -200,7 +203,7 @@ def test_clear_removes_gemini_references(session_app, monkeypatch):
             mime_type="application/pdf",
         )
         svc.clear_documents_for_session()
-    assert client.files.delete.call_count >= 1
+    assert client.files.delete.call_count == 0
 
 
 def test_gemini_delete_failure_does_not_break_user(session_app, monkeypatch):
@@ -226,7 +229,7 @@ def test_gemini_upload_failure_registers_error_status(session_app, monkeypatch):
             file_bytes=make_minimal_pdf(),
             mime_type="application/pdf",
         )
-    assert public[FIELD_STATUS] == STATUS_ERROR
+    assert public[FIELD_STATUS] == STATUS_ACTIVE
     assert public[FIELD_PDF_CONTEXT_READY] is False
 
 
@@ -250,8 +253,8 @@ def test_upload_pdf_prepared_context_marks_ready(session_app, monkeypatch):
             mime_type="application/pdf",
         )
     record = peek_document_record(public["doc_id"])
-    assert record[FIELD_CONTEXT_KIND] == CONTEXT_KIND_GEMINI_FILE
-    assert '"gemini_file_ready": true' in (record.get(FIELD_PREPARED_CONTEXT) or "").lower()
+    assert record[FIELD_CONTEXT_KIND] == CONTEXT_KIND_TEXT
+    assert "gemini_file_ready" not in (record.get(FIELD_PREPARED_CONTEXT) or "").lower()
 
 
 def test_remove_document_record_cleans_gemini(monkeypatch, tmp_path):

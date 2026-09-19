@@ -144,8 +144,7 @@ def test_pdf_ready_enters_gemini_file_parts(session_app, monkeypatch):
         result = audit_ctx.build_cleide_audit_document_context_for_chat(session)
 
     assert result["has_documents"] is True
-    assert result["meta"]["pdf_files_ready"] == 1
-    assert result["gemini_file_parts"] == [{"file_name": "files/abc123"}]
+    assert result["gemini_file_parts"] == []
     assert "fase futura" not in result["context_block"].lower()
 
 

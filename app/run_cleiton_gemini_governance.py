@@ -12,6 +12,16 @@ from flask import has_app_context
 from app.consumo_identidade import resolve_identidade_para_persistencia
 from app.extensions import db
 from app.models import IaConsumoEvento, utcnow_naive
+from app.services.cleiton_ai_data_governance import (
+    CleitonAiGovernanceBlockedError,
+    CONTENT_TYPE_GENERATE_CONTENTS,
+    CONTENT_TYPE_IMAGE_PROMPT,
+    govern_or_raise,
+    govern_provider_config,
+    project_safe_error,
+    purpose_from_flow_type,
+)
+from app.services.cleiton_ai_safe_context import CleitonAiAliasSession
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +78,10 @@ def _truncate_err(msg: str | None, limit: int = 2000) -> str | None:
     if len(s) <= limit:
         return s
     return s[: limit - 3] + "..."
+
+
+def _safe_error_summary(exc: BaseException, *, stage: str, retry: bool | None = None) -> str:
+    return _truncate_err(project_safe_error(exc, stage=stage, provider=PROVIDER_GEMINI, retry=retry), 2000)
 
 
 def _coerce_usage_value(source: Any, *names: str) -> int | None:
@@ -212,6 +226,37 @@ def register_internal_ia_event(
             pass
 
 
+def _authorize_outbound_payload(
+    contents: Any,
+    *,
+    agent: str,
+    flow_type: str,
+    content_type: str,
+    purpose: str | None = None,
+    alias_session: CleitonAiAliasSession | None = None,
+) -> Any:
+    resolved_purpose = purpose or purpose_from_flow_type(flow_type, agent)
+    try:
+        governed = govern_or_raise(
+            contents,
+            purpose=resolved_purpose,
+            content_type=content_type,
+            agent=agent,
+            provider=PROVIDER_GEMINI,
+            alias_session=alias_session,
+        )
+    except CleitonAiGovernanceBlockedError as exc:
+        register_internal_ia_event(
+            operation="ai_data_governance_block",
+            agent=agent,
+            flow_type=flow_type,
+            status=STATUS_FAILURE,
+            error_summary=_safe_error_summary(exc, stage="pre_provider"),
+        )
+        raise
+    return governed.safe_content
+
+
 def cleiton_governed_generate_content(
     client: Any,
     *,
@@ -221,11 +266,39 @@ def cleiton_governed_generate_content(
     agent: str,
     flow_type: str,
     api_key_label: str,
+    purpose: str | None = None,
 ) -> Any:
     """
-    Executa client.models.generate_content, registra evento e retorna a resposta do SDK.
+    Governa o payload localmente, executa generate_content e registra evento de consumo.
     """
-    contents_summary = _summarize_generate_contents(contents)
+    resolved_purpose = purpose or purpose_from_flow_type(flow_type, agent)
+    alias_session = CleitonAiAliasSession()
+    authorized_contents = _authorize_outbound_payload(
+        contents,
+        agent=agent,
+        flow_type=flow_type,
+        content_type=CONTENT_TYPE_GENERATE_CONTENTS,
+        purpose=resolved_purpose,
+        alias_session=alias_session,
+    )
+    try:
+        authorized_config = govern_provider_config(
+            config,
+            purpose=resolved_purpose,
+            agent=agent,
+            provider=PROVIDER_GEMINI,
+            alias_session=alias_session,
+        )
+    except CleitonAiGovernanceBlockedError as exc:
+        register_internal_ia_event(
+            operation="ai_data_governance_block",
+            agent=agent,
+            flow_type=flow_type,
+            status=STATUS_FAILURE,
+            error_summary=_safe_error_summary(exc, stage="pre_provider_config"),
+        )
+        raise
+    contents_summary = _summarize_generate_contents(authorized_contents)
     logger.info(
         "Governanca Gemini: generate_content start model=%s agent=%s flow_type=%s contents=%s",
         model,
@@ -236,8 +309,8 @@ def cleiton_governed_generate_content(
     try:
         response = client.models.generate_content(
             model=model,
-            contents=contents,
-            config=config,
+            contents=authorized_contents,
+            config=authorized_config,
         )
         inp, out, tot = _extract_usage_from_response(response)
         logger.info(
@@ -268,11 +341,10 @@ def cleiton_governed_generate_content(
         return response
     except Exception as e:
         logger.warning(
-            "Governanca Gemini: generate_content provider failure model=%s flow_type=%s exc_type=%s message=%s",
+            "Governanca Gemini: generate_content provider failure model=%s flow_type=%s %s",
             model,
             flow_type,
-            e.__class__.__name__,
-            e,
+            _safe_error_summary(e, stage="generate_content"),
         )
         _persist_event(
             operation=OP_GENERATE_CONTENT,
@@ -284,7 +356,7 @@ def cleiton_governed_generate_content(
             input_tokens=None,
             output_tokens=None,
             total_tokens=None,
-            error_summary=str(e),
+            error_summary=_safe_error_summary(e, stage="generate_content"),
         )
         raise
 
@@ -302,6 +374,35 @@ def cleiton_governed_generate_images(
     O SDK atual não expõe usage_metadata tipado em GenerateImagesResponse; tokens ficam nulos.
     """
     model = str(kwargs.get("model") or "")
+    resolved_purpose = purpose_from_flow_type(flow_type, agent)
+    alias_session = CleitonAiAliasSession()
+    if "prompt" in kwargs:
+        kwargs["prompt"] = _authorize_outbound_payload(
+            kwargs.get("prompt") or "",
+            agent=agent,
+            flow_type=flow_type,
+            content_type=CONTENT_TYPE_IMAGE_PROMPT,
+            purpose=resolved_purpose,
+            alias_session=alias_session,
+        )
+    if "config" in kwargs:
+        try:
+            kwargs["config"] = govern_provider_config(
+                kwargs.get("config"),
+                purpose=resolved_purpose,
+                agent=agent,
+                provider=PROVIDER_GEMINI,
+                alias_session=alias_session,
+            )
+        except CleitonAiGovernanceBlockedError as exc:
+            register_internal_ia_event(
+                operation="ai_data_governance_block",
+                agent=agent,
+                flow_type=flow_type,
+                status=STATUS_FAILURE,
+                error_summary=_safe_error_summary(exc, stage="pre_provider_config"),
+            )
+            raise
     try:
         response = client.models.generate_images(**kwargs)
         _persist_event(
@@ -328,6 +429,6 @@ def cleiton_governed_generate_images(
             input_tokens=None,
             output_tokens=None,
             total_tokens=None,
-            error_summary=str(e),
+            error_summary=_safe_error_summary(e, stage="generate_images"),
         )
         raise

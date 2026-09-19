@@ -1,17 +1,20 @@
 # Guia de MKT
 
-Data de consolidacao: `2026-05-26`
+Revisão documental: `2026-09-19`
 
 Este documento resume posicionamento institucional, SEO e compartilhamento social do Agentefrete. Ele complementa o `README.md`, mas nao substitui a documentacao tecnica principal.
 
 ## 1. Visao geral
 
-O Agentefrete combina quatro camadas oficiais:
+AgenteFrete reúne as superfícies descritas em [agentes e identidades](AGENTS.md):
 
-- Roberto: estrategia, produto e direcionamento operacional
-- Cleiton: governanca, missao operacional e orquestracao
-- Julia: editorial, imagem, redacao e publicacao
-- Cleide: leitura documental, upload e suporte operacional IA
+- AgenteFrete/Júlia operacional: chat autenticado e contexto documental; Júlia também mantém funções editoriais.
+- Cleiton: governança, discovery, franquias, billing e observabilidade.
+- AgenteAudita (Cleide no código): auditoria de fretes, BI e chat analítico.
+- AgenteCompara: comparação de duas ou três tabelas fornecidas pelo usuário.
+- Roberto: BI de fretes e chat quantitativo em `/fretes`.
+
+Multiuser V1 está em produção, com contratação Stripe e franquias individuais. Não anunciar compartilhamento de memória, arquivos ou resultados entre membros, API pública Multiuser ou contratação automática de transportadoras. Ver [Multiuser V1](multiuser_v1.md).
 
 ## 2. Proposta de valor
 
@@ -34,11 +37,9 @@ Evitar:
 - linguagem vaga de IA
 - discurso desconectado da operacao real
 
-## 4. Contrato publico de SEO
+## 4. Contrato de SEO do conteúdo editorial
 
-Fonte de verdade:
-
-- `PUBLIC_BASE_URL`
+Para URLs editoriais de notícia/artigo, a base é `PUBLIC_BASE_URL` e o template usa `share_url_abs`. Isso não é garantia universal para todas as páginas: `index.html` ainda fixa o domínio de produção em seu bloco canonical.
 
 Ambientes:
 
@@ -61,11 +62,15 @@ Regras:
 Paginas publicas relevantes:
 
 - `/`
-- `/fretes`
+- `/feed`
 - `/noticia/<id>`
+
+`/fretes` é uma superfície autenticada de BI, não uma página editorial pública.
 
 Paginas que devem permanecer fora da superficie publica de SEO:
 
+- `/fretes`
+- `/gestao-multiuser`
 - `/admin/...`
 - `/perfil`
 - `/contrate-um-plano`

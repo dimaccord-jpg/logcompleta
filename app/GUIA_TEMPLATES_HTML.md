@@ -14,10 +14,10 @@ Este guia complementa o `README.md` principal com foco apenas em estrutura visua
 
 ### `index.html`
 
-- home do portal;
-- inclui `chat_julia.html`;
-- inclui listas de notícias e artigos;
-- usa hero, ticker e newsletter.
+- home de discovery público ou superfície operacional autenticada conforme contexto;
+- inclui `partials/app_global_header.html` e `chat_julia.html`;
+- CTA público participa de `home_chat_cta_v1`;
+- conteúdo editorial está no `/feed`, não em uma lista de notícias deste template.
 
 ### `chat_julia.html`
 
@@ -28,8 +28,7 @@ Estado atual esperado:
 - campo de entrada em `textarea`;
 - `Shift+Enter` para quebra de linha e `Enter` para envio, controlados no JS;
 - não exibe dica visual de teclado;
-- mensagem de boas-vindas exibida:
-  - `Faça uma pergunta sobre logística, fretes, supply chain ou indicadores. Ex.: "Como o dólar impacta o frete?"`
+- texto inicial depende da superfície autenticada/discovery e de `home_cta_text`; não fixar uma única mensagem para todos os contextos
 - suporta sugestões clicáveis;
 - renderização visual preparada para markdown básico seguro da Júlia;
 - mensagens do usuário continuam simples e puras.
@@ -72,7 +71,14 @@ Estado visual atual esperado:
 
 - card `Pagamento` em `/perfil` é clicável;
 - redireciona para `/contrate-um-plano`;
-- template `contrate_plano.html` mostra estado provisório de funcionalidade em construção.
+- `contrate_plano.html` oferece planos Free, Starter, Pro e Multiuser, resumo de contratação e início de Checkout Stripe;
+- Multiuser coleta dados empresariais, CNPJ e quantity antes do checkout;
+- perfil apresenta acesso à gestão Multiuser conforme autorização;
+- notificações possuem limitações de UX registradas na SCRUM-187: [estado de produção](../docs/estado_producao.md#pendências-conhecidas-e-pós-release).
+
+### Gestão Multiuser
+
+O painel `/gestao-multiuser` é do contratante ativo. Visibilidade de botões não substitui autorização no backend. Membros não compartilham documentos, chats ou resultados apenas por pertencerem à mesma Conta. Regras em [Multiuser V1](../docs/multiuser_v1.md).
 
 ### `noticia_interna.html`
 
@@ -107,5 +113,5 @@ Para HTML vindo do banco:
 
 ## Referência Principal
 
-Mudanças funcionais e comportamento do sistema devem ser registrados primeiro no `README.md` da raiz.  
+O [README](../README.md) é o índice; regras funcionais ficam nos guias canônicos de cada domínio.
 Este arquivo deve focar apenas em padrão visual e estrutural.

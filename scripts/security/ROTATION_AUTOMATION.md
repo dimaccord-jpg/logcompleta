@@ -51,7 +51,7 @@ Se precisar inserir chaves ausentes no arquivo alvo:
 Rotacao completa (internos + externos ja renovados no provedor):
 
 > OBS: `MAIL_PASSWORD` era usado na configuracao SMTP/Gmail legada e nao e mais utilizado pelo app.
-> A rotacao de segredos de e-mail agora deve focar em `RESEND_API_KEY` configurado nos arquivos `.env.*` dentro de `app/`.
+> A rotação de e-mail usa `RESEND_API_KEY`. Em homolog/prod, o valor efetivo fica no Render/secret manager. Arquivos locais não são fonte de verdade do ambiente implantado.
 
 ```powershell
 ./scripts/security/rotate-secrets.ps1 \
@@ -114,6 +114,7 @@ Script: `scripts/security/post_rotation_check.ps1`
 ## Boas praticas
 
 1. Sempre rodar `-DryRun` antes de aplicar.
-2. Rotacionar primeiro no provedor e depois atualizar arquivos locais.
+2. Rotacionar primeiro no provedor e atualizar o serviço-alvo; arquivos locais são auxiliares de desenvolvimento, não prova de configuração implantada.
+   Stripe usa `STRIPE_API_KEY` e `STRIPE_WEBHOOK_SECRET`, também geridos externamente; não reutilizar credenciais de produção em homolog.
 3. Reiniciar aplicacao apos atualizar variaveis.
 4. Validar fluxo OAuth, e-mail e rotas operacionais apos cada rotacao.

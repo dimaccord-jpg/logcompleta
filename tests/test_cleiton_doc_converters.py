@@ -5,7 +5,6 @@ import pytest
 import app.cleiton_doc_service as svc
 import app.cleiton_doc_store as store
 from app.cleiton_doc_contracts import (
-    CONTEXT_KIND_GEMINI_FILE,
     CONTEXT_KIND_TEXT,
     FIELD_CHAR_COUNT,
     FIELD_CONTEXT_KIND,
@@ -85,20 +84,21 @@ def test_prepare_and_register_stores_prepared_context_not_in_public_record(sessi
         assert full[FIELD_PREPARED_CONTEXT] == "conteudo temporario"
 
 
-def test_prepare_and_register_pdf_gemini_kind(session_app, tmp_path, monkeypatch):
+def test_prepare_and_register_pdf_uses_local_text_not_files_api(session_app, tmp_path, monkeypatch):
     from tests.cleiton_doc_fixtures import patch_gemini_pdf_upload
 
-    patch_gemini_pdf_upload(monkeypatch)
+    client = patch_gemini_pdf_upload(monkeypatch)
     with session_app.test_request_context("/"):
         doc = svc.prepare_and_register_document(
             display_name="arquivo.pdf",
             file_bytes=make_minimal_pdf(pages=1),
             mime_type="application/pdf",
         )
-        assert doc[FIELD_CONTEXT_KIND] == CONTEXT_KIND_GEMINI_FILE
+        assert doc[FIELD_CONTEXT_KIND] == CONTEXT_KIND_TEXT
         full = _load_full_record(tmp_path, doc[FIELD_DOC_ID])
-        payload = json.loads(full[FIELD_PREPARED_CONTEXT])
-        assert payload["strategy"] == "gemini_file_api"
+        assert full[FIELD_CONTEXT_KIND] == CONTEXT_KIND_TEXT
+        assert "gemini_file_api" not in (full.get(FIELD_PREPARED_CONTEXT) or "")
+    client.files.upload.assert_not_called()
 
 
 def test_prepare_and_register_does_not_register_on_failure(session_app, tmp_path):
