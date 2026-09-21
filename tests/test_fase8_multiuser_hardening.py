@@ -91,6 +91,11 @@ def _preparar_planos_admin(*, valor="49.90", minimo="5"):
         gateway_interval_raw="month",
         gateway_pronto_raw=True,
     )
+    plano_service.atualizar_parametros_plano_admin(
+        plano_codigo="free",
+        valor_plano_raw="0.00",
+        franquia_limite_total_raw="50",
+    )
 
 
 def _preparar_conta_multiuser(slug: str, *, qtd: int, email: str):

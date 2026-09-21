@@ -259,6 +259,17 @@ def _encontrar_conta_individual_restauravel(
     return anterior, franquia
 
 
+def _aplicar_limite_free_franquia_nova(franquia: Franquia) -> None:
+    """Teto da franquia individual nova: referência administrativa vigente do Free."""
+    from app.services.plano_service import obter_limite_referencia_plano_admin
+
+    franquia.limite_total = obter_limite_referencia_plano_admin(
+        "free",
+        exigir_configurado=True,
+    )
+    db.session.add(franquia)
+
+
 def _criar_conta_individual_para_restauracao(user: User) -> tuple[Conta, Franquia]:
     email = user.email or f"u{user.id}"
     nome = (user.full_name or user.email or f"Conta {user.id}")[:255]
@@ -307,6 +318,7 @@ def _restaurar_contexto_individual(
         db.session.flush()
         return
     conta, franquia = _criar_conta_individual_para_restauracao(user)
+    _aplicar_limite_free_franquia_nova(franquia)
     user.conta_id = conta.id
     user.franquia_id = franquia.id
     user.categoria = "free"
