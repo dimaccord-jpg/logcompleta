@@ -1,6 +1,6 @@
 # AgenteCompara — Estado Oficial
 
-Referência auditada em 2026-09-04. O código atual é a fonte de verdade.
+Referência revisada em 2026-09-19. O código atual é a fonte de verdade.
 
 ## Superfícies e isolamento
 
@@ -11,6 +11,8 @@ Referência auditada em 2026-09-04. O código atual é a fonte de verdade.
 - estado da comparação: sessão Flask em `agente_compara_comparison_state`;
 - documentos do fluxo: session keys `agente_compara_*`;
 - isolamento confirmado em código e testes frente ao domínio técnico Cleide e à Julia por `comparison_id`, `table_id`, `temp_table_id`, `flow_type`, billing e eventos próprios.
+
+Membros Multiuser da mesma Conta não recebem acesso automático à comparação, documentos, tabelas, resultados ou chats uns dos outros. Ownership e sessão continuam necessários. “Público” nos contratos de payload deste guia significa dados liberados ao frontend autorizado, não acesso anônimo ou compartilhamento organizacional. Ver [privacidade Multiuser](multiuser_v1.md#privacidade-entre-membros).
 
 ## Jornada oficial
 
@@ -185,7 +187,7 @@ Responsabilidades reais:
 - a memória pública lista componentes aplicados, componentes ignorados, subtotal, impostos, evidências e total coerente com a célula;
 - `not_calculated` produz diagnóstico estruturado sem inventar total;
 - o contrato é determinístico, serializável e sem dependência de Flask, billing, Gemini ou Cleide;
-- o payload completo do cálculo é gravado fora da sessão em `app/cleiton_doc_tmp/agente_compara_calc`, com gravação atômica, checksum SHA-256 e chave estável por `comparison_id` + fingerprint.
+- o payload completo do cálculo é gravado fora da sessão em `${settings.data_dir}/cleiton_doc_tmp/agente_compara_calc`, com gravação atômica, checksum SHA-256 e chave estável por `comparison_id` + fingerprint.
 
 Proteções confirmadas:
 
@@ -277,7 +279,7 @@ Comportamentos confirmados em `app/static/js/agente_compara.js`, `app/templates/
 ## Banco, deploy e limites atuais
 
 - PostgreSQL é o banco oficial quando configurado via `DATABASE_URL`;
-- Alembic/Flask-Migrate governam o schema e a cadeia versionada permanece linear até `z0a1b2c3d4e5`;
+- Alembic/Flask-Migrate governam o schema e a cadeia versionada permanece linear até `f7g8h9i0j1k2`;
 - a migration da home adiciona `home_cta_experiment_event` e não altera o schema isolado do AgenteCompara;
 - `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn;
 - `render.yaml` atual aponta homologação para a branch `homolog` e produção para a branch `producao`, ambos com `autoDeploy: true`;

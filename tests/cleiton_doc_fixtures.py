@@ -99,6 +99,36 @@ def make_minimal_pdf(*, pages: int = 1) -> bytes:
     return b"".join(chunks)
 
 
+def make_text_pdf(text: str, *, pages: int = 1) -> bytes:
+    """PDF mínimo com texto extraível localmente (sem OCR)."""
+    payload = (text or "documento").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    objects = [
+        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+        b"2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n",
+    ]
+    stream = f"BT /F1 12 Tf 24 720 Td ({payload}) Tj ET".encode("latin-1", "replace")
+    objects.append(
+        (
+            b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n"
+        )
+    )
+    objects.append(b"4 0 obj << /Length " + str(len(stream)).encode("ascii") + b" >> stream\n" + stream + b"\nendstream endobj\n")
+    objects.append(b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n")
+    body = b"%PDF-1.4\n" + b"".join(objects)
+    xref_pos = len(body)
+    # Offsets are approximate; pypdf lenient parser still extracts the text stream.
+    trailer = (
+        b"xref\n0 6\n0000000000 65535 f \n"
+        + b"".join(b"0000000000 00000 n \n" for _ in range(5))
+        + b"trailer << /Size 6 /Root 1 0 R >>\nstartxref\n"
+        + str(xref_pos).encode("ascii")
+        + b"\n%%EOF\n"
+    )
+    _ = pages
+    return body + trailer
+
+
 def make_invalid_pdf() -> bytes:
     return b"NOTPDF-content"
 

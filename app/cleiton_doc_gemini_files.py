@@ -27,6 +27,7 @@ from app.cleiton_doc_contracts import (
     GEMINI_FILE_STATE_FAILED,
     GEMINI_FILE_STATE_PROCESSING,
 )
+from app.services.cleiton_ai_data_governance import extract_authorized_upload_bytes
 from app.services.external_ai_masking import mask_structured_for_external_ai
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,31 @@ def _wait_for_gemini_file_active(client: Any, file_name: str) -> tuple[str | Non
     return state, uri
 
 
+def _blocked_pdf_upload_result(
+    *,
+    file_bytes: bytes,
+    mime_type: str,
+    page_count: int | None,
+    max_pages: int,
+    placeholder_warnings: list[str],
+    extra_warning: str,
+    error_summary: str,
+) -> GeminiPdfUploadResult:
+    err_placeholder = build_pdf_gemini_placeholder(
+        size_bytes=len(file_bytes or b""),
+        mime_type=mime_type,
+        page_count=page_count,
+        max_pages=max_pages,
+        gemini_error=True,
+    )
+    return GeminiPdfUploadResult(
+        ok=False,
+        prepared_context=err_placeholder.prepared_context,
+        warnings=list(placeholder_warnings) + [extra_warning],
+        error_summary=error_summary,
+    )
+
+
 def upload_pdf_to_gemini_files_api(
     *,
     file_bytes: bytes,
@@ -217,18 +243,42 @@ def upload_pdf_to_gemini_files_api(
     page_count: int | None = None,
     max_pages: int = 50,
     client: Any | None = None,
+    governance_result: Any | None = None,
 ) -> GeminiPdfUploadResult:
     """
-    Envia PDF para Gemini Files API e aguarda estado ACTIVE quando possível.
+    Gate documental da Files API.
 
-    Não persiste binário localmente; apenas retorna referências temporárias do Gemini.
+    Bytes originais do PDF nunca são enviados. Somente uma representação
+    produzida formalmente pela governança de Cleiton pode ser carregada.
+    Preencher um argumento com bytes autodeclarados não constitui autorização.
     """
     placeholder = build_pdf_gemini_placeholder(
-        size_bytes=len(file_bytes),
+        size_bytes=len(file_bytes or b""),
         mime_type=mime_type,
         page_count=page_count,
         max_pages=max_pages,
     )
+    original_display = (display_name or "documento.pdf").strip() or "documento.pdf"
+    safe_display = mask_structured_for_external_ai(
+        {"display_name": original_display}
+    )["display_name"]
+    authorized_bytes = extract_authorized_upload_bytes(governance_result)
+    if authorized_bytes is None or authorized_bytes == bytes(file_bytes or b""):
+        logger.warning(
+            "Cleiton doc Gemini: upload de PDF original bloqueado pela governança contextual (bytes=%s, display=%s).",
+            len(file_bytes or b""),
+            safe_display[:80],
+        )
+        return _blocked_pdf_upload_result(
+            file_bytes=file_bytes or b"",
+            mime_type=mime_type,
+            page_count=page_count,
+            max_pages=max_pages,
+            placeholder_warnings=list(placeholder.warnings),
+            extra_warning="original_pdf_upload_blocked_by_governance",
+            error_summary="original_pdf_upload_blocked_by_governance",
+        )
+
     gemini_client = client or get_cleiton_gemini_client()
     if gemini_client is None:
         return GeminiPdfUploadResult(
@@ -238,12 +288,8 @@ def upload_pdf_to_gemini_files_api(
             error_summary="gemini_client_unavailable",
         )
 
-    original_display = (display_name or "documento.pdf").strip() or "documento.pdf"
-    safe_display = mask_structured_for_external_ai(
-        {"display_name": original_display}
-    )["display_name"]
     try:
-        doc_io = io.BytesIO(file_bytes)
+        doc_io = io.BytesIO(authorized_bytes)
         uploaded = gemini_client.files.upload(
             file=doc_io,
             config={"mime_type": mime_type, "display_name": safe_display[:200]},
@@ -253,7 +299,7 @@ def upload_pdf_to_gemini_files_api(
             "Cleiton doc Gemini: upload Files API falhou (bytes=%s, display=%s): %s",
             len(file_bytes),
             safe_display[:80],
-            exc,
+            exc.__class__.__name__,
         )
         err_placeholder = build_pdf_gemini_placeholder(
             size_bytes=len(file_bytes),

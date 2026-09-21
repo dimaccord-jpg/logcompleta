@@ -1,64 +1,47 @@
 # Integrações de IA e Privacidade
 
-Referência auditada em 2026-08-19.
+Referência atualizada em 2026-09-19 (SCRUM-75).
 
-## Boundary de masking
+## Fronteira obrigatória
 
-O masking implementado hoje é outbound e field-aware.
+Antes de Gemini, DuckDuckGo, Imagen ou outro provedor externo, o conteúdo passa pela governança contextual local de Cleiton.
 
-- serviço: `app/services/external_ai_masking.py`
-- atua sobre `dict`, `list`, `tuple` e escalares já estruturados
-- não reescreve o dado persistido internamente
-- não persiste o mapa de tokens
+Contrato vivo: [Governança contextual de IA](cleiton_ai_data_governance.md).
 
-## Campos tratados explicitamente
+Fluxo:
 
-- `display_name`
-- `source_file_name`
-- `filename`
-- `email`
-- `customer_email`
-- `phone`
-- `telefone`
-- `cpf`
+```text
+raw_text / documento / histórico
+→ Cleiton governance
+→ classificação local
+→ minimização / alias
+→ payload autorizado
+→ provider
+```
 
-## Formato dos tokens
+Não se envia o original para outra IA perguntar se ele é sensível.
 
-- arquivo: `[ARQUIVO_N].ext`
-- e-mail: `[EMAIL_N]`
-- telefone: `[TEL_N]`
-- CPF: `[CPF_N]`
+## Camadas
 
-O mapeamento é estável apenas dentro da operação em memória.
+- `cleiton_ai_data_governance.py`: fachada, finalidade, fail-closed, status para a UI futura
+- `cleiton_ai_privacy_classifier.py`: classificador local (sem regex, sem HTTP)
+- `cleiton_ai_safe_context.py`: aliases temporários da operação
+- `external_ai_masking.py`: mascaramento field-aware de chaves estruturadas conhecidas; permanece como camada inferior, não como contrato definitivo
 
-## Aplicação nos domínios
+## O que permanece
 
-O masking outbound foi incorporado às boundaries adequadas de:
+- documento original local não é reescrito
+- isolamento Multiuser (conta comum não autoriza artefato privado)
+- dados logísticos necessários à tarefa
+- Roberto não ganha nova memória; o contexto que ele envia também passa pelo wrapper de Cleiton
 
-- Júlia
-- Cleide
-- AgenteCompara
+## O que não deve ser prometido
 
-Roberto ficou fora desta mudança.
+- OCR de PDF escaneado
+- desligar a proteção por configuração
+- nova memória persistente de aliases
+- anonimização absoluta de qualquer conteúdo visual não extraível
 
-## Limitações reais
+## Contexto Multiuser
 
-Estas limitações precisam permanecer explícitas:
-
-- o serviço não varre texto livre genericamente
-- strings sem chave autorizada não são inspecionadas nem alteradas
-- OCR e texto livre podem carregar PII não reconhecida
-- campos logísticos não entram em anonimização genérica universal
-- IDs internos não são removidos automaticamente de forma abrangente
-- PDF bruto enviado pela Gemini Files API não é reescrito byte a byte
-- no caso de arquivo PDF, o nome/display name pode ser neutralizado, mas o conteúdo binário não é sanitizado universalmente
-
-## Consequência documental
-
-Não é correto prometer:
-
-- anonimização total antes de IA externa
-- sanitização universal de documentos
-- scanner genérico de PII em qualquer texto ou anexo
-
-O que existe é mascaramento estruturado em pontos específicos de saída.
+A governança de saída não substitui autorização. Antes de montar contexto para Júlia, Cleide/AgenteAudita ou AgenteCompara, os fluxos preservam ownership e escopo da sessão; a Conta comum não autoriza incluir documentos ou memória privada de outro membro. Ver [Multiuser V1](multiuser_v1.md#privacidade-entre-membros).

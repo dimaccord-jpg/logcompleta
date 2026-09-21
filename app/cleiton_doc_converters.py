@@ -15,7 +15,6 @@ from defusedxml import ElementTree as DefusedET
 from defusedxml.common import EntitiesForbidden
 
 from app.cleiton_doc_contracts import (
-    CONTEXT_KIND_GEMINI_FILE,
     CONTEXT_KIND_TEXT,
     DOC_TYPE_CSV,
     DOC_TYPE_DOCX,
@@ -25,6 +24,7 @@ from app.cleiton_doc_contracts import (
     DOC_TYPE_XML,
     ERROR_CONVERSION_FAILED,
     ERROR_CORRUPTED_FILE,
+    ERROR_PDF_VISUAL_UNPREPARED,
     ERROR_TOO_DEEP_XML,
     ERROR_TOO_MANY_COLUMNS,
     ERROR_TOO_MANY_NODES,
@@ -33,7 +33,7 @@ from app.cleiton_doc_contracts import (
     ERROR_TOO_MANY_ROWS,
     ERROR_UNSUPPORTED_TYPE,
 )
-from app.cleiton_doc_gemini_files import build_pdf_gemini_placeholder, estimate_pdf_page_count
+from app.cleiton_doc_gemini_files import estimate_pdf_page_count
 from app.cleiton_doc_security import CleitonDocSecurityError
 from app.services.cleiton_doc_config_service import CleitonDocConfig
 
@@ -321,6 +321,53 @@ def convert_docx(file_bytes: bytes, cfg: CleitonDocConfig) -> ConversionResult:
     )
 
 
+def _page_has_embedded_image(page) -> bool:
+    try:
+        resources = page.get("/Resources")
+        if resources is None:
+            return False
+        if hasattr(resources, "get_object"):
+            resources = resources.get_object()
+        xobject = resources.get("/XObject") if resources is not None else None
+        if xobject is None:
+            return False
+        if hasattr(xobject, "get_object"):
+            xobject = xobject.get_object()
+        for name in xobject:
+            obj = xobject[name]
+            if hasattr(obj, "get_object"):
+                obj = obj.get_object()
+            subtype = str(obj.get("/Subtype") if obj is not None else "")
+            if subtype.endswith("Image"):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def extract_pdf_text_local(file_bytes: bytes) -> tuple[str, int | None, dict]:
+    """
+    Extração textual local. Sem OCR e sem upload.
+    """
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(file_bytes), strict=False)
+    page_count = len(reader.pages)
+    chunks: list[str] = []
+    image_only_pages = 0
+    for page in reader.pages:
+        extracted = page.extract_text() or ""
+        chunks.append(extracted)
+        if _page_has_embedded_image(page) and not extracted.strip():
+            image_only_pages += 1
+    text = "\n".join(chunks).strip()
+    meta = {
+        "image_only_pages": image_only_pages,
+        "visual_only": bool(image_only_pages and not text),
+    }
+    return text, page_count, meta
+
+
 def convert_pdf(file_bytes: bytes, cfg: CleitonDocConfig) -> ConversionResult:
     page_count = estimate_pdf_page_count(file_bytes)
     if page_count is not None and page_count > int(cfg.pdf_max_pages):
@@ -329,18 +376,46 @@ def convert_pdf(file_bytes: bytes, cfg: CleitonDocConfig) -> ConversionResult:
             "PDF excede o número máximo de páginas configurado.",
         )
 
-    placeholder = build_pdf_gemini_placeholder(
-        size_bytes=len(file_bytes),
-        mime_type="application/pdf",
-        page_count=page_count,
-        max_pages=int(cfg.pdf_max_pages),
-    )
+    warnings: list[str] = []
+    extracted_pages: int | None = None
+    text = ""
+    try:
+        text, extracted_pages, meta = extract_pdf_text_local(file_bytes)
+        if extracted_pages is not None and extracted_pages > 0:
+            page_count = extracted_pages
+            if page_count > int(cfg.pdf_max_pages):
+                raise CleitonDocSecurityError(
+                    ERROR_TOO_MANY_PAGES,
+                    "PDF excede o número máximo de páginas configurado.",
+                )
+        if meta.get("visual_only"):
+            raise CleitonDocSecurityError(
+                ERROR_PDF_VISUAL_UNPREPARED,
+                "Este PDF depende de estrutura visual que não pôde ser preparada com segurança para IA. "
+                "Envie um arquivo com texto selecionável e sem informações desnecessárias.",
+            )
+        if not text:
+            warnings.append("pdf_local_extraction_empty")
+        warnings.append("pdf_local_text_extraction")
+    except CleitonDocSecurityError:
+        raise
+    except Exception:
+        warnings.append("pdf_local_extraction_incomplete")
+        text = ""
+
+    if page_count is None:
+        warnings.append(
+            "page_count_indeterminate_local: validação de páginas adiada; extração local sem contagem confiável."
+        )
+
+    text, truncated = _truncate_text(text, int(cfg.pdf_max_chars))
     return ConversionResult(
-        prepared_context=placeholder.prepared_context,
-        context_kind=CONTEXT_KIND_GEMINI_FILE,
+        prepared_context=text,
+        context_kind=CONTEXT_KIND_TEXT,
+        truncated=truncated,
+        char_count=len(text),
         page_count=page_count,
-        warnings=list(placeholder.warnings),
-        char_count=len(placeholder.prepared_context),
+        warnings=warnings,
     )
 
 

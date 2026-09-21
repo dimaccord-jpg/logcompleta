@@ -1,5 +1,39 @@
 {% extends "base.html" %}
 
+{% block extra_head %}
+<style>
+#checkout-embed:empty {
+    min-height: 0 !important;
+    border: 0 !important;
+    padding: 0 !important;
+}
+.mu-cep-lookup {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: stretch;
+    min-width: 0;
+    max-width: 100%;
+}
+.mu-cep-lookup #mu-cep {
+    flex: 1 1 10rem;
+    min-width: 0;
+}
+.mu-cep-lookup #mu-buscar-cep {
+    flex: 0 1 auto;
+    white-space: nowrap;
+}
+#mu-cep-status:empty {
+    display: none;
+}
+@media (max-width: 575.98px) {
+    .mu-cep-lookup #mu-buscar-cep {
+        flex: 1 1 100%;
+    }
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container py-5">
     <div class="row g-4">
@@ -136,9 +170,13 @@
                                 <label class="form-label small fw-bold" for="mu-uf">UF</label>
                                 <input class="form-control form-control-sm" id="mu-uf" name="endereco_uf" maxlength="2" value="{{ dados_empresariais.endereco_uf or '' }}" required>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-12 col-md-8 col-lg-6">
                                 <label class="form-label small fw-bold" for="mu-cep">CEP</label>
-                                <input class="form-control form-control-sm" id="mu-cep" name="endereco_cep" value="{{ dados_empresariais.endereco_cep or '' }}" required>
+                                <div class="mu-cep-lookup">
+                                    <input class="form-control form-control-sm" id="mu-cep" name="endereco_cep" value="{{ dados_empresariais.endereco_cep or '' }}" inputmode="numeric" autocomplete="postal-code" aria-describedby="mu-cep-status" required>
+                                    <button type="button" class="btn btn-outline-dark btn-sm" id="mu-buscar-cep">Buscar CEP</button>
+                                </div>
+                                <div id="mu-cep-status" class="alert alert-light border small mt-2 mb-0" role="status" aria-live="polite"></div>
                             </div>
                             <div class="col-md-4">
                                 <label class="form-label small fw-bold" for="mu-quantity">Acessos</label>
@@ -319,6 +357,202 @@
         };
     }
 
+    const CEP_DEBOUNCE_MS = 300;
+    const CEP_TIMEOUT_MS = 8000;
+    const cepEl = document.getElementById("mu-cep");
+    const cepStatusEl = document.getElementById("mu-cep-status");
+    const btnBuscarCep = document.getElementById("mu-buscar-cep");
+    const cepCamposAuto = {
+        logradouro: document.getElementById("mu-logradouro"),
+        bairro: document.getElementById("mu-bairro"),
+        cidade: document.getElementById("mu-cidade"),
+        uf: document.getElementById("mu-uf"),
+    };
+    const cepAutoPreenchido = {
+        logradouro: null,
+        bairro: null,
+        cidade: null,
+        uf: null,
+    };
+    let cepDebounceTimer = null;
+    let cepAbortController = null;
+    let cepConsultaId = 0;
+    let cepEmVoo = null;
+    let cepConsultadoComSucesso = null;
+    let cepNormalizadoAnterior = normalizarCep(cepEl ? cepEl.value : "");
+
+    function normalizarCep(valor) {
+        return String(valor || "").replace(/\D/g, "");
+    }
+
+    function cepPossuiOitoDigitos(digitos) {
+        return /^\d{8}$/.test(digitos);
+    }
+
+    function setCepStatus(mensagem, nivel) {
+        if (!cepStatusEl) {
+            return;
+        }
+        const texto = mensagem || "";
+        cepStatusEl.textContent = texto;
+        cepStatusEl.className = texto
+            ? `alert alert-${nivel || "light"} border small mt-2 mb-0`
+            : "alert alert-light border small mt-2 mb-0";
+    }
+
+    function cancelarConsultaCep() {
+        if (cepDebounceTimer) {
+            clearTimeout(cepDebounceTimer);
+            cepDebounceTimer = null;
+        }
+        if (cepAbortController) {
+            cepAbortController.abort();
+            cepAbortController = null;
+        }
+        cepEmVoo = null;
+        cepConsultaId += 1;
+    }
+
+    function limparValoresAutomaticosAnteriores() {
+        Object.keys(cepCamposAuto).forEach((chave) => {
+            const campo = cepCamposAuto[chave];
+            const automatico = cepAutoPreenchido[chave];
+            if (campo && automatico !== null && campo.value === automatico) {
+                campo.value = "";
+            }
+            cepAutoPreenchido[chave] = null;
+        });
+    }
+
+    function snapshotCamposCep() {
+        return {
+            logradouro: cepCamposAuto.logradouro ? cepCamposAuto.logradouro.value : "",
+            bairro: cepCamposAuto.bairro ? cepCamposAuto.bairro.value : "",
+            cidade: cepCamposAuto.cidade ? cepCamposAuto.cidade.value : "",
+            uf: cepCamposAuto.uf ? cepCamposAuto.uf.value : "",
+        };
+    }
+
+    function aplicarCampoCep(chave, valorRecebido, snapshot) {
+        const campo = cepCamposAuto[chave];
+        const incoming = String(valorRecebido || "").trim();
+        if (!campo || !incoming) {
+            return false;
+        }
+        if (campo.value !== snapshot[chave]) {
+            return false;
+        }
+        campo.value = incoming;
+        cepAutoPreenchido[chave] = incoming;
+        return true;
+    }
+
+    async function buscarCep() {
+        if (cepDebounceTimer) {
+            clearTimeout(cepDebounceTimer);
+            cepDebounceTimer = null;
+        }
+        const cep = normalizarCep(cepEl ? cepEl.value : "");
+        if (!cepPossuiOitoDigitos(cep)) {
+            setCepStatus("Informe um CEP com 8 dígitos.", "warning");
+            return;
+        }
+        if (cepEmVoo === cep || cepConsultadoComSucesso === cep) {
+            return;
+        }
+        if (cepAbortController) {
+            cepAbortController.abort();
+            cepAbortController = null;
+        }
+        const consultaId = ++cepConsultaId;
+        const snapshot = snapshotCamposCep();
+        const controller = new AbortController();
+        cepAbortController = controller;
+        cepEmVoo = cep;
+        const timeoutId = window.setTimeout(() => controller.abort(), CEP_TIMEOUT_MS);
+        setCepStatus("Buscando CEP...", "info");
+        try {
+            const resp = await fetch(`https://viacep.com.br/ws/${cep}/json/`, {
+                credentials: "omit",
+                referrerPolicy: "no-referrer",
+                signal: controller.signal,
+            });
+            if (consultaId !== cepConsultaId || normalizarCep(cepEl ? cepEl.value : "") !== cep) {
+                return;
+            }
+            if (!resp.ok) {
+                throw new Error("http");
+            }
+            let payload;
+            try {
+                payload = await resp.json();
+            } catch (_jsonErr) {
+                throw new Error("json");
+            }
+            if (consultaId !== cepConsultaId || normalizarCep(cepEl ? cepEl.value : "") !== cep) {
+                return;
+            }
+            if (!payload || payload.erro === true) {
+                cepConsultadoComSucesso = null;
+                setCepStatus("CEP não encontrado. Preencha o endereço manualmente.", "warning");
+                return;
+            }
+            aplicarCampoCep("logradouro", payload.logradouro, snapshot);
+            aplicarCampoCep("bairro", payload.bairro, snapshot);
+            aplicarCampoCep("cidade", payload.localidade, snapshot);
+            aplicarCampoCep("uf", payload.uf, snapshot);
+            const parcial = !String(payload.logradouro || "").trim()
+                || !String(payload.bairro || "").trim()
+                || !String(payload.localidade || "").trim()
+                || !String(payload.uf || "").trim();
+            cepConsultadoComSucesso = cep;
+            setCepStatus(
+                parcial
+                    ? "CEP localizado. Complete os campos restantes."
+                    : "CEP localizado.",
+                "success"
+            );
+        } catch (err) {
+            if (consultaId !== cepConsultaId || normalizarCep(cepEl ? cepEl.value : "") !== cep) {
+                return;
+            }
+            cepConsultadoComSucesso = null;
+            setCepStatus("Não foi possível consultar agora. Preencha o endereço manualmente.", "warning");
+        } finally {
+            window.clearTimeout(timeoutId);
+            if (consultaId === cepConsultaId) {
+                cepEmVoo = null;
+                if (cepAbortController === controller) {
+                    cepAbortController = null;
+                }
+            }
+        }
+    }
+
+    function agendarBuscaCepAutomatica() {
+        if (!cepEl) {
+            return;
+        }
+        const cep = normalizarCep(cepEl.value);
+        if (cep !== cepNormalizadoAnterior) {
+            cancelarConsultaCep();
+            limparValoresAutomaticosAnteriores();
+            cepConsultadoComSucesso = null;
+            cepNormalizadoAnterior = cep;
+            setCepStatus("");
+        }
+        if (cepDebounceTimer) {
+            clearTimeout(cepDebounceTimer);
+        }
+        cepDebounceTimer = setTimeout(() => {
+            cepDebounceTimer = null;
+            if (!cepPossuiOitoDigitos(normalizarCep(cepEl.value))) {
+                return;
+            }
+            buscarCep();
+        }, CEP_DEBOUNCE_MS);
+    }
+
     async function atualizarResumoMultiuser() {
         if (!resumoEl || !qtyEl) {
             return;
@@ -393,6 +627,15 @@
     if (qtyEl) {
         qtyEl.addEventListener("change", atualizarResumoMultiuser);
         qtyEl.addEventListener("input", atualizarResumoMultiuser);
+    }
+    if (cepEl) {
+        cepEl.addEventListener("input", agendarBuscaCepAutomatica);
+    }
+    if (btnBuscarCep) {
+        btnBuscarCep.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            buscarCep();
+        });
     }
 
     document.addEventListener("DOMContentLoaded", () => {

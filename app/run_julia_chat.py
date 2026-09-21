@@ -9,6 +9,16 @@ import os
 from app.cleiton_doc_contracts import FLOW_TYPE_JULIA_CHAT, FLOW_TYPE_JULIA_CHAT_DOCUMENTAL
 from app.prompts import JULIA_CHAT_SYSTEM_PROMPT
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
+from app.services.cleiton_ai_data_governance import (
+    CleitonAiGovernanceBlockedError,
+    PURPOSE_BUSCA_WEB,
+    PURPOSE_CHAT_LOGISTICO,
+    USER_SAFE_PREPARATION_FAILED,
+    govern_history_messages,
+    govern_or_raise,
+    project_safe_error,
+)
+from app.services.cleiton_ai_safe_context import CleitonAiAliasSession
 from app.services.julia_web_search_service import (
     search_web_links,
     should_search_web_for_question,
@@ -295,9 +305,42 @@ def chat_julia_reply(
         logger.warning("Chat Júlia: nenhuma chave Gemini configurada (GEMINI_API_KEY ou GEMINI_API_KEY_1).")
         return {"reply": "Assistente temporariamente indisponível. Verifique a configuração do serviço."}
 
+    alias_session = CleitonAiAliasSession()
+    try:
+        history_slice = govern_history_messages(
+            history_slice,
+            purpose=PURPOSE_CHAT_LOGISTICO,
+            agent="julia",
+            alias_session=alias_session,
+        )
+        governed_message = govern_or_raise(
+            clean_user_message,
+            purpose=PURPOSE_CHAT_LOGISTICO,
+            content_type="text",
+            agent="julia",
+            provider="gemini",
+            alias_session=alias_session,
+        )
+        clean_user_message = str(governed_message.safe_content)
+        if document_context_block:
+            governed_doc = govern_or_raise(
+                document_context_block,
+                purpose=PURPOSE_CHAT_LOGISTICO,
+                content_type="document",
+                agent="julia",
+                provider="gemini",
+                alias_session=alias_session,
+            )
+            document_context_block = str(governed_doc.safe_content)
+    except CleitonAiGovernanceBlockedError:
+        return {
+            "reply": USER_SAFE_PREPARATION_FAILED,
+            "suggestions": _build_follow_up_suggestions(""),
+        }
+
     web_links: list[dict] = []
     if should_search_web_for_question(clean_user_message):
-        web_links = search_web_links(clean_user_message)
+        web_links = search_web_links(clean_user_message, purpose=PURPOSE_BUSCA_WEB)
     contents = _build_contents_with_history(
         history_slice,
         clean_user_message,
@@ -369,14 +412,18 @@ def chat_julia_reply(
                 return out
             last_error = ValueError("Resposta vazia do modelo")
             failed_models.append(model)
+        except CleitonAiGovernanceBlockedError:
+            return {
+                "reply": USER_SAFE_PREPARATION_FAILED,
+                "suggestions": _build_follow_up_suggestions(""),
+            }
         except Exception as e:
             last_error = e
             failed_models.append(model)
             logger.warning(
-                "Chat Julia provider failure: model=%s exc_type=%s message=%s",
+                "Chat Julia provider failure: model=%s %s",
                 model,
-                e.__class__.__name__,
-                e,
+                project_safe_error(e, stage="julia_chat", provider="gemini", retry=idx + 1 < len(model_candidates)),
             )
             if documental_pdf and _is_provider_deadline_error(e):
                 logger.warning(
@@ -389,7 +436,10 @@ def chat_julia_reply(
                 break
 
     if last_error:
-        logger.exception("Chat Júlia falhou após fallbacks: %s", last_error)
+        logger.warning(
+            "Chat Júlia falhou após fallbacks: %s",
+            project_safe_error(last_error, stage="julia_chat_fallback", provider="gemini"),
+        )
     if documental_pdf and last_error and _is_provider_deadline_error(last_error):
         reply_text = DOCUMENTAL_DEADLINE_REPLY
     else:

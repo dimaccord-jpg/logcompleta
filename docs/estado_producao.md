@@ -1,9 +1,10 @@
 # Estado de Produção
 
-Referência auditada em 2026-09-04 a partir do código versionado, migrations, templates, serviços, testes e da configuração do repositório.
+Referência revisada em 2026-09-19 contra `origin/producao` (`f28f28e`, release Multiuser V1). O conteúdo versionado de `homolog` coincide com essa referência na revisão. A implantação, a configuração comercial externa e as pendências operacionais são informações fornecidas pela operação; esta revisão não consultou Render, Stripe nem banco de produção.
 
 ## Estado atual confirmado
 
+- Multiuser V1 implantado e operando em produção; contrato funcional em [Multiuser V1](multiuser_v1.md)
 - branch de homologação: `homolog`
 - branch de produção: `producao`
 - `render.yaml` atual aponta homologação para `homolog` e produção para `producao`
@@ -17,11 +18,11 @@ Referência auditada em 2026-09-04 a partir do código versionado, migrations, t
 
 ## Migration head atual
 
-- head atual versionado no repositório: `z0a1b2c3d4e5`
-- `down_revision`: `y9z0a1b2c3d4`
-- migration nova: `z0a1b2c3d4e5_home_cta_experiment_event.py`
-- tabela nova: `home_cta_experiment_event`
-- experimento associado: `home_chat_cta_v1`
+- head atual versionado: `f7g8h9i0j1k2`
+- `down_revision`: `e6f7a8b9c0d1`
+- migration: `f7g8h9i0j1k2_fase7_lifecycle_comercial.py`
+- cadeia Multiuser F1, F3, F4, F5, F6 e F7 em [Banco e Migrations](DATABASE_AND_MIGRATIONS.md); não existe migration Fase 8
+- a tabela anterior `home_cta_experiment_event` continua sustentando `home_chat_cta_v1`
 
 A tabela da home é isolada e não altera o schema do AgenteCompara, da franquia operacional nem de `FunnelEvent`.
 
@@ -46,13 +47,29 @@ A tabela da home é isolada e não altera o schema do AgenteCompara, da franquia
 
 ## Billing, privacidade e governança
 
-- planos principais visíveis: `Free`, `Starter`, `Pro`
+- planos principais visíveis: `Free`, `Starter`, `Pro`, `Multiuser`
 - cobrança recorrente mensal
 - webhook oficial: `/api/webhook/stripe`
 - `invoice.paid` permanece como evento principal de confirmação contratual documentável
 - snapshots sanitizados continuam possíveis via `payload_bruto_sanitizado_json`
 - consentimento, suppression, newsletter, lifecycle e masking outbound seguem ativos
 - downgrade de banco segue bloqueado por padrão
+
+## Multiuser V1
+
+Conta organizacional/comercial, papéis contratante/membro, vínculo histórico e uma Franquia individual por usuário ativo, inclusive o contratante. Ciclo comum e capacidade contratada são governados pela Conta; consumo e artefatos privados permanecem separados por usuário.
+
+Contratação Stripe, dados empresariais obrigatórios, convite/aceite explícito, reservas, aumentos automático/excepcional, redução futura, revogação e titularidade administrativa estão implementados. O diagnóstico read-only e o CSV administrativo incorporam os estados Multiuser. [Regras, valores de produção, webhook e limites](multiuser_v1.md).
+
+## Pendências conhecidas e pós-release
+
+- **SCRUM-187 — notificações/UX:** notificações pouco objetivas; “Abrir” pode só levar à gestão sem explicação adequada; marcação como lida e organização visual insuficientes; acúmulo de notificações e UX do sininho pobre; CTA inadequado em alguns fluxos, inclusive para removidos do Multiuser. Existe endpoint de marcação como lida e a revogação grava CTA para perfil, mas isso não resolve a pendência de experiência relatada pela operação. Não bloqueia a implantação do V1.
+- **Verificação financeira pós-release:** Multiuser tecnicamente habilitado em produção. O teste manual ponta a ponta com cartão, cobrança, invoice, ciclo e renovação mensal reais foi deliberadamente adiado para a próxima virada do cartão. Aguardar essa janela para registrar a evidência; não descrever como funcionalidade ausente nem como teste real já concluído.
+- **Evidência de UAT:** a implantação do V1 é informação confirmada pela operação. Os testes versionados cobrem revogação, preservação de consumo, reentrada e CSV administrativo, mas sua existência não comprova uma execução aprovada. Não foi localizado nesta revisão um relatório de execução do UAT 7.3 que sustente a contagem anteriormente citada de quatro testes aprovados. A preservação de histórico operacional preexistente após revogação/reentrada não é integralmente demonstrada pelas assertivas de revogação consultadas; isso não é evidência de perda de histórico nem bloqueador de implantação informado pela operação.
+
+## Evolução futura
+
+SCRUM-186: permitir ao contratante liberar o próprio assento mantendo seu papel de gestão. Hoje ele ocupa assento. API pública Multiuser, OAuth/API keys/scopes/rate limit de integração, org-admin, troca livre entre Contas e auto-revogação para cumprir redução continuam fora do V1.
 
 ## Feed atual
 

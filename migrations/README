@@ -1,43 +1,19 @@
 # Migrations (Alembic)
 
-Data de consolidacao: `2026-06-05`
-Commit de referencia: `b5fc444`
+Referência documental do release Multiuser V1 em produção, revisada em 2026-09-19.
 
-Este documento resume a cadeia de migrations relevante para o estado atual.
+O head versionado atual é `f7g8h9i0j1k2`, com `down_revision=e6f7a8b9c0d1`. A cadeia Multiuser existente cobre Fase 1 (fundação), Fase 3 (intenção de checkout), Fase 4 (convites), Fase 5 (aumento automático), Fase 6 (aumento excepcional) e Fase 7 (lifecycle comercial). Não existe migration Fase 8.
 
-## Estado atual
+A fonte canônica da cadeia, modelos e segurança operacional é [Banco e Migrations](../docs/DATABASE_AND_MIGRATIONS.md).
 
-A entrega do upload documental governado da Julia nao adicionou migration nova em `migrations/versions`.
+## Aplicação
 
-Configuracao documental atual:
+A partir da raiz do projeto, com ambiente e banco-alvo corretamente configurados:
 
-- usa o mecanismo existente `ConfigRegras`
-- nao criou tabela nova
-- nao exige revisao adicional de schema para o bloco documental do Cleiton
-
-## Cadeia relevante ja existente
-
-1. `g4h5i6j7k8l9` - identidade de negocio em eventos
-2. `h1i2j3k4l5m6` - conta / franquia / vinculos
-3. `i2j3k4l5m6n7` - regua de creditos
-4. `j3k4l5m6n7o8` - franquia operacional
-5. `k4l5m6n7o8p9` - bloqueio manual de franquia
-6. `l5m6n7o8p9q0` - remocao de campos legados de freemium
-7. `m6n7o8p9q0r1` - multiuser de franquia
-8. `n7o8p9q0r1s2` - billing idempotente de upload Roberto
-9. `o8p9q0r1s2t3` - preparo Stripe/monetizacao
-10. `p9q0r1s2t3u4` - constraints Stripe
-11. `q1r2s3t4u5v6` - privacy policy
-12. `r2s3t4u5v6w7` - hidden terms do onboarding
-
-## Execucao padrao
-
-```powershell
-alembic -c migrations/alembic.ini upgrade head
+```bash
+python -m flask --app app.web db upgrade
 ```
 
-## Sensibilidades
+Esse comando também é executado por `start.sh` antes do Gunicorn. `homolog` usa `APP_ENV=homolog`; `producao` usa `APP_ENV=prod`.
 
-- nao documentar migration nova para a Julia documental, porque ela nao existe
-- nao documentar tabela nova para configuracao documental, porque ela nao existe
-- manter `r2s3t4u5v6w7` como migration relevante do onboarding, mas separada desta entrega
+Downgrade não integra o deploy normal e é bloqueado pelo guard operacional sem as confirmações explícitas descritas no guia de banco. O head versionado não comprova sozinho a revisão efetivamente aplicada em um banco externo.

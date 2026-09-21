@@ -510,33 +510,16 @@ def test_works_with_uploaded_documents(web_client, monkeypatch):
 
 
 def test_pdf_ready_is_sent_as_file_context_to_model(web_client, monkeypatch):
-    monkeypatch.setattr(
-        "app.cleide_audit_doc_service.upload_pdf_to_gemini_files_api",
-        lambda **kwargs: SimpleNamespace(
-            ok=True,
-            gemini_file_name="files/pdf-1",
-            gemini_file_uri="gs://bucket/pdf-1",
-            gemini_mime_type="application/pdf",
-            gemini_file_state="ACTIVE",
-            gemini_uploaded_at="2026-06-09T10:00:00",
-            prepared_context='{"strategy":"gemini_file_api","gemini_file_ready":true}',
-            warnings=[],
-            error_summary=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "app.cleide_audit_doc_context.build_gemini_file_part_for_generate",
-        lambda record: {"pdf": record.get("gemini_file_name")},
-    )
     _upload(web_client, "tabela.pdf", b"%PDF-1.4\n/Type /Page\nconteudo", "application/pdf")
     capture = _fake_governed_generate(monkeypatch)
 
     resp = _chat(web_client, {"message": "Me fale sobre essa tabela de frete anexada."})
 
     assert resp.status_code == 200
-    assert isinstance(capture["contents"], list)
-    assert capture["contents"][0] == {"pdf": "files/pdf-1"}
-    assert "fase futura multimodal" not in str(capture["contents"]).lower()
+    payload = capture["contents"]
+    assert isinstance(payload, str)
+    assert "files/pdf-1" not in payload
+    assert "fase futura multimodal" not in payload.lower()
 
 
 def test_julia_documents_not_used_in_chat(web_client, monkeypatch):

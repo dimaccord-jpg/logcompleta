@@ -209,8 +209,28 @@ def _resolve_duckduckgo_redirect(url: str) -> str:
     return url
 
 
-def search_web_links(query: str, *, max_results: int | None = None) -> list[dict[str, str]]:
+def search_web_links(query: str, *, max_results: int | None = None, purpose: str | None = None) -> list[dict[str, str]]:
     if not (query or "").strip():
+        return []
+    safe_query = query
+    try:
+        from app.services.cleiton_ai_data_governance import (
+            PURPOSE_BUSCA_WEB,
+            govern_or_raise,
+        )
+
+        governed = govern_or_raise(
+            query,
+            purpose=purpose or PURPOSE_BUSCA_WEB,
+            content_type="web_query",
+            agent="julia",
+            provider="duckduckgo",
+        )
+        safe_query = str(governed.safe_content or "").strip()
+    except Exception:
+        logger.warning("Julia web search: query bloqueada pela governança contextual; busca externa omitida.")
+        return []
+    if not safe_query:
         return []
     limit_env = (os.getenv("JULIA_CHAT_WEB_RESULTS_LIMIT") or "").strip()
     timeout_env = (os.getenv("JULIA_CHAT_WEB_TIMEOUT_SEC") or "").strip()
@@ -229,7 +249,7 @@ def search_web_links(query: str, *, max_results: int | None = None) -> list[dict
     try:
         response = requests.get(
             "https://duckduckgo.com/html/",
-            params={"q": query},
+            params={"q": safe_query},
             timeout=timeout,
             headers={"User-Agent": "Mozilla/5.0 (compatible; JuliaChat/1.0)"},
         )
@@ -261,8 +281,8 @@ def search_web_links(query: str, *, max_results: int | None = None) -> list[dict
             )
             if len(results) >= prefilter_target:
                 break
-        curated = filter_relevant_links(query, results)
+        curated = filter_relevant_links(safe_query, results)
         return curated[:limit]
     except Exception as exc:
-        logger.warning("Julia web search failed: %s", exc)
+        logger.warning("Julia web search failed: %s", exc.__class__.__name__)
         return []

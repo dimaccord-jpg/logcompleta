@@ -1,6 +1,6 @@
 # Runtime IA e Observabilidade
 
-Referência auditada em 2026-09-04. Estado funcional consolidado em `docs/estado_producao.md`.
+Referência revisada em 2026-09-19. Estado funcional consolidado em `docs/estado_producao.md`.
 
 ## Trilhas separadas
 
@@ -67,6 +67,12 @@ A autenticação do cron continua por `X-Cron-Secret`, com `?secret=` mantido co
 
 ## Banco e deploy
 
-- o head atual versionado no repositório é `z0a1b2c3d4e5`
+- o head atual versionado no repositório é `f7g8h9i0j1k2`
 - `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn
 - o guard de `app/db_operational_safety.py` bloqueia downgrade sem confirmação explícita, mas não bloqueia `upgrade` normal
+
+## Diagnóstico e consumo Multiuser
+
+Consumo continua individual por Franquia, com ciclo contratual comum à Conta. Renovação paga faz reset idempotente do novo período; convite, reentrada, revogação e aumento não apagam consumo já realizado.
+
+O diagnóstico Multiuser é read-only e alimenta o CSV administrativo com status, código e detalhe do achado. Os estados e a regra de risco/revisão manual estão no [guia Multiuser](multiuser_v1.md#diagnóstico-bi-e-reconciliação). Consultar diagnóstico não executa reconciliação nem libera acesso aos artefatos privados de membros.

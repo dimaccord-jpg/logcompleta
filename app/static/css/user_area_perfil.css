@@ -1,0 +1,367 @@
+/* Central de Segurança e Conta — /perfil (SCRUM-125)
+   Seletores encapsulados em .af-profile-page. Não altera tokens globais. */
+
+.af-profile-page {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.af-profile-page .profile-page-header-bar {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.af-profile-page .profile-page-header-bar h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.af-profile-page .profile-page-lede,
+.af-profile-page .profile-security-subtitle,
+.af-profile-page .profile-security-account-copy,
+.af-profile-page .profile-card-kicker,
+.af-profile-page .profile-card-copy,
+.af-profile-page .profile-admin-copy {
+  color: var(--af-text-secondary) !important;
+}
+
+.af-profile-page .profile-security-card {
+  height: auto;
+}
+
+.af-profile-page .profile-security-card .card-body {
+  padding: 1.25rem;
+}
+
+.af-profile-page .profile-security-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+  margin-bottom: 1.25rem;
+  min-width: 0;
+}
+
+.af-profile-page .profile-security-icon,
+.af-profile-page .profile-card-icon {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  flex-shrink: 0;
+}
+
+.af-profile-page .profile-security-icon i,
+.af-profile-page .profile-card-icon i {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.af-profile-page .profile-security-heading {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.af-profile-page .profile-security-heading .card-title {
+  overflow-wrap: anywhere;
+}
+
+.af-profile-page .profile-security-subtitle {
+  margin-top: 0.2rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.af-profile-page .profile-security-section-title {
+  color: var(--af-text-primary) !important;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+}
+
+.af-profile-page .profile-security-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.af-profile-page .profile-security-status,
+.af-profile-page .profile-security-access,
+.af-profile-page .profile-security-account {
+  min-width: 0;
+}
+
+.af-profile-page .profile-security-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.af-profile-page .profile-security-status-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  background: var(--af-bg-elevated);
+  border: 1px solid var(--af-border);
+  border-radius: var(--af-radius-sm);
+}
+
+.af-profile-page .profile-security-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  flex-shrink: 0;
+  color: var(--af-text-secondary);
+}
+
+.af-profile-page .profile-security-status-item.is-active .profile-security-status-icon {
+  color: var(--af-success);
+}
+
+.af-profile-page .profile-security-status-label {
+  flex: 1 1 10rem;
+  min-width: 0;
+  color: var(--af-text-primary) !important;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.af-profile-page .profile-security-status-value {
+  margin-left: auto;
+  flex: 0 1 auto;
+  color: var(--af-text-secondary) !important;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.af-profile-page .profile-security-status-item.is-active .profile-security-status-value {
+  color: var(--af-success) !important;
+}
+
+.af-profile-page .profile-security-access-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 0.65rem;
+  min-width: 0;
+  color: var(--af-text-primary) !important;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+.af-profile-page .profile-security-access-list li:last-child {
+  margin-bottom: 0;
+}
+
+.af-profile-page .profile-security-access-list i {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+  font-size: 1rem;
+  color: var(--af-success);
+}
+
+.af-profile-page .profile-security-access-list span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--af-text-primary) !important;
+}
+
+.af-profile-page .profile-security-account {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--af-border);
+}
+
+.af-profile-page .profile-security-account-copy {
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.af-profile-page .profile-end-contract-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0.55rem 0.9rem;
+  white-space: normal;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.af-profile-page .profile-end-contract-btn i {
+  flex-shrink: 0;
+}
+
+.af-profile-page .profile-secondary-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+  min-width: 0;
+}
+
+.af-profile-page .profile-payment-link,
+.af-profile-page .profile-secondary-grid > .card {
+  min-width: 0;
+}
+
+.af-profile-page .profile-admin-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.af-profile-page .profile-admin-banner > div {
+  min-width: 0;
+  flex: 1 1 12rem;
+}
+
+.af-profile-page .profile-admin-banner .btn {
+  flex-shrink: 0;
+  min-height: 40px;
+}
+
+.af-profile-page .profile-notifications-list {
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.af-profile-page .profile-notifications-list li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.af-profile-page .profile-notifications-list a,
+.af-profile-page .profile-notifications-list button {
+  white-space: normal;
+}
+
+.af-profile-page .profile-notification-feedback {
+  color: var(--af-text-secondary);
+  font-weight: 400;
+  font-size: 0.8125rem;
+}
+
+/* Modal de encerramento: legibilidade no tema escuro, só neste /perfil */
+.af-profile-page #modalEncerrarContrato .modal-content {
+  background: var(--af-bg-card);
+  border: 1px solid var(--af-border);
+  color: var(--af-text-secondary);
+}
+
+.af-profile-page #modalEncerrarContrato .modal-header,
+.af-profile-page #modalEncerrarContrato .modal-footer {
+  border-color: var(--af-border);
+}
+
+.af-profile-page #modalEncerrarContrato .modal-title {
+  color: var(--af-text-primary) !important;
+}
+
+.af-profile-page #modalEncerrarContrato .modal-body p {
+  color: var(--af-text-secondary) !important;
+}
+
+.af-profile-page #modalEncerrarContrato .btn-close {
+  filter: invert(1) grayscale(1);
+}
+
+@media (min-width: 992px) {
+  .af-profile-page .profile-security-card .card-body {
+    padding: 1.5rem 1.75rem;
+  }
+
+  .af-profile-page .profile-security-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1.5rem 2rem;
+    align-items: start;
+  }
+
+  .af-profile-page .profile-secondary-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .af-profile-page .profile-security-status-item {
+    flex-wrap: nowrap;
+  }
+
+  .af-profile-page .profile-notifications-list {
+    max-height: 20rem;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 991.98px) {
+  .af-profile-page .profile-notifications-list {
+    max-height: 18rem;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .af-profile-page {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .af-profile-page .profile-security-card .card-body {
+    padding: 16px;
+  }
+
+  .af-profile-page .profile-security-status-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .af-profile-page .profile-security-status-value {
+    margin-left: 1.85rem;
+    white-space: normal;
+  }
+
+  .af-profile-page .profile-end-contract-btn {
+    width: 100%;
+  }
+
+  .af-profile-page .profile-admin-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .af-profile-page .profile-admin-banner .btn {
+    width: 100%;
+  }
+
+  .af-profile-page #modalEncerrarContrato .modal-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .af-profile-page #modalEncerrarContrato .modal-footer .btn,
+  .af-profile-page #modalEncerrarContrato .modal-footer form {
+    width: 100%;
+  }
+
+  .af-profile-page .profile-notifications-list {
+    max-height: min(16rem, 35vh);
+  }
+}

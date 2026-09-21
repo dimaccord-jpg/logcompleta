@@ -1,6 +1,6 @@
 # Deploy e Operação
 
-Referência auditada em 2026-09-04. Este arquivo descreve o deploy real. Detalhes adicionais estão em `docs/DEPLOYMENT.md` e `docs/DATABASE_AND_MIGRATIONS.md`. O estado operacional consolidado está em `docs/estado_producao.md`.
+Referência revisada em 2026-09-19. Este arquivo descreve o deploy real. Detalhes adicionais estão em `docs/DEPLOYMENT.md` e `docs/DATABASE_AND_MIGRATIONS.md`. O estado operacional consolidado está em `docs/estado_producao.md`.
 
 ## Ambientes e branches
 
@@ -92,9 +92,10 @@ Use sempre placeholders em exemplos. Não versionar valores reais.
 
 ## Migration head atual
 
-- head atual versionado: `z0a1b2c3d4e5`
-- `down_revision`: `y9z0a1b2c3d4`
-- migration nova: `z0a1b2c3d4e5_home_cta_experiment_event.py`
+- head atual versionado: `f7g8h9i0j1k2`
+- `down_revision`: `e6f7a8b9c0d1`
+- migration: `f7g8h9i0j1k2_fase7_lifecycle_comercial.py`
+- Multiuser V1 já implantado; cadeia em [Banco e Migrations](../docs/DATABASE_AND_MIGRATIONS.md).
 
 Antes de promover, confirmar que as migrations versionadas são compatíveis com esse head.
 
@@ -109,7 +110,7 @@ Antes de promover, confirmar que as migrations versionadas são compatíveis com
 
 1. Validar branch, diff e conteúdo a promover.
 2. Confirmar que o conteúdo destinado a `producao` é o mesmo já validado em `homolog`.
-3. Confirmar migrations versionadas compatíveis com o head `z0a1b2c3d4e5`.
+3. Confirmar migrations versionadas compatíveis com o head `f7g8h9i0j1k2`.
 4. Garantir secrets e volume persistente no ambiente-alvo, via placeholders/configuração externa.
 5. Promover por fast-forward only. Não usar force push.
 6. Publicar e observar build, `db upgrade`, boot e health.

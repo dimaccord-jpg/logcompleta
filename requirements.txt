@@ -18,5 +18,7 @@ openpyxl
 defusedxml
 python-docx
 
+pypdf>=4.2.0,<6
+
 alembic
 Flask-Migrate

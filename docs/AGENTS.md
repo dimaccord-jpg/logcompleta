@@ -1,6 +1,6 @@
 # Agentes e Identidades
 
-Documentação auditada em 2026-09-04. Este guia separa identidade pública, identidade interna e escopo operacional dos agentes no código atual.
+Documentação revisada em 2026-09-19. Este guia separa identidade pública, identidade interna e escopo operacional dos agentes no código atual.
 
 ## Identidade do produto
 
@@ -119,3 +119,14 @@ Sempre separar:
 
 - implementado agora: o que está em rotas, serviços, templates, models e testes atuais
 - planejado/roadmap: previsões futuras, automações comerciais, contratação automática, concorrência aberta de mercado e outras capacidades não comprovadas no código atual
+
+## Isolamento Multiuser em produção
+
+Multiuser V1 não altera as responsabilidades acima. Conta e contrato comuns não compartilham memória ou artefatos privados entre membros.
+
+- Cleiton governa autorização pela Franquia individual, consumo, eventos e infraestrutura documental; isso não concede leitura coletiva.
+- Júlia mantém contexto documental e conversa do usuário/sessão autenticados.
+- Cleide/AgenteAudita mantém documentos, tabelas, lote, BI e chats no escopo autorizado do usuário.
+- AgenteCompara mantém comparação, tabelas, resultados e memória de cálculo vinculados ao ownership e à sessão.
+
+O contratante ocupa assento e administra o vínculo comercial; não é admin global nem leitor automático dos arquivos dos membros. `conta_id` sozinho não autoriza artefatos privados. Revogação invalida o contexto organizacional da sessão, preservando histórico e consumo; reentrada exige aceite. Contrato completo em [Multiuser V1](multiuser_v1.md).

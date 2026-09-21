@@ -1,6 +1,7 @@
 """Notificação interna mínima V1 (Fase 7). Persistência privada e idempotente."""
 from __future__ import annotations
 
+import html
 import logging
 from dataclasses import dataclass
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 CTA_INTERNOS_VALIDOS = frozenset(
     {
         "user.perfil",
+        "user.contrate_plano",
         "multiuser_painel.gestao_multiuser",
         "admin.controle_usuarios",
     }
@@ -114,18 +116,36 @@ def criar_notificacao(
     return row
 
 
-def tentar_enviar_email_notificacao(user: User | None, assunto: str, texto: str) -> None:
+def tentar_enviar_email_notificacao(
+    user: User | None,
+    assunto: str,
+    texto: str,
+    cta_label: str | None = None,
+    cta_url: str | None = None,
+) -> None:
     """Projeção. Falha de e-mail nunca desfaz o evento de domínio."""
     if user is None or not (user.email or "").strip():
         return
     try:
         from app.auth_services import send_email
 
+        label = (cta_label or "").strip()
+        url = (cta_url or "").strip()
+        if label and url:
+            html_body = (
+                f"<p>{html.escape(texto)}</p>"
+                f'<p><a href="{html.escape(url, quote=True)}">{html.escape(label)}</a></p>'
+            )
+            text_body = f"{texto}\n\n{label}: {url}"
+        else:
+            html_body = f"<p>{texto}</p>"
+            text_body = texto
+
         send_email(
             to_email=user.email,
             subject=assunto,
-            html=f"<p>{texto}</p>",
-            text=texto,
+            html=html_body,
+            text=text_body,
         )
     except Exception:
         logger.exception(

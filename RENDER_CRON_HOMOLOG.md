@@ -1,6 +1,6 @@
 # Render + Cron em Homolog
 
-Referência auditada em 2026-08-05.
+Referência revisada em 2026-09-19 para o release Multiuser V1. Deploy canônico em [DEPLOYMENT](docs/DEPLOYMENT.md).
 
 ## Cron confirmado no código
 
@@ -22,7 +22,7 @@ Autenticação:
 ## Pontos operacionais a validar
 
 - homolog continua versionado em `homolog` no `render.yaml`;
-- produção continua versionada em `main` no `render.yaml`;
-- o processo operacional informado usa `producao` como branch de promoção para produção;
-- a publicação validada do AgenteCompara foi homologada em `939b73e` e promovida na branch `producao` pelos commits `fdec64a`, `db72007` e `f9591dc`;
-- o YAML ainda mantém `healthCheckPath: /health`, enquanto o código expõe `/health/liveness` e `/health/readiness`.
+- produção usa `producao` e `APP_ENV=prod`; homolog usa `APP_ENV=homolog`;
+- Render mantém serviços separados com Auto-Deploy por commit em ambos;
+- `healthCheckPath: /health` corresponde à rota existente; o código também expõe `/health/liveness` e `/health/readiness`;
+- configurar cron com host e segredo do serviço-alvo, sem reutilizar credenciais de produção em homolog.

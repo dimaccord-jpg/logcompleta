@@ -1,6 +1,6 @@
 # Guia de Monetização, Franquias e Planos
 
-Referência auditada em 2026-09-04. Este guia descreve a monetização que o código implementa hoje.
+Referência revisada em 2026-09-19. Este guia descreve a monetização que o código implementa hoje.
 
 ## Visão geral
 
@@ -51,8 +51,8 @@ Planos catalogados:
 
 Leitura prática:
 
-- `starter` e `pro` são os fluxos pagos mais claramente integrados ao gateway;
-- `multiuser` e `avulso` continuam suportados operacionalmente;
+- `starter`, `pro` e `multiuser` possuem contratação Stripe; Multiuser V1 está implantado em produção;
+- `avulso` permanece no catálogo operacional e não deve ser confundido com Subscription Multiuser;
 - `uso_adm` é interno;
 - `free` continua sendo a entrada freemium.
 
@@ -77,7 +77,8 @@ O valor comercial e a franquia operacional não são a mesma coisa.
 - cada usuário comercial deve ter vínculo com `Conta` e `Franquia`;
 - a autorização operacional central passa por `avaliar_autorizacao_operacao_por_franquia`;
 - o plano operacional da franquia é resolvido por serviços do Cleiton;
-- `multiuser` pode gerar várias franquias para a mesma conta e códigos em `MultiuserFranquiaCodigo`.
+- Multiuser usa capacidade contratada na Conta, vínculo organizacional persistente e uma Franquia por usuário ativo, com ciclo comum e consumo individual;
+- `MultiuserFranquiaCodigo` permanece por compatibilidade legada e não substitui convite/aceite nem vínculo organizacional.
 
 ## Estados operacionais
 
@@ -118,6 +119,12 @@ Variáveis de ambiente principais:
 - `STRIPE_SUCCESS_URL`
 - `STRIPE_CANCEL_URL`
 - `STRIPE_CHECKOUT_API_BASE_URL`
+
+## Contrato Multiuser V1
+
+A fonte canônica para contratação, dados empresariais, configuração Stripe de produção, convites, capacidade, renovação, aumentos, redução, revogação, titularidade e diagnóstico é o [guia Multiuser V1](multiuser_v1.md).
+
+Quantity contratada, ocupação/reservas e consumo individual são medidas diferentes. Revogação libera ocupação sem reduzir a Subscription; redução futura não limita o ciclo atual; aumento não reinicia consumo. `invoice.paid` confirma ativação/renovação, com reset idempotente do novo período. O contrato comercial não concede acesso aos artefatos privados de outros membros.
 
 ## Eventos e fatos de monetização
 

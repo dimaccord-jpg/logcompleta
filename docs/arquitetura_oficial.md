@@ -1,6 +1,6 @@
 # Arquitetura do Produto
 
-Referência auditada em 2026-09-04. O código atual é a fonte de verdade.
+Referência revisada em 2026-09-19. O código atual é a fonte de verdade.
 
 ## Identidade do produto
 
@@ -27,7 +27,9 @@ Referência auditada em 2026-09-04. O código atual é a fonte de verdade.
 | `/fretes` | autenticado | Roberto BI e chat quantitativo |
 | `/feed` | público | feed editorial misto |
 | `/contrate-um-plano`, `/perfil/*` | autenticado | billing e área do usuário |
-| `/admin/*` | admin | dashboards, configuração e governança |
+| `/gestao-multiuser` | contratante ativo | membros, convites e capacidade |
+| `/convite/<token>` | token; aceite autenticado | ingresso explícito Multiuser |
+| `/admin/*` | admin global | dashboards, configuração, titularidade e governança |
 | `/cron/*`, `/ops/*`, `/health*` | operacional | automação, suporte e health |
 
 ## Domínios e agentes
@@ -75,6 +77,22 @@ Referência auditada em 2026-09-04. O código atual é a fonte de verdade.
 - schema evoluído via Alembic;
 - persistência técnica em disco para documentos, índices, resultados e artefatos temporários.
 
+## Organização comercial Multiuser V1
+
+O [Multiuser V1](multiuser_v1.md) está implantado. `Conta` é a raiz comercial; `ContaVinculoOrganizacional` registra contratante/membro e histórico. Cada usuário ativo ocupa uma Franquia individual, inclusive o contratante. Capacidade contratada e ciclo são da Conta; consumo é individual. Stripe mantém um Customer, uma Subscription e um Item com quantity de assentos.
+
+```mermaid
+flowchart TD
+    Conta --> Contrato[Customer / Subscription / Item quantity]
+    Conta --> Vinculos[Vínculos organizacionais históricos]
+    Vinculos --> Contratante[Contratante ativo]
+    Vinculos --> Membros[Membros ativos]
+    Contratante --> FranquiaC[Franquia individual]
+    Membros --> FranquiasM[Uma Franquia por membro]
+```
+
+`User.categoria` define plano; `User.is_admin` define admin global. Não existe org-admin. Blueprints Multiuser cobrem painel e convites, com serviços de contratação, ciclo, aumentos, redução, revogação, titularidade e diagnóstico. Endpoints internos não equivalem a API pública Multiuser.
+
 ## Isolamento entre domínios
 
 - Julia, o domínio técnico Cleide e AgenteCompara usam chaves e escopos distintos em sessão;
@@ -82,7 +100,9 @@ Referência auditada em 2026-09-04. O código atual é a fonte de verdade.
 - AgenteCompara usa storage comparativo próprio;
 - AgenteAudita usa coverage, lote e contexto analítico próprios;
 - billing e eventos não devem ser misturados entre os domínios;
-- billing e observabilidade não devem ser documentados como compartilhados indistintamente.
+- billing e observabilidade não devem ser documentados como compartilhados indistintamente;
+- membros da mesma Conta não compartilham documentos, chats, uploads, tabelas, resultados ou memória privada: `conta_id` não substitui ownership de usuário/sessão;
+- revogação encerra vínculo/acesso, preserva User, Franquia e histórico/consumo; reentrada exige aceite e não reseta consumo.
 
 ## Persistência e runtime
 
@@ -96,7 +116,7 @@ Referência auditada em 2026-09-04. O código atual é a fonte de verdade.
 - quando `APP_ENV` não vem explícito, `start.sh` reconhece `main`, `master`, `producao` e `prod` como ambiente de produção;
 - o runtime também expõe `/health/liveness` e `/health/readiness`.
 
-Head atual de migration: `z0a1b2c3d4e5`.
+Head atual: `f7g8h9i0j1k2`. Cadeia canônica em [Banco e Migrations](DATABASE_AND_MIGRATIONS.md).
 
 ## Home e experimento de CTA
 

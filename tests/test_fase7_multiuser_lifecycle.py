@@ -119,6 +119,11 @@ def _preparar_planos_admin(*, valor="49.90", minimo="5"):
         gateway_interval_raw="month",
         gateway_pronto_raw=True,
     )
+    plano_service.atualizar_parametros_plano_admin(
+        plano_codigo="free",
+        valor_plano_raw="0.00",
+        franquia_limite_total_raw="50",
+    )
 
 
 def _preparar_conta_multiuser(slug: str, *, qtd: int, email: str):
@@ -1309,6 +1314,73 @@ def test_revogacao_sessao_perde_contexto(app, monkeypatch):
             assert sess.get(SESSION_GERACAO_KEY) == 1
         alvo = db.session.get(User, alvo.id)
         assert int(alvo.conta_id) != int(conta.id)
+
+
+def test_revogacao_nova_franquia_free_usa_limite_admin(app, monkeypatch):
+    """Membro sem contexto individual nasce no Free com o teto administrativo."""
+    from flask import render_template
+
+    from app.services.cleiton_operacao_autorizacao_service import (
+        avaliar_autorizacao_operacao_por_franquia,
+    )
+
+    @app.route("/_probe-footer-revogacao-free")
+    def _probe_footer_revogacao_free():
+        return render_template("base.html")
+
+    with app.app_context():
+        conta, contratante = _preparar_conta_multiuser(
+            "f7-freelim", qtd=10, email="f7freelim@test.com"
+        )
+        alvo = _adicionar_membros(conta, 1, "f7freelim")[0]
+        _mock_stripe(monkeypatch, quantity=10)
+        referencia = plano_service.obter_limite_referencia_plano_admin(
+            "free",
+            exigir_configurado=True,
+        )
+        assert referencia == Decimal("50.000000")
+        franquia_org_id = int(alvo.franquia_id)
+        consumo_org = db.session.get(Franquia, franquia_org_id).consumo_acumulado
+        contas_antes = Conta.query.count()
+        franquias_antes = {int(fr.id) for fr in Franquia.query.all()}
+        alvo_id = int(alvo.id)
+
+        revogar_membro(ator=contratante, alvo_user_id=alvo_id, commit=True)
+
+        alvo = db.session.get(User, alvo_id)
+        nova = db.session.get(Franquia, int(alvo.franquia_id))
+        assert alvo.categoria == "free"
+        assert int(alvo.conta_id) != int(conta.id)
+        assert Conta.query.count() == contas_antes + 1
+        assert int(nova.id) not in franquias_antes
+        assert nova.limite_total is not None
+        assert Decimal(nova.limite_total) == referencia
+        assert Decimal(nova.consumo_acumulado) == Decimal("0")
+        assert db.session.get(Franquia, franquia_org_id).consumo_acumulado == consumo_org
+
+        client = _build_client(app)
+        _login(client, alvo)
+        html = client.get("/_probe-footer-revogacao-free").get_data(as_text=True)
+        assert "Ilimitado" not in html
+        assert "Plano: Free" in html
+        assert "Créditos: 50.00 / 50.00" in html
+
+        dentro = avaliar_autorizacao_operacao_por_franquia(alvo)
+        assert dentro["permitido"] is True
+        assert dentro["franquia"]["limite_total"] is not None
+
+        nova = db.session.get(Franquia, int(alvo.franquia_id))
+        assert Decimal(nova.limite_total) == referencia
+        assert Decimal(nova.consumo_acumulado) == Decimal("0")
+        nova.consumo_acumulado = referencia + Decimal("1")
+        db.session.add(nova)
+        db.session.commit()
+        alvo = db.session.get(User, alvo_id)
+        acima = avaliar_autorizacao_operacao_por_franquia(alvo)
+        assert acima["permitido"] is False
+        assert acima["motivo"] == "limite_atingido_free"
+        assert acima["status_franquia"] == Franquia.STATUS_BLOCKED
+        assert db.session.get(Franquia, franquia_org_id).consumo_acumulado == consumo_org
 
 
 def test_titularidade_aprovada_preserva_billing(app, monkeypatch):

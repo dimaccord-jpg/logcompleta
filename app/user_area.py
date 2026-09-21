@@ -225,12 +225,15 @@ def perfil():
     assert isinstance(current_user._get_current_object(), User)  # type: ignore[attr-defined]
     from app.services.conta_multiuser_aumento_service import user_eh_contratante_ativo
     from app.services.conta_multiuser_notificacao_service import listar_notificacoes_do_user
+    from app.services.cleiton_ai_data_governance import get_ai_data_protection_status
 
     user_obj = current_user._get_current_object()
+    ai_data_protection_status = get_ai_data_protection_status()
     return render_template(
         "user_area.html",
         eh_contratante_multiuser=user_eh_contratante_ativo(user_obj),
         notificacoes_internas=listar_notificacoes_do_user(user_obj),
+        ai_data_protection_status=ai_data_protection_status,
     )
 
 

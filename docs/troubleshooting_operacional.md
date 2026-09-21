@@ -1,6 +1,6 @@
 # Troubleshooting Operacional
 
-Data de consolidação: `2026-08-19`
+Revisão documental: `2026-09-19`, release Multiuser V1 em produção.
 
 ## 1. Home pública sem responder
 
@@ -166,3 +166,17 @@ Conferir:
 3. `tests/test_cron_auth.py`
 
 `?secret=` ainda existe apenas por compatibilidade temporária.
+
+## 19. Multiuser: capacidade, pagamento e vínculo
+
+1. Consultar o diagnóstico read-only e os campos `multiuser_status_diagnostico`, `multiuser_achado_codigo`, `multiuser_achado_detalhe` do CSV administrativo.
+2. Distinguir quantity contratada, vínculos ativos e reservas de convites válidas. O contratante ocupa assento; revogação não reduz quantity.
+3. Correlacionar intenção/solicitação, `MonetizacaoFato`, invoice e vínculo comercial antes de concluir falha de pagamento. `invoice.paid` é autoridade para ativação/renovação.
+4. Em redução, `quantity_futura` não limita o ciclo atual. Ocupação acima da futura no corte impede efetivação; não corrigir por revogação automática.
+5. `RECONCILIACAO_NECESSARIA` requer revisão manual e risco pelo menos atenção. Recuperação causal SCRUM-190 depende de evidência durável correlacionada; não é executada pela consulta do diagnóstico.
+
+## 20. Multiuser: acesso revogado e reentrada
+
+Verificar vínculo encerrado e geração de contexto da sessão. A perda de acesso à organização é esperada; User, Franquia, consumo e histórico permanecem. Reentrada exige novo convite/aceite elegível. A Conta comum não autoriza consultar documentos de outro membro, e o histórico preservado não implica acesso ao contexto revogado.
+
+SCRUM-187 registra problemas de notificações/CTA e não bloqueia o V1. Contrato e limites em [Multiuser V1](multiuser_v1.md); pendências e verificação financeira em [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).

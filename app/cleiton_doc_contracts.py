@@ -103,6 +103,7 @@ ERROR_UNSAFE_FILENAME = "cleiton_doc_unsafe_filename"
 ERROR_MISSING_FILE = "cleiton_doc_missing_file"
 ERROR_UPLOAD_FAILED = "cleiton_doc_upload_failed"
 ERROR_GEMINI_FILE_UPLOAD = "cleiton_doc_gemini_file_upload_failed"
+ERROR_PDF_VISUAL_UNPREPARED = "cleiton_doc_pdf_visual_unprepared"
 
 FLOW_TYPE_UPLOAD = "upload"
 FLOW_TYPE_CONTEXT_PREP = "context_prep"
