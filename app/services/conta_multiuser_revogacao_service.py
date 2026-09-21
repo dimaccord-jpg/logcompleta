@@ -6,7 +6,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 
-from flask import has_request_context, session as flask_session
+from flask import has_app_context, has_request_context, session as flask_session, url_for
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Query
 
@@ -47,6 +47,32 @@ from app.services.conta_organizacional_service import encerrar_vinculo_organizac
 logger = logging.getLogger(__name__)
 
 SESSION_GERACAO_KEY = "mu_sessao_geracao"
+
+MENSAGEM_NOTIFICACAO_MEMBERSHIP_REVOGADO = (
+    "Seu acesso Multiuser nesta Conta foi encerrado. "
+    "Você pode continuar usando o Agente Frete com seu próprio plano. "
+    "Clique aqui para conhecer as opções e continuar com acesso aos recursos da plataforma."
+)
+ASSUNTO_EMAIL_MEMBERSHIP_REVOGADO = (
+    "Seu acesso Multiuser foi encerrado — continue no Agente Frete"
+)
+CORPO_EMAIL_MEMBERSHIP_REVOGADO = (
+    "Seu acesso Multiuser nesta Conta foi encerrado. "
+    "Isso não impede que você continue utilizando o Agente Frete de forma independente. "
+    "Contrate seu próprio plano e continue aproveitando os recursos da plataforma."
+)
+CTA_EMAIL_MEMBERSHIP_REVOGADO = "Continuar usando o Agente Frete"
+CTA_INTERNO_MEMBERSHIP_REVOGADO = "user.contrate_plano"
+
+
+def _url_externa_contrate_plano() -> str | None:
+    if not has_app_context():
+        return None
+    try:
+        return url_for("user.contrate_plano", _external=True)
+    except Exception:
+        logger.info("evento=notificacao_cta_nao_resolvido cta=user.contrate_plano")
+        return None
 
 
 @dataclass
@@ -397,9 +423,9 @@ def revogar_membro(
         user_id=int(alvo.id),
         conta_id=int(conta.id),
         tipo="membership_revogado",
-        mensagem="Seu acesso Multiuser nesta Conta foi encerrado.",
+        mensagem=MENSAGEM_NOTIFICACAO_MEMBERSHIP_REVOGADO,
         dedup_key=f"membership_revogado:{vinculo.id}",
-        cta_interno="user.perfil",
+        cta_interno=CTA_INTERNO_MEMBERSHIP_REVOGADO,
         referencia_dominio=f"vinculo:{vinculo.id}",
         commit=False,
     )
@@ -420,10 +446,13 @@ def revogar_membro(
         db.session.commit()
     else:
         db.session.flush()
+    cta_url = _url_externa_contrate_plano()
     tentar_enviar_email_notificacao(
         alvo,
-        "Acesso Multiuser encerrado",
-        "Seu acesso Multiuser nesta Conta foi encerrado.",
+        ASSUNTO_EMAIL_MEMBERSHIP_REVOGADO,
+        CORPO_EMAIL_MEMBERSHIP_REVOGADO,
+        cta_label=CTA_EMAIL_MEMBERSHIP_REVOGADO if cta_url else None,
+        cta_url=cta_url,
     )
     return ResultadoRevogacaoMembership(
         vinculo_id=int(vinculo.id),

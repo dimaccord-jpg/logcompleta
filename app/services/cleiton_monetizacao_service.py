@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import json
 import logging
 import math
@@ -1141,6 +1142,117 @@ def _agendar_cancelamento_assinatura_stripe(
     return body
 
 
+ASSUNTO_EMAIL_CANCELAMENTO_AGENDADO = "Seu cancelamento foi agendado — Agente Frete"
+CTA_EMAIL_CANCELAMENTO_AGENDADO = "Ver planos e continuar no Agente Frete"
+_PLANOS_PAGOS_EMAIL_CANCELAMENTO = frozenset({"starter", "pro", "multiuser"})
+
+
+def _resolver_plano_pago_email_cancelamento(plano_codigo: str | None) -> str | None:
+    """Plano pago vigente no agendamento. Free não é plano cancelado."""
+    bruto = (plano_codigo or "").strip().lower()
+    if not bruto:
+        return None
+    plano_n = _normalizar_plano_codigo(bruto)
+    if plano_n is None:
+        plano_n = _mapa_planos_reconhecidos_dominio().get(bruto)
+    if plano_n in _PLANOS_PAGOS_EMAIL_CANCELAMENTO:
+        return plano_n
+    return None
+
+
+def _formatar_data_email_cancelamento(efetivar_em: datetime) -> str:
+    dt = _to_datetime_utc_naive(efetivar_em)
+    if dt is None:
+        raise ValueError("Data de efetivacao ausente para o e-mail de cancelamento agendado.")
+    return dt.strftime("%d/%m/%Y")
+
+
+def _saudacao_email_cancelamento(user) -> str:
+    nome = (getattr(user, "full_name", None) or "").strip()
+    if not nome:
+        return "Olá."
+    return f"Olá, {nome}."
+
+
+def _url_contrate_plano_externa() -> str:
+    from flask import url_for
+
+    return url_for("user.contrate_plano", _external=True)
+
+
+def _montar_corpos_email_cancelamento_agendado(
+    *,
+    saudacao: str,
+    nome_plano: str,
+    data_efetivacao: str,
+    cta_url: str,
+) -> tuple[str, str]:
+    paragrafos = [
+        saudacao,
+        f"Recebemos sua solicitação para encerrar a assinatura do plano {nome_plano}.",
+        (
+            f"Seu plano continuará ativo normalmente até {data_efetivacao}. "
+            "Até lá, você poderá continuar utilizando os recursos contratados."
+        ),
+        (
+            "Após essa data, sua assinatura não será renovada. "
+            "Seu login no Agente Frete continuará ativo e você poderá escolher um novo plano quando quiser."
+        ),
+        (
+            "Se mudar de ideia ou quiser conhecer outras opções, "
+            "estamos à disposição para continuar com você."
+        ),
+    ]
+    texto = "\n\n".join(paragrafos)
+    texto = f"{texto}\n\n{CTA_EMAIL_CANCELAMENTO_AGENDADO}: {cta_url}"
+    blocos = "".join(f"<p>{html.escape(paragrafo)}</p>" for paragrafo in paragrafos)
+    href = html.escape(cta_url, quote=True)
+    label = html.escape(CTA_EMAIL_CANCELAMENTO_AGENDADO)
+    html_body = f'{blocos}<p><a href="{href}">{label}</a></p>'
+    return html_body, texto
+
+
+def _tentar_enviar_email_cancelamento_agendado(
+    *,
+    user,
+    plano_codigo: str | None,
+    efetivar_em: datetime,
+) -> None:
+    """
+    Confirma cancelamento já agendado. Falha de envio não desfaz o downgrade.
+    """
+    plano_n = _resolver_plano_pago_email_cancelamento(plano_codigo)
+    if plano_n is None:
+        return
+    destinatario = (getattr(user, "email", None) or "").strip()
+    if not destinatario:
+        return
+    user_id = getattr(user, "id", None)
+    try:
+        from app.auth_services import send_email
+
+        nome_plano = plano_service.obter_nome_exibivel_plano(plano_n)
+        if (nome_plano or "").strip().lower() == "free":
+            return
+        html_body, texto = _montar_corpos_email_cancelamento_agendado(
+            saudacao=_saudacao_email_cancelamento(user),
+            nome_plano=nome_plano,
+            data_efetivacao=_formatar_data_email_cancelamento(efetivar_em),
+            cta_url=_url_contrate_plano_externa(),
+        )
+        send_email(
+            to_email=destinatario,
+            subject=ASSUNTO_EMAIL_CANCELAMENTO_AGENDADO,
+            html=html_body,
+            text=texto,
+        )
+    except Exception:
+        logger.exception(
+            "evento=email_cancelamento_agendado_falhou user_id=%s",
+            user_id,
+        )
+
+
 def listar_planos_contratacao_publica() -> list[dict[str, Any]]:
     """
     Lista planos de contratacao habilitados para a jornada oficial no site.
@@ -1349,6 +1461,11 @@ def iniciar_jornada_assinatura_stripe(
             efetivar_em=efetivar_em,
             origem=MUDANCA_PENDENTE_ORIGEM_USUARIO,
         )
+        plano_no_agendamento = getattr(user, "categoria", None)
+        fato_ja_existia = (
+            MonetizacaoFato.query.filter_by(idempotency_key=idempotency_key).first()
+            is not None
+        )
         registrar_fato_monetizacao(
             tipo_fato="stripe_subscription_cancel_at_period_end_requested",
             status_tecnico=STATUS_TEC_APLICADO,
@@ -1373,6 +1490,12 @@ def iniciar_jornada_assinatura_stripe(
             payload_bruto_sanitizado=response,
         )
         db.session.commit()
+        if not fato_ja_existia:
+            _tentar_enviar_email_cancelamento_agendado(
+                user=user,
+                plano_codigo=plano_no_agendamento,
+                efetivar_em=efetivar_em,
+            )
         return {
             "checkout_session_id": None,
             "checkout_client_secret": None,

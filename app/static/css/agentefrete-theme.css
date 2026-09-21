@@ -125,6 +125,39 @@ a:hover { color: var(--af-cyan-bright); }
   background: rgba(0, 0, 0, 0.3) !important;
 }
 
+/* Rodapé compacto da sidebar recolhida: avatar + sino em coluna, badge visível */
+#sidebar.active .sidebar-footer {
+  padding: 12px 8px;
+  overflow: visible;
+}
+
+#sidebar.active .sidebar-footer > .d-flex {
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+#sidebar.active .sidebar-footer .me-3 {
+  margin-right: 0 !important;
+}
+
+#sidebar.active .sidebar-footer a[aria-label="Área do usuário"],
+#sidebar.active .sidebar-footer a[aria-label="Notificações"] {
+  line-height: 1;
+}
+
+#sidebar.active .sidebar-footer a[aria-label="Notificações"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#sidebar.active .sidebar-footer a[aria-label="Notificações"] .badge {
+  white-space: nowrap;
+  transform: translate(-55%, -45%) !important;
+}
+
 /* Mobile: ocultar atalhos; manter perfil / login */
 #mobileMenu .offcanvas-body > .nav-item,
 #mobileMenu .offcanvas-body > hr {

@@ -298,7 +298,7 @@
                     <a href="{{ url_for('user.perfil') }}#notificacoes" class="flex-shrink-0 me-3 text-white text-decoration-none position-relative" aria-label="Notificações">
                         <i class="bi bi-bell"></i>
                         {% if notificacoes_nao_lidas|default(0) %}
-                        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.55rem;">
+                        <span id="notificacoes-nao-lidas-badge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.55rem;">
                             {{ notificacoes_nao_lidas }}
                         </span>
                         {% endif %}

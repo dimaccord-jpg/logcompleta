@@ -166,15 +166,27 @@
                 </ul>
                 <div id="notificacoes">
                     {% if notificacoes_internas %}
-                    <ul class="list-unstyled small mb-0">
+                    {% set perfil_cta_url = url_for('user.perfil') %}
+                    {% set contrate_plano_cta_url = url_for('user.contrate_plano') %}
+                    <ul
+                        class="profile-notifications-list list-unstyled small mb-0"
+                        tabindex="0"
+                        aria-label="Lista de notificações">
                         {% for item in notificacoes_internas %}
-                        <li class="mb-2 {% if not item.lida %}fw-semibold{% endif %}">
+                        <li class="mb-2 {% if not item.lida %}fw-semibold{% endif %}" data-notificacao-item>
+                            {% set _revog_inline = item.tipo == "membership_revogado" and item.cta_url == contrate_plano_cta_url and "Clique aqui" in item.mensagem %}
+                            {% if _revog_inline %}
+                            {% set _revog_parts = item.mensagem.split("Clique aqui", 1) %}
+                            {{ _revog_parts[0] }}<a href="{{ item.cta_url }}">Clique aqui</a>{{ _revog_parts[1] }}
+                            {% endif %}
+                            {% if not _revog_inline %}
                             {{ item.mensagem }}
-                            {% if item.cta_url %}
+                            {% if item.cta_url and item.cta_url != perfil_cta_url %}
                             <a href="{{ item.cta_url }}" class="ms-1">Abrir</a>
                             {% endif %}
+                            {% endif %}
                             {% if not item.lida %}
-                            <form method="post" action="{{ url_for('multiuser_painel.api_marcar_notificacao_lida', notificacao_id=item.id) }}" class="d-inline">
+                            <form method="post" action="{{ url_for('multiuser_painel.api_marcar_notificacao_lida', notificacao_id=item.id) }}" class="d-inline" data-marcar-notificacao-lida>
                                 <button type="submit" class="btn btn-link btn-sm p-0 align-baseline">Marcar como lida</button>
                             </form>
                             {% endif %}
@@ -231,4 +243,115 @@
     </div>
     {% endif %}
 </div>
+<script>
+(function () {
+    function atualizarBadgeNaoLidas() {
+        var badge = document.getElementById("notificacoes-nao-lidas-badge");
+        if (!badge) {
+            return;
+        }
+        var atual = parseInt(String(badge.textContent || "").trim(), 10);
+        if (!Number.isFinite(atual)) {
+            return;
+        }
+        var proximo = atual - 1;
+        if (proximo > 0) {
+            badge.textContent = String(proximo);
+        } else {
+            badge.remove();
+        }
+    }
+
+    function obterFeedback(item) {
+        var feedback = item.querySelector("[data-notificacao-feedback]");
+        if (feedback) {
+            return feedback;
+        }
+        feedback = document.createElement("span");
+        feedback.setAttribute("data-notificacao-feedback", "");
+        feedback.className = "profile-notification-feedback d-block mt-1";
+        feedback.setAttribute("role", "status");
+        item.appendChild(feedback);
+        return feedback;
+    }
+
+    function limparFeedback(item) {
+        var feedback = item.querySelector("[data-notificacao-feedback]");
+        if (!feedback) {
+            return;
+        }
+        feedback.hidden = true;
+        feedback.textContent = "";
+    }
+
+    function mostrarFeedback(item, mensagem) {
+        var feedback = obterFeedback(item);
+        feedback.hidden = false;
+        feedback.textContent = mensagem;
+    }
+
+    async function marcarComoLida(form) {
+        if (form.dataset.submitting === "1") {
+            return;
+        }
+        var item = form.closest("[data-notificacao-item]");
+        var botao = form.querySelector('button[type="submit"]');
+        form.dataset.submitting = "1";
+        if (botao) {
+            botao.disabled = true;
+        }
+        if (item) {
+            limparFeedback(item);
+        }
+        try {
+            var resposta = await fetch(form.action, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { Accept: "application/json" },
+                body: new FormData(form)
+            });
+            if (!resposta.ok) {
+                throw new Error("http");
+            }
+            var payload;
+            try {
+                payload = await resposta.json();
+            } catch (erroJson) {
+                throw new Error("json");
+            }
+            if (!payload || payload.ok !== true) {
+                throw new Error("not-ok");
+            }
+            if (item) {
+                item.classList.remove("fw-semibold");
+            }
+            form.remove();
+            atualizarBadgeNaoLidas();
+        } catch (erro) {
+            if (item) {
+                mostrarFeedback(item, "Não foi possível marcar como lida. Tente novamente.");
+            }
+            form.dataset.submitting = "0";
+            if (botao) {
+                botao.disabled = false;
+            }
+        }
+    }
+
+    function iniciarMarcacaoNotificacoes() {
+        document.querySelectorAll("form[data-marcar-notificacao-lida]").forEach(function (form) {
+            form.addEventListener("submit", function (event) {
+                event.preventDefault();
+                marcarComoLida(form);
+            });
+        });
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", iniciarMarcacaoNotificacoes);
+    } else {
+        iniciarMarcacaoNotificacoes();
+    }
+})();
+</script>
 {% endblock %}
