@@ -1,6 +1,6 @@
 # Estado de Produção
 
-Referência revisada em 2026-09-19 contra `origin/producao` (`f28f28e`, release Multiuser V1). O conteúdo versionado de `homolog` coincide com essa referência na revisão. A implantação, a configuração comercial externa e as pendências operacionais são informações fornecidas pela operação; esta revisão não consultou Render, Stripe nem banco de produção.
+Referência de produção informada pela operação em 2026-09-22: branch `producao`, commit `bd874ee` (`release: Sprint 11`), com 13 itens aprovados. A árvore versionada desse commit coincide com o checkout auditado. O deploy foi validado pela operação no Render com `/health` (`ambiente=prod`, `database=connected`, `status=ok`), login, sidebar, plano/créditos, `/perfil` e telas principais. Não houve consulta direta ao Render, Stripe ou banco de produção nesta revisão documental.
 
 ## Estado atual confirmado
 
@@ -21,7 +21,7 @@ Referência revisada em 2026-09-19 contra `origin/producao` (`f28f28e`, release 
 - head atual versionado: `f7g8h9i0j1k2`
 - `down_revision`: `e6f7a8b9c0d1`
 - migration: `f7g8h9i0j1k2_fase7_lifecycle_comercial.py`
-- cadeia Multiuser F1, F3, F4, F5, F6 e F7 em [Banco e Migrations](DATABASE_AND_MIGRATIONS.md); não existe migration Fase 8
+- cadeia Multiuser F1, F3, F4, F5, F6 e F7 em [Banco e Migrations](DATABASE_AND_MIGRATIONS.md); não existe migration Fase 8 nem nova migration executável na Sprint 11
 - a tabela anterior `home_cta_experiment_event` continua sustentando `home_chat_cta_v1`
 
 A tabela da home é isolada e não altera o schema do AgenteCompara, da franquia operacional nem de `FunnelEvent`.
@@ -49,7 +49,7 @@ A tabela da home é isolada e não altera o schema do AgenteCompara, da franquia
 
 - planos principais visíveis: `Free`, `Starter`, `Pro`, `Multiuser`
 - cobrança recorrente mensal
-- webhook oficial: `/api/webhook/stripe`
+- webhook oficial de produção: `https://www.agentefrete.com.br/api/webhook/stripe`
 - `invoice.paid` permanece como evento principal de confirmação contratual documentável
 - snapshots sanitizados continuam possíveis via `payload_bruto_sanitizado_json`
 - consentimento, suppression, newsletter, lifecycle e masking outbound seguem ativos
@@ -61,15 +61,19 @@ Conta organizacional/comercial, papéis contratante/membro, vínculo histórico 
 
 Contratação Stripe, dados empresariais obrigatórios, convite/aceite explícito, reservas, aumentos automático/excepcional, redução futura, revogação e titularidade administrativa estão implementados. O diagnóstico read-only e o CSV administrativo incorporam os estados Multiuser. [Regras, valores de produção, webhook e limites](multiuser_v1.md).
 
+`/perfil` reúne segurança e conta, indicadores de dados/IA, plano e notificações. “Alterar senha” envia o usuário ao fluxo existente de recuperação por e-mail; a senha não é alterada diretamente no perfil. `/contrate-um-plano` mostra os planos e inicia Checkout Stripe incorporado quando solicitado.
+
 ## Pendências conhecidas e pós-release
 
-- **SCRUM-187 — notificações/UX:** notificações pouco objetivas; “Abrir” pode só levar à gestão sem explicação adequada; marcação como lida e organização visual insuficientes; acúmulo de notificações e UX do sininho pobre; CTA inadequado em alguns fluxos, inclusive para removidos do Multiuser. Existe endpoint de marcação como lida e a revogação grava CTA para perfil, mas isso não resolve a pendência de experiência relatada pela operação. Não bloqueia a implantação do V1.
-- **Verificação financeira pós-release:** Multiuser tecnicamente habilitado em produção. O teste manual ponta a ponta com cartão, cobrança, invoice, ciclo e renovação mensal reais foi deliberadamente adiado para a próxima virada do cartão. Aguardar essa janela para registrar a evidência; não descrever como funcionalidade ausente nem como teste real já concluído.
+- **Notificações internas:** `/perfil` lista as notificações recentes primeiro, em área com rolagem; o sininho exibe o total não lido. A marcação como lida usa requisição assíncrona, atualiza o badge e o remove quando chega a zero. O CTA “Abrir” aparece apenas para destino útil; o CTA da própria página `/perfil` é omitido. A revogação Multiuser orienta continuidade individual e contratação de plano próprio. Esses mecanismos não significam que toda mensagem do produto produza notificação interna.
+- **Verificação financeira:** a documentação não dispõe de evidência de um ciclo real completo de cobrança e renovação Multiuser. Confirmar no Stripe e no banco antes de registrar essa validação como concluída.
 - **Evidência de UAT:** a implantação do V1 é informação confirmada pela operação. Os testes versionados cobrem revogação, preservação de consumo, reentrada e CSV administrativo, mas sua existência não comprova uma execução aprovada. Não foi localizado nesta revisão um relatório de execução do UAT 7.3 que sustente a contagem anteriormente citada de quatro testes aprovados. A preservação de histórico operacional preexistente após revogação/reentrada não é integralmente demonstrada pelas assertivas de revogação consultadas; isso não é evidência de perda de histórico nem bloqueador de implantação informado pela operação.
 
 ## Evolução futura
 
-SCRUM-186: permitir ao contratante liberar o próprio assento mantendo seu papel de gestão. Hoje ele ocupa assento. API pública Multiuser, OAuth/API keys/scopes/rate limit de integração, org-admin, troca livre entre Contas e auto-revogação para cumprir redução continuam fora do V1.
+O contratante ainda ocupa assento e não pode liberá-lo voluntariamente mantendo o papel de gestão. A redução assistida de assentos e o teardown completo Multiuser → Free ainda exigem validação/hardening; o agendamento do cancelamento não prova esses efeitos. API pública Multiuser, OAuth/API keys/scopes/rate limit de integração, org-admin, troca livre entre Contas e auto-revogação para cumprir redução continuam fora do V1.
+
+Na contratação Multiuser, a consulta online ao ViaCEP preenche campos editáveis de endereço. Há fallback manual; um retorno sem `erro: true` mas sem endereço completo pode receber a mensagem visual “CEP localizado. Complete os campos restantes.” Mesmo quando o CEP não existe, esse caso pode induzir a leitura incorreta de sucesso.
 
 ## Feed atual
 
@@ -90,86 +94,3 @@ O estado esperado do feed no código atual é:
 - masking para IA externa não promete sanitização universal de PDF e texto livre
 - newsletter está operacional, mas isso não implica prioridade comercial atual
 - o drift histórico de schema em `cleiton_billing_apropriacao`, `franquia` e `multiuser_franquia_codigo` permanece tema separado
-
----
-
-## HISTÓRICO — Migration head anterior
-
-Antes da tabela `home_cta_experiment_event`, o head esperado em produção era:
-
-- `y9z0a1b2c3d4`
-
-Migrations daquele ciclo:
-
-- `v6w7x8y9z0a1` `CommunicationSuppression`
-- `w7x8y9z0a1b2` activation journey ended
-- `x8y9z0a1b2c3` `NewsletterSubscription`
-- `y9z0a1b2c3d4` `Lead.email_hmac`
-
-Isso é histórico de schema, não o head atual.
-
-## ROLLOUT ANTERIOR — Communication suppression
-
-Estado histórico conhecido após leitura do banco em produção naquele rollout:
-
-- leads com `opt_out_at`: `0`
-- leads com `activation_opt_out_at`: `0`
-
-Conclusão operacional daquele rollout:
-
-- não havia registros históricos elegíveis para backfill
-- não foi necessário `--apply` do `communication-suppression-backfill`
-
-Isso é histórico de rollout, não regra estrutural da arquitetura.
-
-## ROLLOUT ANTERIOR — Newsletter
-
-Estado histórico conhecido do saneamento:
-
-- antes do backfill, havia `12` users com `subscribes_to_newsletter=True` e sem `NewsletterSubscription`
-- o dry-run oficial reportou `would_create=12`
-- o apply posterior reportou `created=12`
-- a validação final ficou em `users_newsletter_true_sem_subscription=0`
-
-Conclusão:
-
-- o backfill histórico de newsletter foi concluído em produção
-
-## ROLLOUT ANTERIOR — Lead.email minimization
-
-Estado histórico conhecido da análise:
-
-- `total_leads=2`
-- `converted=0`
-- `converted_com_email_hmac=0`
-- `converted_ja_minimizados=0`
-
-Conclusão:
-
-- como `converted_user_id` era requisito, nenhum `Lead` era elegível
-- não foi executado `--apply` de `lead-email-minimization`
-
-## HISTÓRICO — Smoke operacional anterior
-
-O rollout anterior já foi validado em produção para:
-
-- home anônima
-- Copiloto público
-- banner de privacidade
-- painel de preferências
-- rejeição de marketing
-- persistência após F5
-- alteração posterior para aceite
-- persistência do aceite
-- login
-- experiência autenticada com Julia
-- Perfil
-- auditoria de fretes
-- AgenteCompara
-- Feed
-- logout
-- retorno correto ao Copiloto
-
-Também ficou validado que o banner não cobre a sidebar.
-
-O smoke acima é registro operacional histórico, não suíte formal automatizada nem definição permanente do estado atual.

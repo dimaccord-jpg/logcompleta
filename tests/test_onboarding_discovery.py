@@ -504,9 +504,16 @@ class TestOnboardingHomeUxContract:
         monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", lambda _u: {"permitido": True})
         resp = web.app.test_client().get("/")
         html = resp.get_data(as_text=True)
-        assert "Copilot do AgenteFrete" in html
+        assert "AgenteFrete | Assistente virtual especializado em logística" in html
+        assert '<span class="af-hero-definition">Assistente virtual especializado em logística</span>' in html
+        assert "O AgenteFrete ajuda profissionais e empresas a analisar dados, executar tarefas e tomar decisões em logística." in html
+        assert "Copilot do AgenteFrete" not in html
         assert "ONBOARDING_DISCOVERY_MODE = true" in html
-        assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
+        assert 'data-copilot-surface="true"' in html
+        assert 'id="copilotWelcomeMessage"' in html
+        assert 'id="juliaChatForm"' in html
+        assert 'id="juliaChatInput"' in html
+        assert html.count('<span class="af-text-gradient">AgenteFrete</span>') == 1
 
     def test_home_publica_copilot_welcome_typewriter_e_ctas(self, monkeypatch):
         os.environ.setdefault("APP_ENV", "dev")
@@ -526,6 +533,19 @@ class TestOnboardingHomeUxContract:
         assert 'id="juliaChatDiscoverySuggestions"' in html
         assert "Se quiser, você pode começar por uma destas ideias:" in html
         assert "Por onde quer começar? Escolha uma intenção" not in html
+        assert "Pergunte sobre sua operação ou escolha uma habilidade para começar." in html
+        assert 'data-home-skill="analisar_fretes"' in html
+        assert 'data-home-skill="auditar_cobrancas"' in html
+        assert 'data-home-skill="comparar_tabelas"' in html
+        assert 'data-home-skill="consultar_agentefrete"' not in html
+        assert 'data-destination-id="roberto_bi"' in html
+        assert 'data-destination-id="cleide_freight_audit"' in html
+        assert 'data-destination-id="agente_compara"' in html
+        assert 'href="/fretes"' in html
+        assert 'href="/login?next=/auditoria-frete"' in html
+        assert 'href="/login?next=/agente-compara"' in html
+        assert "HOME_SKILL_PRESENTATION" in html
+        assert "window.ONBOARDING_DISCOVERY_API = '/api/onboarding_discovery'" in html
         index_source = pathlib.Path("app/templates/index.html").read_text(encoding="utf-8")
         assert 'id="onboardingCtaGrid"' not in index_source
         assert "discovery_ctas_in_external_grid" not in index_source
@@ -533,7 +553,7 @@ class TestOnboardingHomeUxContract:
         assert cta_count > 0
         assert html.count('class="btn btn-outline-primary btn-sm onboarding-cta-btn"') == 0
         assert "julia-chat-embedded" in html
-        assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
+        assert html.count('<span class="af-text-gradient">AgenteFrete</span>') == 1
 
     def test_frontend_discovery_mode_hides_refinement_chips(self):
         source = pathlib.Path("app/static/js/chat_behavior.js").read_text(encoding="utf-8")
@@ -553,6 +573,8 @@ class TestOnboardingHomeUxContract:
         assert "function classifyResponseActions(payload)" in source
         assert "target.closest('.copilot-suggestion-btn, .copilot-limit-btn')" in source
         assert "function navigateHandoff(handoffUrl)" in source
+        assert "homeSkillForDestination" in source
+        assert "HOME_SKILL_PRESENTATION" in source
         # Preferência pela URL já normalizada no payload (não política só da Júlia).
         assert "data-handoff-url" in source
         assert "Preferir URL já normalizada pelo backend" in source or "navigateHandoff(url)" in source

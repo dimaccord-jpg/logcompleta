@@ -1,6 +1,6 @@
 # Runbook Onboarding Copilot
 
-Revisão: `2026-09-19`, release Multiuser V1 (`origin/producao`, `f28f28e`).
+Revisão funcional: produção `bd874ee` (Sprint 11, Multiuser V1).
 
 ## Arquitetura atual
 

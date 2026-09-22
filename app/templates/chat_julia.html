@@ -1,4 +1,4 @@
-{# Componente de chat do Copilot (discovery) ou da Júlia (operational). #}
+{# Componente de chat da Home (discovery) ou da Júlia (operational). #}
 {% set julia_surface = julia_chat_surface|default('discovery') %}
 {% set julia_documents_ui = julia_documents_ui|default(false) %}
 <div class="julia-chat-wrapper{% if julia_documents_ui or julia_surface != 'operational' %} julia-chat-with-documents julia-chat-embedded{% endif %}"
@@ -6,12 +6,12 @@
      {% if julia_documents_ui %}data-julia-documents="true"{% endif %}
      {% if julia_surface != 'operational' %}data-copilot-surface="true"{% endif %}>
   <div class="julia-chat-container">
-    <div class="julia-chat-header">
+    <div class="julia-chat-header{% if julia_surface != 'operational' %} d-none{% endif %}">
       <div class="d-flex align-items-center">
         {% if julia_surface == 'operational' and config.JULIA_AVATAR_URL %}
         <img src="{{ config.JULIA_AVATAR_URL }}" alt="AgenteFrete" class="julia-chat-avatar me-2" />
         {% elif julia_surface != 'operational' and config.JULIA_AVATAR_URL %}
-        <img src="{{ config.JULIA_AVATAR_URL }}" alt="Copilot do AgenteFrete" class="julia-chat-avatar me-2" />
+        <img src="{{ config.JULIA_AVATAR_URL }}" alt="AgenteFrete" class="julia-chat-avatar me-2" />
         {% else %}
         <span class="julia-chat-avatar-placeholder me-2"><i class="bi bi-robot"></i></span>
         {% endif %}
@@ -20,8 +20,8 @@
           <span class="fw-bold julia-chat-name">AgenteFrete</span>
           <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Assistente virtual especializado em logística. Atenção: o AgenteFrete é uma IA e pode cometer erros.</small>
           {% else %}
-          <span class="fw-bold julia-chat-name">Copilot do AgenteFrete</span>
-          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Descubra o melhor caminho para sua operação logística.</small>
+          <span class="fw-bold julia-chat-name">AgenteFrete</span>
+          <small class="d-block julia-chat-role" style="font-size: 0.75rem;">Assistente virtual especializado em logística</small>
           {% endif %}
         </div>
       </div>
@@ -31,7 +31,7 @@
         {% set home_cta_text = home_cta_experiment.text if home_cta_experiment and home_cta_experiment.text else none %}
         {% if julia_surface == 'operational' %}
         {% if julia_handoff_context %}
-        Você está continuando uma conversa iniciada no Copilot do AgenteFrete.<br><br>
+        Você está continuando uma conversa iniciada no AgenteFrete.<br><br>
         <strong>Pergunta anterior:</strong> {{ julia_handoff_context.user_message }}<br>
         {% if julia_handoff_context.summary %}
         <strong>Contexto trazido:</strong> {{ julia_handoff_context.summary }}
@@ -455,7 +455,7 @@
     border: none;
     border-radius: 0.55rem;
     background: transparent;
-    color: var(--af-text-primary, #F0F0F5);
+    color: var(--af-chrome-text, #F0F0F5);
     font-size: 0.86rem;
     text-decoration: none;
     text-align: left;
@@ -471,8 +471,9 @@
   .julia-actions-item:hover,
   .julia-actions-item:focus-visible {
     background: rgba(0, 191, 255, 0.1);
-    color: var(--af-text-primary, #F0F0F5);
-    outline: none;
+    color: var(--af-chrome-text, #F0F0F5);
+    outline: 2px solid var(--af-chrome-accent, #00BFFF);
+    outline-offset: -2px;
   }
   .julia-actions-item-muted i {
     color: var(--af-text-muted, #8A8AA3);

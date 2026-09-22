@@ -1,0 +1,28 @@
+{% for section in shell_nav.sections %}
+  {% if section.label %}
+  <div class="nav-section" role="group" aria-labelledby="shell-nav-{{ section.id }}-{{ nav_variant }}">
+    <p class="nav-section-label menu-text" id="shell-nav-{{ section.id }}-{{ nav_variant }}">{{ section.label }}</p>
+    {% for item in section.links %}
+    <a href="{{ item.href }}"
+       class="nav-item nav-item-skill{% if item.active %} active{% endif %}"
+       {% if item.active %}aria-current="page"{% endif %}
+       aria-label="{{ item.label }}"
+       title="{{ item.label }}">
+      <i class="bi {{ item.icon }}" aria-hidden="true"></i>
+      <span class="menu-text">{{ item.label }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+    {% for item in section.links %}
+    <a href="{{ item.href }}"
+       class="nav-item{% if item.active %} active{% endif %}"
+       {% if item.active %}aria-current="page"{% endif %}
+       aria-label="{{ item.label }}"
+       title="{{ item.label }}">
+      <i class="bi {{ item.icon }}" aria-hidden="true"></i>
+      <span class="menu-text">{{ item.label }}</span>
+    </a>
+    {% endfor %}
+  {% endif %}
+{% endfor %}

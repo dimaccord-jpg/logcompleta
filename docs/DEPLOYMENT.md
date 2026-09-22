@@ -1,6 +1,6 @@
 # Deploy, Ambientes e Promoção
 
-Documentação revisada em 2026-09-19 a partir de `render.yaml`, `start.sh`, `build.sh` e da configuração versionada do repositório.
+Documentação operacional auditada contra a árvore de produção `bd874ee`, `render.yaml`, `start.sh` e `build.sh`.
 
 ## Ambientes e branches
 
@@ -8,6 +8,8 @@ No `render.yaml` atual:
 
 - homologação: branch `homolog`
 - produção: branch `producao`
+- domínio conhecido de homologação: `homolog0514.agentefrete.com.br`
+- domínio de produção: `www.agentefrete.com.br`
 - ambos os serviços usam `autoDeploy: true`
 
 Mapeamento de ambiente:
@@ -74,12 +76,14 @@ Orientações:
 - não tratar downgrade de banco como rotina de promoção
 - não substituir validação de homologação por merge destrutivo
 
-## Release Multiuser V1 implantado
+## Promoção e rollback
 
-O conjunto Multiuser V1 já está em produção no release `f28f28e`. As antigas condições de promoção de fases isoladas não descrevem o estado atual. Reconciliação do legado e enforcement organizacional já integram o runtime.
+Validar `homolog`, fazer merge controlado em `producao`, push, conferir o deploy no Render, `/health` e smoke test de login, sidebar, plano/créditos, `/perfil` e telas principais. O Multiuser V1 e a Sprint 11 já integram o produto; a identificação do commit implantado fica em [estado de produção](estado_producao.md).
+
+Antes de uma promoção, registrar uma tag imutável no commit de produção anterior. Em caso de rollback, identificar a tag anterior, restaurar o commit pelo fluxo de promoção controlada e conferir compatibilidade de banco antes do deploy. A tag `pre-sprint11-prod-20260921` identifica apenas o ponto anterior à Sprint 11; não é convenção permanente.
 
 O head versionado é `f7g8h9i0j1k2`. A cadeia física está em [Banco e Migrations](DATABASE_AND_MIGRATIONS.md); não há migration Fase 8. Novos deploys aplicam os upgrades pendentes antes do Gunicorn.
 
 Render mantém serviços separados e Auto-Deploy por commit também em produção. Enviar commits para `producao` pode iniciar deploy.
 
-A configuração comercial está no [guia Multiuser V1](multiuser_v1.md). Pendências de UX e teste financeiro real deliberadamente adiado estão no [pós-release](estado_producao.md#pendências-conhecidas-e-pós-release).
+A configuração comercial está no [guia Multiuser V1](multiuser_v1.md). Limitações atuais e evidência financeira estão no [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).

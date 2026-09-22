@@ -1,6 +1,6 @@
 # AgenteFrete
 
-Guia do release Multiuser V1 em produção, revisado em 2026-09-19 contra `origin/producao` (`f28f28e`). Comece pelo [estado de produção](docs/estado_producao.md), pela [arquitetura](docs/arquitetura_oficial.md) e pelo [inventário documental](docs/indice_documentacao.md).
+Guia do Agente Frete. A produção informada pela operação executa `bd874ee` (Sprint 11); comece pelo [estado de produção](docs/estado_producao.md), pela [arquitetura](docs/arquitetura_oficial.md) e pelo [índice documental](docs/indice_documentacao.md).
 
 ## Visão do produto
 

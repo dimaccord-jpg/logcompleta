@@ -1,6 +1,6 @@
 # Multiuser V1 em produção
 
-Guia funcional do release `f28f28e` (`origin/producao`), revisado em 2026-09-19. O Multiuser V1 está implantado e operando em produção. Configurações externas informadas pela operação estão identificadas abaixo; não são constantes do código nem resultado de uma consulta ao banco ou ao Stripe nesta revisão.
+Guia funcional do Multiuser V1, incluído na produção `bd874ee` (Sprint 11). Configurações externas informadas pela operação são referências datadas, não constantes do código nem resultado de consulta ao banco ou Stripe nesta revisão.
 
 ## Organização, papéis e acesso
 
@@ -20,23 +20,13 @@ Cleide/AgenteAudita, Júlia e AgenteCompara preservam seus namespaces e contexto
 
 O fluxo começa em `/contrate-um-plano`, valida os dados empresariais, cria a intenção persistente e abre o Checkout Stripe. Nova contratação exige razão social, nome fantasia, CNPJ validado/normalizado, e-mail empresarial e endereço estruturado: logradouro, número, cidade, UF e CEP.
 
+A página apresenta cards de planos e formulário Multiuser; o Checkout Stripe é incorporado quando iniciado. O endereço pode ser auxiliado por consulta online ao ViaCEP, por botão “Buscar CEP” ou após completar o CEP. Logradouro, bairro, cidade e UF são preenchidos quando disponíveis e continuam editáveis; número e complemento são manuais. Falha de consulta permite preenchimento manual. Um retorno incompleto sem `erro: true` pode exibir “CEP localizado. Complete os campos restantes.”, inclusive em caso de CEP inexistente; não use essa mensagem como validação definitiva de endereço.
+
 A quantity mínima é configurável. A configuração administrativa dos planos usa `ConfigRegras`; o benefício pago só é concedido após confirmação de pagamento. A Conta usa um Stripe Customer, uma Subscription e um Subscription Item cuja `quantity` representa os assentos contratados.
 
-### Configuração de produção informada pela operação em 2026-09-19
+### Configuração comercial
 
-| Parâmetro | Valor |
-|---|---|
-| Provider | Stripe |
-| Product | `prod_VHzmnCmSYi739U` |
-| Price | `price_1UHPmx09L4HKewm5zb1DAJGB` |
-| Preço por assento | R$ 49,90 |
-| Moeda / recorrência | BRL / mensal |
-| Billing scheme / usage type | `per_unit` / `licensed` |
-| Quantidade mínima | 5 assentos |
-| Franquia individual | 1000 créditos |
-| Limite de aumento automático acumulado por ciclo | 5 assentos |
-
-IDs de produto/preço são identificadores de catálogo, não credenciais. Segredos ficam no provedor; ver [segurança](../SECURITY_SECRETS.md). Esses valores de produção não devem ser reutilizados como configuração de homologação.
+Preço, catálogo Stripe, quantidade mínima, franquia individual e limite de aumento automático são parâmetros administrativos. Consulte `ConfigRegras` e o catálogo Stripe do ambiente antes de citar valores vigentes; referências de uma revisão anterior não comprovam a configuração atual. IDs de produto/preço não são credenciais. Segredos ficam no provedor; ver [segurança](../SECURITY_SECRETS.md).
 
 ### Webhook e renovação
 
@@ -62,13 +52,15 @@ O usuário existente só é transferido por aceite explícito. Contrato/benefíc
 
 O contratante pode encerrar o vínculo de um membro. O vínculo permanece como `encerrado`, o User e a Franquia permanecem existentes, e o consumo já realizado é preservado. A operação não cancela a Subscription nem altera sua quantity.
 
-O usuário retorna a contexto individual elegível; quando não há contexto restaurável, o serviço cria o contexto individual de retorno. A geração do contexto de sessão é incrementada e as referências operacionais antigas são invalidadas. Isso encerra o acesso organizacional, sem desidentificar a pessoa nem apagar seu histórico. Preservação histórica não significa que artefatos temporários nunca expirem, nem que o usuário conserve acesso ao contexto revogado.
+O usuário retorna a contexto individual elegível; quando não há contexto restaurável, o serviço cria Conta e Franquia individuais, define `User.categoria=free` e obtém `Franquia.limite_total` da referência administrativa vigente do Free (`exigir_configurado=True`). A nova franquia não nasce com limite nulo; seu consumo inicial segue a criação operacional da franquia. Se houver contexto individual reutilizável, a categoria só volta a Free quando não existe benefício pago vigente nesse contexto; o serviço não normaliza indiscriminadamente todas as franquias históricas. A geração do contexto de sessão é incrementada e as referências operacionais antigas são invalidadas. O login permanece disponível; e-mail e notificação orientam a contratação de plano próprio. Isso encerra o acesso organizacional, sem desidentificar a pessoa nem apagar seu histórico.
 
 Repetir a revogação é idempotente. O contratante não pode revogar a si próprio nem liberar seu assento por esse fluxo.
 
+O e-mail “Seu acesso Multiuser foi encerrado — continue no Agente Frete” e a notificação interna orientam o membro a contratar um plano próprio. O CTA útil conduz à contratação, sem prometer manutenção do acesso aos documentos da Conta anterior.
+
 ## Aumento de assentos
 
-Dentro do limite automático acumulado por ciclo (atualmente +5), o contratante pode ampliar a capacidade imediatamente. A atualização usa o mesmo Subscription Item, sem nova Subscription e sem prorata do ciclo atual (`proration_behavior=none`). A cobrança recorrente futura acompanha a nova quantity; ciclo e consumo permanecem.
+Dentro do limite automático acumulado configurado para o ciclo, o contratante pode ampliar a capacidade imediatamente. A atualização usa o mesmo Subscription Item, sem nova Subscription e sem prorata do ciclo atual (`proration_behavior=none`). A cobrança recorrente futura acompanha a nova quantity; ciclo e consumo permanecem.
 
 Acima do limite, o aumento excepcional entra em análise administrativa. Pode ser aprovado gratuitamente, aprovado com cobrança extraordinária ou rejeitado. A cobrança extraordinária não cria nova Subscription. Correlação e idempotência vinculam pagamento e solicitação: a confirmação libera a capacidade exatamente uma vez, sem reiniciar ciclo ou consumo. Falhas parciais exigem observar os estados persistidos antes de repetir uma operação.
 
@@ -102,7 +94,7 @@ Fora do V1: API pública Multiuser, OAuth de integração, API keys, scopes e ra
 
 SCRUM-186 é evolução futura para permitir que o contratante libere seu próprio assento mantendo o papel de contratante/gestão. O comportamento atual continua contando esse assento.
 
-As pendências de UX (SCRUM-187) e a verificação financeira pós-release estão centralizadas em [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).
+As notificações atuais e as limitações de validação financeira estão em [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).
 
 ## Referências de implementação
 

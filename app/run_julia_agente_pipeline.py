@@ -16,6 +16,10 @@ from app.run_julia_agente_imagem import gerar_imagem_publicavel, classificar_ori
 from app.run_julia_agente_publicacao import publicar
 from app.run_julia_agente_publisher import publicar_multicanal, RESULTADO_FALHA_TOTAL
 from app.run_julia_agente_qualidade import validar_conteudo
+from app.editorial_metadata import (
+    anexar_editorial_em_assets,
+    intencao_explicita_do_payload,
+)
 from app.run_julia_agente_redacao import gerar_conteudo
 from app.run_julia_regras import status_verificacao_permitidos
 from app.services.pauta_service import (
@@ -43,21 +47,27 @@ def _montar_prompt_imagem_contextual(conteudo: dict[str, Any], pauta: Pauta, tip
     resumo = _limpar_texto_prompt(conteudo.get("resumo_julia"), 220)
     fonte = _limpar_texto_prompt(pauta.fonte, 80)
     conteudo_texto = _limpar_texto_prompt(conteudo.get("conteudo_completo"), 450)
-    tema_logistico = _limpar_texto_prompt(pauta.titulo_original, 120)
+    tema_logistico = _limpar_texto_prompt(conteudo.get("tema") or pauta.titulo_original, 120)
 
     if prompt_base and len(prompt_base) >= 30:
         contexto_base = prompt_base
     else:
         contexto_base = " | ".join([x for x in [titulo, subtitulo, resumo, conteudo_texto] if x])
-    tipo_desc = "strategic long-form article" if (tipo_missao or "noticia") == "artigo" else "fast logistics insight"
+    intencao = (conteudo.get("intencao_editorial") or "").strip().lower()
+    if intencao not in ("news", "analysis", "evergreen"):
+        intencao = "analysis" if (tipo_missao or "noticia") == "artigo" else "news"
+    tipo_desc = {
+        "news": "short factual logistics news",
+        "analysis": "practical logistics analysis",
+        "evergreen": "evergreen logistics explainer",
+    }[intencao]
     prompt_final = (
-        "Create a unique professional editorial cover image for a Brazilian logistics publication. "
-        "No written text in the image, no watermark, no real brand logos, "
-        "realistic high-quality photography style with editorial framing. "
-        "The scene must be specific to the article context and avoid generic visuals. "
+        "Professional editorial photo for a Brazilian logistics publication, "
+        "semantically tied to the theme, attractive and specific, no clickbait scene. "
+        "No written text, no watermark, no real brand logos. "
         f"Content type: {tipo_desc}. Source: {fonte or 'logistics portal'}. "
-        f"Logistics theme: {tema_logistico or 'global supply chain operations'}. "
-        f"Context: {contexto_base or 'global supply chain operations'}"
+        f"Logistics theme: {tema_logistico or 'supply chain operations'}. "
+        f"Context: {contexto_base or 'supply chain operations'}"
     )
     return prompt_final[:500]
 
@@ -225,7 +235,13 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
                 resultado="sucesso",
             )
 
-            conteudo = gerar_conteudo(pauta.titulo_original, pauta.fonte or "", pauta.link, tipo_missao)
+            conteudo = gerar_conteudo(
+                pauta.titulo_original,
+                pauta.fonte or "",
+                pauta.link,
+                tipo_missao,
+                intencao_editorial=intencao_explicita_do_payload(payload),
+            )
             if not isinstance(conteudo, dict) or not conteudo:
                 logger.error("Júlia pipeline: falha na redação")
                 marcar_pauta_falha(pauta.id)
@@ -358,14 +374,17 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
             url_master = design.get("url_imagem_master") or conteudo.get("url_imagem")
             assets_por_canal = design.get("assets_por_canal") or {}
             assets_json = normalizar_assets_json(assets_por_canal)
-            assets_json = _normalizar_assets_observabilidade(
-                assets_json,
-                imagem_status=imagem_info.get("status") or "desconhecido",
-                imagem_origem=origem_imagem,
-                imagem_motivo=imagem_info.get("motivo") or "",
-                prompt_imagem_usado=prompt_imagem,
-                imagem_url_final=url_master,
-                imagem_provider=imagem_info.get("provider") or "desconhecido",
+            assets_json = anexar_editorial_em_assets(
+                _normalizar_assets_observabilidade(
+                    assets_json,
+                    imagem_status=imagem_info.get("status") or "desconhecido",
+                    imagem_origem=origem_imagem,
+                    imagem_motivo=imagem_info.get("motivo") or "",
+                    prompt_imagem_usado=prompt_imagem,
+                    imagem_url_final=url_master,
+                    imagem_provider=imagem_info.get("provider") or "desconhecido",
+                ),
+                conteudo.get("editorial") if isinstance(conteudo.get("editorial"), dict) else None,
             )
             auditoria_registrar(
                 tipo_decisao="designer",

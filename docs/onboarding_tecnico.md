@@ -1,6 +1,6 @@
 # Onboarding técnico
 
-Guia revisado em 2026-09-19 para o release Multiuser V1 em produção (`origin/producao`, `f28f28e`).
+Guia auditado contra a árvore de produção `bd874ee` (Sprint 11, Multiuser V1).
 
 ## Ordem de leitura
 

@@ -449,6 +449,7 @@
         label: handoff.label || '',
         url: handoff.url || null,
         action: handoff.action || null,
+        destination: handoff.destination || '',
         requires_login: handoff.requires_login === true,
         open_in_new_tab: handoff.open_in_new_tab === true,
         guidance_title: handoff.guidance_title || '',
@@ -457,6 +458,14 @@
     });
 
     return actions;
+  }
+
+  function homeSkillForDestination(destination) {
+    var map = window.HOME_SKILL_PRESENTATION;
+    if (!map || !destination || typeof map !== 'object') return null;
+    var skill = map[destination];
+    if (!skill || !skill.label) return null;
+    return skill;
   }
 
   function appendResponseActions(container, actions) {
@@ -508,6 +517,30 @@
         wrap.appendChild(guidance);
         return;
       } else if (actionItem.url) {
+        var skill = homeSkillForDestination(actionItem.destination);
+        if (skill && !actionItem.guidance_title && !actionItem.guidance_text) {
+          var skillCard = document.createElement('div');
+          skillCard.className = 'agentefrete-platform-guidance';
+          var skillTitle = document.createElement('div');
+          skillTitle.className = 'agentefrete-platform-guidance-title';
+          skillTitle.textContent = skill.label;
+          skillCard.appendChild(skillTitle);
+          if (skill.summary) {
+            var skillText = document.createElement('div');
+            skillText.className = 'agentefrete-platform-guidance-text';
+            skillText.textContent = skill.summary;
+            skillCard.appendChild(skillText);
+          }
+          btn.className = actionItem.requires_login ? 'copilot-limit-btn' : 'copilot-suggestion-btn';
+          btn.setAttribute('data-handoff-url', actionItem.url);
+          btn.setAttribute('data-handoff-login', actionItem.requires_login ? '1' : '0');
+          btn.textContent = actionItem.requires_login
+            ? ('Entrar para abrir ' + skill.label)
+            : ('Abrir ' + skill.label);
+          skillCard.appendChild(btn);
+          wrap.appendChild(skillCard);
+          return;
+        }
         btn.className = actionItem.requires_login ? 'copilot-limit-btn' : 'copilot-suggestion-btn';
         btn.setAttribute('data-handoff-url', actionItem.url);
         btn.setAttribute('data-handoff-login', actionItem.requires_login ? '1' : '0');

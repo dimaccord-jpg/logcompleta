@@ -1,6 +1,6 @@
 # Índice e governança da documentação
 
-Inventário revisado em 2026-09-19 para o release Multiuser V1 (`origin/producao`, `f28f28e`). A documentação viva descreve produção; datas e conclusões de relatórios históricos pertencem às respectivas entregas.
+Inventário revisado para a produção `bd874ee` (Sprint 11). A documentação viva descreve o comportamento da árvore versionada desse commit; datas e conclusões de relatórios históricos pertencem às respectivas entregas.
 
 Classes: **A** = canônica viva; **B** = histórica/auditoria; **C** = temporária; **D** = duplicada/obsoleta. A extensão Markdown não torna um arquivo necessariamente documentação: prompts carregados pela aplicação são configuração funcional.
 
@@ -32,7 +32,7 @@ Classes: **A** = canônica viva; **B** = histórica/auditoria; **C** = temporár
 | [Troubleshooting](troubleshooting_operacional.md) | Triagem operacional |
 | [Privacidade técnica](lgpd_governanca_tecnica.md) | Lifecycle, retenção e separação da revogação Multiuser |
 | [IA e privacidade](integracoes_ia_privacidade.md) | Fronteira de saída e masking |
-| [Governança contextual de IA](cleiton_ai_data_governance.md) | SCRUM-75: minimização local antes do provider |
+| [Governança contextual de IA](cleiton_ai_data_governance.md) | Contrato canônico de classificação e minimização local antes do provedor |
 | [Consentimento de marketing](consentimento_privacidade_marketing.md) | Cookie, endpoint e medição opcional; permanece válido |
 | [Comunicações/newsletter](comunicacoes_newsletter_suppression.md) | Suppression e newsletter; histórico de backfills identificado |
 | [Documentos legais](governanca_documentos_legais.md) | Governança técnica; não substitui documentos jurídicos |
@@ -75,9 +75,9 @@ Diretórios de configuração de ferramentas, como `.cursor/`, não constituem g
 
 ## Base de verdade e limites de atualização
 
-- Referência de código: `origin/producao` local no release `f28f28e`; o conteúdo versionado de `homolog` coincide com ela nesta revisão.
+- Referência de código: commit `bd874ee`, cuja árvore versionada coincide com o checkout `homolog` auditado. A operação informou que `bd874ee` está implantado em `producao`.
 - Runtime: services/routes/models, `render.yaml`, `start.sh`, migrations e testes existentes foram confrontados com as regras documentadas.
 - Estado externo: implantação, catálogo Stripe, eventos habilitados e pendências são informações fornecidas pela operação. Não houve leitura de banco de produção nem consulta ao painel Stripe/Render nesta revisão.
-- Evidência de testes não equivale a teste financeiro real. O limite do UAT 7.3 e a janela financeira pós-release estão registrados em [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).
+- Evidência de testes não equivale a teste financeiro real. As limitações de validação constam em [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).
 
 Ao atualizar o release, revisar primeiro produção e implementação, depois os guias A pertinentes. Manter registros B com sua data e contexto, sem reescrever resultados históricos.

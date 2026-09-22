@@ -43,7 +43,7 @@ def _send_button_tag(html: str) -> str:
 def test_cleide_auditoria_welcome_typewriter_contract(monkeypatch):
     web = _load_web_module()
     html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
-    assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
+    assert html.count('<span class="af-text-gradient">AgenteFrete</span>') == 1
     assert "AgenteAudita" in html
     assert "Assistente especializado em auditoria de fretes. Atenção: o AgenteAudita é uma IA e pode cometer erros." in html
     assert "Envie arquivos de apoio para o AgenteAudita analisar nesta conversa." in html
@@ -298,7 +298,7 @@ def test_cleide_auditoria_template_suporta_listas_e_links_no_chat():
 def test_cleide_auditoria_pagina_mantem_contratos_visuais(monkeypatch):
     web = _load_web_module()
     html = web.app.test_client().get("/auditoria-frete").get_data(as_text=True)
-    assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
+    assert html.count('<span class="af-text-gradient">AgenteFrete</span>') == 1
     assert "cleide-auditoria-embedded" in html
     assert 'id="cleideAuditoriaComposer"' in html
     assert 'id="cleideAuditoriaAttachBtn"' in html

@@ -70,7 +70,9 @@ def _render_base(app: Flask) -> str:
         }
     )
     with app.test_request_context("/"):
-        from flask import g
+        from flask import g, url_for
+
+        from app.shell_navigation import build_shell_navigation
 
         g._login_user = SimpleNamespace(
             is_authenticated=False,
@@ -79,18 +81,26 @@ def _render_base(app: Flask) -> str:
             categoria="free",
             franquia=None,
         )
-        return render_template_string('{% include "base.html" %}')
+        shell_nav = build_shell_navigation(
+            authenticated=False,
+            request_path="/",
+            url_for=url_for,
+            has_endpoint=lambda endpoint_name: endpoint_name in app.view_functions,
+        )
+        return render_template_string('{% include "base.html" %}', shell_nav=shell_nav)
 
 
 def test_base_render_nao_quebra_sem_blueprint_cleide():
     app = _build_base_render_app(register_cleide=False)
     html = _render_base(app)
-    assert "Auditoria de Frete" in html
+    assert "Auditar cobranças de frete" in html
     assert 'href="/login?next=/auditoria-frete"' in html
+    assert 'data-shell-nav="desktop"' in html
+    assert 'data-shell-nav="mobile"' in html
 
 
 def test_base_render_com_blueprint_cleide():
     app = _build_base_render_app(register_cleide=True)
     html = _render_base(app)
-    assert "Auditoria de Frete" in html
+    assert "Auditar cobranças de frete" in html
     assert 'href="/login?next=/auditoria-frete"' in html

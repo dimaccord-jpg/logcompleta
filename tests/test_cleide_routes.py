@@ -50,7 +50,7 @@ def test_auditoria_frete_retornar_200_quando_autorizado(monkeypatch):
     resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
-    assert '<span class="af-text-gradient">Agentefrete</span>' in html
+    assert '<span class="af-text-gradient">AgenteFrete</span>' in html
     assert "Agente Cleide" in html
     assert "BI Cleide" in html
     assert "Auditoria de Frete Operacional" not in html
@@ -86,7 +86,7 @@ def test_auditoria_frete_publica_quando_nao_autenticado(monkeypatch):
     resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
-    assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
+    assert html.count('<span class="af-text-gradient">AgenteFrete</span>') == 1
     assert "BI Cleide" in html
     assert "Auditoria de Frete Operacional" not in html
     assert "Faca login para enviar planilhas" in html

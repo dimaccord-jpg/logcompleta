@@ -1,6 +1,6 @@
 # Troubleshooting Operacional
 
-Revisão documental: `2026-09-19`, release Multiuser V1 em produção.
+Revisão documental: árvore de produção `bd874ee` (Sprint 11, Multiuser V1).
 
 ## 1. Home pública sem responder
 
@@ -179,4 +179,4 @@ Conferir:
 
 Verificar vínculo encerrado e geração de contexto da sessão. A perda de acesso à organização é esperada; User, Franquia, consumo e histórico permanecem. Reentrada exige novo convite/aceite elegível. A Conta comum não autoriza consultar documentos de outro membro, e o histórico preservado não implica acesso ao contexto revogado.
 
-SCRUM-187 registra problemas de notificações/CTA e não bloqueia o V1. Contrato e limites em [Multiuser V1](multiuser_v1.md); pendências e verificação financeira em [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).
+Notificações internas e CTA de continuidade individual após revogação estão disponíveis. Conferir produtores e semântica de cada evento antes de assumir que toda comunicação gera item interno. Contrato e limites em [Multiuser V1](multiuser_v1.md); evidência financeira em [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).

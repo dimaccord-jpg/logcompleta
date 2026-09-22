@@ -1,6 +1,6 @@
 # Banco e Migrations
 
-Documentação revisada em 2026-09-19 contra `origin/producao` (`f28f28e`), models e cadeia física Alembic.
+Documentação revisada contra a árvore de produção `bd874ee`, models e cadeia física Alembic. A Sprint 11 não adicionou migration executável em `migrations/versions`; mudanças de documentação não alteram o schema.
 
 ## Fonte de verdade
 
