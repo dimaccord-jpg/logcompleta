@@ -57,17 +57,47 @@
                         </li>
                     </ul>
                     <form method="post" action="{{ url_for('admin.agentes_julia_executar_artigo_manual') }}" class="mt-2">
-                        <button type="submit" class="btn btn-outline-danger">
+                        <div class="mb-2">
+                            <label for="intencao_editorial" class="form-label">Tipo editorial</label>
+                            <select id="intencao_editorial" name="intencao_editorial" class="form-select" required>
+                                <option value="analysis">Análise</option>
+                                <option value="evergreen">Evergreen</option>
+                            </select>
+                        </div>
+                        <div class="mb-2">
+                            <label for="pauta_id" class="form-label">Pauta</label>
+                            {% if pautas_elegiveis %}
+                            <select id="pauta_id" name="pauta_id" class="form-select" required>
+                                <option value="" disabled selected>Selecione uma pauta elegível</option>
+                                {% for p in pautas_elegiveis %}
+                                <option value="{{ p.id }}">#{{ p.id }} — {{ p.titulo }}</option>
+                                {% endfor %}
+                            </select>
+                            {% else %}
+                            <select id="pauta_id" name="pauta_id" class="form-select" disabled>
+                                <option value="">Nenhuma pauta elegível disponível</option>
+                            </select>
+                            <div class="form-text text-warning">
+                                Não há pautas de artigo elegíveis. Cadastre ou aprove uma pauta antes de executar.
+                            </div>
+                            {% endif %}
+                            <div class="mt-1">
+                                <a href="{{ url_for('admin.pautas_admin') }}">Cadastrar nova pauta</a>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-outline-danger"{% if not pautas_elegiveis %} disabled{% endif %}>
                             <i class="bi bi-journal-medical me-1"></i> Executar artigo agora (bypass diário)
                         </button>
                     </form>
                     <small class="text-muted d-block mt-2">
-                        Dispara manualmente uma missão de artigo, ignorando apenas a trava de artigo já publicado hoje.
+                        Dispara manualmente uma missão de artigo com a intenção e a pauta escolhidas,
+                        ignorando apenas a trava de artigo já publicado hoje.
                         Não altera o comportamento automático de notícias rápidas ou do cron.
                     </small>
                     <small class="text-muted d-block">
-                        Para novos artigos, insira pautas com <code>tipo='artigo'</code> na tabela
-                        <code>pautas</code> (ou via importadores) e deixe o Verificador aprovar.
+                        Para novos artigos, use
+                        <a href="{{ url_for('admin.pautas_admin') }}">/admin/pautas</a>
+                        com <code>tipo='artigo'</code> e deixe o Verificador aprovar.
                     </small>
                 </div>
             </div>
@@ -142,6 +172,68 @@
                     </button>
                 </div>
             </form>
+            <hr class="my-3">
+            <h6 class="mb-3">Automação Evergreen</h6>
+            <p class="text-muted mb-3">
+                Cadência independente do ciclo news/analysis. A execução ocorre no
+                próximo acionamento externo elegível (não há precisão maior que o cron).
+            </p>
+            <form method="post" action="{{ url_for('admin.agentes_julia_configurar_evergreen') }}" class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label for="evergreen_modo" class="form-label">Modo</label>
+                    <select id="evergreen_modo" name="evergreen_modo" class="form-select" required>
+                        <option value="manual" {% if evergreen_modo != 'automatico' %}selected{% endif %}>Somente manual</option>
+                        <option value="automatico" {% if evergreen_modo == 'automatico' %}selected{% endif %}>Automático</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label for="evergreen_frequencia_minutos" class="form-label">Intervalo (minutos)</label>
+                    <input
+                        id="evergreen_frequencia_minutos"
+                        name="evergreen_frequencia_minutos"
+                        type="number"
+                        min="{{ frequencia_minima_admin|default(5) }}"
+                        step="1"
+                        class="form-control"
+                        value="{{ evergreen_frequencia_minutos|default(180) }}"
+                        required
+                    >
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save me-1"></i> Salvar evergreen
+                    </button>
+                </div>
+            </form>
+            <ul class="mb-0 text-muted small mt-3">
+                <li><strong>Modo atual:</strong> {{ 'Automático' if evergreen_modo == 'automatico' else 'Somente manual' }}.</li>
+                <li><strong>Frequência evergreen salva:</strong> {{ evergreen_frequencia_label|default('3h') }}.</li>
+                <li><strong>Última execução automática evergreen:</strong>
+                    {% if evergreen_ultima_execucao_automatica %}
+                        {{ evergreen_ultima_execucao_automatica.strftime('%d/%m/%Y %H:%M') }} (UTC).
+                    {% else %}
+                        Nunca registrada.
+                    {% endif %}
+                </li>
+                <li><strong>Próxima elegibilidade evergreen:</strong>
+                    {% if evergreen_modo == 'automatico' %}
+                        {% if evergreen_proxima_elegibilidade %}
+                            {{ evergreen_proxima_elegibilidade.strftime('%d/%m/%Y %H:%M') }} (UTC).
+                        {% else %}
+                            {{ evergreen_proxima_elegibilidade_label|default('Elegível no próximo acionamento') }}
+                        {% endif %}
+                    {% else %}
+                        {{ evergreen_proxima_elegibilidade_label|default('Automação desabilitada — geração manual disponível.') }}
+                    {% endif %}
+                </li>
+                <li><strong>Estado:</strong>
+                    {% if evergreen_modo == 'automatico' %}
+                        Automático — gerará no máximo uma missão evergreen por acionamento elegível.
+                    {% else %}
+                        Automação desabilitada — geração manual disponível.
+                    {% endif %}
+                </li>
+            </ul>
             <hr class="my-3">
             <h6 class="mb-2">Próxima notícia automática (homolog/prod)</h6>
             <ul class="mb-0 text-muted small">

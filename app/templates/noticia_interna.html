@@ -12,11 +12,11 @@
 {% else %}{% set seo_image = base_url ~ "/static/img/logo.png" %}{% endif %}
 
 {% block title %}
-{{ noticia.titulo_julia }} | Agentefrete
+{{ seo.titulo }} | Agentefrete
 {% endblock %}
 
 {% block meta_description %}
-{{ noticia.resumo_julia or noticia.subtitulo or "Notícia sobre logística e transporte rodoviário." }}
+{{ seo.meta_description }}
 {% endblock %}
 
 {% block canonical %}{{ share_url_abs }}{% endblock %}
@@ -33,8 +33,8 @@
 <script type="application/ld+json">
 {
   "@context": {{ "https://schema.org" | tojson }},
-  "@type": {{ "NewsArticle" | tojson }},
-  "headline": {{ noticia.titulo_julia | tojson }},
+  "@type": {{ seo.schema_type | tojson }},
+  "headline": {{ seo.titulo | tojson }},
   "datePublished": {{ (noticia.publicado_em.isoformat() if noticia.publicado_em else "") | tojson }},
   "image": [{{ seo_image | tojson }}],
   "author": {
@@ -45,7 +45,7 @@
     "@type": {{ "Organization" | tojson }},
     "name": {{ "Agentefrete" | tojson }}
   },
-  "description": {{ (noticia.resumo_julia or "") | tojson }}
+  "description": {{ seo.meta_description | tojson }}
 }
 </script>
 {% endblock %}
@@ -78,7 +78,7 @@
                 {% endif %}
             </div>
 
-            <h1 class="fw-bold display-5 mb-3">{{ noticia.titulo_julia }}</h1>
+            <h1 class="fw-bold display-5 mb-3">{{ seo.titulo }}</h1>
             
             {# Subtítulo premium gerado pela Júlia para Artigos  #}
             {% if noticia.tipo == 'artigo' and noticia.subtitulo %}
@@ -100,7 +100,7 @@
         {# Imagem de capa dinâmica #}
         {% if url_imagem_resolvida %}
             <div class="mb-5">
-                <img src="{{ url_imagem_resolvida }}" class="img-fluid rounded shadow-sm w-100" alt="Capa da Matéria">
+                <img src="{{ url_imagem_resolvida }}" class="img-fluid rounded shadow-sm w-100" alt="{{ seo.alt }}">
             </div>
         {% endif %}
         
@@ -108,8 +108,8 @@
             {% if noticia.tipo == 'artigo' %}
                 {# Renderiza o conteúdo técnico em HTML se for Artigo  #}
                 <div class="artigo-texto">
-                    {% if noticia.conteudo_completo %}
-                        {{ noticia.conteudo_completo | safe }}
+                    {% if conteudo_html %}
+                        {{ conteudo_html | safe }}
                     {% else %}
                         <p class="text-muted italic">Conteúdo técnico em processamento pela Editora Júlia...</p>
                     {% endif %}
@@ -145,7 +145,7 @@
             <p class="mb-2 text-muted">Esta análise foi fundamentada na pauta original:</p>
             <p class="mb-0">
                 <a href="{{ noticia.link }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none fw-bold text-primary">
-                    <i class="bi bi-link-45deg"></i> {{ noticia.titulo_original }}
+                    <i class="bi bi-link-45deg"></i> {{ titulo_original_exibicao or noticia.titulo_original }}
                 </a>
             </p>
             
@@ -157,8 +157,11 @@
                 </div>
             {% endif %}
 
-            {# CTA e objetivo de lead (artigos Etapa 2) #}
-            {% if noticia.tipo == 'artigo' and noticia.cta %}
+            {% if seo.habilidade_href %}
+                <div class="mt-4 pt-4 border-top border-primary">
+                    <a class="btn btn-primary" href="{{ seo.habilidade_href }}">{{ seo.habilidade_rotulo }}</a>
+                </div>
+            {% elif noticia.tipo == 'artigo' and noticia.cta %}
                 <div class="mt-4 pt-4 border-top border-primary">
                     <p class="fw-bold mb-2">{{ noticia.cta }}</p>
                     {% if noticia.objetivo_lead %}

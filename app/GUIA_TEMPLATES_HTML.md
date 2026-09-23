@@ -74,11 +74,14 @@ Estado visual atual esperado:
 - `contrate_plano.html` oferece planos Free, Starter, Pro e Multiuser, resumo de contratação e início de Checkout Stripe;
 - Multiuser coleta dados empresariais, CNPJ e quantity antes do checkout;
 - perfil apresenta acesso à gestão Multiuser conforme autorização;
-- notificações possuem limitações de UX registradas na SCRUM-187: [estado de produção](../docs/estado_producao.md#pendências-conhecidas-e-pós-release).
+- `/perfil` apresenta segurança e conta, link de alteração de senha pelo fluxo de recuperação por e-mail, plano e notificações internas; a leitura é marcada sem navegar para JSON e o badge acompanha o total não lido. [Estado de produção](../docs/estado_producao.md#pendências-conhecidas-e-pós-release).
+- `/contrate-um-plano` usa Checkout Stripe incorporado quando iniciado; a consulta online ao ViaCEP auxilia o formulário Multiuser, com endereço editável e preenchimento manual em falha.
 
 ### Gestão Multiuser
 
 O painel `/gestao-multiuser` é do contratante ativo. Visibilidade de botões não substitui autorização no backend. Membros não compartilham documentos, chats ou resultados apenas por pertencerem à mesma Conta. Regras em [Multiuser V1](../docs/multiuser_v1.md).
+
+A tabela “Membros e assentos” usa a identidade dark com `table-responsive`; o ajuste visual não altera autorização nem regras de assentos.
 
 ### `noticia_interna.html`
 

@@ -218,7 +218,7 @@ def _build_contents_with_history(
         content = (msg.get("content") or "").strip()
         if not content:
             continue
-        label = "Usuário" if role == "user" else "Júlia"
+        label = "Usuário" if role == "user" else "AgenteFrete"
         parts.append(f"{label}: {content}\n\n")
     parts.append(f"Usuário: {new_message.strip()}\n\n")
     meta = suggestion_meta or {}
@@ -242,7 +242,7 @@ def _build_contents_with_history(
                 parts.append(f" | {snippet}")
             parts.append("\n")
         parts.append("\n")
-    parts.append("Júlia:")
+    parts.append("AgenteFrete:")
     prompt_text = "".join(parts)
     file_parts = [p for p in (document_file_parts or []) if p is not None]
     if file_parts:

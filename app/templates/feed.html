@@ -14,22 +14,22 @@ Notícias de logística, artigos estratégicos da Júlia e newsletter do Agentef
 {% include 'partials/app_global_header.html' %}
 <style>
   :root{
-    --ri-primary:#0D6EFD;
-    --ri-amber:#FFC107;
-    --ri-dark:#212529;
-    --ri-light:#F8F9FA;
-    --ri-soft:#CCE5FF;
-    --ri-success:#198754;
+    --ri-primary: var(--af-primary);
+    --ri-amber: var(--af-warning);
+    --ri-dark: var(--af-text);
+    --ri-light: var(--af-surface-elevated);
+    --ri-soft: var(--af-primary-soft);
+    --ri-success: var(--af-success);
   }
-  .ri-page{ color:var(--ri-dark); }
+  .ri-page{ color: var(--af-text); }
   .ri-card{
-    background:var(--ri-light);
-    border:1px solid rgba(33,37,41,.08);
-    border-radius:.75rem;
+    background: var(--af-surface);
+    border: 1px solid var(--af-border);
+    border-radius: .75rem;
   }
   .ri-card .card-header{
-    background:#fff;
-    border-bottom:1px solid rgba(33,37,41,.08);
+    background: var(--af-surface);
+    border-bottom: 1px solid var(--af-border);
   }
   .card-noticia{ transition:transform .2s; }
   .card-noticia:hover{ transform:translateY(-5px); }

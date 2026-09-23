@@ -26,6 +26,9 @@ CHAVE_RETENCAO_MESES_DADOS = "retencao_meses_dados"
 CHAVE_RETENCAO_MESES_IMAGENS = "retencao_meses_imagens"
 # Limite de tentativas de artigo por dia (meta diária) - Sprint 4
 CHAVE_MAX_TENTATIVAS_ARTIGO_DIA = "max_tentativas_artigo_dia"
+# SCRUM-215A/B: configuração evergreen (automação no orquestrador, cadência independente)
+CHAVE_EVERGREEN_AUTOMATICO_HABILITADO = "evergreen_automatico_habilitado"
+CHAVE_EVERGREEN_FREQUENCIA_MINUTOS = "evergreen_frequencia_minutos"
 
 DEFAULTS = {
     CHAVE_FREQUENCIA_HORAS: 3,
@@ -37,6 +40,8 @@ DEFAULTS = {
     CHAVE_RETENCAO_MESES_DADOS: 18,
     CHAVE_RETENCAO_MESES_IMAGENS: 2,
     CHAVE_MAX_TENTATIVAS_ARTIGO_DIA: 3,
+    CHAVE_EVERGREEN_AUTOMATICO_HABILITADO: 0,
+    CHAVE_EVERGREEN_FREQUENCIA_MINUTOS: 180,
 }
 
 
@@ -177,6 +182,64 @@ def configurar_frequencia_minutos(valor: int) -> None:
     cfg_horas.valor_inteiro = max(1, int(math.ceil(minutos / 60.0)))
     cfg_horas.valor_texto = None
     cfg_horas.valor_real = None
+    db.session.commit()
+
+
+def get_evergreen_automatico_habilitado() -> bool:
+    """True se o modo automático evergreen está configurado (execução automática: bloco 215B)."""
+    v = _get_valor(CHAVE_EVERGREEN_AUTOMATICO_HABILITADO, "inteiro")
+    if v is None:
+        return bool(DEFAULTS[CHAVE_EVERGREEN_AUTOMATICO_HABILITADO])
+    return bool(int(v))
+
+
+def get_evergreen_frequencia_minutos() -> int:
+    """Intervalo configurado para evergreen automático (minutos). Não dispara execução neste bloco."""
+    v = _get_valor(CHAVE_EVERGREEN_FREQUENCIA_MINUTOS, "inteiro")
+    if v is None:
+        return int(DEFAULTS[CHAVE_EVERGREEN_FREQUENCIA_MINUTOS])
+    return max(1, int(v))
+
+
+def configurar_evergreen(
+    *,
+    automatico_habilitado: bool,
+    frequencia_minutos: int | None = None,
+) -> None:
+    """
+    Persiste configuração evergreen em ConfigRegras.
+    Não altera frequencia_minutos do ciclo legado.
+    """
+    bootstrap_regras()
+
+    cfg_auto = ConfigRegras.query.filter_by(
+        chave=CHAVE_EVERGREEN_AUTOMATICO_HABILITADO
+    ).first()
+    if not cfg_auto:
+        cfg_auto = ConfigRegras(
+            chave=CHAVE_EVERGREEN_AUTOMATICO_HABILITADO,
+            descricao="Evergreen automático habilitado (0=manual, 1=automático)",
+        )
+        db.session.add(cfg_auto)
+    cfg_auto.valor_inteiro = 1 if automatico_habilitado else 0
+    cfg_auto.valor_texto = None
+    cfg_auto.valor_real = None
+
+    if frequencia_minutos is not None:
+        minutos = max(1, int(frequencia_minutos))
+        cfg_freq = ConfigRegras.query.filter_by(
+            chave=CHAVE_EVERGREEN_FREQUENCIA_MINUTOS
+        ).first()
+        if not cfg_freq:
+            cfg_freq = ConfigRegras(
+                chave=CHAVE_EVERGREEN_FREQUENCIA_MINUTOS,
+                descricao="Intervalo em minutos para evergreen automático",
+            )
+            db.session.add(cfg_freq)
+        cfg_freq.valor_inteiro = minutos
+        cfg_freq.valor_texto = None
+        cfg_freq.valor_real = None
+
     db.session.commit()
 
 

@@ -6,7 +6,7 @@ Saída: True apenas quando publicação concluída no formato correto; falhas au
 import logging
 import re
 import json
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.extensions import db
 from app.models import Pauta, SerieItemEditorial
@@ -16,14 +16,30 @@ from app.run_julia_agente_imagem import gerar_imagem_publicavel, classificar_ori
 from app.run_julia_agente_publicacao import publicar
 from app.run_julia_agente_publisher import publicar_multicanal, RESULTADO_FALHA_TOTAL
 from app.run_julia_agente_qualidade import validar_conteudo
+from app.editorial_metadata import (
+    anexar_editorial_em_assets,
+    intencao_explicita_do_payload,
+)
 from app.run_julia_agente_redacao import gerar_conteudo
 from app.run_julia_regras import status_verificacao_permitidos
 from app.services.pauta_service import (
     aplicar_filtro_fila_editorial_elegivel,
     arquivar_pautas_automaticas_vencidas,
+    obter_pauta_artigo_elegivel_por_id,
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel: chave pauta_id realmente ausente no payload/metadados.
+_PAUTA_ID_AUSENTE = object()
+
+
+class _PautaIdResolvido(NamedTuple):
+    """Distingue ausência (legado) de ID explícito válido/inválido (SCRUM-215A)."""
+
+    explicit: bool
+    pauta_id: int | None
+    invalid: bool
 
 
 def _limpar_texto_prompt(v: str | None, limite: int) -> str:
@@ -43,21 +59,27 @@ def _montar_prompt_imagem_contextual(conteudo: dict[str, Any], pauta: Pauta, tip
     resumo = _limpar_texto_prompt(conteudo.get("resumo_julia"), 220)
     fonte = _limpar_texto_prompt(pauta.fonte, 80)
     conteudo_texto = _limpar_texto_prompt(conteudo.get("conteudo_completo"), 450)
-    tema_logistico = _limpar_texto_prompt(pauta.titulo_original, 120)
+    tema_logistico = _limpar_texto_prompt(conteudo.get("tema") or pauta.titulo_original, 120)
 
     if prompt_base and len(prompt_base) >= 30:
         contexto_base = prompt_base
     else:
         contexto_base = " | ".join([x for x in [titulo, subtitulo, resumo, conteudo_texto] if x])
-    tipo_desc = "strategic long-form article" if (tipo_missao or "noticia") == "artigo" else "fast logistics insight"
+    intencao = (conteudo.get("intencao_editorial") or "").strip().lower()
+    if intencao not in ("news", "analysis", "evergreen"):
+        intencao = "analysis" if (tipo_missao or "noticia") == "artigo" else "news"
+    tipo_desc = {
+        "news": "short factual logistics news",
+        "analysis": "practical logistics analysis",
+        "evergreen": "evergreen logistics explainer",
+    }[intencao]
     prompt_final = (
-        "Create a unique professional editorial cover image for a Brazilian logistics publication. "
-        "No written text in the image, no watermark, no real brand logos, "
-        "realistic high-quality photography style with editorial framing. "
-        "The scene must be specific to the article context and avoid generic visuals. "
+        "Professional editorial photo for a Brazilian logistics publication, "
+        "semantically tied to the theme, attractive and specific, no clickbait scene. "
+        "No written text, no watermark, no real brand logos. "
         f"Content type: {tipo_desc}. Source: {fonte or 'logistics portal'}. "
-        f"Logistics theme: {tema_logistico or 'global supply chain operations'}. "
-        f"Context: {contexto_base or 'global supply chain operations'}"
+        f"Logistics theme: {tema_logistico or 'supply chain operations'}. "
+        f"Context: {contexto_base or 'supply chain operations'}"
     )
     return prompt_final[:500]
 
@@ -104,27 +126,97 @@ def _status_verificacao_permitidos() -> list[str]:
     return status_verificacao_permitidos()
 
 
-def obter_pauta_validada(tipo_missao: str, mission_id: str | None) -> Pauta | None:
+def _raw_pauta_id_do_payload(payload: dict | None) -> Any:
+    """Valor bruto de pauta_id no topo ou metadados; _PAUTA_ID_AUSENTE se chave inexistente."""
+    if not isinstance(payload, dict):
+        return _PAUTA_ID_AUSENTE
+    if "pauta_id" in payload:
+        return payload["pauta_id"]
+    metadados = payload.get("metadados")
+    if isinstance(metadados, dict) and "pauta_id" in metadados:
+        return metadados["pauta_id"]
+    return _PAUTA_ID_AUSENTE
+
+
+def _resolver_pauta_id_do_payload(payload: dict | None) -> _PautaIdResolvido:
+    """
+    Resolve pauta_id sem colapsar ausente e malformado em None.
+
+    - chave ausente ou None (callers opcionais) → explicit=False (seleção legada)
+    - int / string numérica válida → explicit=True, pauta_id=<int>
+    - valor fornecido malformado (ex.: "abc", "", [], {}) → explicit=True, invalid=True
+    """
+    bruto = _raw_pauta_id_do_payload(payload)
+    if bruto is _PAUTA_ID_AUSENTE or bruto is None:
+        return _PautaIdResolvido(explicit=False, pauta_id=None, invalid=False)
+
+    # Valor explicitamente presente e não-None: não pode cair no legado.
+    if isinstance(bruto, bool):
+        return _PautaIdResolvido(explicit=True, pauta_id=None, invalid=True)
+    if isinstance(bruto, int):
+        return _PautaIdResolvido(explicit=True, pauta_id=bruto, invalid=False)
+    if isinstance(bruto, str):
+        texto = bruto.strip()
+        if not texto:
+            # "" não é representação usada pelos callers atuais para ausência no payload.
+            return _PautaIdResolvido(explicit=True, pauta_id=None, invalid=True)
+        try:
+            return _PautaIdResolvido(explicit=True, pauta_id=int(texto), invalid=False)
+        except ValueError:
+            return _PautaIdResolvido(explicit=True, pauta_id=None, invalid=True)
+    return _PautaIdResolvido(explicit=True, pauta_id=None, invalid=True)
+
+
+def obter_pauta_validada(
+    tipo_missao: str,
+    mission_id: str | None,
+    pauta_id: int | None = None,
+) -> Pauta | None:
     """
     Retorna uma pauta pendente elegível pelo Verificador para o tipo (noticia | artigo).
     Por padrão só 'aprovado'; pode incluir 'revisar' via env em homolog.
     Marca como em_processamento e opcionalmente associa mission_id.
+
+    Se pauta_id for informado, consome EXATAMENTE essa pauta (sem fallback).
+    Se não for elegível, retorna None e não seleciona outra.
     """
     tipo = (tipo_missao or "noticia").lower()
     status_permitidos = _status_verificacao_permitidos()
     try:
         arquivar_pautas_automaticas_vencidas()
-        pauta = (
-            aplicar_filtro_fila_editorial_elegivel(
-                Pauta.query.filter(
-                Pauta.tipo == tipo,
-                Pauta.status == "pendente",
-                Pauta.status_verificacao.in_(status_permitidos),
+        if pauta_id is not None:
+            if tipo == "artigo":
+                pauta = obter_pauta_artigo_elegivel_por_id(pauta_id)
+            else:
+                pauta = (
+                    aplicar_filtro_fila_editorial_elegivel(
+                        Pauta.query.filter(
+                            Pauta.id == int(pauta_id),
+                            Pauta.tipo == tipo,
+                            Pauta.status == "pendente",
+                            Pauta.status_verificacao.in_(status_permitidos),
+                        )
+                    ).first()
+                )
+            if not pauta:
+                logger.warning(
+                    "Júlia pipeline: pauta_id=%s informada mas inexistente/inelegível (tipo=%s); sem fallback.",
+                    pauta_id,
+                    tipo,
+                )
+                return None
+        else:
+            pauta = (
+                aplicar_filtro_fila_editorial_elegivel(
+                    Pauta.query.filter(
+                        Pauta.tipo == tipo,
+                        Pauta.status == "pendente",
+                        Pauta.status_verificacao.in_(status_permitidos),
+                    )
+                )
+                .order_by(Pauta.created_at.asc())
+                .first()
             )
-            )
-            .order_by(Pauta.created_at.asc())
-            .first()
-        )
         if not pauta:
             return None
         pauta.status = "em_processamento"
@@ -181,13 +273,62 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
     """
     mission_id = payload.get("mission_id", "")
     tipo_missao = (payload.get("tipo_missao") or "noticia").lower()
-    logger.info("Júlia pipeline: mission_id=%s tipo=%s", mission_id, tipo_missao)
+    pauta_resolvida = _resolver_pauta_id_do_payload(payload)
+    logger.info(
+        "Júlia pipeline: mission_id=%s tipo=%s pauta_id=%s explicit=%s invalid=%s",
+        mission_id,
+        tipo_missao,
+        pauta_resolvida.pauta_id,
+        pauta_resolvida.explicit,
+        pauta_resolvida.invalid,
+    )
 
     with app_flask.app_context():
         pauta = None
         try:
-            pauta = obter_pauta_validada(tipo_missao, mission_id)
+            if pauta_resolvida.explicit and pauta_resolvida.invalid:
+                logger.warning(
+                    "Júlia pipeline: pauta_id explícito malformado; sem fallback legado."
+                )
+                auditoria_registrar(
+                    tipo_decisao="julia",
+                    decisao="Pauta explícita inválida ou inelegível",
+                    contexto={
+                        "mission_id": mission_id,
+                        "tipo_missao": tipo_missao,
+                        "pauta_id": _raw_pauta_id_do_payload(payload),
+                        "pauta_id_malformado": True,
+                    },
+                    resultado="falha",
+                    detalhe="pauta_id explícito malformado; sem fallback para outra pauta.",
+                )
+                return False
+
+            pauta_id_explicito = (
+                pauta_resolvida.pauta_id if pauta_resolvida.explicit else None
+            )
+            pauta = obter_pauta_validada(
+                tipo_missao, mission_id, pauta_id=pauta_id_explicito
+            )
             if not pauta:
+                if pauta_resolvida.explicit:
+                    logger.warning(
+                        "Júlia pipeline: pauta explícita %s inválida/inelegível; sem fallback.",
+                        pauta_id_explicito,
+                    )
+                    auditoria_registrar(
+                        tipo_decisao="julia",
+                        decisao="Pauta explícita inválida ou inelegível",
+                        contexto={
+                            "mission_id": mission_id,
+                            "tipo_missao": tipo_missao,
+                            "pauta_id": pauta_id_explicito,
+                            "status_verificacao_permitidos": _status_verificacao_permitidos(),
+                        },
+                        resultado="falha",
+                        detalhe="Pauta informada não existe ou não é elegível; sem fallback.",
+                    )
+                    return False
                 logger.warning("Júlia pipeline: nenhuma pauta pendente/elegível para tipo=%s", tipo_missao)
                 auditoria_registrar(
                     tipo_decisao="julia",
@@ -225,7 +366,13 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
                 resultado="sucesso",
             )
 
-            conteudo = gerar_conteudo(pauta.titulo_original, pauta.fonte or "", pauta.link, tipo_missao)
+            conteudo = gerar_conteudo(
+                pauta.titulo_original,
+                pauta.fonte or "",
+                pauta.link,
+                tipo_missao,
+                intencao_editorial=intencao_explicita_do_payload(payload),
+            )
             if not isinstance(conteudo, dict) or not conteudo:
                 logger.error("Júlia pipeline: falha na redação")
                 marcar_pauta_falha(pauta.id)
@@ -358,14 +505,17 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
             url_master = design.get("url_imagem_master") or conteudo.get("url_imagem")
             assets_por_canal = design.get("assets_por_canal") or {}
             assets_json = normalizar_assets_json(assets_por_canal)
-            assets_json = _normalizar_assets_observabilidade(
-                assets_json,
-                imagem_status=imagem_info.get("status") or "desconhecido",
-                imagem_origem=origem_imagem,
-                imagem_motivo=imagem_info.get("motivo") or "",
-                prompt_imagem_usado=prompt_imagem,
-                imagem_url_final=url_master,
-                imagem_provider=imagem_info.get("provider") or "desconhecido",
+            assets_json = anexar_editorial_em_assets(
+                _normalizar_assets_observabilidade(
+                    assets_json,
+                    imagem_status=imagem_info.get("status") or "desconhecido",
+                    imagem_origem=origem_imagem,
+                    imagem_motivo=imagem_info.get("motivo") or "",
+                    prompt_imagem_usado=prompt_imagem,
+                    imagem_url_final=url_master,
+                    imagem_provider=imagem_info.get("provider") or "desconhecido",
+                ),
+                conteudo.get("editorial") if isinstance(conteudo.get("editorial"), dict) else None,
             )
             auditoria_registrar(
                 tipo_decisao="designer",

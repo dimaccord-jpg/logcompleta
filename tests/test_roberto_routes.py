@@ -30,7 +30,7 @@ def _force_login(client, web, monkeypatch, *, is_admin=False):
     return user
 
 
-def test_fretes_publica_quando_nao_autenticado(monkeypatch):
+def test_fretes_exige_login_quando_nao_autenticado(monkeypatch):
     web = _load_web_module()
     monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
     monkeypatch.setattr(web, "_load_indices_payload", lambda: {"origens": [], "destinos": []})
@@ -44,14 +44,13 @@ def test_fretes_publica_quando_nao_autenticado(monkeypatch):
     monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", _authz)
 
     client = web.app.test_client()
-    resp = client.get("/fretes")
-    assert resp.status_code == 200
-    html = resp.get_data(as_text=True)
-    assert "Análise de Fretes com Inteligência Artificial" in html
-    assert "Faca login para enviar planilhas" in html
-    assert "window.ROBERTO_BI_AUTHENTICATED = false;" in html
-    assert "const redirectUnauthenticatedPrivateAction = true;" in html
-    assert "window.location.href = loginUrl;" in html
+    resp = client.get("/fretes", follow_redirects=False)
+    assert resp.status_code in (302, 303)
+    location = resp.headers.get("Location") or ""
+    assert "/login" in location
+    assert "next=" in location
+    assert "%2Ffretes" in location or "next=/fretes" in location
+    assert "Análise de Fretes com Inteligência Artificial" not in (resp.get_data(as_text=True) or "")
     assert calls["authz"] == 0
 
 

@@ -214,11 +214,26 @@
     let embeddedCheckout = null;
     let confirmacaoPendente = null;
     let checkoutInFlight = false;
+    let checkoutGeneration = 0;
 
-    function setBotoesCheckoutDesabilitados(desabilitado) {
-        botoes.forEach((btn) => {
-            btn.disabled = !!desabilitado;
-        });
+    function limparCheckoutEmbedded() {
+        if (embeddedCheckout && typeof embeddedCheckout.destroy === "function") {
+            try {
+                embeddedCheckout.destroy();
+            } catch (_err) {
+                /* ignore destroy failures; container is cleared below */
+            }
+        }
+        embeddedCheckout = null;
+        if (embedEl) {
+            embedEl.innerHTML = "";
+        }
+    }
+
+    function invalidarCheckoutPendente() {
+        checkoutGeneration += 1;
+        limparCheckoutEmbedded();
+        checkoutInFlight = false;
     }
 
     function ehDowngrade(planoDestino) {
@@ -272,8 +287,9 @@
         if (checkoutInFlight) {
             return;
         }
+        const generation = ++checkoutGeneration;
+        limparCheckoutEmbedded();
         checkoutInFlight = true;
-        setBotoesCheckoutDesabilitados(true);
         statusEl.className = "alert alert-info small mb-3";
         statusEl.textContent = "Iniciando jornada de contratacao...";
         try {
@@ -288,6 +304,9 @@
                 body: JSON.stringify(body),
             });
             const payload = await resp.json();
+            if (generation !== checkoutGeneration) {
+                return;
+            }
             if (!resp.ok || !payload.ok) {
                 throw new Error(payload.erro || "Falha ao iniciar checkout.");
             }
@@ -320,22 +339,39 @@
             if (!stripe) {
                 throw new Error("Stripe.js indisponivel.");
             }
-            if (embeddedCheckout && typeof embeddedCheckout.destroy === "function") {
-                embeddedCheckout.destroy();
+            if (generation !== checkoutGeneration) {
+                return;
             }
-            embeddedCheckout = await stripe.initEmbeddedCheckout({
+            const checkoutInstance = await stripe.initEmbeddedCheckout({
                 clientSecret: payload.checkout_client_secret,
             });
+            if (generation !== checkoutGeneration) {
+                if (checkoutInstance && typeof checkoutInstance.destroy === "function") {
+                    try {
+                        checkoutInstance.destroy();
+                    } catch (_err) {
+                        /* ignore */
+                    }
+                }
+                return;
+            }
+            limparCheckoutEmbedded();
+            embeddedCheckout = checkoutInstance;
             embedEl.innerHTML = "";
             embeddedCheckout.mount("#checkout-embed");
             statusEl.className = "alert alert-success small mb-3";
             statusEl.textContent = "Checkout iniciado. Complete a contratacao neste painel.";
         } catch (err) {
+            if (generation !== checkoutGeneration) {
+                return;
+            }
+            limparCheckoutEmbedded();
             statusEl.className = "alert alert-danger small mb-3";
             statusEl.textContent = err && err.message ? err.message : "Falha ao iniciar checkout.";
         } finally {
-            checkoutInFlight = false;
-            setBotoesCheckoutDesabilitados(false);
+            if (generation === checkoutGeneration) {
+                checkoutInFlight = false;
+            }
         }
     }
 
@@ -594,6 +630,7 @@
                 return;
             }
             if ((planoCodigo || "").toLowerCase() === "multiuser") {
+                invalidarCheckoutPendente();
                 if (formMultiuser) {
                     formMultiuser.classList.remove("d-none");
                     const minimo = btn.getAttribute("data-quantidade-minima");

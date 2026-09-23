@@ -1,6 +1,6 @@
 # Execução Local
 
-Referência revisada em 2026-09-19. A visão funcional oficial está em `docs/arquitetura_oficial.md` e `docs/estado_producao.md`.
+Referência funcional da árvore de produção `bd874ee`. A visão oficial está em [arquitetura](../docs/arquitetura_oficial.md) e [estado de produção](../docs/estado_producao.md).
 
 ## Pré-requisitos
 
@@ -8,6 +8,7 @@ Referência revisada em 2026-09-19. A visão funcional oficial está em `docs/ar
 - ativar a `.venv` local quando aplicável;
 - usar `APP_ENV=dev`, banco de desenvolvimento e definir `DATABASE_URL`, `SECRET_KEY`, `APP_DATA_DIR`, `INDICES_FILE_PATH` e `PUBLIC_BASE_URL`;
 - homologação usa `homolog`/`APP_ENV=homolog`; produção usa `producao`/`APP_ENV=prod`, em serviços Render separados.
+- instalar `requirements.txt` para executar o runtime; a Sprint 11 acrescentou `pypdf>=4.2.0,<6`, usado pelo conversor local de texto de PDF em `app/cleiton_doc_converters.py`.
 
 ## Comandos principais
 

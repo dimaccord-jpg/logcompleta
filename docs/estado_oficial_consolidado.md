@@ -1,6 +1,6 @@
 # Estado oficial consolidado — redirecionamento
 
-Este caminho permanece para compatibilidade com links antigos. Não mantém uma segunda descrição do sistema.
+Este caminho permanece para compatibilidade com links antigos. O estado operacional da produção `bd874ee` (Sprint 11, Multiuser V1) está nos guias canônicos abaixo; este redirecionamento evita uma segunda descrição divergente.
 
 A documentação canônica vigente é:
 

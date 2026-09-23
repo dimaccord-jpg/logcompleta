@@ -175,9 +175,11 @@ def test_agente_compara_menu_admin_mostra_atalhos_completos(monkeypatch):
 def test_agente_compara_not_in_base_html_main_nav():
     base = pathlib.Path("app/templates/base.html").read_text(encoding="utf-8")
     source = pathlib.Path("app/templates/agente_compara.html").read_text(encoding="utf-8")
-    assert "Compare Tabelas" in base
-    assert "agente-compara" in base
-    assert "agente_compara" in base
+    nav = pathlib.Path("app/shell_navigation.py").read_text(encoding="utf-8")
+    assert 'partials/shell_primary_nav.html' in base
+    assert "Comparar tabelas" in nav
+    assert 'destination_id="agente_compara"' in nav
+    assert "AgenteCompara" not in nav
     assert 'class="container-fluid agente-compara-layout mb-5"' in source
 
 

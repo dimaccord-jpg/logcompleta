@@ -1,12 +1,59 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-br" data-theme="dark" data-theme-preference="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% set base_url = "https://www.agentefrete.com.br" %}
     <meta name="theme-color" content="#0A0A0F">
+    <script>
+        /* af-theme-init: roda antes do CSS para evitar flash de tema.
+           Tema é global em toda superfície que herda base.html. */
+        (function (global) {
+            var STORAGE_KEY = "af-theme";
+            var ALLOWED = { system: true, dark: true, light: true };
+            function readPreference() {
+                try {
+                    var stored = global.localStorage.getItem(STORAGE_KEY);
+                    if (stored && ALLOWED[stored]) return stored;
+                } catch (e) {}
+                return "dark";
+            }
+            function resolveTheme(preference) {
+                if (!ALLOWED[preference]) preference = "dark";
+                if (preference !== "system") return preference;
+                try {
+                    if (global.matchMedia && global.matchMedia("(prefers-color-scheme: light)").matches) {
+                        return "light";
+                    }
+                } catch (e) {}
+                return "dark";
+            }
+            function applyTheme(preference, persist) {
+                var root = document.documentElement;
+                if (!ALLOWED[preference]) preference = "dark";
+                var theme = resolveTheme(preference);
+                root.setAttribute("data-theme", theme);
+                root.setAttribute("data-theme-preference", preference);
+                var meta = document.querySelector('meta[name="theme-color"]');
+                if (meta) meta.setAttribute("content", theme === "light" ? "#f4f7f9" : "#0A0A0F");
+                if (persist) {
+                    try { global.localStorage.setItem(STORAGE_KEY, preference); } catch (e) {}
+                }
+                var nodes = document.querySelectorAll("[data-af-theme-select]");
+                for (var i = 0; i < nodes.length; i++) nodes[i].value = preference;
+                return { preference: preference, theme: theme };
+            }
+            global.AFTheme = {
+                STORAGE_KEY: STORAGE_KEY,
+                readPreference: readPreference,
+                resolveTheme: resolveTheme,
+                applyTheme: applyTheme
+            };
+            applyTheme(readPreference(), false);
+        })(window);
+    </script>
     <title>
-    {% block title %}Agentefrete | Inteligência de Dados para Logística{% endblock %}
+    {% block title %}AgenteFrete | Inteligência de Dados para Logística{% endblock %}
     </title>
     <meta name="description" content="{% block meta_description %}Plataforma de inteligência de dados para logística e transporte.{% endblock %}">
     <link rel="canonical" href="{% block canonical %}{{ base_url }}{{ request.path }}{% endblock %}">
@@ -32,146 +79,6 @@
     {% include "partials/pixel_base.html" %}
     {% include "partials/openai_ads_pixel.html" %}
     {% endif %}
-    <style>
-        :root {
-            /* Cores de Alto Contraste */
-            --sidebar-bg: #050c16;      /* Fundo profundo para contraste */
-            --sidebar-hover: #112240;
-            --laranja-log: #ff6b35;
-            --texto-muted: #a8b2d1;
-            --sidebar-width: 260px;
-            --sidebar-collapsed: 80px;
-        }
-
-        body { background-color: #f4f7f9; transition: all 0.3s; overflow-x: hidden; }
-
-        /* SIDEBAR ESTRUTURA */
-        #sidebar {
-            width: var(--sidebar-width);
-            height: 100vh;
-            position: fixed;
-            background: var(--sidebar-bg);
-            color: white;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            flex-direction: column;
-            z-index: 1000;
-            box-shadow: 4px 0 10px rgba(0,0,0,0.2);
-        }
-
-        #sidebar.active { width: var(--sidebar-collapsed); }
-
-        /* HEADER CENTRALIZADO */
-        .sidebar-header { 
-            padding: 25px 15px; 
-            display: flex; 
-            flex-direction: column;
-            align-items: center; 
-            justify-content: center;
-            background: rgba(0,0,0,0.3);
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-            min-height: 120px;
-            text-align: center;
-        }
-
-        .logo-img { 
-            max-width: 180px; 
-            height: auto; 
-            margin-bottom: 15px;
-            transition: 0.3s;
-        }
-
-        #sidebarCollapse {
-            background: rgba(255,255,255,0.05);
-            border-radius: 8px;
-            padding: 5px 10px;
-            transition: 0.2s;
-        }
-        #sidebarCollapse:hover { background: var(--laranja-log); }
-
-        /* MODO RECOLHIDO */
-        #sidebar.active .logo-img { display: none; }
-        #sidebar.active .logo-icon { display: block !important; }
-        .logo-icon {
-            display: none;
-            width: 72px;
-            height: auto;
-            max-height: 72px;
-            object-fit: contain;
-            margin-bottom: 10px;
-        }
-
-        /* MENU ITENS */
-        .nav-list { list-style: none; padding: 0; margin: 0; display: block; }
-        .nav-item { 
-            padding: 14px 25px; 
-            display: flex; 
-            align-items: center; 
-            color: var(--texto-muted); 
-            text-decoration: none; 
-            transition: 0.2s; 
-            white-space: nowrap;
-            font-weight: 500;
-        }
-        .nav-item i { font-size: 1.3rem; min-width: 45px; }
-        .nav-item:hover, .nav-item.active { 
-            color: white; 
-            background: var(--sidebar-hover); 
-            border-left: 4px solid var(--laranja-log); 
-        }
-
-        /* RODAPÉ — única área visível do menu lateral */
-        .sidebar-footer { 
-            padding: 20px; 
-            margin-top: auto;
-            border-top: 1px solid rgba(255,255,255,0.05); 
-            background: rgba(0,0,0,0.2); 
-        }
-        .sidebar-footer-renovacao {
-            font-size: 0.7rem;
-            line-height: 1.25;
-        }
-
-        #content {
-            margin-left: var(--sidebar-width);
-            width: calc(100% - var(--sidebar-width));
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            min-height: 100vh;
-        }
-        #content.active {
-            margin-left: var(--sidebar-collapsed);
-            width: calc(100% - var(--sidebar-collapsed));
-        }
-
-        #sidebar.active .menu-text { display: none; }
-
-        /* ALERTAS FLASH */
-        .flash-messages {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 1050;
-        }
-
-        /* NAVBAR MOBILE (substitui sidebar em celulares) */
-        .mobile-navbar {
-            background: var(--sidebar-bg);
-        }
-
-        @media (max-width: 767.98px) {
-            #sidebar {
-                display: none;
-            }
-            #content,
-            #content.active {
-                margin-left: 0;
-                width: 100%;
-            }
-            .flash-messages {
-                top: 70px;
-            }
-        }
-    </style>
     {% block extra_head %}{% endblock %}
 </head>
 <body{% if privacy_marketing_state|default('unknown') == 'unknown' %} class="af-privacy-banner-visible"{% endif %}>
@@ -202,7 +109,7 @@
                 <i class="bi bi-list fs-4"></i>
             </button>
             <span class="navbar-brand mb-0 h6 text-truncate ms-2">
-                Agentefrete
+                AgenteFrete
             </span>
         </div>
     </nav>
@@ -211,82 +118,60 @@
     <div class="offcanvas offcanvas-start text-bg-dark d-md-none" tabindex="-1" id="mobileMenu" aria-labelledby="mobileMenuLabel">
         <div class="offcanvas-header">
             <h5 class="offcanvas-title" id="mobileMenuLabel">Menu</h5>
-            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Fechar menu"></button>
         </div>
         <div class="offcanvas-body d-flex flex-column">
-            <a href="{{ url_for('index') }}" class="nav-item mb-1">
-                <i class="bi bi-house-door"></i>
-                <span class="menu-text">Home</span>
-            </a>
-            <a href="{{ cleide_auditoria_href }}" class="nav-item mb-1">
-                <i class="bi bi-clipboard-check"></i>
-                <span class="menu-text">Auditoria de Frete</span>
-            </a>
-            <a href="{{ agente_compara_href }}" class="nav-item mb-1">
-                <i class="bi bi-table"></i>
-                <span class="menu-text">Compare Tabelas</span>
-            </a>
-            <a href="{{ feed_href }}" class="nav-item mb-1">
-                <i class="bi bi-rss"></i>
-                <span class="menu-text">Feed</span>
-            </a>
+            <div class="af-mobile-menu-main">
+                <div data-shell-nav="mobile">
+                    {% set nav_variant = 'mobile' %}
+                    {% include "partials/shell_primary_nav.html" %}
+                </div>
 
-            <hr class="border-secondary my-3">
+                <hr class="border-secondary my-3">
 
-            {% if current_user.is_authenticated %}
-                <div class="mb-3 small text-muted">
-                    <div class="d-flex align-items-center mb-2">
-                        <i class="bi bi-person-circle fs-4 me-2 text-warning"></i>
-                        <div>
-                            <div class="text-uppercase" style="font-size: 0.65rem;">Bem-vindo</div>
-                            <div class="fw-semibold">
-                                {{ current_user.full_name or current_user.email }}
+                {% if current_user.is_authenticated %}
+                    <div class="mb-3 small text-muted">
+                        <div class="d-flex align-items-center mb-2">
+                            <i class="bi bi-person-circle fs-4 me-2 text-warning"></i>
+                            <div>
+                                <div class="text-uppercase" style="font-size: 0.65rem;">Bem-vindo</div>
+                                <div class="fw-semibold">
+                                    {{ current_user.full_name or current_user.email }}
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-                <a href="{{ url_for('user.perfil') }}" class="btn btn-outline-light btn-sm mb-2 text-start">
-                    <i class="bi bi-gear me-1"></i> Área do Usuário
-                </a>
-                <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm text-start">
-                    <i class="bi bi-box-arrow-right me-1"></i> Sair
-                </a>
-            {% else %}
-                <a href="{{ url_for('login') }}" class="btn btn-outline-light btn-sm text-start">
-                    <i class="bi bi-box-arrow-in-right me-1"></i> Login / Cadastro
-                </a>
-            {% endif %}
+                    <a href="{{ url_for('user.perfil') }}" class="btn btn-outline-light btn-sm mb-2 text-start">
+                        <i class="bi bi-gear me-1"></i> Área do Usuário
+                    </a>
+                    <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm text-start">
+                        <i class="bi bi-box-arrow-right me-1"></i> Sair
+                    </a>
+                {% else %}
+                    <a href="{{ url_for('login') }}" class="btn btn-outline-light btn-sm text-start">
+                        <i class="bi bi-box-arrow-in-right me-1"></i> Login / Cadastro
+                    </a>
+                {% endif %}
+            </div>
+            {% set af_theme_variant = 'mobile' %}
+            {% include "partials/af_theme_control.html" %}
         </div>
     </div>
 
     <!-- SIDEBAR DESKTOP/TABLET -->
-    <nav id="sidebar" class="active d-none d-md-flex">
+    <nav id="sidebar" class="active d-none d-md-flex" aria-label="Navegação principal">
         <div class="sidebar-header">
             <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Logo" class="logo-img">
             <img src="{{ url_for('static', filename='img/logo_simples.png') }}" alt="Logo simplificada" class="logo-icon">
             
-            <button type="button" id="sidebarCollapse" class="btn text-white shadow-none">
-                <i class="bi bi-list fs-4"></i>
+            <button type="button" id="sidebarCollapse" class="btn text-white shadow-none" aria-expanded="false" aria-controls="sidebar" aria-label="Expandir menu lateral">
+                <i class="bi bi-list fs-4" aria-hidden="true"></i>
             </button>
         </div>
 
-        <div class="nav-list">
-            <a href="{{ url_for('index') }}" class="nav-item active">
-                <i class="bi bi-house-door"></i>
-                <span class="menu-text">Home</span>
-            </a>
-            <a href="{{ cleide_auditoria_href }}" class="nav-item">
-                <i class="bi bi-clipboard-check"></i>
-                <span class="menu-text">Auditoria de Frete</span>
-            </a>
-            <a href="{{ agente_compara_href }}" class="nav-item">
-                <i class="bi bi-table"></i>
-                <span class="menu-text">Compare Tabelas</span>
-            </a>
-            <a href="{{ feed_href }}" class="nav-item">
-                <i class="bi bi-rss"></i>
-                <span class="menu-text">Feed</span>
-            </a>
+        <div class="nav-list" data-shell-nav="desktop">
+            {% set nav_variant = 'desktop' %}
+            {% include "partials/shell_primary_nav.html" %}
         </div>
 
         <div class="sidebar-footer">
@@ -354,6 +239,8 @@
                     <span class="menu-text">Login / Cadastro</span>
                 </a>
             {% endif %}
+            {% set af_theme_variant = 'sidebar' %}
+            {% include "partials/af_theme_control.html" %}
         </div>
     </nav>
 
@@ -361,18 +248,17 @@
         {% block content %}{% endblock %}
     </div>
     {% if not request.path.startswith('/admin/confirmar-promocao-admin/') and not request.path.startswith('/admin/confirmar-revogacao-admin/') %}
-    <footer class="py-4 mt-4" style="background:#050c16; border-top:1px solid rgba(255,255,255,.08); font-size:0.8125rem;">
+    <footer class="af-shell-footer py-4 mt-4">
         <div class="container text-center">
             <a
                 href="{{ url_for('privacy_policy') }}"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="text-decoration-none"
-                style="color:#a8b2d1; font-weight:500;"
+                class="af-shell-footer-link text-decoration-none"
             >
                 Política de Privacidade
             </a>
-            <span style="color:#5A5A72;"> · </span>
+            <span class="af-shell-footer-sep"> · </span>
             <button
                 type="button"
                 id="af-privacy-open-preferences"
@@ -383,10 +269,10 @@
             >
                 Preferências de privacidade
             </button>
-            <div class="mt-2" style="color:#a8b2d1; font-weight:500;">
+            <div class="af-shell-footer-meta mt-2">
                 Contato: contat@agentefrete.com.br
             </div>
-            <div class="mt-2" style="color:#a8b2d1; font-weight:500;">
+            <div class="af-shell-footer-meta mt-2">
                 AgenteFrete é uma plataforma da LOGCOMPLETA AGENTES INTELIGENTES LTDA — Nome fantasia: AGENTE FRETE — CNPJ 52.583.078/0001-80 — Paulínia/SP.
             </div>
         </div>
@@ -397,18 +283,50 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         $(document).ready(function () {
+            function syncSidebarToggle() {
+                var collapsed = $('#sidebar').hasClass('active');
+                $('#sidebarCollapse')
+                    .attr('aria-expanded', collapsed ? 'false' : 'true')
+                    .attr('aria-label', collapsed ? 'Expandir menu lateral' : 'Recolher menu lateral');
+            }
+
             // Botão de toggle da sidebar
             $('#sidebarCollapse').on('click', function () {
                 $('#sidebar, #content').toggleClass('active');
                 $('.overlay').toggleClass('show');
+                syncSidebarToggle();
             });
 
             // Fecha a sidebar ao clicar no overlay
             $('.overlay').on('click', function () {
                 $('#sidebar, #content').removeClass('active');
                 $(this).removeClass('show');
+                syncSidebarToggle();
             });
         });
+    </script>
+    <script>
+        (function () {
+            if (!window.AFTheme) return;
+            var preference = document.documentElement.getAttribute("data-theme-preference") || "dark";
+            window.AFTheme.applyTheme(preference, false);
+            var nodes = document.querySelectorAll("[data-af-theme-select]");
+            for (var i = 0; i < nodes.length; i++) {
+                nodes[i].addEventListener("change", function (event) {
+                    window.AFTheme.applyTheme(event.target.value, true);
+                });
+            }
+            try {
+                var mq = window.matchMedia("(prefers-color-scheme: light)");
+                var onChange = function () {
+                    if (document.documentElement.getAttribute("data-theme-preference") === "system") {
+                        window.AFTheme.applyTheme("system", false);
+                    }
+                };
+                if (mq.addEventListener) mq.addEventListener("change", onChange);
+                else if (mq.addListener) mq.addListener(onChange);
+            } catch (e) {}
+        })();
     </script>
     {% include "partials/privacy_consent.html" %}
     {% if privacy_marketing_allowed %}

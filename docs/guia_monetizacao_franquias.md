@@ -1,6 +1,6 @@
 # Guia de Monetização, Franquias e Planos
 
-Referência revisada em 2026-09-19. Este guia descreve a monetização que o código implementa hoje.
+Referência funcional auditada contra a árvore de produção `bd874ee` (Sprint 11).
 
 ## Visão geral
 
@@ -72,6 +72,8 @@ Os planos usam `ConfigRegras` para parâmetros administrativos, incluindo:
 
 O valor comercial e a franquia operacional não são a mesma coisa.
 
+O limite Free é obtido da referência administrativa vigente (`plano_franquia_ref_admin_free`), não de uma constante estrutural. A configuração informada para produção/homologação nesta revisão corresponde a 50 créditos; consulte o valor administrativo antes de usá-lo operacionalmente. `User.categoria` identifica o plano, enquanto `Franquia.limite_total`, `consumo_acumulado`, ciclo e estado governam a autorização/consumo. `User.creditos` não é o saldo oficial.
+
 ## Governança de franquia
 
 - cada usuário comercial deve ter vínculo com `Conta` e `Franquia`;
@@ -106,6 +108,8 @@ Fluxos confirmados no código:
 - regularização em `/perfil/regularizar-pagamento` e `/perfil/regularizar-pagamento/stripe`;
 - encerramento contratual em `/perfil/encerrar-contrato`;
 - webhook oficial em `/api/webhook/stripe`.
+
+O cancelamento para Free é agendado no fim do período da assinatura; até a data efetiva, a categoria operacional paga permanece. O serviço registra fato monetário e envia o e-mail “Seu cancelamento foi agendado — Agente Frete”, com data efetiva e CTA para consultar planos. O agendamento não garante, por si, teardown completo da Conta Multiuser.
 
 Evento contratual principal documentável:
 

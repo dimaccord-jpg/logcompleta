@@ -8,7 +8,13 @@ import os
 import re
 from google import genai
 from google.genai import types as genai_types
-from app.prompts import PERSONA, GERAR_NOTICIA_CURTA, GERAR_ARTIGO_COMPLETO
+from app.editorial_metadata import (
+    completar_metadados_editoriais,
+    ids_habilidades_para_prompt,
+    resolver_intencao_editorial,
+    titulo_para_redacao,
+)
+from app.prompts import PERSONA, GERAR_NOTICIA_CURTA, GERAR_ANALISE_PRATICA, GERAR_EVERGREEN
 from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 
 logger = logging.getLogger(__name__)
@@ -83,19 +89,28 @@ def _client_for_tipo(tipo: str):
         return None
 
 
+def _prompt_artigo(intencao: str) -> str:
+    if intencao == "evergreen":
+        return GERAR_EVERGREEN
+    return GERAR_ANALISE_PRATICA
+
+
 def gerar_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict | None:
     """
-    Gera notícia no padrão executivo curto.
-    Retorna dict com: titulo_julia, resumo_julia (insight_curto 3-5 linhas), prompt_imagem.
+    Gera notícia rápida e factual.
+    Retorna dict com: titulo_julia, resumo_julia (insight_curto 3-5 linhas), prompt_imagem
+    e metadados editoriais derivados na mesma resposta.
     """
+    titulo_limpo = titulo_para_redacao(titulo_original)
     client = _client_for_tipo("noticia")
     if not client:
         logger.error("Nenhuma chave Gemini configurada para notícias. Usando fallback local de redação.")
         return _fallback_noticia_curta(titulo_original, fonte, link)
     instrucao = GERAR_NOTICIA_CURTA.format(
-        titulo_original=titulo_original,
+        titulo_original=titulo_limpo,
         fonte=fonte,
         link=link,
+        habilidades=ids_habilidades_para_prompt(),
     )
     prompt = f"{PERSONA}\n{instrucao}"
     data, _ = _chamar_modelo(client, prompt, "noticia")
@@ -103,15 +118,29 @@ def gerar_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict | N
         logger.warning("Redação de notícia retornou vazio/inválido. Usando fallback local de redação.")
         return _fallback_noticia_curta(titulo_original, fonte, link)
     data["resumo_julia"] = _garantir_insight_3_5_linhas(data.get("resumo_julia", ""))
-    return data
+    return completar_metadados_editoriais(
+        data,
+        tipo_missao="noticia",
+        titulo_pauta=titulo_original,
+    )
 
 
-def gerar_artigo_completo(titulo_original: str, fonte: str, link: str) -> dict | None:
+def gerar_artigo_completo(
+    titulo_original: str,
+    fonte: str,
+    link: str,
+    intencao_editorial: str | None = None,
+) -> dict | None:
     """
-    Gera artigo no padrão estendido (marketing + lead).
-    Retorna dict com: titulo_julia, subtitulo, resumo_julia, conteudo_completo (HTML seguro),
-    prompt_imagem, cta, objetivo_lead (ex.: newsletter, diagnóstico, contato comercial).
+    Gera artigo manual como análise prática ou evergreen.
+    A mesma chamada de modelo devolve texto e metadados de SEO.
     """
+    titulo_limpo = titulo_para_redacao(titulo_original)
+    intencao = resolver_intencao_editorial(
+        tipo_missao="artigo",
+        titulo=titulo_original,
+        explicita=intencao_editorial,
+    )
     client = _client_for_tipo("artigo")
     if not client:
         logger.error("Nenhuma chave Gemini configurada para artigos. Usando fallback local de redação.")
@@ -120,11 +149,13 @@ def gerar_artigo_completo(titulo_original: str, fonte: str, link: str) -> dict |
             fonte,
             link,
             motivo="gemini_client_unavailable",
+            intencao_editorial=intencao,
         )
-    instrucao = GERAR_ARTIGO_COMPLETO.format(
-        titulo_original=titulo_original,
+    instrucao = _prompt_artigo(intencao).format(
+        titulo_original=titulo_limpo,
         fonte=fonte,
         link=link,
+        habilidades=ids_habilidades_para_prompt(),
     )
     prompt = f"{PERSONA}\n{instrucao}"
     data, motivo_falha = _chamar_modelo(client, prompt, "artigo")
@@ -135,11 +166,17 @@ def gerar_artigo_completo(titulo_original: str, fonte: str, link: str) -> dict |
             fonte,
             link,
             motivo=motivo_falha or "unknown",
+            intencao_editorial=intencao,
         )
     data["redacao_status"] = "sucesso"
     data["redacao_fallback"] = False
     data["redacao_motivo"] = None
-    return data
+    return completar_metadados_editoriais(
+        data,
+        tipo_missao="artigo",
+        titulo_pauta=titulo_original,
+        explicita=intencao,
+    )
 
 
 def _classificar_motivo_redacao(exc: Exception | None) -> str:
@@ -185,6 +222,7 @@ def _response_config_for_tipo(tipo: str) -> genai_types.GenerateContentConfig:
                 "cta": genai_types.Schema(type="STRING"),
                 "objetivo_lead": genai_types.Schema(type="STRING"),
                 "referencias": genai_types.Schema(type="STRING"),
+                **_propriedades_seo_opcionais(),
             },
         )
     else:
@@ -196,6 +234,7 @@ def _response_config_for_tipo(tipo: str) -> genai_types.GenerateContentConfig:
                 "titulo_julia": genai_types.Schema(type="STRING"),
                 "resumo_julia": genai_types.Schema(type="STRING"),
                 "prompt_imagem": genai_types.Schema(type="STRING"),
+                **_propriedades_seo_opcionais(),
             },
         )
     return genai_types.GenerateContentConfig(
@@ -257,14 +296,34 @@ def _extract_json_payload(txt: str) -> dict:
     return data
 
 
+def _propriedades_seo_opcionais() -> dict:
+    return {
+        "meta_description": genai_types.Schema(type="STRING"),
+        "alt_imagem": genai_types.Schema(type="STRING"),
+        "tema": genai_types.Schema(type="STRING"),
+        "perfil_interesse": genai_types.Schema(type="STRING"),
+        "intencao_busca": genai_types.Schema(type="STRING"),
+        "habilidade_relacionada": genai_types.Schema(type="STRING"),
+    }
+
+
 def _normalizar_payload_modelo(payload: dict, tipo: str) -> dict:
     required = ARTICLE_REQUIRED_KEYS if (tipo or "").lower() == "artigo" else NEWS_REQUIRED_KEYS
+    opcionais_em_branco = {"cta", "objetivo_lead"} if (tipo or "").lower() == "artigo" else set()
     missing = []
     normalized = {}
     for key, value in (payload or {}).items():
         normalized[key] = value.strip() if isinstance(value, str) else value
     for key in required:
         val = normalized.get(key)
+        if key in opcionais_em_branco:
+            if val is None:
+                normalized[key] = ""
+                continue
+            if isinstance(val, str):
+                continue
+            missing.append(key)
+            continue
         if not isinstance(val, str) or not val.strip():
             missing.append(key)
     if missing:
@@ -348,20 +407,31 @@ def _limpar_marcacao_markdown(texto: str) -> str:
     return out
 
 
-def gerar_conteudo(pauta_titulo: str, pauta_fonte: str, pauta_link: str, tipo_missao: str) -> dict | None:
+def gerar_conteudo(
+    pauta_titulo: str,
+    pauta_fonte: str,
+    pauta_link: str,
+    tipo_missao: str,
+    intencao_editorial: str | None = None,
+) -> dict | None:
     """
     Entrada única do agente de redação: delega para notícia curta ou artigo completo.
-    tipo_missao: 'noticia' | 'artigo'
+    tipo_missao: 'noticia' | 'artigo'. Notícia automática ignora intenção de artigo.
     """
     if (tipo_missao or "").lower() == "artigo":
-        return gerar_artigo_completo(pauta_titulo, pauta_fonte, pauta_link)
+        return gerar_artigo_completo(
+            pauta_titulo,
+            pauta_fonte,
+            pauta_link,
+            intencao_editorial=intencao_editorial,
+        )
     return gerar_noticia_curta(pauta_titulo, pauta_fonte, pauta_link)
 
 
 def _fallback_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict:
     """Fallback determinístico para notícia curta quando o provedor de IA falhar."""
-    titulo_base = (titulo_original or "Atualização logística").strip()
-    titulo_base = re.sub(r"\s+", " ", titulo_base)
+    titulo_base = titulo_para_redacao(titulo_original) or "Atualização logística"
+    titulo_base = re.sub(r"\s+", " ", titulo_base).strip() or "Atualização logística"
     if len(titulo_base) > 110:
         titulo_base = titulo_base[:107].rstrip() + "..."
 
@@ -370,11 +440,20 @@ def _fallback_noticia_curta(titulo_original: str, fonte: str, link: str) -> dict
         "A recomendação é validar impacto por rota e priorizar ajustes de capacidade nas próximas janelas de decisão. "
         "Com acompanhamento diário de indicadores, o time reduz risco de ruptura e melhora o nível de serviço."
     )
-    return {
-        "titulo_julia": titulo_base,
-        "resumo_julia": _garantir_insight_3_5_linhas(resumo),
-        "prompt_imagem": "Modern logistics control tower, containers, trucks and data dashboards, realistic photo style",
-    }
+    return completar_metadados_editoriais(
+        {
+            "titulo_julia": titulo_base,
+            "resumo_julia": _garantir_insight_3_5_linhas(resumo),
+            "prompt_imagem": (
+                "Realistic photo of the specific logistics event, containers or freight operation, "
+                "no written text, no logos, no watermark"
+            ),
+            "tema": titulo_base,
+            "alt_imagem": f"Imagem ilustrativa de {titulo_base}",
+        },
+        tipo_missao="noticia",
+        titulo_pauta=titulo_original,
+    )
 
 
 def _fallback_artigo_completo(
@@ -382,10 +461,16 @@ def _fallback_artigo_completo(
     fonte: str,
     link: str,
     motivo: str = "unknown",
+    intencao_editorial: str | None = None,
 ) -> dict:
     """Fallback determinístico para artigo completo quando o provedor de IA falhar."""
-    titulo_base = (titulo_original or "Estratégia logística para ganho operacional").strip()
-    titulo_base = re.sub(r"\s+", " ", titulo_base)
+    titulo_base = (
+        titulo_para_redacao(titulo_original)
+        or "Estratégia logística para ganho operacional"
+    )
+    titulo_base = re.sub(r"\s+", " ", titulo_base).strip() or (
+        "Estratégia logística para ganho operacional"
+    )
     if len(titulo_base) > 118:
         titulo_base = titulo_base[:115].rstrip() + "..."
 
@@ -410,16 +495,25 @@ def _fallback_artigo_completo(
         "A execução disciplinada dessas ações tende a elevar previsibilidade, reduzir desperdícios e sustentar crescimento com risco controlado.</p>"
     )
 
-    return {
-        "titulo_julia": titulo_base,
-        "subtitulo": subtitulo,
-        "resumo_julia": resumo,
-        "conteudo_completo": conteudo,
-        "prompt_imagem": "Executive logistics strategy meeting with digital supply chain dashboard, realistic corporate style",
-        "cta": "Fale com um especialista e receba um plano prático para aumentar previsibilidade operacional.",
-        "objetivo_lead": "contato_comercial",
-        "referencias": f"Fonte: {fonte_txt} | Link: {link_txt}",
-        "redacao_status": "fallback",
-        "redacao_fallback": True,
-        "redacao_motivo": motivo or "unknown",
-    }
+    return completar_metadados_editoriais(
+        {
+            "titulo_julia": titulo_base,
+            "subtitulo": subtitulo,
+            "resumo_julia": resumo,
+            "conteudo_completo": conteudo,
+            "prompt_imagem": (
+                "Realistic photo of the logistics subject in the article, "
+                "no written text, no logos, no watermark"
+            ),
+            "cta": "",
+            "objetivo_lead": "",
+            "referencias": f"Fonte: {fonte_txt} | Link: {link_txt}",
+            "redacao_status": "fallback",
+            "redacao_fallback": True,
+            "redacao_motivo": motivo or "unknown",
+            "tema": titulo_para_redacao(titulo_original) or titulo_base,
+        },
+        tipo_missao="artigo",
+        titulo_pauta=titulo_original,
+        explicita=intencao_editorial,
+    )

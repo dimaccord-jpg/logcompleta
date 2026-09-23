@@ -1,6 +1,6 @@
 # Deploy e Operação
 
-Referência revisada em 2026-09-19. Este arquivo descreve o deploy real. Detalhes adicionais estão em `docs/DEPLOYMENT.md` e `docs/DATABASE_AND_MIGRATIONS.md`. O estado operacional consolidado está em `docs/estado_producao.md`.
+Referência operacional da árvore de produção `bd874ee`. Este arquivo descreve o deploy real. Detalhes adicionais estão em [DEPLOYMENT](../docs/DEPLOYMENT.md) e [DATABASE_AND_MIGRATIONS](../docs/DATABASE_AND_MIGRATIONS.md). O estado operacional consolidado está em [estado de produção](../docs/estado_producao.md).
 
 ## Ambientes e branches
 

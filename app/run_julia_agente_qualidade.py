@@ -87,7 +87,8 @@ def validar_noticia_curta(d: dict) -> tuple[bool, list[str]]:
 def validar_artigo(d: dict) -> tuple[bool, list[str]]:
     """
     Valida dict de artigo. Campos obrigatórios:
-    titulo_julia, url_imagem, subtitulo, resumo_julia, conteudo_completo, fonte_link, cta, objetivo_lead.
+    titulo_julia, url_imagem, subtitulo, resumo_julia, conteudo_completo, fonte_link.
+    CTA e objetivo_lead são opcionais; se vierem preenchidos, seguem o formato atual.
     Retorna (ok, lista de erros).
     """
     err = []
@@ -116,11 +117,9 @@ def validar_artigo(d: dict) -> tuple[bool, list[str]]:
         err.append("fonte_link (link original) obrigatório para artigo")
     if not _url_imagem_integra(url_img):
         err.append("url_imagem ausente ou inválida para artigo")
-    if not cta or len(cta) < MIN_CTA:
-        err.append("cta obrigatória e com pelo menos %d caracteres" % MIN_CTA)
-    if not objetivo:
-        err.append("objetivo_lead obrigatório para artigo (ex.: newsletter, diagnóstico, contato_comercial)")
-    else:
+    if cta and len(cta) < MIN_CTA:
+        err.append("cta com pelo menos %d caracteres quando informada" % MIN_CTA)
+    if objetivo:
         objetivo_norm = objetivo.strip().lower()
         if objetivo_norm not in OBJETIVOS_LEAD_VALIDOS:
             err.append("objetivo_lead deve ser um de: " + ", ".join(sorted(OBJETIVOS_LEAD_VALIDOS)))

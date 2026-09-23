@@ -1,8 +1,8 @@
 # Migrations (Alembic)
 
-Referência documental do release Multiuser V1 em produção, revisada em 2026-09-19.
+Referência documental da cadeia Alembic em produção no release `bd874ee`.
 
-O head versionado atual é `f7g8h9i0j1k2`, com `down_revision=e6f7a8b9c0d1`. A cadeia Multiuser existente cobre Fase 1 (fundação), Fase 3 (intenção de checkout), Fase 4 (convites), Fase 5 (aumento automático), Fase 6 (aumento excepcional) e Fase 7 (lifecycle comercial). Não existe migration Fase 8.
+O head versionado atual é `f7g8h9i0j1k2`, com `down_revision=e6f7a8b9c0d1`. A cadeia Multiuser existente cobre Fase 1 (fundação), Fase 3 (intenção de checkout), Fase 4 (convites), Fase 5 (aumento automático), Fase 6 (aumento excepcional) e Fase 7 (lifecycle comercial). Não existe migration Fase 8. A Sprint 11 (`bd874ee`) não adicionou migration executável.
 
 A fonte canônica da cadeia, modelos e segurança operacional é [Banco e Migrations](../docs/DATABASE_AND_MIGRATIONS.md).
 

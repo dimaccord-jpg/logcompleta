@@ -328,6 +328,31 @@ def inject_template_endpoint_helpers():
 
 
 @app.context_processor
+def inject_shell_navigation():
+    from flask import request, url_for
+    from flask_login import current_user
+
+    from app.shell_navigation import build_shell_navigation
+
+    try:
+        authenticated = bool(getattr(current_user, "is_authenticated", False))
+    except Exception:
+        authenticated = False
+    try:
+        request_path = request.path or "/"
+    except Exception:
+        request_path = "/"
+    return {
+        "shell_nav": build_shell_navigation(
+            authenticated=authenticated,
+            request_path=request_path,
+            url_for=url_for,
+            has_endpoint=lambda endpoint_name: endpoint_name in app.view_functions,
+        )
+    }
+
+
+@app.context_processor
 def inject_falha_mensal_vigente_context():
     from flask import url_for
 
@@ -406,7 +431,11 @@ def _handle_unauthorized_access():
                 "require_login": True,
             }
         ), 401
-    return redirect(url_for("login"))
+    # Páginas HTML: preserva retorno interno seguro via next (ex.: /fretes).
+    next_target = request.path or "/"
+    if request.query_string:
+        next_target = f"{next_target}?{request.query_string.decode('utf-8', errors='ignore')}"
+    return redirect(_login_url_with_next(next_target))
 
 
 def _safe_next_redirect(target: str | None):
@@ -768,10 +797,17 @@ def index():
         try_record_home_cta_impression,
     )
 
+    from app.shell_navigation import build_home_skills, home_skill_presentation
+
     indicadores = _load_home_indicadores()
 
     julia_chat_max_history = get_julia_chat_max_history()
     is_authenticated = bool(getattr(current_user, "is_authenticated", False))
+    home_skills = build_home_skills(
+        authenticated=is_authenticated,
+        url_for=url_for,
+        has_endpoint=lambda endpoint_name: endpoint_name in app.view_functions,
+    )
     # Estado operacional do chat (fonte única: autorização operacional por franquia).
     julia_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
     julia_chat_surface = 'operational' if is_authenticated else 'discovery'
@@ -788,6 +824,8 @@ def index():
         julia_documents_ui=is_authenticated,
         julia_handoff_context=_pop_onboarding_julia_context() if is_authenticated else None,
         home_cta_experiment=build_home_cta_template_context(home_cta_assignment),
+        home_skills=home_skills,
+        home_skill_presentation=home_skill_presentation(home_skills),
     )
 
 
@@ -917,9 +955,9 @@ def sitemap_xml():
         home_lastmod = noticias_publicadas[0].publicado_em.date().isoformat()
 
     urls = [{"loc": f"{_SEO_CANONICAL_ORIGIN}/", "lastmod": home_lastmod}]
+    # /fretes é superfície autenticada (SCRUM-211); não anunciar no sitemap público.
     for path in (
         "/feed",
-        "/fretes",
     ):
         urls.append(
             {"loc": f"{_SEO_CANONICAL_ORIGIN}{path}", "lastmod": home_lastmod}
@@ -1265,6 +1303,7 @@ def logout():
 # --- ROTAS DE INTELIGÊNCIA (CONECTADAS AO BRAIN) ---
 
 @app.route('/fretes', methods=['GET', 'POST'])
+@login_required
 def fretes():
     indices = _load_indices_payload()
 
@@ -1272,8 +1311,6 @@ def fretes():
     is_authenticated = bool(getattr(current_user, 'is_authenticated', False))
 
     if request.method == 'POST':
-        if not is_authenticated:
-            return redirect(url_for('login'))
         # CAPTURA DOS DADOS DO FORMULÁRIO
         origem = request.form.get('origem')
         destino = request.form.get('destino')
@@ -1293,6 +1330,7 @@ def fretes():
     if is_authenticated:
         roberto_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
     else:
+        # Defesa residual: @login_required já bloqueia anônimos na rota.
         roberto_chat_limits = {
             'permitido': False,
             'modo_operacao': 'login_required',
@@ -2303,11 +2341,16 @@ def detalhe_noticia(noticia_id):
     url_imagem_resolvida = _resolver_url_imagem(noticia.url_imagem)
     public_base_url = _public_base_url()
     share_url_abs = _public_noticia_url(noticia_id)
-    share_title = noticia.titulo_julia or "Conteúdo AgenteFrete"
+    from app.editorial_metadata import apresentacao_editorial, rebaixar_h1, titulo_publico
+
+    seo = apresentacao_editorial(noticia)
+    share_title = seo["titulo"] or noticia.titulo_julia or "Conteúdo AgenteFrete"
     share_url_encoded = quote(share_url_abs, safe="")
     share_title_encoded = quote(share_title, safe="")
-    
-    # Redirecionamos ambos para o mesmo template, 
+    conteudo_html = rebaixar_h1(getattr(noticia, "conteudo_completo", None) or "")
+    titulo_original_exibicao = titulo_publico(getattr(noticia, "titulo_original", None))
+
+    # Redirecionamos ambos para o mesmo template,
     # pois ele já gerencia a lógica de exibição interna.
     return render_template(
         'noticia_interna.html',
@@ -2318,6 +2361,9 @@ def detalhe_noticia(noticia_id):
         share_title=share_title,
         share_url_encoded=share_url_encoded,
         share_title_encoded=share_title_encoded,
+        seo=seo,
+        conteudo_html=conteudo_html,
+        titulo_original_exibicao=titulo_original_exibicao,
     )
 
 # Criando lazy: importar dentro da função, na hora que você realmente vai usar.

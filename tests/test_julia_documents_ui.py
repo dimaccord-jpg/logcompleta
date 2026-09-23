@@ -83,7 +83,7 @@ def test_operational_page_renders_attach_button(monkeypatch):
     assert 'accept=".txt,.xml,.csv,.xlsx,.docx,.pdf"' in html
     assert "julia_documents.js" in html
     assert "window.JULIA_DOCUMENTS_UI = true" in html
-    assert html.count('<span class="af-text-gradient">Agentefrete</span>') == 1
+    assert html.count('<span class="af-text-gradient">AgenteFrete</span>') == 1
 
 
 def test_attach_button_inside_composer(monkeypatch):

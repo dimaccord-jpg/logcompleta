@@ -141,7 +141,7 @@ def _build_gemini_client(key: str):
 
 
 def _get_model_image() -> str:
-    return (os.getenv("GEMINI_MODEL_IMAGE", "").strip() or "imagen-3.0-generate-002").strip()
+    return (os.getenv("GEMINI_MODEL_IMAGE", "").strip() or "gemini-3.1-flash-image").strip()
 
 
 def _get_model_image_fallback() -> str:

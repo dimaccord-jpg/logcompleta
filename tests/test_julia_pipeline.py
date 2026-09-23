@@ -304,7 +304,7 @@ def test_modelo_multimodal_configurado_vira_caminho_principal_sem_chamar_imagen(
     from app.run_julia_agente_imagem import _gerar_via_gemini
 
     monkeypatch.setenv("GEMINI_API_KEY_2", "secret")
-    monkeypatch.setenv("GEMINI_MODEL_IMAGE", "gemini-3.1-flash-image-preview")
+    monkeypatch.setenv("GEMINI_MODEL_IMAGE", "gemini-3.1-flash-image")
     called = {"imagen": 0, "multi": 0}
 
     def _imagen(*_args, **_kwargs):
@@ -313,7 +313,7 @@ def test_modelo_multimodal_configurado_vira_caminho_principal_sem_chamar_imagen(
 
     def _multi(*_args, **kwargs):
         called["multi"] += 1
-        assert kwargs.get("model_override") == "gemini-3.1-flash-image-preview"
+        assert kwargs.get("model_override") == "gemini-3.1-flash-image"
         return "/media/generated/principal.png"
 
     monkeypatch.setattr("app.run_julia_agente_imagem._gerar_via_gemini_imagen", _imagen)

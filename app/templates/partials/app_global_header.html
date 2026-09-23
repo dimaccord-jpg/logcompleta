@@ -1,21 +1,16 @@
-{% set app_header_title = app_header_title|default('Agentefrete') %}
+{% set app_header_title = app_header_title|default('AgenteFrete') %}
 {% set app_header_subtitle = app_header_subtitle|default('Descubra o caminho certo para sua operação logística — indicadores em tempo real e orientação inteligente') %}
 {% set app_header_show_ticker = app_header_show_ticker|default(indicadores is defined and indicadores) %}
 
 <style>
-  :root{
-    --ri-primary:#0D6EFD;
-    --ri-dark:#212529;
-    --ri-success:#198754;
-  }
   .af-app-header-ticker{
-    background:var(--ri-dark);
-    color:#fff;
+    background:var(--af-surface, #111119);
+    color:var(--af-text, #F0F0F5);
     overflow:hidden;
     height:40px;
     display:flex;
     align-items:center;
-    border-bottom:2px solid var(--ri-primary);
+    border-bottom:2px solid var(--af-primary, #00BFFF);
   }
   .af-app-header-ticker-content{
     display:flex;
@@ -29,12 +24,12 @@
     align-items:center;
   }
   .af-app-header-ticker-label{
-    color:rgba(255,255,255,.75);
+    color:var(--af-text-secondary, #8A8AA3);
     font-weight:700;
     margin-right:8px;
   }
   .af-app-header-ticker-value{
-    color:var(--ri-success);
+    color:var(--af-success, #00C48C);
     font-family:'Courier New', monospace;
     font-weight:800;
   }
@@ -74,6 +69,9 @@
     <div class="text-center my-4 position-relative">
       <h1 class="fw-bolder mb-2" style="font-size: 2.5rem;">
         <span class="af-text-gradient">{{ app_header_title }}</span>
+        {% if app_header_definition %}
+        <span class="af-hero-definition">{{ app_header_definition }}</span>
+        {% endif %}
       </h1>
       <p class="lead mb-4" style="color: var(--af-text-secondary); font-size: 1.1rem;">
         {{ app_header_subtitle }}

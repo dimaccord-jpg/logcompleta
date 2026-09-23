@@ -84,11 +84,14 @@ def executar_orquestracao(
     ignorar_trava_artigo_hoje: bool = False,
     ignorar_janela_publicacao: bool = False,
     consumo_identidade: Optional[dict] = None,
+    pauta_id: int | None = None,
+    intencao_editorial: str | None = None,
 ):
     """
     Fachada: delega ao orquestrador gerencial (regras, auditoria, dispatch).
     Mantém compatibilidade com rota /executar-cleiton e script em loop.
     ignorar_janela_publicacao: quando True (ex.: botão "Executar artigo agora"), não bloqueia por janela de publicação.
+    pauta_id / intencao_editorial: opcionais para artigo manual explícito (SCRUM-215A).
     """
     from app.run_cleiton_agente_orquestrador import executar_ciclo_gerencial
     logger.info("MAESTRO CLEITON: Iniciando ciclo gerencial (delegação ao orquestrador).")
@@ -99,6 +102,8 @@ def executar_orquestracao(
         ignorar_trava_artigo_hoje=ignorar_trava_artigo_hoje,
         ignorar_janela_publicacao=ignorar_janela_publicacao,
         consumo_identidade=consumo_identidade,
+        pauta_id=pauta_id,
+        intencao_editorial=intencao_editorial,
     )
     return resultado
 
