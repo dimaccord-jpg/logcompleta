@@ -103,6 +103,12 @@ html[data-theme="light"] {
   --af-shadow-sm: 0 4px 16px rgba(14, 23, 38, 0.08);
   --af-overlay: rgba(14, 23, 38, 0.45);
   --af-glass-bg: rgba(255, 255, 255, 0.88);
+  --af-chrome-bg: var(--af-surface);
+  --af-chrome-hover: var(--af-surface-muted);
+  --af-chrome-text: var(--af-text);
+  --af-chrome-muted: var(--af-text-secondary);
+  --af-chrome-accent: var(--af-primary);
+  --af-chrome-border: var(--af-border);
 }
 
 /* 2. TIPOGRAFIA */
@@ -738,22 +744,43 @@ a.home-skill-card i {
     opacity: 1;
 }
 
-@media (max-width: 768px) {
-  #sidebar { 
-    margin-left: calc(-1 * var(--sidebar-width)); 
+/* md breakpoint Bootstrap: abaixo de 768px a sidebar desktop some (d-md-flex)
+   e o offcanvas assume a navegação. #content começa com .active no HTML;
+   sem resetar width em #content.active, a regra desktop
+   width: calc(100% - var(--sidebar-collapsed)) continua vencendo por
+   especificidade e deixa ~80px vazios à direita. */
+@media (max-width: 767.98px) {
+  #sidebar {
+    margin-left: calc(-1 * var(--sidebar-width));
     position: fixed;
-    z-index: 1001; /* Garante que a sidebar fique acima do overlay */
+    z-index: 1001;
   }
-  #sidebar.active { 
-    margin-left: 0; 
-  }
-  #content { 
-    width: 100%; 
+  #sidebar.active {
     margin-left: 0;
   }
-  /* Remove o empurrão do conteúdo em telas móveis, pois a sidebar é um overlay */
-  #content.active { 
-    margin-left: 0; 
+  #content,
+  #content.active {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+  }
+
+  /* Login: botão+link lado a lado comprimem o card em viewports estreitos. */
+  .af-login-actions {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 0.75rem;
+  }
+  .af-login-actions .btn {
+    width: 100%;
+    white-space: normal;
+  }
+  .af-login-actions a {
+    text-align: center;
+  }
+  .af-tabs .nav-link {
+    padding: 0.65rem 0.5rem;
+    font-size: 0.8rem;
   }
 }
 
@@ -876,7 +903,7 @@ body.af-downgrade-modal-open .modal-backdrop.show {
   color: var(--af-cyan-bright) !important;
 }
 
-/* 16. SHELL — chrome navy estável + tema claro no conteúdo */
+/* 16. SHELL — chrome segue os tokens; no claro, --af-chrome-* aponta para a superfície */
 .sidebar-footer-renovacao {
   font-size: 0.7rem;
   line-height: 1.25;
@@ -905,11 +932,58 @@ body.af-downgrade-modal-open .modal-backdrop.show {
   color: var(--af-chrome-text);
 }
 
+.af-theme-control-row {
+  margin-top: 0.75rem;
+}
+
+.sidebar-footer .af-theme-control,
+#mobileMenu .af-theme-control {
+  display: flex;
+  width: 100%;
+  margin-top: 0;
+}
+
+.sidebar-footer .af-theme-control select,
+#mobileMenu .af-theme-control select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+#sidebar.active .af-theme-control {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.2rem;
+}
+
+#sidebar.active .af-theme-control-label {
+  font-size: 0.6rem;
+  line-height: 1.1;
+  text-align: center;
+}
+
+#sidebar.active .af-theme-control select {
+  width: 100%;
+  padding: 0.15rem 0.1rem;
+  font-size: 0.65rem;
+}
+
+#mobileMenu .af-mobile-menu-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#mobileMenu .af-theme-control-row {
+  flex: 0 0 auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--af-chrome-border);
+}
+
 .af-theme-control {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  margin-top: 0.85rem;
   color: var(--af-chrome-muted);
   font-weight: 500;
 }
@@ -968,8 +1042,79 @@ html[data-theme="light"] #mobileMenu .nav-item.active {
   color: var(--af-chrome-text) !important;
 }
 
-html[data-theme="light"] #sidebar .text-warning {
-  color: #D4A853 !important;
+html[data-theme="light"] #sidebar {
+  box-shadow: var(--af-shadow-sm) !important;
+}
+
+html[data-theme="light"] .sidebar-header,
+html[data-theme="light"] .sidebar-footer {
+  background: var(--af-surface-elevated) !important;
+}
+
+html[data-theme="light"] #sidebarCollapse {
+  background: var(--af-surface-muted) !important;
+  color: var(--af-chrome-text) !important;
+  border-color: var(--af-chrome-border) !important;
+}
+
+html[data-theme="light"] #sidebar .text-white,
+html[data-theme="light"] .mobile-navbar.navbar-dark,
+html[data-theme="light"] .mobile-navbar .navbar-brand {
+  color: var(--af-chrome-text) !important;
+}
+
+html[data-theme="light"] #sidebarCollapse:hover,
+html[data-theme="light"] #sidebarCollapse:focus-visible {
+  background: var(--af-chrome-hover) !important;
+  border-color: var(--af-chrome-accent) !important;
+  color: var(--af-chrome-text) !important;
+}
+
+html[data-theme="light"] #sidebarCollapse:hover i,
+html[data-theme="light"] #sidebarCollapse:focus-visible i {
+  color: var(--af-chrome-text) !important;
+}
+
+html[data-theme="light"] .mobile-navbar.navbar-dark {
+  --bs-navbar-color: var(--af-chrome-text);
+  --bs-navbar-hover-color: var(--af-chrome-text);
+  --bs-navbar-brand-color: var(--af-chrome-text);
+  --bs-navbar-brand-hover-color: var(--af-chrome-text);
+}
+
+html[data-theme="light"] .mobile-navbar .btn-outline-light {
+  --bs-btn-color: var(--af-chrome-text);
+  --bs-btn-border-color: transparent;
+  --bs-btn-hover-color: var(--af-chrome-text);
+  --bs-btn-hover-bg: var(--af-chrome-hover);
+  --bs-btn-hover-border-color: transparent;
+  --bs-btn-active-color: var(--af-chrome-text);
+  --bs-btn-active-bg: var(--af-chrome-hover);
+  --bs-btn-active-border-color: transparent;
+  color: var(--af-chrome-text);
+  border-color: transparent;
+}
+
+html[data-theme="light"] #mobileMenu .btn-outline-light {
+  --bs-btn-color: var(--af-text);
+  --bs-btn-border-color: var(--af-border-strong);
+  --bs-btn-hover-color: var(--af-text);
+  --bs-btn-hover-bg: var(--af-surface-muted);
+  --bs-btn-hover-border-color: var(--af-border-strong);
+  --bs-btn-active-color: var(--af-text);
+  --bs-btn-active-bg: var(--af-surface-muted);
+  --bs-btn-active-border-color: var(--af-border-strong);
+  color: var(--af-text);
+  border-color: var(--af-border-strong);
+}
+
+html[data-theme="light"] #mobileMenu .btn-close-white {
+  filter: none;
+}
+
+html[data-theme="light"] #sidebar .text-warning,
+html[data-theme="light"] #mobileMenu .text-warning {
+  color: var(--af-gold) !important;
 }
 
 html[data-theme="light"] .af-login-sidebar {

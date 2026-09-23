@@ -3,10 +3,10 @@ body.af-privacy-banner-visible {
 }
 
 .af-privacy-footer-btn {
-  background: none;
+  background: transparent;
   border: 0;
   padding: 0;
-  color: #a8b2d1;
+  color: var(--af-chrome-muted);
   font-size: inherit;
   font-weight: 500;
   cursor: pointer;
@@ -14,8 +14,30 @@ body.af-privacy-banner-visible {
 
 .af-privacy-footer-btn:hover,
 .af-privacy-footer-btn:focus-visible {
-  color: #f0f0f5;
+  background: transparent;
+  border-color: transparent;
+  color: var(--af-chrome-text);
   text-decoration: underline;
+}
+
+.af-privacy-footer-btn:focus-visible {
+  outline: 2px solid var(--af-chrome-accent);
+  outline-offset: 2px;
+}
+
+/* Light: superfície distinguível do footer (chrome-bg = surface). Dark permanece transparente. */
+html[data-theme="light"] .af-privacy-footer-btn {
+  background: var(--af-surface-elevated);
+  border: 1px solid var(--af-chrome-border);
+  border-radius: var(--af-radius-sm);
+  padding: 0.25rem 0.5rem;
+}
+
+html[data-theme="light"] .af-privacy-footer-btn:hover,
+html[data-theme="light"] .af-privacy-footer-btn:focus-visible {
+  background: var(--af-chrome-hover);
+  border-color: var(--af-chrome-border);
+  color: var(--af-chrome-text);
 }
 
 .af-privacy-banner,

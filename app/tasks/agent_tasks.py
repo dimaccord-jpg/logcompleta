@@ -36,7 +36,7 @@ def run_cleiton_background(app, bypass_frequencia: bool, consumo_identidade: dic
             resultado.get("motivo_final") or resultado.get("motivo"),
             resultado.get("caminho_usado"),
         )
-        persistir_ultima_execucao_manual(resultado, ORIGEM_CLEITON, app_flask=app)
+        persistir_ultima_execucao_manual(resultado, ORIGEM_CLEITON, app=app)
     except Exception as e:
         logger.exception("Falha no ciclo Cleiton admin (async): %s", e)
         persistir_ultima_execucao_manual(
@@ -46,13 +46,20 @@ def run_cleiton_background(app, bypass_frequencia: bool, consumo_identidade: dic
                 "caminho_usado": "excecao",
             },
             ORIGEM_CLEITON,
-            app_flask=app,
+            app=app,
         )
 
 
-def run_artigo_manual_background(app, consumo_identidade: dict | None = None) -> None:
+def run_artigo_manual_background(
+    app,
+    consumo_identidade: dict | None = None,
+    *,
+    pauta_id: int | None = None,
+    intencao_editorial: str | None = None,
+) -> None:
     """
     Executa missão manual de artigo no background e persiste resultado.
+    Aceita pauta_id e intencao_editorial opcionais (SCRUM-215A).
     """
     try:
         from app.run_cleiton import executar_orquestracao
@@ -63,6 +70,8 @@ def run_artigo_manual_background(app, consumo_identidade: dict | None = None) ->
             ignorar_trava_artigo_hoje=True,
             ignorar_janela_publicacao=True,
             consumo_identidade=consumo_identidade,
+            pauta_id=pauta_id,
+            intencao_editorial=intencao_editorial,
         ) or {}
         logger.info(
             "Artigo manual admin (async) concluído: status=%s mission_id=%s motivo=%s caminho=%s",
@@ -72,7 +81,7 @@ def run_artigo_manual_background(app, consumo_identidade: dict | None = None) ->
             resultado.get("caminho_usado"),
         )
         persistir_ultima_execucao_manual(
-            resultado, ORIGEM_ARTIGO_MANUAL, app_flask=app
+            resultado, ORIGEM_ARTIGO_MANUAL, app=app
         )
     except Exception as e:
         logger.exception("Falha no artigo manual admin (async): %s", e)
@@ -83,5 +92,5 @@ def run_artigo_manual_background(app, consumo_identidade: dict | None = None) ->
                 "caminho_usado": "excecao",
             },
             ORIGEM_ARTIGO_MANUAL,
-            app_flask=app,
+            app=app,
         )

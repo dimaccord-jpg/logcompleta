@@ -748,6 +748,8 @@ def agentes_julia():
     status_pautas_artigo = agent_service.obter_status_pautas_artigo()
     ultima_artigo = agent_service.obter_ultima_publicacao_artigo()
     ultima_execucao_manual = agent_service.ler_ultima_execucao_manual()
+    pautas_elegiveis = agent_service.listar_pautas_artigo_elegiveis_admin()
+    evergreen_cfg = agent_service.obter_evergreen_config()
     return render_template(
         "agentes_julia.html",
         frequencia_horas=agent_service.obter_frequencia_horas(),
@@ -762,6 +764,20 @@ def agentes_julia():
         status_pautas_artigo=status_pautas_artigo,
         ultima_artigo=ultima_artigo,
         ultima_execucao_manual=ultima_execucao_manual,
+        pautas_elegiveis=pautas_elegiveis,
+        evergreen_automatico_habilitado=evergreen_cfg["evergreen_automatico_habilitado"],
+        evergreen_frequencia_minutos=evergreen_cfg["evergreen_frequencia_minutos"],
+        evergreen_modo=evergreen_cfg["modo"],
+        evergreen_frequencia_label=_formatar_frequencia_minutos(
+            evergreen_cfg["evergreen_frequencia_minutos"]
+        ),
+        evergreen_ultima_execucao_automatica=evergreen_cfg.get(
+            "ultima_execucao_automatica"
+        ),
+        evergreen_proxima_elegibilidade=evergreen_cfg.get("proxima_elegibilidade"),
+        evergreen_proxima_elegibilidade_label=evergreen_cfg.get(
+            "proxima_elegibilidade_label"
+        ),
     )
 
 
@@ -825,6 +841,52 @@ def agentes_julia_configurar_historico():
             flash(f"Limite de histórico da Júlia atualizado para {novo_valor}.", "success")
     except Exception:
         flash("Erro ao salvar limite de histórico. Tente novamente.", "danger")
+    return redirect(url_for("admin.agentes_julia"))
+
+
+@admin_bp.route("/agentes/julia/evergreen", methods=["POST"])
+@login_required
+def agentes_julia_configurar_evergreen():
+    """Persiste modo e frequência evergreen sem alterar frequencia_minutos legado."""
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    modo = (request.form.get("evergreen_modo") or "").strip().lower()
+    if modo not in ("manual", "automatico"):
+        flash("Modo evergreen inválido. Use 'Somente manual' ou 'Automático'.", "warning")
+        return redirect(url_for("admin.agentes_julia"))
+    automatico = modo == "automatico"
+    valor_raw = (request.form.get("evergreen_frequencia_minutos") or "").strip()
+    try:
+        if automatico:
+            valor = _validar_frequencia_minutos_admin(
+                valor_raw,
+                contexto="o evergreen",
+            )
+        else:
+            # Em modo manual a frequência pode permanecer armazenada; valida se enviada.
+            if valor_raw:
+                valor = _validar_frequencia_minutos_admin(
+                    valor_raw,
+                    contexto="o evergreen",
+                )
+            else:
+                valor = agent_service.obter_evergreen_config()[
+                    "evergreen_frequencia_minutos"
+                ]
+        agent_service.configurar_evergreen_admin(
+            automatico_habilitado=automatico,
+            frequencia_minutos=valor,
+        )
+        modo_label = "Automático" if automatico else "Somente manual"
+        flash(
+            f"Configuração evergreen salva: {modo_label}, "
+            f"intervalo {_formatar_frequencia_minutos(valor)}.",
+            "success",
+        )
+    except ValueError as e:
+        flash(f"Configuração evergreen inválida. {str(e)}", "warning")
+    except Exception as e:
+        flash(f"Erro ao salvar evergreen: {str(e)}", "danger")
     return redirect(url_for("admin.agentes_julia"))
 
 
@@ -1201,6 +1263,35 @@ def agentes_julia_executar_cleiton():
 def agentes_julia_executar_artigo_manual():
     if not verificar_acesso_admin():
         return "Acesso Negado", 403
+
+    from app.editorial_metadata import INTENCOES_ARTIGO
+
+    intencao_raw = (request.form.get("intencao_editorial") or "").strip().lower()
+    pauta_id_raw = (request.form.get("pauta_id") or "").strip()
+    intencao_editorial = None
+    pauta_id = None
+
+    if intencao_raw:
+        if intencao_raw not in INTENCOES_ARTIGO:
+            flash(
+                "Intenção editorial inválida. Use Análise (analysis) ou Evergreen (evergreen).",
+                "warning",
+            )
+            return redirect(url_for("admin.agentes_julia"))
+        intencao_editorial = intencao_raw
+
+    if pauta_id_raw:
+        try:
+            pauta_id = int(pauta_id_raw)
+        except (TypeError, ValueError):
+            flash("pauta_id inválido.", "warning")
+            return redirect(url_for("admin.agentes_julia"))
+        try:
+            agent_service.validar_pauta_artigo_manual(pauta_id)
+        except ValueError as e:
+            flash(str(e), "warning")
+            return redirect(url_for("admin.agentes_julia"))
+
     if agent_service.admin_exec_mode() == "async":
         global _ARTIGO_MANUAL_FUTURE
         executor = get_admin_executor()
@@ -1217,6 +1308,8 @@ def agentes_julia_executar_artigo_manual():
                 agent_tasks.run_artigo_manual_background,
                 app_obj,
                 _ident_art,
+                pauta_id=pauta_id,
+                intencao_editorial=intencao_editorial,
             )
         flash(
             "Execução manual de artigo iniciada em segundo plano. Acompanhe os logs para status final.",
@@ -1224,7 +1317,11 @@ def agentes_julia_executar_artigo_manual():
         )
         return redirect(url_for("admin.agentes_julia"))
     try:
-        resultado = agent_service.executar_artigo_manual_sincrono(current_app)
+        resultado = agent_service.executar_artigo_manual_sincrono(
+            current_app,
+            pauta_id=pauta_id,
+            intencao_editorial=intencao_editorial,
+        )
         agent_service.persistir_ultima_execucao_manual(
             resultado, "Executar artigo agora"
         )

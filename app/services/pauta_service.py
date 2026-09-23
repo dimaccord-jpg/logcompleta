@@ -60,6 +60,106 @@ def aplicar_filtro_fila_editorial_elegivel(query, *, agora: datetime | None = No
     )
 
 
+def query_pautas_artigo_elegiveis_manuais(*, agora: datetime | None = None):
+    """
+    Query de pautas de artigo elegíveis para execução manual/automática.
+    Reutiliza as mesmas regras de tipo, status, verificação e fila editorial.
+    """
+    status_permitidos = status_verificacao_permitidos()
+    query = Pauta.query.filter(
+        Pauta.tipo == "artigo",
+        Pauta.status == "pendente",
+        Pauta.status_verificacao.in_(status_permitidos),
+    )
+    return aplicar_filtro_fila_editorial_elegivel(query, agora=agora)
+
+
+def aplicar_filtro_excluir_evergreen_explicito(query):
+    """
+    Remove da fila automática legada pautas com marcador [evergreen].
+    Manual com pauta_id explícito não usa este filtro.
+    """
+    return query.filter(
+        ~func.lower(func.trim(Pauta.titulo_original)).like("[evergreen]%")
+    )
+
+
+def query_pautas_artigo_elegiveis_legado_automatico(*, agora: datetime | None = None):
+    """
+    Pautas de artigo para o ciclo legado automático.
+    Mantém filtro SQL de marcador [evergreen] e, em seguida, exclui qualquer
+    candidata evergreen pela regra compartilhada (marcador ou heurística).
+    Manual com pauta_id explícito não usa esta query.
+    """
+    from app.editorial_metadata import pauta_candidata_evergreen_automatico
+
+    base = aplicar_filtro_excluir_evergreen_explicito(
+        query_pautas_artigo_elegiveis_manuais(agora=agora)
+    )
+    ids_ok = [
+        p.id
+        for p in base.all()
+        if not pauta_candidata_evergreen_automatico(p.titulo_original)
+    ]
+    if not ids_ok:
+        return base.filter(Pauta.id.in_([]))
+    return base.filter(Pauta.id.in_(ids_ok))
+
+
+def listar_pautas_artigo_elegiveis_manuais(
+    *, agora: datetime | None = None
+) -> list[Pauta]:
+    """Lista pautas de artigo elegíveis (mais antigas primeiro)."""
+    return (
+        query_pautas_artigo_elegiveis_manuais(agora=agora)
+        .order_by(Pauta.created_at.asc())
+        .all()
+    )
+
+
+def selecionar_pauta_evergreen_automatico(
+    *,
+    agora: datetime | None = None,
+    excluir_ids: set[int] | frozenset[int] | None = None,
+) -> Pauta | None:
+    """
+    Seleciona a pauta mais antiga elegível para evergreen automático.
+    Critério determinístico (marcador ou padrões seguros); sem fallback após escolha.
+    """
+    from app.editorial_metadata import pauta_candidata_evergreen_automatico
+
+    excluidos = {int(x) for x in (excluir_ids or set())}
+    candidatas = (
+        query_pautas_artigo_elegiveis_manuais(agora=agora)
+        .order_by(Pauta.created_at.asc())
+        .all()
+    )
+    for pauta in candidatas:
+        if pauta.id in excluidos:
+            continue
+        if pauta_candidata_evergreen_automatico(pauta.titulo_original):
+            return pauta
+    return None
+
+
+def obter_pauta_artigo_elegivel_por_id(
+    pauta_id: int, *, agora: datetime | None = None
+) -> Pauta | None:
+    """
+    Retorna a pauta de artigo se existir e for elegível pelas regras atuais.
+    Sem fallback para outra pauta.
+    """
+    try:
+        pid = int(pauta_id)
+    except (TypeError, ValueError):
+        return None
+    return (
+        query_pautas_artigo_elegiveis_manuais(agora=agora)
+        .filter(Pauta.id == pid)
+        .first()
+    )
+
+
 def arquivar_pautas_automaticas_vencidas(
     actor_email: str | None = None,
     motivo: str | None = None,

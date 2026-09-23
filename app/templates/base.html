@@ -130,35 +130,41 @@
             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Fechar menu"></button>
         </div>
         <div class="offcanvas-body d-flex flex-column">
-            <div data-shell-nav="mobile">
-                {% set nav_variant = 'mobile' %}
-                {% include "partials/shell_primary_nav.html" %}
-            </div>
+            <div class="af-mobile-menu-main">
+                <div data-shell-nav="mobile">
+                    {% set nav_variant = 'mobile' %}
+                    {% include "partials/shell_primary_nav.html" %}
+                </div>
 
-            <hr class="border-secondary my-3">
+                <hr class="border-secondary my-3">
 
-            {% if current_user.is_authenticated %}
-                <div class="mb-3 small text-muted">
-                    <div class="d-flex align-items-center mb-2">
-                        <i class="bi bi-person-circle fs-4 me-2 text-warning"></i>
-                        <div>
-                            <div class="text-uppercase" style="font-size: 0.65rem;">Bem-vindo</div>
-                            <div class="fw-semibold">
-                                {{ current_user.full_name or current_user.email }}
+                {% if current_user.is_authenticated %}
+                    <div class="mb-3 small text-muted">
+                        <div class="d-flex align-items-center mb-2">
+                            <i class="bi bi-person-circle fs-4 me-2 text-warning"></i>
+                            <div>
+                                <div class="text-uppercase" style="font-size: 0.65rem;">Bem-vindo</div>
+                                <div class="fw-semibold">
+                                    {{ current_user.full_name or current_user.email }}
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-                <a href="{{ url_for('user.perfil') }}" class="btn btn-outline-light btn-sm mb-2 text-start">
-                    <i class="bi bi-gear me-1"></i> Área do Usuário
-                </a>
-                <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm text-start">
-                    <i class="bi bi-box-arrow-right me-1"></i> Sair
-                </a>
-            {% else %}
-                <a href="{{ url_for('login') }}" class="btn btn-outline-light btn-sm text-start">
-                    <i class="bi bi-box-arrow-in-right me-1"></i> Login / Cadastro
-                </a>
+                    <a href="{{ url_for('user.perfil') }}" class="btn btn-outline-light btn-sm mb-2 text-start">
+                        <i class="bi bi-gear me-1"></i> Área do Usuário
+                    </a>
+                    <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm text-start">
+                        <i class="bi bi-box-arrow-right me-1"></i> Sair
+                    </a>
+                {% else %}
+                    <a href="{{ url_for('login') }}" class="btn btn-outline-light btn-sm text-start">
+                        <i class="bi bi-box-arrow-in-right me-1"></i> Login / Cadastro
+                    </a>
+                {% endif %}
+            </div>
+            {% if self.af_theme_enabled()|trim == 'true' %}
+                {% set af_theme_variant = 'mobile' %}
+                {% include "partials/af_theme_control.html" %}
             {% endif %}
         </div>
     </div>
@@ -244,6 +250,10 @@
                     <span class="menu-text">Login / Cadastro</span>
                 </a>
             {% endif %}
+            {% if self.af_theme_enabled()|trim == 'true' %}
+                {% set af_theme_variant = 'sidebar' %}
+                {% include "partials/af_theme_control.html" %}
+            {% endif %}
         </div>
     </nav>
 
@@ -278,18 +288,6 @@
             <div class="af-shell-footer-meta mt-2">
                 AgenteFrete é uma plataforma da LOGCOMPLETA AGENTES INTELIGENTES LTDA — Nome fantasia: AGENTE FRETE — CNPJ 52.583.078/0001-80 — Paulínia/SP.
             </div>
-            {% if self.af_theme_enabled()|trim == 'true' %}
-            <div class="af-theme-control-row">
-                <label class="af-theme-control" for="af-theme-select">
-                    <span class="af-theme-control-label">Tema</span>
-                    <select id="af-theme-select" data-af-theme-select aria-label="Tema da interface">
-                        <option value="system">Sistema</option>
-                        <option value="dark" selected>Escuro</option>
-                        <option value="light">Claro</option>
-                    </select>
-                </label>
-            </div>
-            {% endif %}
         </div>
     </footer>
     {% endif %}

@@ -6,7 +6,7 @@ Saída: True apenas quando publicação concluída no formato correto; falhas au
 import logging
 import re
 import json
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.extensions import db
 from app.models import Pauta, SerieItemEditorial
@@ -25,9 +25,21 @@ from app.run_julia_regras import status_verificacao_permitidos
 from app.services.pauta_service import (
     aplicar_filtro_fila_editorial_elegivel,
     arquivar_pautas_automaticas_vencidas,
+    obter_pauta_artigo_elegivel_por_id,
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel: chave pauta_id realmente ausente no payload/metadados.
+_PAUTA_ID_AUSENTE = object()
+
+
+class _PautaIdResolvido(NamedTuple):
+    """Distingue ausência (legado) de ID explícito válido/inválido (SCRUM-215A)."""
+
+    explicit: bool
+    pauta_id: int | None
+    invalid: bool
 
 
 def _limpar_texto_prompt(v: str | None, limite: int) -> str:
@@ -114,27 +126,97 @@ def _status_verificacao_permitidos() -> list[str]:
     return status_verificacao_permitidos()
 
 
-def obter_pauta_validada(tipo_missao: str, mission_id: str | None) -> Pauta | None:
+def _raw_pauta_id_do_payload(payload: dict | None) -> Any:
+    """Valor bruto de pauta_id no topo ou metadados; _PAUTA_ID_AUSENTE se chave inexistente."""
+    if not isinstance(payload, dict):
+        return _PAUTA_ID_AUSENTE
+    if "pauta_id" in payload:
+        return payload["pauta_id"]
+    metadados = payload.get("metadados")
+    if isinstance(metadados, dict) and "pauta_id" in metadados:
+        return metadados["pauta_id"]
+    return _PAUTA_ID_AUSENTE
+
+
+def _resolver_pauta_id_do_payload(payload: dict | None) -> _PautaIdResolvido:
+    """
+    Resolve pauta_id sem colapsar ausente e malformado em None.
+
+    - chave ausente ou None (callers opcionais) → explicit=False (seleção legada)
+    - int / string numérica válida → explicit=True, pauta_id=<int>
+    - valor fornecido malformado (ex.: "abc", "", [], {}) → explicit=True, invalid=True
+    """
+    bruto = _raw_pauta_id_do_payload(payload)
+    if bruto is _PAUTA_ID_AUSENTE or bruto is None:
+        return _PautaIdResolvido(explicit=False, pauta_id=None, invalid=False)
+
+    # Valor explicitamente presente e não-None: não pode cair no legado.
+    if isinstance(bruto, bool):
+        return _PautaIdResolvido(explicit=True, pauta_id=None, invalid=True)
+    if isinstance(bruto, int):
+        return _PautaIdResolvido(explicit=True, pauta_id=bruto, invalid=False)
+    if isinstance(bruto, str):
+        texto = bruto.strip()
+        if not texto:
+            # "" não é representação usada pelos callers atuais para ausência no payload.
+            return _PautaIdResolvido(explicit=True, pauta_id=None, invalid=True)
+        try:
+            return _PautaIdResolvido(explicit=True, pauta_id=int(texto), invalid=False)
+        except ValueError:
+            return _PautaIdResolvido(explicit=True, pauta_id=None, invalid=True)
+    return _PautaIdResolvido(explicit=True, pauta_id=None, invalid=True)
+
+
+def obter_pauta_validada(
+    tipo_missao: str,
+    mission_id: str | None,
+    pauta_id: int | None = None,
+) -> Pauta | None:
     """
     Retorna uma pauta pendente elegível pelo Verificador para o tipo (noticia | artigo).
     Por padrão só 'aprovado'; pode incluir 'revisar' via env em homolog.
     Marca como em_processamento e opcionalmente associa mission_id.
+
+    Se pauta_id for informado, consome EXATAMENTE essa pauta (sem fallback).
+    Se não for elegível, retorna None e não seleciona outra.
     """
     tipo = (tipo_missao or "noticia").lower()
     status_permitidos = _status_verificacao_permitidos()
     try:
         arquivar_pautas_automaticas_vencidas()
-        pauta = (
-            aplicar_filtro_fila_editorial_elegivel(
-                Pauta.query.filter(
-                Pauta.tipo == tipo,
-                Pauta.status == "pendente",
-                Pauta.status_verificacao.in_(status_permitidos),
+        if pauta_id is not None:
+            if tipo == "artigo":
+                pauta = obter_pauta_artigo_elegivel_por_id(pauta_id)
+            else:
+                pauta = (
+                    aplicar_filtro_fila_editorial_elegivel(
+                        Pauta.query.filter(
+                            Pauta.id == int(pauta_id),
+                            Pauta.tipo == tipo,
+                            Pauta.status == "pendente",
+                            Pauta.status_verificacao.in_(status_permitidos),
+                        )
+                    ).first()
+                )
+            if not pauta:
+                logger.warning(
+                    "Júlia pipeline: pauta_id=%s informada mas inexistente/inelegível (tipo=%s); sem fallback.",
+                    pauta_id,
+                    tipo,
+                )
+                return None
+        else:
+            pauta = (
+                aplicar_filtro_fila_editorial_elegivel(
+                    Pauta.query.filter(
+                        Pauta.tipo == tipo,
+                        Pauta.status == "pendente",
+                        Pauta.status_verificacao.in_(status_permitidos),
+                    )
+                )
+                .order_by(Pauta.created_at.asc())
+                .first()
             )
-            )
-            .order_by(Pauta.created_at.asc())
-            .first()
-        )
         if not pauta:
             return None
         pauta.status = "em_processamento"
@@ -191,13 +273,62 @@ def executar_pipeline(payload: dict[str, Any], app_flask) -> bool:
     """
     mission_id = payload.get("mission_id", "")
     tipo_missao = (payload.get("tipo_missao") or "noticia").lower()
-    logger.info("Júlia pipeline: mission_id=%s tipo=%s", mission_id, tipo_missao)
+    pauta_resolvida = _resolver_pauta_id_do_payload(payload)
+    logger.info(
+        "Júlia pipeline: mission_id=%s tipo=%s pauta_id=%s explicit=%s invalid=%s",
+        mission_id,
+        tipo_missao,
+        pauta_resolvida.pauta_id,
+        pauta_resolvida.explicit,
+        pauta_resolvida.invalid,
+    )
 
     with app_flask.app_context():
         pauta = None
         try:
-            pauta = obter_pauta_validada(tipo_missao, mission_id)
+            if pauta_resolvida.explicit and pauta_resolvida.invalid:
+                logger.warning(
+                    "Júlia pipeline: pauta_id explícito malformado; sem fallback legado."
+                )
+                auditoria_registrar(
+                    tipo_decisao="julia",
+                    decisao="Pauta explícita inválida ou inelegível",
+                    contexto={
+                        "mission_id": mission_id,
+                        "tipo_missao": tipo_missao,
+                        "pauta_id": _raw_pauta_id_do_payload(payload),
+                        "pauta_id_malformado": True,
+                    },
+                    resultado="falha",
+                    detalhe="pauta_id explícito malformado; sem fallback para outra pauta.",
+                )
+                return False
+
+            pauta_id_explicito = (
+                pauta_resolvida.pauta_id if pauta_resolvida.explicit else None
+            )
+            pauta = obter_pauta_validada(
+                tipo_missao, mission_id, pauta_id=pauta_id_explicito
+            )
             if not pauta:
+                if pauta_resolvida.explicit:
+                    logger.warning(
+                        "Júlia pipeline: pauta explícita %s inválida/inelegível; sem fallback.",
+                        pauta_id_explicito,
+                    )
+                    auditoria_registrar(
+                        tipo_decisao="julia",
+                        decisao="Pauta explícita inválida ou inelegível",
+                        contexto={
+                            "mission_id": mission_id,
+                            "tipo_missao": tipo_missao,
+                            "pauta_id": pauta_id_explicito,
+                            "status_verificacao_permitidos": _status_verificacao_permitidos(),
+                        },
+                        resultado="falha",
+                        detalhe="Pauta informada não existe ou não é elegível; sem fallback.",
+                    )
+                    return False
                 logger.warning("Júlia pipeline: nenhuma pauta pendente/elegível para tipo=%s", tipo_missao)
                 auditoria_registrar(
                     tipo_decisao="julia",

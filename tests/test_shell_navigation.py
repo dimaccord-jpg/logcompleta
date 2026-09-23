@@ -70,7 +70,7 @@ def test_catalog_uses_real_destinations_and_keeps_internal_ids():
     assert DESTINATIONS["feed"].url == "/feed"
     assert DESTINATIONS["cleide_audit"].url == "/cleide-bi-frete"
     assert "cleide_audit" not in {entry.destination_id for entry in SHELL_NAV_CATALOG}
-    assert by_id["analisar_fretes"].requires_login is False
+    assert by_id["analisar_fretes"].requires_login is None
     assert DESTINATIONS["roberto_bi"].requires_login is True
 
 
@@ -100,7 +100,7 @@ def test_guest_and_authenticated_hrefs_follow_existing_login_rules():
     }
 
     assert guest_hrefs["inicio"] == "/"
-    assert guest_hrefs["analisar_fretes"] == "/fretes"
+    assert guest_hrefs["analisar_fretes"] == "/login?next=/fretes"
     assert guest_hrefs["feed"] == "/feed"
     assert guest_hrefs["auditar_cobrancas"] == "/login?next=/auditoria-frete"
     assert guest_hrefs["comparar_tabelas"] == "/login?next=/agente-compara"
@@ -146,8 +146,8 @@ def test_home_skills_follow_catalog_order_and_shell_login_rules():
         "Auditar cobranças de frete",
         "Comparar tabelas",
     ]
-    assert guest[0]["href"] == "/fretes"
-    assert guest[0]["requires_login"] is False
+    assert guest[0]["href"] == "/login?next=/fretes"
+    assert guest[0]["requires_login"] is True
     assert guest[1]["href"] == "/login?next=/auditoria-frete"
     assert guest[1]["requires_login"] is True
     assert guest[2]["href"] == "/login?next=/agente-compara"
@@ -180,10 +180,12 @@ def test_home_shell_repeats_the_same_destinations_on_desktop_and_mobile(monkeypa
     assert 'href="/login?next=/auditoria-frete"' in mobile
     assert 'href="/login?next=/agente-compara"' in desktop
     assert 'href="/login?next=/agente-compara"' in mobile
+    assert 'href="/login?next=/fretes"' in desktop
+    assert 'href="/login?next=/fretes"' in mobile
     assert 'href="/login?next=%2Fchat_julia%3Fmode%3Doperational"' in desktop
     assert 'href="/login?next=%2Fchat_julia%3Fmode%3Doperational"' in mobile
-    assert 'href="/fretes"' in desktop
-    assert 'href="/fretes"' in mobile
+    assert 'href="/fretes"' not in desktop
+    assert 'href="/fretes"' not in mobile
     assert 'href="/feed"' in desktop
     assert 'href="/feed"' in mobile
     assert "/acesso-desktop" not in desktop
@@ -227,8 +229,11 @@ def test_authenticated_shell_keeps_direct_skill_links_and_profile(monkeypatch):
     mobile = _region(html, 'data-shell-nav="mobile"')
     assert 'href="/chat_julia?mode=operational"' in desktop
     assert 'href="/chat_julia?mode=operational"' in mobile
+    assert 'href="/fretes"' in desktop
+    assert 'href="/fretes"' in mobile
     assert 'href="/auditoria-frete"' in desktop
     assert 'href="/agente-compara"' in mobile
+    assert 'href="/login?next=/fretes"' not in desktop
     assert 'href="/login?next=/auditoria-frete"' not in desktop
     assert 'href="/login?next=/agente-compara"' not in mobile
     assert 'href="/perfil"' in html

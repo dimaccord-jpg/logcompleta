@@ -541,7 +541,7 @@ class TestOnboardingHomeUxContract:
         assert 'data-destination-id="roberto_bi"' in html
         assert 'data-destination-id="cleide_freight_audit"' in html
         assert 'data-destination-id="agente_compara"' in html
-        assert 'href="/fretes"' in html
+        assert 'href="/login?next=/fretes"' in html
         assert 'href="/login?next=/auditoria-frete"' in html
         assert 'href="/login?next=/agente-compara"' in html
         assert "HOME_SKILL_PRESENTATION" in html

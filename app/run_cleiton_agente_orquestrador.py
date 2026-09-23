@@ -23,12 +23,15 @@ from app.run_cleiton_agente_regras import (
     pode_executar_por_frequencia,
     bootstrap_regras,
     get_max_tentativas_artigo_dia,
+    get_evergreen_automatico_habilitado,
+    get_evergreen_frequencia_minutos,
 )
 from app.run_cleiton_agente_auditoria import registrar as auditoria_registrar
-from app.run_julia_regras import status_verificacao_permitidos
 from app.services.pauta_service import (
-    aplicar_filtro_fila_editorial_elegivel,
     arquivar_pautas_automaticas_vencidas,
+    obter_pauta_artigo_elegivel_por_id,
+    query_pautas_artigo_elegiveis_legado_automatico,
+    selecionar_pauta_evergreen_automatico,
 )
 from app.run_cleiton_agente_serie import (
     selecionar_item_para_missao,
@@ -41,6 +44,10 @@ from app.run_cleiton_agente_dispatcher import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Origem/cadência identificável na auditoria (SCRUM-215B). Não mistura com ciclo legado.
+ORIGEM_EVERGREEN_AUTOMATICO = "evergreen_automatico"
+TIPO_DECISAO_EVERGREEN_AUTOMATICO = "evergreen_automatico"
 
 
 def _detalhe_falha_dispatch_julia(mission_id: str | None) -> str | None:
@@ -92,11 +99,33 @@ def _contexto_indica_bypass_frequencia(contexto_json: str | None) -> bool:
         return False
 
 
+def _contexto_indica_evergreen_automatico(contexto_json: str | None) -> bool:
+    """True quando o registro pertence à cadência evergreen automática."""
+    if not contexto_json:
+        return False
+    try:
+        data = json.loads(contexto_json)
+        if not isinstance(data, dict):
+            return False
+        origem = str(data.get("origem") or data.get("cadencia") or "").strip().lower()
+        return origem == ORIGEM_EVERGREEN_AUTOMATICO
+    except Exception:
+        return False
+
+
 def _contexto_orquestracao(base: dict | None, bypass_frequencia: bool) -> dict:
     """Garante metadado de bypass no contexto para preservar rastreabilidade."""
     contexto = dict(base or {})
     if bypass_frequencia:
         contexto["bypass_frequencia"] = True
+    return contexto
+
+
+def _contexto_evergreen_automatico(base: dict | None = None) -> dict:
+    contexto = dict(base or {})
+    contexto["origem"] = ORIGEM_EVERGREEN_AUTOMATICO
+    contexto["cadencia"] = ORIGEM_EVERGREEN_AUTOMATICO
+    contexto["intencao_editorial"] = "evergreen"
     return contexto
 
 
@@ -121,11 +150,50 @@ def ultima_auditoria_orquestracao() -> datetime | None:
         for r in registros:
             if (r.resultado or "").strip().lower() == "ignorado":
                 continue
-            if not _contexto_indica_bypass_frequencia(r.contexto_json):
-                return r.created_at
+            if _contexto_indica_bypass_frequencia(r.contexto_json):
+                continue
+            if _contexto_indica_evergreen_automatico(r.contexto_json):
+                continue
+            return r.created_at
         return None
     except Exception:
         return None
+
+
+def ultima_auditoria_evergreen_automatico() -> datetime | None:
+    """
+    Última execução automática evergreen bem-sucedida.
+    Independente do ciclo legado; ignora manual, news e analysis.
+    """
+    try:
+        registros = (
+            AuditoriaGerencial.query.filter_by(
+                tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO
+            )
+            .order_by(AuditoriaGerencial.created_at.desc())
+            .limit(200)
+            .all()
+        )
+        for r in registros:
+            if (r.resultado or "").strip().lower() != "sucesso":
+                continue
+            if not _contexto_indica_evergreen_automatico(r.contexto_json):
+                continue
+            return r.created_at
+        return None
+    except Exception:
+        return None
+
+
+def pode_executar_evergreen_por_frequencia(
+    ultima_execucao: datetime | None, agora: datetime | None = None
+) -> bool:
+    """True se o intervalo evergreen_frequencia_minutos já venceu (ou nunca executou)."""
+    if ultima_execucao is None:
+        return True
+    t = agora or _utcnow_naive()
+    delta = t - ultima_execucao
+    return delta.total_seconds() >= get_evergreen_frequencia_minutos() * 60
 
 
 def _utcnow_naive() -> datetime:
@@ -148,35 +216,56 @@ def _artigo_publicado_hoje() -> bool:
     )
 
 
+def _intencao_editorial_da_missao(missao: MissaoAgente) -> str | None:
+    """Extrai intencao_editorial do payload persistido da missão, se houver."""
+    bruto = missao.payload_metadados
+    if not bruto:
+        return None
+    try:
+        payload = json.loads(bruto)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    valor = payload.get("intencao_editorial")
+    if not valor and isinstance(payload.get("metadados"), dict):
+        valor = payload["metadados"].get("intencao_editorial")
+    if isinstance(valor, str) and valor.strip():
+        return valor.strip().lower()
+    return None
+
+
 def _tentativas_artigo_hoje() -> int:
     """
-    Conta quantas missões de artigo já foram disparadas hoje.
-    Usa MissaoAgente como fonte de verdade (tipo_missao='artigo').
+    Conta missões de artigo do fluxo legado disparadas hoje.
+    Exclui evergreen (automático ou manual) para não bloquear analysis.
     """
     hoje_inicio = _utcnow_naive().replace(hour=0, minute=0, second=0, microsecond=0)
     try:
-        return (
+        missoes = (
             MissaoAgente.query.filter(
                 MissaoAgente.tipo_missao == "artigo",
                 MissaoAgente.created_at >= hoje_inicio,
-            ).count()
+            ).all()
         )
+        total = 0
+        for missao in missoes:
+            if _intencao_editorial_da_missao(missao) == "evergreen":
+                continue
+            total += 1
+        return total
     except Exception:
         return 0
 
 
 def _buscar_pauta_manual_artigo() -> Pauta | None:
-    """Busca a pauta manual de artigo mais antiga e elegível para execução."""
+    """Busca a pauta manual de artigo mais antiga elegível para o ciclo legado."""
     try:
-        status_permitidos = status_verificacao_permitidos()
-        query = (
-            Pauta.query.filter(
-                Pauta.tipo == "artigo",
-                Pauta.status == "pendente",
-                Pauta.status_verificacao.in_(status_permitidos),
-            )
+        return (
+            query_pautas_artigo_elegiveis_legado_automatico()
+            .order_by(Pauta.created_at.asc())
+            .first()
         )
-        return aplicar_filtro_fila_editorial_elegivel(query).order_by(Pauta.created_at.asc()).first()
     except Exception:
         return None
 
@@ -189,18 +278,14 @@ def decidir_tipo_missao() -> str:
       prioriza artigo.
     - Caso contrário, prioriza notícia automática.
     Deve ser chamada dentro de app_context. Não gera conteúdo; apenas decide o tipo.
+    Não inclui evergreen em decidir_tipo_missao (cadência independente em 215B).
     """
     tem_artigo_hoje = _artigo_publicado_hoje()
     arquivar_pautas_automaticas_vencidas()
 
-    status_permitidos = status_verificacao_permitidos()
-
-    tem_artigo_backlog_query = Pauta.query.filter(
-        Pauta.tipo == "artigo",
-        Pauta.status == "pendente",
-        Pauta.status_verificacao.in_(status_permitidos),
+    tem_artigo_backlog = (
+        query_pautas_artigo_elegiveis_legado_automatico().first()
     )
-    tem_artigo_backlog = aplicar_filtro_fila_editorial_elegivel(tem_artigo_backlog_query).first()
 
     # Série editorial ativa também conta como fonte elegível para artigo do dia.
     item_serie, _motivo = selecionar_item_para_missao()
@@ -251,6 +336,192 @@ def bootstrap_plano_se_necessario() -> None:
             pass
 
 
+def _avaliar_e_executar_evergreen_automatico(
+    app_flask,
+    *,
+    ignorar_janela_publicacao: bool = False,
+    excluir_pauta_ids: set[int] | frozenset[int] | None = None,
+    tema_serie: str = "portal",
+    objetivo: str = "conteúdo editorial",
+    plano: PlanoEstrategico | None = None,
+) -> dict[str, Any]:
+    """
+    Cadência evergreen independente do ciclo legado (SCRUM-215B).
+    Não altera decidir_tipo_missao nem frequencia_minutos legado.
+    """
+    resultado: dict[str, Any] = {
+        "status": "ignorado",
+        "motivo": "Evergreen automático não executado.",
+        "tipo_missao": None,
+        "intencao_editorial": "evergreen",
+        "pauta_id": None,
+        "mission_id": None,
+        "dispatch_ok": None,
+        "caminho_usado": "evergreen_automatico",
+    }
+
+    if not get_evergreen_automatico_habilitado():
+        msg = "Evergreen automático desabilitado."
+        auditoria_registrar(
+            tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO,
+            decisao="Evergreen automático desabilitado",
+            contexto=_contexto_evergreen_automatico({}),
+            resultado="ignorado",
+            detalhe=msg,
+        )
+        resultado["motivo"] = msg
+        resultado["caminho_usado"] = "evergreen_desabilitado"
+        return resultado
+
+    ultima_ev = ultima_auditoria_evergreen_automatico()
+    if not pode_executar_evergreen_por_frequencia(ultima_ev):
+        msg = "Evergreen automático não elegível por intervalo."
+        auditoria_registrar(
+            tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO,
+            decisao="Evergreen automático não elegível por intervalo",
+            contexto=_contexto_evergreen_automatico(
+                {
+                    "ultima_execucao_automatica": (
+                        ultima_ev.isoformat() if ultima_ev else None
+                    ),
+                    "frequencia_minutos": get_evergreen_frequencia_minutos(),
+                }
+            ),
+            resultado="ignorado",
+            detalhe=msg,
+        )
+        resultado["motivo"] = msg
+        resultado["caminho_usado"] = "evergreen_intervalo"
+        return resultado
+
+    if not ignorar_janela_publicacao and not dentro_janela_publicacao():
+        msg = "Evergreen automático fora da janela de publicação."
+        auditoria_registrar(
+            tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO,
+            decisao="Evergreen automático fora da janela de publicação",
+            contexto=_contexto_evergreen_automatico(
+                {"janela": list(get_janela_publicacao())}
+            ),
+            resultado="ignorado",
+            detalhe=msg,
+        )
+        resultado["motivo"] = msg
+        resultado["fora_janela"] = True
+        resultado["caminho_usado"] = "evergreen_fora_janela"
+        return resultado
+
+    pauta_escolhida_id: int | None = None
+    pauta = selecionar_pauta_evergreen_automatico(excluir_ids=excluir_pauta_ids)
+    if not pauta:
+        msg = "Evergreen automático sem pauta elegível."
+        auditoria_registrar(
+            tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO,
+            decisao="Evergreen automático sem pauta elegível",
+            contexto=_contexto_evergreen_automatico({}),
+            resultado="ignorado",
+            detalhe=msg,
+        )
+        resultado["motivo"] = msg
+        resultado["caminho_usado"] = "evergreen_sem_pauta"
+        return resultado
+
+    pauta_escolhida_id = int(pauta.id)
+    # Revalida imediatamente antes do dispatch (sem fallback para outra).
+    pauta_ainda = obter_pauta_artigo_elegivel_por_id(pauta_escolhida_id)
+    if not pauta_ainda:
+        msg = (
+            f"Pauta {pauta_escolhida_id} perdeu elegibilidade antes da execução "
+            "evergreen; sem fallback."
+        )
+        auditoria_registrar(
+            tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO,
+            decisao="Evergreen automático falhou",
+            contexto=_contexto_evergreen_automatico(
+                {"pauta_id": pauta_escolhida_id, "motivo": "pauta_inelegivel"}
+            ),
+            resultado="falha",
+            detalhe=msg,
+        )
+        resultado["status"] = "falha"
+        resultado["motivo"] = msg
+        resultado["pauta_id"] = pauta_escolhida_id
+        resultado["caminho_usado"] = "evergreen_pauta_inelegivel"
+        return resultado
+
+    resultado["pauta_id"] = pauta_escolhida_id
+    resultado["tipo_missao"] = "artigo"
+
+    inicio_janela, fim_janela = get_janela_publicacao()
+    agora = datetime.now()
+    janela_inicio = agora.replace(hour=inicio_janela, minute=0, second=0, microsecond=0)
+    janela_fim = agora.replace(hour=fim_janela, minute=0, second=0, microsecond=0)
+    from datetime import timedelta
+
+    if janela_fim <= janela_inicio:
+        janela_fim = janela_fim + timedelta(days=1)
+
+    metadados = {
+        "objetivo": objetivo,
+        "estagio": plano.estagio_atual if plano else None,
+        "pauta_id": pauta_escolhida_id,
+        "intencao_editorial": "evergreen",
+        "origem": ORIGEM_EVERGREEN_AUTOMATICO,
+        "cadencia": ORIGEM_EVERGREEN_AUTOMATICO,
+    }
+    payload = construir_payload(
+        tipo_missao="artigo",
+        tema=tema_serie,
+        prioridade=get_prioridade_padrao(),
+        janela_publicacao_inicio=janela_inicio,
+        janela_publicacao_fim=janela_fim,
+        tentativa_atual=1,
+        metadados=metadados,
+    )
+    payload["pauta_id"] = pauta_escolhida_id
+    payload["intencao_editorial"] = "evergreen"
+    resultado["mission_id"] = payload.get("mission_id")
+    registrar_missao(payload)
+
+    ok = despachar(payload, app_flask)
+    resultado["dispatch_ok"] = bool(ok)
+    if not ok:
+        msg = (
+            _detalhe_falha_dispatch_julia(payload.get("mission_id"))
+            or "Despacho evergreen automático falhou."
+        )
+        auditoria_registrar(
+            tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO,
+            decisao="Evergreen automático falhou",
+            contexto=_contexto_evergreen_automatico(
+                {
+                    "mission_id": payload.get("mission_id"),
+                    "pauta_id": pauta_escolhida_id,
+                }
+            ),
+            resultado="falha",
+            detalhe=msg,
+        )
+        resultado["status"] = "falha"
+        resultado["motivo"] = msg
+        return resultado
+
+    auditoria_registrar(
+        tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO,
+        decisao="Evergreen automático executado",
+        contexto=_contexto_evergreen_automatico(
+            {
+                "mission_id": payload.get("mission_id"),
+                "pauta_id": pauta_escolhida_id,
+                "tipo_missao": "artigo",
+            }
+        ),
+        resultado="sucesso",
+    )
+    resultado["status"] = "sucesso"
+    resultado["motivo"] = "Evergreen automático despachado com sucesso."
+    return resultado
+
+
 def executar_ciclo_gerencial(
     app_flask,
     bypass_frequencia: bool = False,
@@ -258,6 +529,8 @@ def executar_ciclo_gerencial(
     ignorar_trava_artigo_hoje: bool = False,
     ignorar_janela_publicacao: bool = False,
     consumo_identidade: Optional[dict] = None,
+    pauta_id: int | None = None,
+    intencao_editorial: str | None = None,
 ) -> dict[str, Any]:
     """
     Ciclo principal do Cleiton (gerencial):
@@ -267,8 +540,13 @@ def executar_ciclo_gerencial(
     4. Decide tipo de missão (artigo/noticia)
     5. Registra auditoria
     6. Constrói payload e despacha para agente operacional
-    7. Executa retenção (purge auditável)
+    7. Avalia evergreen automático de forma independente (SCRUM-215B)
+    8. Executa retenção (purge auditável)
     Nenhuma geração de conteúdo final aqui.
+
+    pauta_id / intencao_editorial: opcionais para execução manual explícita (SCRUM-215A).
+    Automação evergreen é avaliação separada no mesmo acionamento
+    (não disputa decidir_tipo_missao).
     """
     logger.info("Cleiton orquestrador: iniciando ciclo gerencial.")
     with app_flask.app_context():
@@ -280,6 +558,10 @@ def executar_ciclo_gerencial(
         plano = obter_plano_ativo()
         tema_serie = (plano.tema_serie if plano else "") or "portal"
         objetivo = (plano.objetivo if plano else "") or "conteúdo editorial"
+
+        # Evergreen automático só no acionamento sem missão/pauta forçadas.
+        avaliar_evergreen_auto = tipo_missao_forcado is None and pauta_id is None
+        excluir_pauta_ids: set[int] = set()
 
         resultado: dict[str, Any] = {
             "status": "falha",
@@ -299,6 +581,34 @@ def executar_ciclo_gerencial(
             "motivo_final": "Ciclo não concluído.",
         }
 
+        def _finalize_com_evergreen(res: dict[str, Any]) -> dict[str, Any]:
+            if not avaliar_evergreen_auto:
+                return res
+            try:
+                res["evergreen_automatico"] = _avaliar_e_executar_evergreen_automatico(
+                    app_flask,
+                    ignorar_janela_publicacao=ignorar_janela_publicacao,
+                    excluir_pauta_ids=excluir_pauta_ids,
+                    tema_serie=tema_serie,
+                    objetivo=objetivo,
+                    plano=plano,
+                )
+            except Exception as e:
+                logger.exception("Evergreen automático falhou de forma inesperada: %s", e)
+                auditoria_registrar(
+                    tipo_decisao=TIPO_DECISAO_EVERGREEN_AUTOMATICO,
+                    decisao="Evergreen automático falhou",
+                    contexto=_contexto_evergreen_automatico({}),
+                    resultado="falha",
+                    detalhe=str(e),
+                )
+                res["evergreen_automatico"] = {
+                    "status": "falha",
+                    "motivo": str(e),
+                    "caminho_usado": "evergreen_erro_inesperado",
+                }
+            return res
+
         ultima = ultima_auditoria_orquestracao()
         if not bypass_frequencia and not pode_executar_por_frequencia(ultima):
             logger.info("Cleiton: ciclo ignorado por frequência (última execução recente).")
@@ -316,7 +626,7 @@ def executar_ciclo_gerencial(
             resultado["ignorado_frequencia"] = True
             resultado["motivo_final"] = resultado["motivo"]
             resultado["caminho_usado"] = "ignorado_frequencia"
-            return resultado
+            return _finalize_com_evergreen(resultado)
 
         if bypass_frequencia:
             auditoria_registrar(
@@ -345,7 +655,7 @@ def executar_ciclo_gerencial(
             resultado["fora_janela"] = True
             resultado["motivo_final"] = resultado["motivo"]
             resultado["caminho_usado"] = "fora_janela_publicacao"
-            return resultado
+            return _finalize_com_evergreen(resultado)
 
         # Define tipo de missão base (artigo x notícia) antes de aplicar recomendações.
         if tipo_missao_forcado:
@@ -357,6 +667,20 @@ def executar_ciclo_gerencial(
         prioridade_efetiva = get_prioridade_padrao()
         recomendacao_em_uso = None  # Fase 6: feedback loop estratégico
         item_serie_usado = None
+        pauta_id_explicito: int | None = None
+        if pauta_id is not None:
+            try:
+                pauta_id_explicito = int(pauta_id)
+            except (TypeError, ValueError):
+                resultado["status"] = "falha"
+                resultado["motivo"] = "pauta_id inválido."
+                resultado["motivo_final"] = resultado["motivo"]
+                resultado["caminho_usado"] = "pauta_explicita_invalida"
+                return _finalize_com_evergreen(resultado)
+
+        intencao_explicita = None
+        if intencao_editorial is not None and str(intencao_editorial).strip():
+            intencao_explicita = str(intencao_editorial).strip().lower()
 
         try:
             from app.run_cleiton_agente_customer_insight import (
@@ -398,6 +722,7 @@ def executar_ciclo_gerencial(
             )
 
         # Limite de tentativas de artigo no dia (evita loop infinito de missão de artigo).
+        # Evergreen não entra neste limite (_tentativas_artigo_hoje exclui intencao evergreen).
         if tipo_missao == "artigo" and not ignorar_trava_artigo_hoje:
             tentativas_hoje = _tentativas_artigo_hoje()
             max_tentativas = get_max_tentativas_artigo_dia()
@@ -417,44 +742,79 @@ def executar_ciclo_gerencial(
                 resultado["motivo"] = msg
                 resultado["motivo_final"] = msg
                 resultado["caminho_usado"] = "limite_artigo_dia"
-                return resultado
+                return _finalize_com_evergreen(resultado)
 
         # Se a missão for artigo, tenta selecionar item de série editorial elegível e preparar pauta.
         if tipo_missao == "artigo":
             fonte_artigo_resolvida = False
-            item_serie, motivo_selecao = selecionar_item_para_missao()
-            if item_serie and motivo_selecao:
-                pauta = preparar_pauta_para_item(item_serie)
-                if pauta:
-                    item_serie_usado = item_serie
-                    resultado["serie_id"] = item_serie.serie_id
-                    resultado["serie_item_id"] = item_serie.id
-                    resultado["serie_motivo_selecao"] = motivo_selecao
-                    # Caminho explícito de artigo via série: série do dia ou atrasada.
-                    resultado["caminho_usado"] = motivo_selecao
-                    fonte_artigo_resolvida = True
-                else:
+            if pauta_id_explicito is not None:
+                pauta_explicita = obter_pauta_artigo_elegivel_por_id(pauta_id_explicito)
+                if not pauta_explicita:
+                    msg = (
+                        f"Pauta {pauta_id_explicito} inexistente ou inelegível "
+                        "para artigo manual; sem fallback."
+                    )
+                    logger.warning("Cleiton: %s", msg)
                     auditoria_registrar(
                         tipo_decisao="orquestracao",
-                        decisao="Falha ao preparar pauta de item de série; tentando fallback manual",
-                        contexto={"serie_item_id": item_serie.id, "serie_id": item_serie.serie_id},
+                        decisao="Pauta explícita inválida ou inelegível",
+                        contexto={"pauta_id": pauta_id_explicito},
                         resultado="falha",
+                        detalhe=msg,
                     )
+                    resultado["status"] = "falha"
+                    resultado["motivo"] = msg
+                    resultado["motivo_final"] = msg
+                    resultado["caminho_usado"] = "pauta_explicita_invalida"
+                    return _finalize_com_evergreen(resultado)
+                resultado["caminho_usado"] = "pauta_explicita"
+                resultado["pauta_id"] = pauta_explicita.id
+                excluir_pauta_ids.add(int(pauta_explicita.id))
+                fonte_artigo_resolvida = True
+                auditoria_registrar(
+                    tipo_decisao="orquestracao",
+                    decisao="Pauta explícita selecionada para artigo manual",
+                    contexto={"pauta_id": pauta_explicita.id},
+                    resultado="sucesso",
+                )
+            else:
+                item_serie, motivo_selecao = selecionar_item_para_missao()
+                if item_serie and motivo_selecao:
+                    pauta = preparar_pauta_para_item(item_serie)
+                    if pauta:
+                        item_serie_usado = item_serie
+                        resultado["serie_id"] = item_serie.serie_id
+                        resultado["serie_item_id"] = item_serie.id
+                        resultado["serie_motivo_selecao"] = motivo_selecao
+                        # Caminho explícito de artigo via série: série do dia ou atrasada.
+                        resultado["caminho_usado"] = motivo_selecao
+                        resultado["pauta_id"] = pauta.id
+                        excluir_pauta_ids.add(int(pauta.id))
+                        fonte_artigo_resolvida = True
+                    else:
+                        auditoria_registrar(
+                            tipo_decisao="orquestracao",
+                            decisao="Falha ao preparar pauta de item de série; tentando fallback manual",
+                            contexto={"serie_item_id": item_serie.id, "serie_id": item_serie.serie_id},
+                            resultado="falha",
+                        )
 
-            if not fonte_artigo_resolvida:
-                # Fallback explícito: tentar pauta manual de artigo.
-                pauta_manual = _buscar_pauta_manual_artigo()
-                if pauta_manual:
-                    resultado["caminho_usado"] = "pauta_manual"
-                    fonte_artigo_resolvida = True
-                    auditoria_registrar(
-                        tipo_decisao="orquestracao",
-                        decisao="Fallback para pauta manual de artigo",
-                        contexto={
-                            "pauta_id": pauta_manual.id,
-                        },
-                        resultado="sucesso",
-                    )
+                if not fonte_artigo_resolvida:
+                    # Fallback explícito: tentar pauta manual de artigo (sem [evergreen]).
+                    pauta_manual = _buscar_pauta_manual_artigo()
+                    if pauta_manual:
+                        resultado["caminho_usado"] = "pauta_manual"
+                        resultado["pauta_id"] = pauta_manual.id
+                        excluir_pauta_ids.add(int(pauta_manual.id))
+                        fonte_artigo_resolvida = True
+                        auditoria_registrar(
+                            tipo_decisao="orquestracao",
+                            decisao="Fallback para pauta manual de artigo",
+                            contexto={
+                                "pauta_id": pauta_manual.id,
+                            },
+                            resultado="sucesso",
+                        )
             if not fonte_artigo_resolvida:
                 resultado["status"] = "ignorado"
                 resultado["motivo"] = "Nenhum item de série ou pauta manual elegível para artigo."
@@ -466,7 +826,7 @@ def executar_ciclo_gerencial(
                     contexto={},
                     resultado="ignorado",
                 )
-                return resultado
+                return _finalize_com_evergreen(resultado)
         else:
             # Missão de notícia rápida mantém fluxo legado de notícias automáticas.
             resultado["caminho_usado"] = "noticia_rapida"
@@ -519,6 +879,12 @@ def executar_ciclo_gerencial(
         if recomendacao_em_uso:
             metadados["recomendacao_id"] = recomendacao_em_uso.id
             metadados["insight_recomendacao"] = True
+        if pauta_id_explicito is not None:
+            metadados["pauta_id"] = pauta_id_explicito
+        elif resultado.get("pauta_id") is not None:
+            metadados["pauta_id"] = resultado["pauta_id"]
+        if intencao_explicita:
+            metadados["intencao_editorial"] = intencao_explicita
         payload = construir_payload(
             tipo_missao=tipo_missao,
             tema=tema_efetivo,
@@ -528,13 +894,24 @@ def executar_ciclo_gerencial(
             tentativa_atual=1,
             metadados=metadados,
         )
+        if pauta_id_explicito is not None:
+            payload["pauta_id"] = pauta_id_explicito
+        elif resultado.get("pauta_id") is not None:
+            payload["pauta_id"] = resultado["pauta_id"]
+        if intencao_explicita:
+            payload["intencao_editorial"] = intencao_explicita
         resultado["mission_id"] = payload.get("mission_id")
         registrar_missao(payload)
         auditoria_registrar(
             tipo_decisao="orquestracao",
             decisao=f"Missão criada tipo={tipo_missao} theme={tema_efetivo}",
             contexto=_contexto_orquestracao(
-                {"mission_id": payload.get("mission_id"), "tipo_missao": tipo_missao},
+                {
+                    "mission_id": payload.get("mission_id"),
+                    "tipo_missao": tipo_missao,
+                    "pauta_id": payload.get("pauta_id"),
+                    "intencao_editorial": intencao_explicita,
+                },
                 bypass_frequencia,
             ),
             resultado="sucesso",
@@ -600,5 +977,6 @@ def executar_ciclo_gerencial(
                 resultado="falha",
                 detalhe=str(e),
             )
+        return _finalize_com_evergreen(resultado)
     logger.info("Cleiton orquestrador: ciclo gerencial encerrado.")
     return resultado

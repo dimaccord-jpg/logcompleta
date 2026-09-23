@@ -64,7 +64,10 @@ def _pode_transicionar_status(atual: str | None, novo: str) -> bool:
     return novo in TRANSICOES_PERMITIDAS.get(atual_normalizado, set())
 
 
-def selecionar_item_para_missao() -> Tuple[Optional[SerieItemEditorial], Optional[MotivoSelecao]]:
+def selecionar_item_para_missao(
+    *,
+    excluir_evergreen_explicito: bool = True,
+) -> Tuple[Optional[SerieItemEditorial], Optional[MotivoSelecao]]:
     """
     Seleciona item de série elegível para artigo diário.
     Regra:
@@ -72,7 +75,11 @@ def selecionar_item_para_missao() -> Tuple[Optional[SerieItemEditorial], Optiona
       2) itens com status 'planejado' e data_planejada <= hoje;
       3) ordenação determinística: data_planejada ASC, ordem ASC, id ASC;
       4) motivo = 'serie_dia' quando data_planejada == hoje (dia UTC), senão 'serie_atrasada'.
+      5) por padrão, itens candidatas evergreen (marcador ou heurística compartilhada)
+         ficam fora do ciclo legado (cadência evergreen / manual).
     """
+    from app.editorial_metadata import pauta_candidata_evergreen_automatico
+
     hoje = _utcnow_naive().date()
     try:
         q = (
@@ -91,12 +98,15 @@ def selecionar_item_para_missao() -> Tuple[Optional[SerieItemEditorial], Optiona
                 SerieItemEditorial.id.asc(),
             )
         )
-        item = q.first()
-        if not item:
-            return None, None
-        data_item = (item.data_planejada or _utcnow_naive()).date()
-        motivo: MotivoSelecao = "serie_dia" if data_item == hoje else "serie_atrasada"
-        return item, motivo
+        for item in q.all():
+            if excluir_evergreen_explicito and pauta_candidata_evergreen_automatico(
+                item.titulo_planejado
+            ):
+                continue
+            data_item = (item.data_planejada or _utcnow_naive()).date()
+            motivo: MotivoSelecao = "serie_dia" if data_item == hoje else "serie_atrasada"
+            return item, motivo
+        return None, None
     except Exception as e:
         logger.warning("Falha ao selecionar item de série: %s", e)
         return None, None

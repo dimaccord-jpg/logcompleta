@@ -78,8 +78,7 @@ SHELL_NAV_CATALOG: tuple[ShellNavEntry, ...] = (
         icon="bi-bar-chart-line",
         endpoint="fretes",
         destination_id="roberto_bi",
-        # GET /fretes é público. O shell não coloca login na frente desse destino.
-        requires_login=False,
+        # requires_login vem da taxonomia (roberto_bi → True).
         active_prefixes=("/fretes",),
         home_summary="Indicadores e leitura dos fretes.",
     ),

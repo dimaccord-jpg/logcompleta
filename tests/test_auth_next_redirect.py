@@ -221,3 +221,15 @@ class TestPostLoginNextFlow:
             # Quando GET funciona, deve persistir next seguro.
             if "post_login_next" in sess:
                 assert sess["post_login_next"] == "/auditoria-frete"
+
+    def test_unauthorized_html_route_preserves_safe_next_for_fretes(self, web_mod, monkeypatch):
+        monkeypatch.setattr(flask_login.utils, "_get_user", _anon_user)
+        monkeypatch.setattr(web_mod, "current_user", _anon_user())
+        client = web_mod.app.test_client()
+        resp = client.get("/fretes", follow_redirects=False)
+        assert resp.status_code in (302, 303)
+        location = resp.headers.get("Location") or ""
+        assert "/login" in location
+        assert "next=/fretes" in location or "next=%2Ffretes" in location
+        assert "http://" not in location.split("next=", 1)[-1]
+        assert "//evil" not in location

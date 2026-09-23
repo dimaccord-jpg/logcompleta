@@ -431,7 +431,11 @@ def _handle_unauthorized_access():
                 "require_login": True,
             }
         ), 401
-    return redirect(url_for("login"))
+    # Páginas HTML: preserva retorno interno seguro via next (ex.: /fretes).
+    next_target = request.path or "/"
+    if request.query_string:
+        next_target = f"{next_target}?{request.query_string.decode('utf-8', errors='ignore')}"
+    return redirect(_login_url_with_next(next_target))
 
 
 def _safe_next_redirect(target: str | None):
@@ -951,9 +955,9 @@ def sitemap_xml():
         home_lastmod = noticias_publicadas[0].publicado_em.date().isoformat()
 
     urls = [{"loc": f"{_SEO_CANONICAL_ORIGIN}/", "lastmod": home_lastmod}]
+    # /fretes é superfície autenticada (SCRUM-211); não anunciar no sitemap público.
     for path in (
         "/feed",
-        "/fretes",
     ):
         urls.append(
             {"loc": f"{_SEO_CANONICAL_ORIGIN}{path}", "lastmod": home_lastmod}
@@ -1299,6 +1303,7 @@ def logout():
 # --- ROTAS DE INTELIGÊNCIA (CONECTADAS AO BRAIN) ---
 
 @app.route('/fretes', methods=['GET', 'POST'])
+@login_required
 def fretes():
     indices = _load_indices_payload()
 
@@ -1306,8 +1311,6 @@ def fretes():
     is_authenticated = bool(getattr(current_user, 'is_authenticated', False))
 
     if request.method == 'POST':
-        if not is_authenticated:
-            return redirect(url_for('login'))
         # CAPTURA DOS DADOS DO FORMULÁRIO
         origem = request.form.get('origem')
         destino = request.form.get('destino')
@@ -1327,6 +1330,7 @@ def fretes():
     if is_authenticated:
         roberto_chat_limits = avaliar_autorizacao_operacao_por_franquia(current_user)
     else:
+        # Defesa residual: @login_required já bloqueia anônimos na rota.
         roberto_chat_limits = {
             'permitido': False,
             'modo_operacao': 'login_required',

@@ -104,6 +104,27 @@ def titulo_indica_evergreen(titulo: str | None) -> bool:
     return any(padrao.search(texto) for padrao in _EVERGREEN_PADROES)
 
 
+def pauta_marcada_evergreen_explicita(titulo: str | None) -> bool:
+    """True quando o título traz o marcador inequívoco [evergreen]."""
+    tag, _resto = extrair_tag_intencao(titulo)
+    return tag == "evergreen"
+
+
+def pauta_candidata_evergreen_automatico(titulo: str | None) -> bool:
+    """
+    Elegibilidade segura para automação evergreen (sem chamada de IA):
+    - marcador [evergreen]; ou
+    - padrões determinísticos já usados por titulo_indica_evergreen;
+    - nunca trata [analysis]/[news] como evergreen.
+    """
+    tag, titulo_limpo = extrair_tag_intencao(titulo)
+    if tag == "evergreen":
+        return True
+    if tag in ("analysis", "news"):
+        return False
+    return titulo_indica_evergreen(titulo_limpo)
+
+
 def resolver_intencao_editorial(
     *,
     tipo_missao: str,

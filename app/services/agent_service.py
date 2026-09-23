@@ -314,6 +314,88 @@ def configurar_frequencia_minutos(valor: int) -> None:
     _config(valor)
 
 
+def listar_pautas_artigo_elegiveis_admin() -> list[dict]:
+    """Pautas elegíveis para o seletor de artigo manual no admin (id + título)."""
+    from app.services.pauta_service import listar_pautas_artigo_elegiveis_manuais
+
+    try:
+        return [
+            {"id": p.id, "titulo": p.titulo_original or f"Pauta #{p.id}"}
+            for p in listar_pautas_artigo_elegiveis_manuais()
+        ]
+    except Exception:
+        logger.exception("Falha ao listar pautas elegíveis para admin")
+        return []
+
+
+def validar_pauta_artigo_manual(pauta_id: int):
+    """
+    Valida pauta para execução manual. Retorna a Pauta ou levanta ValueError.
+    """
+    from app.services.pauta_service import obter_pauta_artigo_elegivel_por_id
+
+    pauta = obter_pauta_artigo_elegivel_por_id(pauta_id)
+    if not pauta:
+        existente = db.session.get(Pauta, pauta_id)
+        if not existente:
+            raise ValueError(f"Pauta {pauta_id} não encontrada.")
+        raise ValueError(
+            f"Pauta {pauta_id} não é elegível para artigo manual "
+            "(tipo, status, verificação ou arquivamento incompatíveis)."
+        )
+    return pauta
+
+
+def obter_evergreen_config() -> dict:
+    """Lê configuração evergreen do admin (sem disparar automação)."""
+    from datetime import timedelta
+
+    from app.run_cleiton_agente_orquestrador import (
+        ultima_auditoria_evergreen_automatico,
+    )
+    from app.run_cleiton_agente_regras import (
+        get_evergreen_automatico_habilitado,
+        get_evergreen_frequencia_minutos,
+    )
+
+    automatico = get_evergreen_automatico_habilitado()
+    minutos = get_evergreen_frequencia_minutos()
+    ultima_auto = ultima_auditoria_evergreen_automatico() if automatico else None
+    proxima_elegibilidade = None
+    proxima_elegibilidade_label = None
+    if automatico:
+        if ultima_auto is None:
+            proxima_elegibilidade_label = "Elegível no próximo acionamento"
+        else:
+            proxima_elegibilidade = ultima_auto + timedelta(minutes=max(1, minutos))
+            proxima_elegibilidade_label = None
+    else:
+        proxima_elegibilidade_label = (
+            "Automação desabilitada — geração manual disponível."
+        )
+
+    return {
+        "evergreen_automatico_habilitado": automatico,
+        "evergreen_frequencia_minutos": minutos,
+        "modo": "automatico" if automatico else "manual",
+        "ultima_execucao_automatica": ultima_auto,
+        "proxima_elegibilidade": proxima_elegibilidade,
+        "proxima_elegibilidade_label": proxima_elegibilidade_label,
+    }
+
+
+def configurar_evergreen_admin(
+    *, automatico_habilitado: bool, frequencia_minutos: int
+) -> None:
+    """Persiste evergreen no ConfigRegras. Não altera frequencia_minutos legado."""
+    from app.run_cleiton_agente_regras import configurar_evergreen
+
+    configurar_evergreen(
+        automatico_habilitado=automatico_habilitado,
+        frequencia_minutos=frequencia_minutos,
+    )
+
+
 def formatar_mensagem_resultado_cleiton(resultado: dict) -> str:
     """Monta mensagem única a partir do resultado de executar_orquestracao (Cleiton)."""
     motivo = resultado.get("motivo") or "Ciclo não informou motivo detalhado."
@@ -356,7 +438,12 @@ def executar_cleiton_sincrono(app, bypass_frequencia: bool) -> dict:
     ) or {}
 
 
-def executar_artigo_manual_sincrono(app) -> dict:
+def executar_artigo_manual_sincrono(
+    app,
+    *,
+    pauta_id: int | None = None,
+    intencao_editorial: str | None = None,
+) -> dict:
     """Executa missão manual de artigo de forma síncrona. Retorna resultado."""
     from app.run_cleiton import executar_orquestracao
     return executar_orquestracao(
@@ -365,6 +452,8 @@ def executar_artigo_manual_sincrono(app) -> dict:
         tipo_missao_forcado="artigo",
         ignorar_trava_artigo_hoje=True,
         ignorar_janela_publicacao=True,
+        pauta_id=pauta_id,
+        intencao_editorial=intencao_editorial,
     ) or {}
 
 

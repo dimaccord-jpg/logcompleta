@@ -87,7 +87,7 @@ def test_shell_templates_keep_single_theme_contract():
     assert 'data-theme="dark"' in base
     assert 'data-theme-preference="dark"' in base
     assert "af-theme-init" in base
-    assert 'data-af-theme-select' in base
+    assert "partials/af_theme_control.html" in base
     assert "if (!window.AFTheme) return;" in base
     assert "--laranja-log" not in base
     assert "--ri-primary" not in header
@@ -101,9 +101,137 @@ def test_shell_templates_keep_single_theme_contract():
     index = (ROOT / "app" / "templates" / "index.html").read_text(encoding="utf-8")
     auditoria = (ROOT / "app" / "templates" / "cleide_auditoria.html").read_text(encoding="utf-8")
     compara = (ROOT / "app" / "templates" / "agente_compara.html").read_text(encoding="utf-8")
+    operational = (ROOT / "app" / "templates" / "julia_chat_operational.html").read_text(encoding="utf-8")
+    feed = (ROOT / "app" / "templates" / "feed.html").read_text(encoding="utf-8")
+    fretes = (ROOT / "app" / "templates" / "fretes.html").read_text(encoding="utf-8")
     assert "{% block af_theme_enabled %}true{% endblock %}" in index
+    assert "{% block af_theme_enabled %}true{% endblock %}" in operational
     assert "af_theme_enabled" not in auditoria
     assert "af_theme_enabled" not in compara
+    assert "af_theme_enabled" not in feed
+    assert "af_theme_enabled" not in fretes
+    assert 'STORAGE_KEY = "af-theme"' in base
+
+    sidebar = base[base.index('id="sidebar"'):base.index('id="content"')]
+    mobile = base[base.index('id="mobileMenu"'):base.index('id="sidebar"')]
+    footer = base[base.index("<footer"):base.index("</footer>")]
+    assert "af_theme_variant = 'sidebar'" in sidebar
+    assert "af_theme_variant = 'mobile'" in mobile
+    assert "af_theme_control.html" not in footer
+    assert "data-af-theme-select" not in footer
+
+    control = (ROOT / "app" / "templates" / "partials" / "af_theme_control.html").read_text(encoding="utf-8")
+    assert 'data-af-theme-select' in control
+    assert 'value="system"' in control
+    assert 'value="dark"' in control
+    assert 'value="light"' in control
+    assert 'title="Usar preferência do sistema"' in control
+    assert 'html[data-theme="light"] .julia-chat-actions-menu' in chat
+    assert 'html[data-theme="light"] .julia-chat-attach-icon' in chat
+
+
+def test_light_shell_reuses_semantic_tokens_and_dark_chrome_stays():
+    css = _css()
+    dark = _slice(css, ":root,", 'html[data-theme="light"]')
+    light = _slice(css, 'html[data-theme="light"]', "/* 2. TIPOGRAFIA */")
+
+    assert "--af-chrome-bg: #050c16;" in dark
+    assert "--af-chrome-hover: #112240;" in dark
+    assert "--af-chrome-text: #ffffff;" in dark
+    assert "--af-chrome-muted: #a8b2d1;" in dark
+    assert "background: rgba(0, 0, 0, 0.4) !important;" in css
+    assert "background: rgba(0, 0, 0, 0.3) !important;" in css
+    assert "#content" in css and "background: var(--af-bg-deep)" in css
+    assert ".af-shell-footer" in css and "background: var(--af-chrome-bg);" in css
+    assert "#sidebar" in css and "background: var(--af-chrome-bg) !important;" in css
+
+    assert "--af-chrome-bg: var(--af-surface);" in light
+    assert "--af-chrome-hover: var(--af-surface-muted);" in light
+    assert "--af-chrome-text: var(--af-text);" in light
+    assert "--af-chrome-muted: var(--af-text-secondary);" in light
+    assert "--af-chrome-accent: var(--af-primary);" in light
+    assert "--af-chrome-border: var(--af-border);" in light
+    assert "#050c16" not in light
+    assert "#112240" not in light
+
+    assert 'html[data-theme="light"] .sidebar-header' in css
+    assert 'html[data-theme="light"] .sidebar-footer' in css
+    assert 'html[data-theme="light"] #sidebarCollapse' in css
+    assert 'html[data-theme="light"] #mobileMenu .btn-close-white' in css
+    assert 'html[data-theme="light"] #mobileMenu .nav-item:hover' in css
+    assert 'html[data-theme="light"] #sidebar .nav-item.active' in css
+
+
+def test_light_chrome_hover_and_privacy_button_use_semantic_tokens():
+    css = _css()
+    privacy = (ROOT / "app" / "static" / "css" / "privacy_consent.css").read_text(encoding="utf-8")
+    hover = _slice(
+        css,
+        'html[data-theme="light"] #sidebarCollapse:hover',
+        'html[data-theme="light"] .mobile-navbar.navbar-dark',
+    )
+    assert "color: var(--af-chrome-text)" in hover
+    assert "background: var(--af-chrome-hover)" in hover
+    assert "border-color: var(--af-chrome-accent)" in hover
+    assert "--af-primary-text" not in hover
+    assert "#fff" not in hover
+    assert "#sidebarCollapse:hover { background: var(--af-chrome-accent) !important; border-color: var(--af-chrome-accent) !important; }" in css
+
+    footer_btn = _slice(privacy, ".af-privacy-footer-btn {", ".af-privacy-banner,")
+    assert "color: var(--af-chrome-muted);" in footer_btn
+    assert "color: var(--af-chrome-text);" in footer_btn
+    # Dark: base permanece transparente (sem regressão).
+    assert "background: transparent;" in footer_btn
+    assert "border: 0;" in footer_btn
+    # Light: superfície e borda semânticas distinguíveis do footer.
+    assert 'html[data-theme="light"] .af-privacy-footer-btn' in footer_btn
+    assert "background: var(--af-surface-elevated);" in footer_btn
+    assert "border: 1px solid var(--af-chrome-border);" in footer_btn
+    assert "background: var(--af-chrome-hover);" in footer_btn
+    assert "border-color: var(--af-chrome-border);" in footer_btn
+    assert "outline: 2px solid var(--af-chrome-accent);" in footer_btn
+    assert "#a8b2d1" not in footer_btn
+    assert "#f0f0f5" not in footer_btn
+    assert "#0a0a0f" in privacy
+
+
+def _shell_regions(html: str) -> tuple[str, str, str]:
+    sidebar = html[html.index('id="sidebar"'):html.index('id="content"')]
+    mobile = html[html.index('id="mobileMenu"'):html.index('id="sidebar"')]
+    footer = html[html.index("af-shell-footer"):html.index("</footer>")]
+    return sidebar, mobile, footer
+
+
+def test_home_and_operational_chat_share_theme_opt_in(monkeypatch):
+    os.environ.setdefault("APP_ENV", "dev")
+    os.environ.setdefault("SECRET_KEY", "test-secret")
+    web = importlib.import_module("app.web")
+    monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
+    monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
+    monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", lambda _u: {"permitido": True})
+    client = web.app.test_client()
+
+    home = client.get("/")
+    assert home.status_code == 200
+    home_html = home.get_data(as_text=True)
+    assert 'data-af-theme-enabled="true"' in home_html
+    sidebar, mobile, footer = _shell_regions(home_html)
+    assert 'id="af-theme-select-sidebar"' in sidebar
+    assert 'id="af-theme-select-mobile"' in mobile
+    assert 'data-af-theme-select' not in footer
+    assert 'title="Usar preferência do sistema"' in sidebar
+    assert 'title="Usar preferência do sistema"' in mobile
+    assert home_html.count('id="af-theme-select-') == 2
+
+    operational = client.get("/chat_julia?mode=operational")
+    assert operational.status_code == 200
+    operational_html = operational.get_data(as_text=True)
+    assert 'data-af-theme-enabled="true"' in operational_html
+    op_sidebar, op_mobile, op_footer = _shell_regions(operational_html)
+    assert 'id="af-theme-select-sidebar"' in op_sidebar
+    assert 'id="af-theme-select-mobile"' in op_mobile
+    assert 'data-af-theme-select' not in op_footer
+    assert 'STORAGE_KEY = "af-theme"' in operational_html
 
 
 def test_theme_script_fallbacks_and_system_preference():
