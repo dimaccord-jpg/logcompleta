@@ -1,12 +1,13 @@
 <!DOCTYPE html>
-<html lang="pt-br" data-theme="dark" data-theme-preference="dark" data-af-theme-enabled="{%- block af_theme_enabled -%}false{%- endblock -%}">
+<html lang="pt-br" data-theme="dark" data-theme-preference="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {% set base_url = "https://www.agentefrete.com.br" %}
     <meta name="theme-color" content="#0A0A0F">
     <script>
-        /* af-theme-init: roda antes do CSS para evitar flash de tema. */
+        /* af-theme-init: roda antes do CSS para evitar flash de tema.
+           Tema é global em toda superfície que herda base.html. */
         (function (global) {
             var STORAGE_KEY = "af-theme";
             var ALLOWED = { system: true, dark: true, light: true };
@@ -27,18 +28,8 @@
                 } catch (e) {}
                 return "dark";
             }
-            function themeEnabled() {
-                return document.documentElement.getAttribute("data-af-theme-enabled") === "true";
-            }
             function applyTheme(preference, persist) {
                 var root = document.documentElement;
-                if (!themeEnabled()) {
-                    root.setAttribute("data-theme", "dark");
-                    root.setAttribute("data-theme-preference", "dark");
-                    var lockedMeta = document.querySelector('meta[name="theme-color"]');
-                    if (lockedMeta) lockedMeta.setAttribute("content", "#0A0A0F");
-                    return { preference: "dark", theme: "dark" };
-                }
                 if (!ALLOWED[preference]) preference = "dark";
                 var theme = resolveTheme(preference);
                 root.setAttribute("data-theme", theme);
@@ -162,10 +153,8 @@
                     </a>
                 {% endif %}
             </div>
-            {% if self.af_theme_enabled()|trim == 'true' %}
-                {% set af_theme_variant = 'mobile' %}
-                {% include "partials/af_theme_control.html" %}
-            {% endif %}
+            {% set af_theme_variant = 'mobile' %}
+            {% include "partials/af_theme_control.html" %}
         </div>
     </div>
 
@@ -250,10 +239,8 @@
                     <span class="menu-text">Login / Cadastro</span>
                 </a>
             {% endif %}
-            {% if self.af_theme_enabled()|trim == 'true' %}
-                {% set af_theme_variant = 'sidebar' %}
-                {% include "partials/af_theme_control.html" %}
-            {% endif %}
+            {% set af_theme_variant = 'sidebar' %}
+            {% include "partials/af_theme_control.html" %}
         </div>
     </nav>
 

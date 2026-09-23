@@ -1,4 +1,4 @@
-"""Fundação visual do AgenteFrete: tokens compartilhados e alternância de tema."""
+"""Fundação visual do AgenteFrete: tokens compartilhados e tema global no shell."""
 from __future__ import annotations
 
 import importlib
@@ -35,6 +35,25 @@ SEMANTIC_TOKENS = (
     "--af-shadow-sm",
     "--af-shadow-md",
     "--af-transition",
+)
+
+SHELL_TEMPLATES = (
+    "index.html",
+    "login.html",
+    "julia_chat_operational.html",
+    "user_area.html",
+    "contrate_plano.html",
+    "fretes.html",
+    "cleide_auditoria.html",
+    "agente_compara.html",
+    "feed.html",
+    "noticia_interna.html",
+    "request_reset.html",
+    "reset_password.html",
+    "complete_profile.html",
+    "regularizar_pagamento.html",
+    "feature_under_construction.html",
+    "gestao_multiuser.html",
 )
 
 
@@ -78,7 +97,7 @@ def test_design_system_has_one_token_source_for_dark_and_light():
     assert "--laranja-log" not in css
 
 
-def test_shell_templates_keep_single_theme_contract():
+def test_shell_templates_keep_single_global_theme_contract():
     base = BASE_HTML.read_text(encoding="utf-8")
     header = HEADER_HTML.read_text(encoding="utf-8")
     chat = CHAT_HTML.read_text(encoding="utf-8")
@@ -97,20 +116,17 @@ def test_shell_templates_keep_single_theme_contract():
     assert 'data-copilot-surface="true"' in chat
     assert "Assistente virtual especializado em logística" in chat
     assert "agentefrete-theme.css" not in desktop
-    assert 'data-af-theme-enabled="{%- block af_theme_enabled -%}false{%- endblock -%}"' in base
-    index = (ROOT / "app" / "templates" / "index.html").read_text(encoding="utf-8")
-    auditoria = (ROOT / "app" / "templates" / "cleide_auditoria.html").read_text(encoding="utf-8")
-    compara = (ROOT / "app" / "templates" / "agente_compara.html").read_text(encoding="utf-8")
-    operational = (ROOT / "app" / "templates" / "julia_chat_operational.html").read_text(encoding="utf-8")
-    feed = (ROOT / "app" / "templates" / "feed.html").read_text(encoding="utf-8")
-    fretes = (ROOT / "app" / "templates" / "fretes.html").read_text(encoding="utf-8")
-    assert "{% block af_theme_enabled %}true{% endblock %}" in index
-    assert "{% block af_theme_enabled %}true{% endblock %}" in operational
-    assert "af_theme_enabled" not in auditoria
-    assert "af_theme_enabled" not in compara
-    assert "af_theme_enabled" not in feed
-    assert "af_theme_enabled" not in fretes
+
+    # Contrato novo: tema global — sem opt-in / sem gate data-af-theme-enabled.
+    assert "data-af-theme-enabled" not in base
+    assert "af_theme_enabled" not in base
+    assert "themeEnabled" not in base
     assert 'STORAGE_KEY = "af-theme"' in base
+
+    for name in SHELL_TEMPLATES:
+        html = (ROOT / "app" / "templates" / name).read_text(encoding="utf-8")
+        assert "af_theme_enabled" not in html, name
+        assert '{% extends "base.html" %}' in html, name
 
     sidebar = base[base.index('id="sidebar"'):base.index('id="content"')]
     mobile = base[base.index('id="mobileMenu"'):base.index('id="sidebar"')]
@@ -119,6 +135,9 @@ def test_shell_templates_keep_single_theme_contract():
     assert "af_theme_variant = 'mobile'" in mobile
     assert "af_theme_control.html" not in footer
     assert "data-af-theme-select" not in footer
+    # Controle sempre presente no shell (não depende de opt-in).
+    assert "af_theme_control.html" in sidebar
+    assert "af_theme_control.html" in mobile
 
     control = (ROOT / "app" / "templates" / "partials" / "af_theme_control.html").read_text(encoding="utf-8")
     assert 'data-af-theme-select' in control
@@ -128,6 +147,15 @@ def test_shell_templates_keep_single_theme_contract():
     assert 'title="Usar preferência do sistema"' in control
     assert 'html[data-theme="light"] .julia-chat-actions-menu' in chat
     assert 'html[data-theme="light"] .julia-chat-attach-icon' in chat
+
+    login_css = _css()
+    assert "#001428" not in login_css
+    assert "rgba(255, 255, 255, 0.8)" not in login_css
+    assert ".af-login-sidebar" in login_css
+    assert "var(--af-chrome-bg)" in login_css
+    perfil_css = (ROOT / "app" / "static" / "css" / "user_area_perfil.css").read_text(encoding="utf-8")
+    assert 'html[data-theme="light"] .af-profile-page #modalEncerrarContrato .btn-close' in perfil_css
+    assert "filter: none;" in perfil_css
 
 
 def test_light_shell_reuses_semantic_tokens_and_dark_chrome_stays():
@@ -202,39 +230,40 @@ def _shell_regions(html: str) -> tuple[str, str, str]:
     return sidebar, mobile, footer
 
 
-def test_home_and_operational_chat_share_theme_opt_in(monkeypatch):
+def _client(monkeypatch):
     os.environ.setdefault("APP_ENV", "dev")
     os.environ.setdefault("SECRET_KEY", "test-secret")
     web = importlib.import_module("app.web")
     monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
     monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
     monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", lambda _u: {"permitido": True})
-    client = web.app.test_client()
-
-    home = client.get("/")
-    assert home.status_code == 200
-    home_html = home.get_data(as_text=True)
-    assert 'data-af-theme-enabled="true"' in home_html
-    sidebar, mobile, footer = _shell_regions(home_html)
-    assert 'id="af-theme-select-sidebar"' in sidebar
-    assert 'id="af-theme-select-mobile"' in mobile
-    assert 'data-af-theme-select' not in footer
-    assert 'title="Usar preferência do sistema"' in sidebar
-    assert 'title="Usar preferência do sistema"' in mobile
-    assert home_html.count('id="af-theme-select-') == 2
-
-    operational = client.get("/chat_julia?mode=operational")
-    assert operational.status_code == 200
-    operational_html = operational.get_data(as_text=True)
-    assert 'data-af-theme-enabled="true"' in operational_html
-    op_sidebar, op_mobile, op_footer = _shell_regions(operational_html)
-    assert 'id="af-theme-select-sidebar"' in op_sidebar
-    assert 'id="af-theme-select-mobile"' in op_mobile
-    assert 'data-af-theme-select' not in op_footer
-    assert 'STORAGE_KEY = "af-theme"' in operational_html
+    return web.app.test_client()
 
 
-def test_theme_script_fallbacks_and_system_preference():
+def test_shell_pages_expose_theme_control_globally(monkeypatch):
+    client = _client(monkeypatch)
+
+    # Rotas públicas/acessíveis sem auth no test client.
+    for path in ("/", "/login", "/chat_julia?mode=operational", "/feed"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        html = response.get_data(as_text=True)
+        assert "data-af-theme-enabled" not in html, path
+        assert 'STORAGE_KEY = "af-theme"' in html, path
+        sidebar, mobile, footer = _shell_regions(html)
+        assert 'id="af-theme-select-sidebar"' in sidebar, path
+        assert 'id="af-theme-select-mobile"' in mobile, path
+        assert 'data-af-theme-select' not in footer, path
+        assert html.count('id="af-theme-select-') == 2, path
+
+    # Fretes/Perfil/Planos herdam base.html (contrato estático + seletor no shell).
+    for name in ("fretes.html", "user_area.html", "contrate_plano.html", "cleide_auditoria.html", "agente_compara.html"):
+        html = (ROOT / "app" / "templates" / name).read_text(encoding="utf-8")
+        assert '{% extends "base.html" %}' in html, name
+        assert "af_theme_enabled" not in html, name
+
+
+def test_theme_script_applies_preference_globally_without_opt_in():
     cscript = shutil.which("cscript")
     assert cscript, "cscript é necessário para executar o script de tema isolado."
     harness = r"""
@@ -249,12 +278,14 @@ if (start < 0 || end < 0) {
   WScript.Quit(2);
 }
 var source = html.substring(start, end + "})(window);".length);
+if (source.indexOf("themeEnabled") >= 0 || source.indexOf("data-af-theme-enabled") >= 0) {
+  WScript.Echo("contrato antigo de opt-in ainda presente no script");
+  WScript.Quit(3);
+}
 
-function boot(storedValue, throwOnRead, matchLight, matchMediaMissing, themeEnabled) {
+function boot(storedValue, throwOnRead, matchLight, matchMediaMissing) {
   var attrs = {};
-  var writes = 0;
-  var kept = storedValue;
-  attrs["data-af-theme-enabled"] = themeEnabled === false ? "false" : "true";
+  var state = { writes: 0, kept: storedValue };
   var meta = { content: "#0A0A0F" };
   var document = {
     documentElement: {
@@ -277,16 +308,16 @@ function boot(storedValue, throwOnRead, matchLight, matchMediaMissing, themeEnab
     localStorage: {
       getItem: function () {
         if (throwOnRead) throw new Error("denied");
-        return kept;
+        return state.kept;
       },
-      setItem: function (key, value) { writes += 1; kept = String(value); }
+      setItem: function (key, value) { state.writes += 1; state.kept = String(value); }
     },
     matchMedia: matchMediaMissing ? undefined : function (query) {
       return { matches: matchLight && String(query).indexOf("light") !== -1 };
     }
   };
   var api = new Function("window", "document", source + "\nreturn window.AFTheme;")(window, document);
-  return { attrs: attrs, meta: meta, api: api, writes: writes, kept: kept };
+  return { attrs: attrs, meta: meta, api: api, state: state };
 }
 
 function assert(cond, msg) {
@@ -306,7 +337,12 @@ assert(result.attrs["data-theme-preference"] === "dark", "preferencia invalida n
 
 result = boot("light", false, false, false);
 assert(result.attrs["data-theme"] === "light", "light explicito");
+assert(result.attrs["data-theme-preference"] === "light", "preferencia light preservada");
 assert(result.meta.content === "#f4f7f9", "theme-color do tema claro");
+
+result = boot("dark", false, true, false);
+assert(result.attrs["data-theme"] === "dark", "dark explicito");
+assert(result.attrs["data-theme-preference"] === "dark", "preferencia dark preservada");
 
 result = boot("system", false, true, false);
 assert(result.attrs["data-theme"] === "light", "sistema com prefers-color-scheme light");
@@ -326,15 +362,21 @@ result = boot(null, false, false, false);
 var applied = result.api.applyTheme("garbage", false);
 assert(applied.theme === "dark" && applied.preference === "dark", "applyTheme invalido");
 
-result = boot("light", false, true, false, false);
-assert(result.attrs["data-theme"] === "dark", "superficie sem opt-in permanece dark");
-assert(result.writes === 0, "preferencia salva nao pode ser apagada");
-assert(result.kept === "light", "light salvo permanece no storage");
+result = boot("light", false, true, false);
+assert(result.attrs["data-theme"] === "light", "light aplica sem opt-in");
+assert(result.state.writes === 0, "boot sem persist nao grava");
+assert(result.state.kept === "light", "light salvo permanece no storage");
 
-result = boot("system", false, true, false, false);
-assert(result.attrs["data-theme"] === "dark", "sistema claro nao aplica light sem opt-in");
-assert(result.writes === 0, "preferencia sistema permanece salva");
-assert(result.kept === "system", "valor sistema permanece no storage");
+result = boot("system", false, true, false);
+assert(result.attrs["data-theme"] === "light", "sistema claro aplica light sem opt-in");
+assert(result.state.writes === 0, "preferencia sistema permanece salva");
+assert(result.state.kept === "system", "valor sistema permanece no storage");
+
+result = boot("light", false, false, false);
+var persisted = result.api.applyTheme("system", true);
+assert(persisted.preference === "system", "persist guarda system");
+assert(result.state.kept === "system", "localStorage atualizado para system");
+assert(result.state.writes === 1, "persist grava uma vez");
 WScript.Echo("ok");
 """
     harness_path = ROOT / "tests" / "_af_theme_harness.js"
@@ -353,16 +395,10 @@ WScript.Echo("ok");
 
 
 def test_home_shell_still_renders_with_theme_control(monkeypatch):
-    os.environ.setdefault("APP_ENV", "dev")
-    os.environ.setdefault("SECRET_KEY", "test-secret")
-    web = importlib.import_module("app.web")
-    monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=False))
-    monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
-    monkeypatch.setattr(web, "avaliar_autorizacao_operacao_por_franquia", lambda _u: {"permitido": True})
-    response = web.app.test_client().get("/")
+    response = _client(monkeypatch).get("/")
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert 'data-af-theme-enabled="true"' in html
+    assert "data-af-theme-enabled" not in html
     assert 'data-theme="dark"' in html
     assert 'data-af-theme-select' in html
     assert "Copilot do AgenteFrete" not in html

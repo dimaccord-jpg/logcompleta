@@ -288,6 +288,10 @@
   filter: invert(1) grayscale(1);
 }
 
+html[data-theme="light"] .af-profile-page #modalEncerrarContrato .btn-close {
+  filter: none;
+}
+
 @media (min-width: 992px) {
   .af-profile-page .profile-security-card .card-body {
     padding: 1.5rem 1.75rem;

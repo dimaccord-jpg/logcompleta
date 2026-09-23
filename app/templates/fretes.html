@@ -12,45 +12,45 @@
 {% include 'partials/app_global_header.html' %}
 <style>
   :root{
-    --ri-primary:#0D6EFD;
-    --ri-amber:#FFC107;
-    --ri-dark:#212529;
-    --ri-light:#F8F9FA;
-    --ri-soft:#CCE5FF;
-    --ri-success:#198754;
+    --ri-primary: var(--af-primary);
+    --ri-amber: var(--af-warning);
+    --ri-dark: var(--af-text);
+    --ri-light: var(--af-surface-elevated);
+    --ri-soft: var(--af-primary-soft);
+    --ri-success: var(--af-success);
   }
 
   /* Roberto Intelligence helpers (Bootstrap 5-safe) */
-  .ri-page{ color: var(--ri-dark); }
+  .ri-page{ color: var(--af-text); }
   .ri-surface{
-    background: var(--ri-light);
-    border: 1px solid rgba(33,37,41,.08);
+    background: var(--af-surface-elevated);
+    border: 1px solid var(--af-border);
     border-radius: 1rem;
   }
   .ri-card{
-    background:#fff;
-    border: 1px solid rgba(33,37,41,.08);
+    background: var(--af-surface);
+    border: 1px solid var(--af-border);
     border-radius: 1rem;
   }
   .ri-badge-soft-primary{
-    background: var(--ri-soft);
-    color: var(--ri-primary);
-    border: 1px solid rgba(13,110,253,.18);
+    background: var(--af-primary-soft);
+    color: var(--af-primary);
+    border: 1px solid var(--af-info-border);
   }
   .ri-insight{
-    background: rgba(255,193,7,.16);
-    border: 1px solid rgba(255,193,7,.35);
-    color: var(--ri-dark);
+    background: var(--af-warning-soft);
+    border: 1px solid var(--af-warning-border);
+    color: var(--af-text);
     border-radius: .75rem;
   }
   .ri-metric{
-    border: 1px solid rgba(33,37,41,.08);
+    border: 1px solid var(--af-border);
     border-radius: 1rem;
   }
   .extra-small{ font-size: .75rem; }
   .ri-hero{
-    background: linear-gradient(135deg, #ffffff 0%, #f5f9ff 100%);
-    border: 1px solid rgba(13,110,253,.12);
+    background: linear-gradient(135deg, var(--af-surface) 0%, var(--af-surface-elevated) 100%);
+    border: 1px solid var(--af-border);
   }
   .ri-operational-stack .roberto-bi{
     margin-top: 0 !important;
@@ -60,14 +60,14 @@
     line-height: 1.65;
   }
   .ri-seo-content{
-    background: linear-gradient(180deg, rgba(8,15,28,.92) 0%, rgba(10,18,34,.88) 100%);
-    border-color: rgba(115,149,197,.2);
+    background: linear-gradient(180deg, var(--af-surface) 0%, var(--af-surface-elevated) 100%);
+    border-color: var(--af-border);
   }
   .ri-seo-intro{
     max-width: 860px;
   }
   .ri-seo-preview{
-    color: rgba(228,237,252,.92) !important;
+    color: var(--af-text-secondary) !important;
     padding-left: 1.1rem;
     margin-bottom: 0;
   }
@@ -76,7 +76,7 @@
   }
   .ri-seo-disclosure{
     margin-top: 1rem;
-    border-top: 1px solid rgba(125,159,214,.28);
+    border-top: 1px solid var(--af-border);
     padding-top: 1rem;
   }
   .ri-seo-summary{
@@ -85,17 +85,17 @@
     align-items: center;
     gap: .55rem;
     cursor: pointer;
-    border: 1px solid rgba(125,159,214,.35);
+    border: 1px solid var(--af-border-strong);
     border-radius: 999px;
     padding: .45rem .95rem;
-    color: #eaf2ff;
-    background: rgba(24,38,66,.6);
+    color: var(--af-text);
+    background: var(--af-surface-muted);
     user-select: none;
     transition: background-color .2s ease, border-color .2s ease;
   }
   .ri-seo-summary:hover{
-    background: rgba(31,49,84,.74);
-    border-color: rgba(154,188,242,.55);
+    background: var(--af-surface-elevated);
+    border-color: var(--af-border-hover);
   }
   .ri-seo-summary::-webkit-details-marker{
     display: none;
@@ -122,21 +122,21 @@
   }
   .ri-seo-content h2,
   .ri-seo-content h3{
-    color: #f4f8ff;
+    color: var(--af-text);
   }
   .ri-seo-content .text-muted{
-    color: rgba(223,234,250,.88) !important;
+    color: var(--af-text-secondary) !important;
   }
   .ri-seo-benefits{
-    background: linear-gradient(180deg, rgba(20,32,56,.94) 0%, rgba(17,28,48,.9) 100%);
-    border: 1px solid rgba(125,159,214,.32);
-    box-shadow: 0 14px 36px rgba(3,9,20,.28);
+    background: linear-gradient(180deg, var(--af-surface) 0%, var(--af-surface-elevated) 100%);
+    border: 1px solid var(--af-border);
+    box-shadow: var(--af-shadow-sm);
   }
   .ri-seo-benefits h3{
-    color: #f4f8ff;
+    color: var(--af-text);
   }
   .ri-seo-benefits ul{
-    color: rgba(228,237,252,.92) !important;
+    color: var(--af-text-secondary) !important;
     padding-left: 1.1rem;
   }
   .ri-seo-benefits li + li{

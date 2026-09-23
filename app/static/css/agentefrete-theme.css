@@ -633,10 +633,10 @@ a.home-skill-card i {
   border-radius: var(--af-radius-xl) !important;
   overflow: hidden;
   border: 1px solid var(--af-border) !important;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5) !important;
+  box-shadow: var(--af-shadow-sm) !important;
 }
 .af-login-sidebar {
-  background: linear-gradient(160deg, var(--af-bg-deep), #001428) !important;
+  background: linear-gradient(160deg, var(--af-bg-deep), var(--af-chrome-bg)) !important;
   position: relative;
   overflow: hidden;
 }
@@ -657,7 +657,7 @@ a.home-skill-card i {
 .af-tabs .nav-link:hover:not(.active) { color: var(--af-text-primary); }
 .af-feature-item { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .af-feature-item i { color: var(--af-cyan); font-size: 1rem; }
-.af-feature-item span { color: rgba(255, 255, 255, 0.8); font-size: 0.9rem; }
+.af-feature-item span { color: var(--af-chrome-muted); font-size: 0.9rem; }
 
 /* 13.1 CONTRASTE DE LEITURA (global e reutilizavel) */
 .af-readable-surface {
@@ -1118,11 +1118,17 @@ html[data-theme="light"] #mobileMenu .text-warning {
 }
 
 html[data-theme="light"] .af-login-sidebar {
-  background: linear-gradient(160deg, var(--af-chrome-bg), #001428) !important;
+  background: linear-gradient(160deg, var(--af-primary-deep), var(--af-primary)) !important;
+  color: var(--af-primary-text);
 }
 
-html[data-theme="light"] .af-feature-item span {
-  color: var(--af-chrome-muted);
+html[data-theme="light"] .af-login-sidebar .af-feature-item span,
+html[data-theme="light"] .af-login-sidebar p {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+html[data-theme="light"] .af-login-card {
+  box-shadow: var(--af-shadow-sm) !important;
 }
 
 @media (max-width: 767.98px) {

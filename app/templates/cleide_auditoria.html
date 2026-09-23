@@ -1015,9 +1015,9 @@
 
     border-radius: 0.85rem;
 
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--af-border, rgba(255, 255, 255, 0.08));
 
-    background: rgba(12, 16, 28, 0.98);
+    background: var(--af-surface, rgba(12, 16, 28, 0.98));
 
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 191, 255, 0.08);
 
@@ -1101,7 +1101,7 @@
 
     margin: 0.3rem 0.45rem;
 
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--af-surface-muted);
 
   }
 
@@ -1167,7 +1167,7 @@
 
     border: 1px solid rgba(0, 191, 255, 0.28) !important;
 
-    background: rgba(255, 255, 255, 0.03) !important;
+    background: var(--af-surface-muted) !important;
 
     color: var(--af-text-secondary, #C8CCE5) !important;
 
@@ -1219,7 +1219,7 @@
 
     border: 1px solid rgba(0, 191, 255, 0.18);
 
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--af-surface-elevated);
 
   }
 
@@ -1416,7 +1416,7 @@
     justify-content: space-between;
     gap: 0.75rem;
     padding: 1rem 1.15rem 0.65rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--af-border);
   }
 
   .cleide-audit-temp-table-modal-header-main {
@@ -1434,8 +1434,8 @@
     margin-top: 0.05rem;
     padding: 0;
     border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--af-border-strong);
+    background: var(--af-surface-muted);
     color: var(--af-text-secondary, #8A8AA3);
     font-size: 1.35rem;
     line-height: 1;
@@ -1484,7 +1484,7 @@
 
   .cleide-audit-temp-table-modal-footer {
     padding: 0.75rem 1.15rem 1rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--af-border);
     display: flex;
     justify-content: flex-end;
     align-items: center;
@@ -1555,7 +1555,7 @@
     display: flex;
     gap: 0.5rem;
     margin-bottom: 0.85rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--af-border);
     padding-bottom: 0.35rem;
   }
 
@@ -1591,7 +1591,7 @@
     padding: 0.75rem 0.85rem;
     border-radius: 0.65rem;
     border: 1px solid rgba(0, 191, 255, 0.22);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--af-surface-muted);
   }
 
   .cleide-audit-coverage-prompt-title {
@@ -1652,14 +1652,14 @@
   }
 
   .cleide-audit-coverage-prompt-btn-secondary {
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--af-border-strong);
+    background: var(--af-surface-muted);
     color: var(--af-text-secondary, #C8CCE5);
   }
 
   .cleide-audit-coverage-prompt-btn-secondary:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.28);
+    background: var(--af-surface-muted);
+    border-color: var(--af-border-strong);
     color: var(--af-text-primary, #F0F0F5);
   }
 
@@ -1688,7 +1688,7 @@
     padding: 0.75rem 0.85rem;
     border-radius: 0.65rem;
     border: 1px solid rgba(0, 191, 255, 0.22);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--af-surface-muted);
   }
 
   .cleide-audit-coverage-upload-header {
@@ -1923,7 +1923,7 @@
     padding: 0.75rem 0.85rem;
     border-radius: 0.65rem;
     border: 1px solid rgba(0, 191, 255, 0.22);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--af-surface-muted);
   }
 
   .cleide-audit-audit-file-description {
@@ -2001,7 +2001,7 @@
   .cleide-audit-audit-file-summary {
     margin-top: 0.35rem;
     padding-top: 0.55rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--af-border);
   }
 
   .cleide-audit-audit-file-summary-title {
@@ -2065,7 +2065,7 @@
   .cleide-audit-run-results {
     margin-top: 0.45rem;
     padding-top: 0.55rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--af-border);
   }
 
   .cleide-audit-run-summary-title,
@@ -2093,7 +2093,7 @@
     gap: 0.5rem;
     padding: 0.4rem 0.5rem;
     border-radius: 0.45rem;
-    background: rgba(255, 255, 255, 0.035);
+    background: var(--af-surface-muted);
   }
 
   .cleide-audit-run-summary-label {
@@ -2385,7 +2385,7 @@
     gap: 1rem;
     margin-top: 0.85rem;
     padding-top: 0.65rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: 1px solid var(--af-border);
     font-size: 0.82rem;
   }
 
@@ -2408,13 +2408,13 @@
   }
 
   .cleide-audit-temp-table-modal-cancel-edit-btn {
-    border: 1px solid rgba(255, 255, 255, 0.18) !important;
-    background: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid var(--af-border-strong) !important;
+    background: var(--af-surface-muted) !important;
     color: var(--af-text-secondary, #C8CCE5) !important;
   }
 
   .cleide-audit-temp-table-modal-cancel-edit-btn:hover {
-    background: rgba(255, 255, 255, 0.08) !important;
+    background: var(--af-surface-muted) !important;
   }
 
   .cleide-audit-temp-table-modal-cell-input {
@@ -2546,8 +2546,8 @@
     margin-bottom: 1rem;
     padding: 0.65rem 0.75rem;
     border-radius: 0.55rem;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--af-surface-muted);
+    border: 1px solid var(--af-border);
   }
 
   .cleide-audit-temp-table-modal-meta-row {
@@ -2595,8 +2595,8 @@
     margin-bottom: 0.5rem;
     padding: 0.55rem 0.65rem;
     border-radius: 0.45rem;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--af-border);
+    background: var(--af-surface-elevated);
   }
 
   .cleide-audit-temp-table-modal-detail-row {
@@ -2649,7 +2649,7 @@
     font-size: 0.82rem;
     font-weight: 600;
     color: var(--af-cyan, #00BFFF);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid var(--af-border);
   }
 
   .cleide-audit-temp-table-modal-freight-table-summary::-webkit-details-marker {
@@ -2696,7 +2696,7 @@
     -webkit-overflow-scrolling: touch;
     margin: 0.25rem 0 0.5rem;
     border-radius: 0.45rem;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--af-border);
     background: rgba(0, 0, 0, 0.12);
   }
 
@@ -2723,7 +2723,7 @@
   .cleide-audit-temp-table-modal-freight-table tbody td {
     color: var(--af-text-primary, #F0F0F5);
     padding: 0.4rem 0.55rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid var(--af-border);
     vertical-align: top;
     word-break: normal;
     overflow-wrap: break-word;
@@ -2756,7 +2756,7 @@
   .cleide-audit-temp-table-modal-data-table tbody td {
     color: var(--af-text-primary, #F0F0F5);
     padding: 0.38rem 0.55rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid var(--af-border);
     vertical-align: top;
     word-break: normal;
     overflow-wrap: break-word;
@@ -2948,7 +2948,7 @@
 
   .cleide-audit-bi-confidence-card,
   .cleide-audit-bi-kpi-card {
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--af-border);
     border-radius: 0.55rem;
     background: rgba(0, 0, 0, 0.2);
     padding: 0.7rem 0.75rem;
@@ -3044,7 +3044,7 @@
   }
 
   .cleide-audit-bi-chart-card {
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--af-border);
     border-radius: 0.55rem;
     background: rgba(0, 0, 0, 0.18);
     padding: 0.65rem 0.7rem 0.75rem;
@@ -3077,7 +3077,7 @@
   }
 
   .cleide-audit-bi-hide-chart-btn {
-    border-color: rgba(255, 255, 255, 0.14);
+    border-color: var(--af-border-strong);
     color: var(--af-text-secondary, #A0A0B8);
     background: transparent;
     font-size: 0.68rem;
@@ -3092,7 +3092,7 @@
   .cleide-audit-bi-chart-empty {
     font-size: 0.74rem;
     color: var(--af-text-secondary, #A0A0B8);
-    border: 1px dashed rgba(255, 255, 255, 0.12);
+    border: 1px dashed var(--af-border-strong);
     border-radius: 0.45rem;
     padding: 0.65rem 0.75rem;
     margin-bottom: 0.35rem;
