@@ -1,6 +1,6 @@
 # Guia de Monetização, Franquias e Planos
 
-Referência funcional auditada contra a árvore de produção `bd874ee` (Sprint 11).
+Referência funcional auditada contra a árvore de produção `fa98317` (Sprint 12). Preços e regras comerciais abaixo não foram alterados pela Sprint 12 além do comportamento de checkout Multiusuário (limpeza do embedded Starter/Pro antes do formulário; ver [estado de produção](estado_producao.md)).
 
 ## Visão geral
 
@@ -103,6 +103,7 @@ Leitura operacional resumida:
 Fluxos confirmados no código:
 
 - página de contratação em `/contrate-um-plano`;
+- Starter/Pro usam checkout embedded; ao selecionar Multiusuário, o embedded anterior é destruído/limpo e o formulário Multiusuário só inicia checkout após **Ir para o checkout**;
 - criação/início de checkout em `/api/contratacao/stripe/iniciar`;
 - conciliação de retorno de checkout na própria área do usuário;
 - regularização em `/perfil/regularizar-pagamento` e `/perfil/regularizar-pagamento/stripe`;

@@ -1,6 +1,6 @@
 # Multiuser V1 em produção
 
-Guia funcional do Multiuser V1, incluído na produção `bd874ee` (Sprint 11). Configurações externas informadas pela operação são referências datadas, não constantes do código nem resultado de consulta ao banco ou Stripe nesta revisão.
+Guia funcional do Multiuser V1, vigente na produção `fa98317` (Sprint 12; baseline Multiuser da Sprint 11). Configurações externas informadas pela operação são referências datadas, não constantes do código nem resultado de consulta ao banco ou Stripe nesta revisão.
 
 ## Organização, papéis e acesso
 

@@ -22,6 +22,41 @@ FLOW_TYPE_ROBERTO_CHAT = "roberto_chat_fretes"
 API_KEY_LABEL_ROBERTO = "GEMINI_API_KEY_ROBERTO"
 FLOW_TYPE_ROBERTO_CHAT_SNAPSHOT = "roberto_chat_snapshot"
 
+
+def _try_record_roberto_chat_growth_task(
+    *,
+    event_name: str,
+    execution_id: str,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Observabilidade Growth fail-open; nao altera o chat Roberto."""
+    exec_id = (execution_id or "").strip()
+    if not exec_id:
+        return
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_SOURCE_ROBERTO_CHAT,
+            TASK_TYPE_ROBERTO_CHAT,
+            try_record_growth_task_event,
+        )
+
+        try_record_growth_task_event(
+            event_name=event_name,
+            source=FUNNEL_SOURCE_ROBERTO_CHAT,
+            task_type=TASK_TYPE_ROBERTO_CHAT,
+            idempotency_key=f"growth:roberto_chat:{exec_id}:{event_name}",
+            task_stage=task_stage,
+            error_code=error_code,
+            execution_id=exec_id,
+        )
+    except Exception:
+        logger.exception(
+            "roberto_chat_growth_task_failed event=%s execution_id=%s",
+            event_name,
+            exec_id,
+        )
+
 ROBERTO_CHAT_SYSTEM_PROMPT = """
 Você é Roberto Santos, gerente de análises e logística do Agentefrete.
 
@@ -452,6 +487,21 @@ def chat_roberto_reply(
             "suggestions": _build_follow_up_suggestions(""),
         }
 
+    from app.funnel_event_service import (
+        FUNNEL_EVENT_TASK_COMPLETED,
+        FUNNEL_EVENT_TASK_FAILED,
+        FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+        FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+        FUNNEL_EVENT_TASK_STARTED,
+    )
+
+    # Preparação separável: montagem do snapshot analítico antes da geração.
+    _try_record_roberto_chat_growth_task(
+        event_name=FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+        execution_id=exec_id,
+        task_stage="snapshot_context",
+    )
+
     t0_snapshot = time.perf_counter()
     try:
         ctx_upload_only = get_contexto_bi_roberto_upload_only()
@@ -463,11 +513,23 @@ def chat_roberto_reply(
             execution_id=exec_id,
             error_summary=f"Falha ao montar contexto upload-only: {e}",
         )
+        _try_record_roberto_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            execution_id=exec_id,
+            task_stage="snapshot_context",
+            error_code="roberto_chat_context_unavailable",
+        )
         return {
             "reply": "Não foi possível montar o contexto analítico do upload agora. Tente novamente em instantes.",
             "suggestions": _build_follow_up_suggestions(clean_user_message),
         }
     if not ctx_upload_only:
+        _try_record_roberto_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            execution_id=exec_id,
+            task_stage="snapshot_context",
+            error_code="roberto_chat_requires_upload",
+        )
         return {
             "reply": (
                 "Para iniciar o Chat Roberto, envie sua base em Excel no upload desta tela. "
@@ -489,9 +551,21 @@ def chat_roberto_reply(
         execution_id=exec_id,
         error_summary=None,
     )
+    # ProcessingEvent do snapshot já commitado; contexto utilizável.
+    _try_record_roberto_chat_growth_task(
+        event_name=FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+        execution_id=exec_id,
+        task_stage="snapshot_ready",
+    )
 
     client = _get_client()
     if not client:
+        _try_record_roberto_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            execution_id=exec_id,
+            task_stage="provider_check",
+            error_code="roberto_chat_provider_unavailable",
+        )
         return {
             "reply": "Chat Roberto indisponível. Verifique a configuração da GEMINI_API_KEY_ROBERTO.",
             "suggestions": _build_follow_up_suggestions(clean_user_message),
@@ -502,6 +576,12 @@ def chat_roberto_reply(
     history_slice = history_list[-max_hist:] if max_hist > 0 else []
     snapshot = _build_roberto_snapshot(ctx_upload_only)
     contents = _build_prompt_contents(history_slice, clean_user_message, snapshot, meta)
+
+    _try_record_roberto_chat_growth_task(
+        event_name=FUNNEL_EVENT_TASK_STARTED,
+        execution_id=exec_id,
+        task_stage="llm_generation",
+    )
 
     last_error = None
     for model in _get_model_candidates():
@@ -516,6 +596,12 @@ def chat_roberto_reply(
             )
             text = (response.text or "").strip()
             if text:
+                # IaConsumoEvento já commitado pela governança Cleiton.
+                _try_record_roberto_chat_growth_task(
+                    event_name=FUNNEL_EVENT_TASK_COMPLETED,
+                    execution_id=exec_id,
+                    task_stage="reply_ready",
+                )
                 return {
                     "reply": text,
                     "suggestions": _build_follow_up_suggestions(clean_user_message),
@@ -531,4 +617,10 @@ def chat_roberto_reply(
 
     if last_error:
         logger.exception("Chat Roberto falhou após fallbacks: %s", last_error)
+    _try_record_roberto_chat_growth_task(
+        event_name=FUNNEL_EVENT_TASK_FAILED,
+        execution_id=exec_id,
+        task_stage="llm_generation",
+        error_code="roberto_chat_generation_failed",
+    )
     return {"reply": fallback, "suggestions": _build_follow_up_suggestions(clean_user_message)}

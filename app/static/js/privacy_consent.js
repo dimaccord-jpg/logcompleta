@@ -101,6 +101,16 @@
                     throw new Error("request_failed");
                 }
                 if (decision === "rejected") {
+                    try {
+                        if (
+                            window.AFExternalTracking
+                            && typeof window.AFExternalTracking.disable === "function"
+                        ) {
+                            window.AFExternalTracking.disable();
+                        }
+                    } catch (err) {
+                        // Nao bloqueia reload.
+                    }
                     clearOwnMarketingStorage();
                 }
                 window.location.reload();

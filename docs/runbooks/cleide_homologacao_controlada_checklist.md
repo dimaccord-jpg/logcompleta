@@ -1,6 +1,8 @@
 # Cleide - Homologacao Operacional Controlada
 
-Este documento continua sendo um runbook historico/de validacao controlada da entrega aprovada. Nao e a fonte primaria da arquitetura ativa; para estado vigente, consultar `README.md`.
+**Status:** historical / superseded as living architecture guide.
+
+Este documento continua sendo um runbook historico/de validacao controlada da entrega aprovada. Nao e a fonte primaria da arquitetura ativa; para estado vigente, consultar `docs/estado_producao.md` e `README.md`.
 
 Fotografia histórica anterior: os commits `d02ce15` e `6efa2e2` pertenciam à validação de 2026-07-10 e não representam o estado vigente.
 

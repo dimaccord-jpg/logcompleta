@@ -8,6 +8,8 @@ import logging
 import random
 from collections import defaultdict
 from datetime import datetime
+from uuid import uuid4
+
 from flask import g, has_request_context, jsonify, request
 from sqlalchemy import text
 
@@ -346,7 +348,68 @@ def get_contexto_bi_roberto() -> dict:
         cached = getattr(g, "_roberto_bi_contexto", None)
         if cached is not None:
             return cached
-        ctx = _montar_contexto_bi_roberto()
+
+        upload_ref = None
+        track_upload_bi = False
+        try:
+            from flask import session
+            from app.upload_handler import SESSION_KEY_UPLOAD_REF, get_dados_upload_cliente
+
+            raw_ref = session.get(SESSION_KEY_UPLOAD_REF)
+            if isinstance(raw_ref, str) and raw_ref.strip() and get_dados_upload_cliente():
+                upload_ref = raw_ref.strip()
+                track_upload_bi = True
+        except Exception:
+            track_upload_bi = False
+
+        # UUID só para correlação/idempotência Growth desta execução analítica.
+        analysis_execution_id = str(uuid4()) if (track_upload_bi and upload_ref) else None
+
+        if track_upload_bi and upload_ref and analysis_execution_id:
+            from app.funnel_event_service import FUNNEL_EVENT_TASK_STARTED
+            from app.upload_handler import _try_record_roberto_bi_growth_task
+
+            _try_record_roberto_bi_growth_task(
+                event_name=FUNNEL_EVENT_TASK_STARTED,
+                idempotency_key=(
+                    f"growth:roberto_bi:{upload_ref}:{analysis_execution_id}:task_started"
+                ),
+                execution_id=analysis_execution_id,
+                task_stage="analytics_generation",
+            )
+
+        try:
+            ctx = _montar_contexto_bi_roberto()
+        except Exception:
+            if track_upload_bi and upload_ref and analysis_execution_id:
+                from app.funnel_event_service import FUNNEL_EVENT_TASK_FAILED
+                from app.upload_handler import _try_record_roberto_bi_growth_task
+
+                _try_record_roberto_bi_growth_task(
+                    event_name=FUNNEL_EVENT_TASK_FAILED,
+                    idempotency_key=(
+                        f"growth:roberto_bi:{upload_ref}:{analysis_execution_id}:task_failed"
+                    ),
+                    execution_id=analysis_execution_id,
+                    task_stage="analytics_generation",
+                    error_code="roberto_bi_analysis_failed",
+                )
+            raise
+
+        if track_upload_bi and upload_ref and analysis_execution_id:
+            from app.funnel_event_service import FUNNEL_EVENT_TASK_COMPLETED
+            from app.upload_handler import _try_record_roberto_bi_growth_task
+
+            # Contexto analítico montado em memória a partir de upload já durável.
+            _try_record_roberto_bi_growth_task(
+                event_name=FUNNEL_EVENT_TASK_COMPLETED,
+                idempotency_key=(
+                    f"growth:roberto_bi:{upload_ref}:{analysis_execution_id}:task_completed"
+                ),
+                execution_id=analysis_execution_id,
+                task_stage="analytics_ready",
+            )
+
         g._roberto_bi_contexto = ctx
         return ctx
     return _montar_contexto_bi_roberto()

@@ -162,6 +162,8 @@ def _build_test_html(*, prefill=None) -> str:
     form = re.sub(r"\{\{[^}]+\}\}", "", form)
     script = script.replace("{{ url_for('user.resumo_contratacao_multiuser') }}", "/api/resumo-multiuser")
     script = script.replace("{{ url_for('user.iniciar_contratacao_stripe') }}", "/api/contratacao/stripe/iniciar")
+    script = script.replace("{{ url_for('growth.growth_plan_selected') }}", "/api/growth/plan-selected")
+    script = script.replace("{{ url_for('growth.growth_checkout_started') }}", "/api/growth/checkout-started")
     script = re.sub(r"\{\{[^}]+\}\}", "", script)
     prefill = prefill or {}
     for field_id, value in prefill.items():

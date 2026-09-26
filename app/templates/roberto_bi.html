@@ -25,7 +25,7 @@
       <p class="text-muted small mb-2">Use esta área para transformar sua planilha de fretes em análises visuais e receber orientações práticas sobre sua operação.</p>
       {% if not current_user.is_authenticated %}
       <div class="alert alert-info py-2 px-3 small" data-testid="roberto-login-cta">
-        Faca <a href="{{ roberto_login_url }}">login</a> para enviar planilhas, abrir o BI privado e conversar com o Roberto.
+        Faca <a href="{{ roberto_login_url }}" data-growth-cta="fretes_login">login</a> para enviar planilhas, abrir o BI privado e conversar com o Roberto.
       </div>
       {% endif %}
       <div class="bi-usage-guide mb-3" aria-label="Guia rápido de uso do BI">

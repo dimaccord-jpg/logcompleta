@@ -8,7 +8,8 @@
   t.src=v;s=b.getElementsByTagName(e)[0];
   s.parentNode.insertBefore(t,s)}(window, document,'script',
   'https://connect.facebook.net/en_US/fbevents.js');
+  fbq('set', 'autoConfig', false, '{{ facebook_pixel_id }}');
   fbq('init', '{{ facebook_pixel_id }}');
-  fbq('track', 'PageView');
+  {# PageView NAO e automatico: AFExternalTracking apos Growth page_view confirmado. #}
 </script>
 {% endif %}

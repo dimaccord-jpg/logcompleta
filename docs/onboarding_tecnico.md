@@ -1,39 +1,42 @@
 # Onboarding técnico
 
-Guia auditado contra a árvore de produção `bd874ee` (Sprint 11, Multiuser V1).
+Guia auditado contra a árvore de produção `fa98317` (Sprint 12).
 
 ## Ordem de leitura
 
 1. [README](../README.md) e [inventário documental](indice_documentacao.md).
-2. [Estado de produção](estado_producao.md): release, pendências e limites de evidência.
-3. [Arquitetura](arquitetura_oficial.md) e [agentes](AGENTS.md).
+2. [Estado de produção](estado_producao.md): Sprint 12, pendências e limites de evidência.
+3. [Arquitetura](arquitetura_oficial.md) e [agentes](AGENTS.md) — AgenteFrete público vs nomes internos.
 4. [Multiuser V1](multiuser_v1.md) e [monetização/franquias](guia_monetizacao_franquias.md).
 5. [Execução local](../app/README_RUN.md), [deploy](DEPLOYMENT.md) e [banco/migrations](DATABASE_AND_MIGRATIONS.md).
-6. [AgenteAudita](cleide_auditoria_operacional.md), [AgenteCompara](agente_compara_estado_oficial.md) e [discovery](runbook_onboarding_copilot.md).
-7. [Privacidade](lgpd_governanca_tecnica.md), [IA externa](integracoes_ia_privacidade.md), [observabilidade](runtime_ia_e_observabilidade.md) e [troubleshooting](troubleshooting_operacional.md).
+6. [AgenteAudita](cleide_auditoria_operacional.md), [AgenteCompara](agente_compara_estado_oficial.md), [discovery](runbook_onboarding_copilot.md) e [marketing/editorial](guia_de_mkt.md).
+7. [Privacidade](lgpd_governanca_tecnica.md), [IA externa](integracoes_ia_privacidade.md), [governança IA](cleiton_ai_data_governance.md), [observabilidade](runtime_ia_e_observabilidade.md) e [troubleshooting](troubleshooting_operacional.md).
 
 ## Módulos principais
 
-- `app/web.py`: aplicação Flask, home, autenticação, Roberto, cron, webhook e health.
-- `app/models.py`: Conta, User, Franquia, vínculos e operações comerciais persistentes.
-- `app/conta_multiuser_painel_routes.py` e `app/conta_multiuser_convite_routes.py`: gestão e convites.
-- `app/services/conta_multiuser_*`: contratação, capacidade, ciclo, convites, aumentos, redução, revogação, titularidade e diagnóstico.
-- `app/julia_documents_routes.py`, `app/cleide_audit_routes.py` e `app/agente_compara_api_routes.py`: domínios documentais separados.
-- `app/cleiton_doc_store.py`: infraestrutura documental comum com ownership, não repositório compartilhado entre membros.
-- `app/services/*`: autorização, billing, custos, métricas e configurações.
+- `app/web.py`: Flask, home, autenticação (`_safe_next_redirect`), Roberto, cron, webhook e health.
+- `app/shell_navigation.py`: catálogo único de Início / Habilidades / Feed.
+- `app/models.py`: Conta, User, Franquia, vínculos e operações comerciais.
+- `app/conta_multiuser_*` e `app/services/conta_multiuser_*`: Multiuser.
+- `app/julia_*`, `app/cleide_audit_*`, `app/agente_compara_*`: domínios separados (nomes técnicos).
+- `app/editorial_metadata.py`, `app/run_cleiton_agente_*`, `app/run_julia_agente_*`: pipeline editorial / evergreen / imagem.
+- `app/cleiton_doc_store.py`: infraestrutura documental comum com ownership.
+- `app/services/cleiton_ai_data_governance.py`: fronteira outbound.
 
 ## Premissas para desenvolvimento
 
-Use `APP_ENV=dev` e banco de desenvolvimento. `homolog` corresponde a `APP_ENV=homolog`; `producao` a `APP_ENV=prod`, em serviços Render separados. Ambos têm Auto-Deploy por commit. `start.sh` aplica `python -m flask --app app.web db upgrade` antes de `gunicorn --config gunicorn_config.py app.web:app`. Head atual: `f7g8h9i0j1k2`. Health do Render: `/health`, com `/health/liveness` e `/health/readiness` adicionais.
+Use `APP_ENV=dev` e banco de desenvolvimento. Homolog: `homolog` / `APP_ENV=homolog`; produção: `producao` / `APP_ENV=prod`. Ambos Auto-Deploy. `start.sh` aplica `db upgrade` antes do Gunicorn. Head versionado: `g8h9i0j1k2l3` (`down_revision=f7g8h9i0j1k2`).
 
-`User.categoria` é plano, `User.is_admin` é admin global, e contratante/membro são papéis do vínculo organizacional. Capacidade e ciclo são da Conta; consumo é da Franquia individual. Endpoints internos não são API pública de integração.
+`load_app_env()` carrega `app/.env.{APP_ENV}` com `override=False` — variáveis do processo vencem o arquivo. Não tratar `.env.prod` local como configuração do Render.
+
+Identidade pública do chat: AgenteFrete. Não reintroduzir “Júlia” como marca no UI operacional. Tema global via `af-theme`; sem opt-in por página.
 
 ## Regras de integridade
 
-- Preservar namespaces, usuário e sessão ao acessar artefatos; `conta_id` sozinho não autoriza documentos privados.
-- Preservar histórico e consumo em revogação/reentrada; não confundir isso com o reset idempotente de uma renovação paga.
-- Manter `temp_table` como estado temporário, com revisão explícita; chat não altera tabela por autorização implícita.
+- Preservar namespaces, usuário e sessão; `conta_id` sozinho não autoriza documentos privados.
+- Preservar histórico e consumo em revogação/reentrada.
+- Manter `temp_table` como estado temporário com revisão explícita.
 - Não versionar `.env` reais, bancos locais, caches ou artefatos técnicos.
-- Selecionar testes existentes relacionados à mudança. Os fixtures centrais usam SQLite em memória; validar mocks dos serviços externos.
+- Selecionar testes existentes relacionados à mudança (há cobertura para tema, auth `/fretes`, identidade AgenteFrete, evergreen, imagem, checkout Multiusuário, mobile). Evitar tratar contagens globais de testes como verdade permanente em guias.
 
-`app/copilot_capabilities.md` é carregado como prompt pelo runtime. Alterá-lo é mudança funcional, mesmo tendo extensão Markdown. Não usar relatórios de auditoria ou checklists históricos como especificação vigente.
+`app/copilot_capabilities.md` é prompt de runtime. Relatórios históricos (classe B no índice) não são especificação vigente.

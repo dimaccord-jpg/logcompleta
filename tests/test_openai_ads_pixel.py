@@ -195,7 +195,11 @@ def test_registration_completed_somente_no_mesmo_fato_do_complete_registration(w
     client = _client(web)
     _accept_marketing(client)
     with client.session_transaction() as sess:
-        sess["pixel_event_complete_registration_once"] = True
+        sess["af_external_event_pending"] = {
+            "event": "signup_completed",
+            "token": "v1_" + ("e" * 32),
+            "params": {"signup_method": "password"},
+        }
     html = client.get("/login").get_data(as_text=True)
     assert "const completeRegistrationEnabled = true" in html
     assert 'window.oaiq("measure", "registration_completed"' in html
@@ -209,7 +213,11 @@ def test_ausencia_do_pixel_nao_quebra_o_fato_de_registro(web):
     web.app.config["OPENAI_ADS_PIXEL_ID"] = ""
     client = _client(web)
     with client.session_transaction() as sess:
-        sess["pixel_event_complete_registration_once"] = True
+        sess["af_external_event_pending"] = {
+            "event": "signup_completed",
+            "token": "v1_" + ("f" * 32),
+            "params": {"signup_method": "password"},
+        }
     resp = client.get("/login")
     html = resp.get_data(as_text=True)
     assert resp.status_code == 200
@@ -234,11 +242,17 @@ def test_openai_e_meta_permanecem_independentes(web):
     client = _client(web)
     _accept_marketing(client)
     with client.session_transaction() as sess:
-        sess["pixel_event_complete_registration_once"] = True
+        sess["af_external_event_pending"] = {
+            "event": "signup_completed",
+            "token": "v1_" + ("d" * 32),
+            "params": {"signup_method": "password"},
+        }
     html = client.get("/login").get_data(as_text=True)
-    assert 'trackEvent("CompleteRegistration")' in html
+    assert "AFExternalTracking.dispatch" in html
+    assert "signup_completed" in html
     assert 'window.oaiq("measure", "registration_completed"' in html
     assert "fbq('init'" in html or 'fbq("init"' in html or "fbq('init', 'meta_pixel_test')" in html
+    assert 'trackEvent("CompleteRegistration")' not in html
 
 
 def test_robots_autoriza_oai_adsbot_e_searchbot_na_raiz(web):
@@ -275,7 +289,10 @@ def test_partials_estruturais_nao_expandem_escopo():
     assert 'window.oaiq("measure", "registration_completed"' in events
     assert 'type: "customer_action"' in events
     assert "privacy_marketing_allowed" in meta
-    assert 'trackEvent("CompleteRegistration")' in meta
+    assert "AuditStarted" not in meta
+    assert "trackFunnelEvent" not in meta
+    assert "FirstAuditCompleted" not in meta
+    assert 'trackEvent("CompleteRegistration")' not in meta
     for event_name in FORBIDDEN_CONVERSIONS:
         assert event_name not in events
         assert event_name not in base

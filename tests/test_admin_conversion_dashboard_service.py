@@ -8,8 +8,10 @@ from app.funnel_event_service import (
     FUNNEL_EVENT_FILE_UPLOADED,
     FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
     FUNNEL_EVENT_FREIGHT_CALCULATED,
+    FUNNEL_EVENT_PAGE_VIEW,
     FUNNEL_SOURCE_AGENTE_COMPARA,
     FUNNEL_SOURCE_CLEIDE_AUDIT,
+    FUNNEL_SOURCE_GROWTH,
     record_funnel_event,
 )
 from app.models import FunnelEvent
@@ -134,3 +136,52 @@ def test_service_uses_single_query_without_n_plus_one(app, monkeypatch):
         payload = get_conversion_dashboard_payload(source="all", days=7, now_utc=datetime(2026, 8, 6, 12, 0, 0))
         assert payload["kpis"]["uploaded_users"] == 1
         assert calls["count"] == 1
+
+
+def test_dashboard_filters_out_page_view_before_materialize(app, monkeypatch):
+    with app.app_context():
+        user = _seed_user("conv-pageview@test.com")
+        _event(
+            user,
+            event_name=FUNNEL_EVENT_FILE_UPLOADED,
+            source=FUNNEL_SOURCE_CLEIDE_AUDIT,
+            key="pv-up-1",
+            occurred_at=datetime(2026, 8, 6, 12, 0, 0),
+        )
+        record_funnel_event(
+            event_name=FUNNEL_EVENT_PAGE_VIEW,
+            source=FUNNEL_SOURCE_GROWTH,
+            user_id=None,
+            conta_id=None,
+            franquia_id=None,
+            idempotency_key="pv-nav-1",
+            occurred_at=datetime(2026, 8, 6, 12, 30, 0),
+            metadata_json={"page": "home"},
+        )
+        record_funnel_event(
+            event_name=FUNNEL_EVENT_PAGE_VIEW,
+            source=FUNNEL_SOURCE_GROWTH,
+            user_id=None,
+            conta_id=None,
+            franquia_id=None,
+            idempotency_key="pv-nav-2",
+            occurred_at=datetime(2026, 8, 6, 13, 0, 0),
+            metadata_json={"page": "pricing"},
+        )
+        db.session.commit()
+
+        loaded_names = []
+        real_all = FunnelEvent.query.__class__.all
+
+        def tracked_all(query):
+            rows = real_all(query)
+            loaded_names.extend(event.event_name for event in rows)
+            return rows
+
+        monkeypatch.setattr(FunnelEvent.query.__class__, "all", tracked_all)
+        payload = get_conversion_dashboard_payload(source="all", days=7, now_utc=datetime(2026, 8, 6, 12, 0, 0))
+
+        assert payload["kpis"]["uploaded_users"] == 1
+        assert payload["kpis"]["upload_events"] == 1
+        assert FUNNEL_EVENT_PAGE_VIEW not in loaded_names
+        assert loaded_names == [FUNNEL_EVENT_FILE_UPLOADED]

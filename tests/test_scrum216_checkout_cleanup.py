@@ -29,7 +29,7 @@ def test_multiuser_selection_invalidates_and_clears_checkout():
     assert "function invalidarCheckoutPendente()" in src
     assert "let checkoutGeneration = 0" in src
     multiuser_branch = src[
-        src.index('if ((planoCodigo || "").toLowerCase() === "multiuser")') :
+        src.index('if (planoNormalizado === "multiuser")') :
         src.index("if (formMultiuser) {\n                formMultiuser.classList.add")
     ]
     assert "invalidarCheckoutPendente()" in multiuser_branch
@@ -61,6 +61,14 @@ def _build_test_html() -> str:
     script = script.replace(
         "{{ url_for('user.iniciar_contratacao_stripe') }}",
         "/api/contratacao/stripe/iniciar",
+    )
+    script = script.replace(
+        "{{ url_for('growth.growth_plan_selected') }}",
+        "/api/growth/plan-selected",
+    )
+    script = script.replace(
+        "{{ url_for('growth.growth_checkout_started') }}",
+        "/api/growth/checkout-started",
     )
     script = re.sub(r"\{\{[^}]+\}\}", "", script)
     return f"""<!doctype html>

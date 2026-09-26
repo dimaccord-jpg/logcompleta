@@ -1,122 +1,116 @@
 # Guia de MKT
 
-Revisão documental: `2026-09-19`
+Revisão documental: `2026-09-23` (Sprint 12)
 
-Este documento resume posicionamento institucional, SEO e compartilhamento social do Agentefrete. Ele complementa o `README.md`, mas nao substitui a documentacao tecnica principal.
+Este documento resume posicionamento institucional, SEO e compartilhamento social do AgenteFrete. Complementa o `README.md`, mas não substitui a documentação técnica principal.
 
-## 1. Visao geral
+## 1. Visão geral
 
-AgenteFrete reúne as superfícies descritas em [agentes e identidades](AGENTS.md):
+**AgenteFrete** é o assistente virtual especializado em logística da LogCompleta — identidade pública única. Nomes internos (Júlia, Roberto, Cleide, Cleiton, AgenteCompara) não devem ser apresentados como marcas/produtos separados.
 
-- AgenteFrete/Júlia operacional: chat autenticado e contexto documental; Júlia também mantém funções editoriais.
-- Cleiton: governança, discovery, franquias, billing e observabilidade.
-- AgenteAudita (Cleide no código): auditoria de fretes, BI e chat analítico.
-- AgenteCompara: comparação de duas ou três tabelas fornecidas pelo usuário.
-- Roberto: BI de fretes e chat quantitativo em `/fretes`.
+Capacidades (habilidades do AgenteFrete):
 
-Multiuser V1 está em produção, com contratação Stripe e franquias individuais. Não anunciar compartilhamento de memória, arquivos ou resultados entre membros, API pública Multiuser ou contratação automática de transportadoras. Ver [Multiuser V1](multiuser_v1.md).
+- Conversar / Consultar o AgenteFrete — chat operacional autenticado
+- Analisar fretes — BI Roberto em `/fretes`
+- Auditar cobranças de frete — AgenteAudita
+- Comparar tabelas — AgenteCompara
+- Feed editorial — informação + aquisição + recorrência
+
+Cleiton governa discovery, franquias, billing e orquestração. Multiuser V1 está em produção; não anunciar memória compartilhada entre membros nem API pública Multiuser. Ver [AGENTS](AGENTS.md) e [Multiuser V1](multiuser_v1.md).
+
+O produto **não** é TMS, WMS nem ERP.
 
 ## 2. Proposta de valor
 
-Mensagem central:
-
-- inteligencia de dados para logistica e transporte
-- conteudo especializado com superficie publica rastreavel
-- apoio operacional governado, sem promessas genericas de IA
+- inteligência de dados para logística e transporte
+- conteúdo especializado com superfície pública rastreável
+- apoio operacional governado, sem promessas genéricas de IA
 
 ## 3. Tom recomendado
 
-- claro
-- tecnico sem excesso
-- confiavel
-- orientado a decisao
-
-Evitar:
-
-- promessas exageradas
-- linguagem vaga de IA
-- discurso desconectado da operacao real
+- claro, técnico sem excesso, confiável, orientado a decisão
+- evitar promessas exageradas e discurso desconectado da operação real
 
 ## 4. Contrato de SEO do conteúdo editorial
 
-Para URLs editoriais de notícia/artigo, a base é `PUBLIC_BASE_URL` e o template usa `share_url_abs`. Isso não é garantia universal para todas as páginas: `index.html` ainda fixa o domínio de produção em seu bloco canonical.
+Base: `PUBLIC_BASE_URL`; template usa `share_url_abs`. `index.html` ainda pode fixar domínio de produção em seu bloco canonical — isso não é garantia universal para todas as páginas.
 
 Ambientes:
 
-- producao: `https://www.agentefrete.com.br`
+- produção: `https://www.agentefrete.com.br`
 - homolog: host homolog configurado no ambiente
 
-Contrato obrigatorio:
+Contrato obrigatório em URLs editoriais:
 
 - `canonical == og:url == share_url_abs`
 
-Regras:
+## 5. Pipeline editorial e intenções
 
-- canonical deve refletir a URL publica efetiva do ambiente
-- `og:url` deve refletir a mesma URL
-- qualquer URL absoluta usada em share deve seguir essa base
-- paginas privadas e operacionais nao entram na superficie SEO publica
+Intenções explícitas (não apenas heurística):
 
-## 5. Superficie publica atual
+| Intenção | Uso |
+|---|---|
+| `news` | notícia rápida / atualidade |
+| `analysis` | análise / aplicação prática |
+| `evergreen` | conteúdo perene orientado a intenção de busca |
 
-Paginas publicas relevantes:
+Elementos do pipeline:
+
+- metadata editorial
+- SEO / meta description
+- alt de imagem
+- JSON-LD (`NewsArticle` vs `Article` conforme apresentação)
+- CTA contextual quando há habilidade real mapeada
+- URLs públicas: `/noticia/<id>`
+- Feed `/feed`: informação + aquisição + recorrência
+
+### Evergreen (operação)
+
+- admin editorial (Júlia) permite Analysis / Evergreen e pauta explícita
+- `pauta_id` explícito preservado; inválido = fail-closed
+- `evergreen_automatico_habilitado` e `evergreen_frequencia_minutos` em `ConfigRegras`
+- cadência independente do ciclo legado; ver [estado de produção](estado_producao.md)
+
+### Imagem editorial
+
+- modelo principal: `gemini-3.1-flash-image` via `generate_content`
+- não documentar `imagen-3.0-generate-002` como default atual
+- fallback permanece disponível; valor remoto no Render é a fonte de verdade
+
+## 6. Superfície pública atual
+
+Páginas públicas relevantes:
 
 - `/`
 - `/feed`
 - `/noticia/<id>`
+- `/acesso-desktop` (campanha opcional/legada; **não** fluxo principal nem gate)
 
-`/fretes` é uma superfície autenticada de BI, não uma página editorial pública.
+`/fretes` é autenticada — fora da superfície SEO pública.
 
-Paginas que devem permanecer fora da superficie publica de SEO:
+Fora da superfície pública de SEO:
 
-- `/fretes`
-- `/gestao-multiuser`
-- `/admin/...`
-- `/perfil`
-- `/contrate-um-plano`
-- `/api/...`
-- `/cron/...`
-- `/ops/...`
-- `/login`
-- `/logout`
-- `/register`
+- `/fretes`, `/gestao-multiuser`, `/admin/...`, `/perfil`, `/contrate-um-plano`
+- `/api/...`, `/cron/...`, `/ops/...`, `/login`, `/logout`, `/register`
 
-## 6. Compartilhamento social
+## 7. Compartilhamento social
 
-Escopo atual:
+- conteúdo público em `app/templates/noticia_interna.html`
+- partial `app/templates/partials/social_share.html`
+- redes: Facebook, Threads, X, LinkedIn, WhatsApp (`https://api.whatsapp.com/send`)
+- share público não usa IA, não gera `IaConsumoEvento`, não faz billing e não dispara pipeline
 
-- conteudo publico da Julia em `app/templates/noticia_interna.html`
-- partial oficial `app/templates/partials/social_share.html`
+A persona editorial “Júlia, Editora Virtual” pode aparecer no artigo; isso não redefine a identidade do chat operacional (AgenteFrete).
 
-Redes suportadas:
-
-- Facebook
-- Threads
-- X
-- LinkedIn
-- WhatsApp
-
-Contrato de WhatsApp:
-
-- `https://api.whatsapp.com/send`
-
-Regras de governanca:
-
-- share publico nao usa IA
-- share publico nao gera `IaConsumoEvento`
-- share publico nao faz billing
-- share publico nao dispara pipeline
-
-## 7. Checklist de validacao
+## 8. Checklist de validação
 
 - `PUBLIC_BASE_URL` correto no ambiente
-- canonical correto
-- `og:url` correto
-- `share_url_abs` igual ao canonical
-- links de Facebook, Threads, X, LinkedIn e WhatsApp funcionando
-- conteudo publico responde `200`
-- conteudo despublicado responde `404`
+- canonical / `og:url` / `share_url_abs` alinhados
+- links de share funcionando
+- conteúdo público `200`; despublicado `404`
+- intenções news/analysis/evergreen coerentes com o conteúdo
+- CTA de habilidade só quando o destino existe
 
-## 8. Resumo executivo
+## 9. Resumo executivo
 
-O marketing do Agentefrete deve comunicar valor real de logistica e transporte, preservando o contrato tecnico de share e SEO por ambiente. A regra mais importante e simples: a superficie publica precisa ser canonica, rastreavel e separada do runtime de IA e billing.
+AgenteFrete é a marca pública; o Feed editorial (news/analysis/evergreen) sustenta SEO e recorrência; habilidades operacionais exigem autenticação; `/acesso-desktop` é campanha opcional.

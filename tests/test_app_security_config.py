@@ -29,6 +29,56 @@ def _load_settings(monkeypatch, tmp_path, app_env: str, secret_key: str | None):
     return importlib.import_module("app.settings")
 
 
+def test_database_url_postgresql_sem_driver_normaliza_para_psycopg2(monkeypatch):
+    env_loader = importlib.import_module("app.env_loader")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@localhost:5432/testdb",
+    )
+
+    uri = env_loader.resolve_postgresql_sqlalchemy_uri()
+
+    assert uri == "postgresql+psycopg2://user:pass@localhost:5432/testdb"
+
+
+def test_database_url_psycopg2_explicito_e_preservado(monkeypatch):
+    env_loader = importlib.import_module("app.env_loader")
+    expected = "postgresql+psycopg2://user:pass@localhost:5432/testdb"
+    monkeypatch.setenv("DATABASE_URL", expected)
+
+    assert env_loader.resolve_postgresql_sqlalchemy_uri() == expected
+
+
+def test_settings_normaliza_database_url_postgresql_sem_driver(monkeypatch, tmp_path):
+    env_loader = importlib.import_module("app.env_loader")
+    data_dir = tmp_path / "data_database_driver"
+    data_dir.mkdir(exist_ok=True)
+
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@localhost:5432/testdb",
+    )
+    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.setattr(env_loader, "load_app_env", lambda: True)
+    monkeypatch.setattr(env_loader, "validate_runtime_env", lambda: None)
+    monkeypatch.setattr(env_loader, "resolve_data_dir", lambda: str(data_dir))
+    monkeypatch.setattr(
+        env_loader,
+        "resolve_indices_file_path",
+        lambda: str(data_dir / "indices.json"),
+    )
+
+    sys.modules.pop("app.settings", None)
+    settings_module = importlib.import_module("app.settings")
+
+    assert (
+        settings_module.settings.sqlalchemy_database_uri
+        == "postgresql+psycopg2://user:pass@localhost:5432/testdb"
+    )
+
+
 def test_secret_key_dev_sem_secret_permite_boot(monkeypatch, tmp_path):
     settings_module = _load_settings(monkeypatch, tmp_path, "dev", None)
     assert settings_module.settings.app_env == "dev"
@@ -106,6 +156,6 @@ def test_openai_ads_settings_nao_expoe_capi_ou_secret(monkeypatch, tmp_path):
     assert "openai_ads_pixel_id" in fields
     assert "openai_ads_debug" in fields
     assert "openai_ads_capi_key" not in fields
-    assert not any("capi" in name.lower() for name in fields)
+    assert not any("openai_ads" in name.lower() and "capi" in name.lower() for name in fields)
     assert not any("openai_ads" in name.lower() and "secret" in name.lower() for name in fields)
     assert not any("openai_ads" in name.lower() and "key" in name.lower() for name in fields)

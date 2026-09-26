@@ -683,7 +683,6 @@ def agente_compara_documents_upload():
                     payload["funnel_event"] = {
                         "event_name": FUNNEL_EVENT_FILE_UPLOADED,
                         "source": FUNNEL_SOURCE_AGENTE_COMPARA,
-                        "allow_meta_pixel": True,
                         "is_first_audit": False,
                     }
                 elif started_funnel_tx:
@@ -1777,6 +1776,7 @@ def agente_compara_chat():
         question_max_chars=audit_cfg.question_max_chars,
         fallback_message=audit_cfg.fallback_message,
         no_hallucination_instruction_enabled=audit_cfg.no_hallucination_instruction_enabled,
+        execution_id=request_id,
     )
 
     if result.get("error"):

@@ -1,120 +1,106 @@
 # Guia de Templates HTML
 
-Este guia complementa o `README.md` principal com foco apenas em estrutura visual e padrões de templates.
+Este guia complementa o `README.md` principal com foco em estrutura visual e padrões de templates. Referência: Sprint 12 / produção `fa98317`.
 
 ## Princípios
 
-- usar `base.html` como base única de navegação;
+- usar `base.html` como base única de navegação do shell principal;
 - reutilizar o design system em `static/css/agentefrete-theme.css`;
 - evitar estilos fora da paleta `--af-*`;
 - manter contraste, legibilidade e responsividade;
-- não replicar lógica de negócio complexa em template.
+- não replicar lógica de negócio complexa em template;
+- não duplicar listas de navegação: o shell consome `app/shell_navigation.py`.
+
+## Tema global (contrato atual)
+
+Preferências: `system` | `dark` | `light`.
+
+- persistência: `localStorage` chave `af-theme`
+- aplicação: templates que herdam `base.html` (Login, Chat, Perfil, Planos, Fretes, Auditoria, Comparação, Feed, etc.)
+- `system` acompanha `prefers-color-scheme`; mudança do SO reflete enquanto a preferência for `system`
+- **não** existe opt-in por página (`af_theme_enabled` / `data-af-theme-enabled` removidos)
+- controle de tema: partial `partials/af_theme_control.html` (sidebar + menu mobile)
+- **fora do contrato:** `painel_admin/template_admin/base_admin.html` e páginas standalone como `/acesso-desktop`
+
+## Responsividade
+
+- Home e Login possuem correções mobile cobertas por teste
+- referência operacional aproximada: 360–430 px de largura
+- expectativa: sem overflow horizontal; menu mobile funcional; desktop/tablet preservados
+- não inventar suporte a devices específicos além do validado
 
 ## Templates Principais
 
 ### `index.html`
 
-- home de discovery público ou superfície operacional autenticada conforme contexto;
-- inclui `partials/app_global_header.html` e `chat_julia.html`;
-- CTA público participa de `home_chat_cta_v1`;
-- conteúdo editorial está no `/feed`, não em uma lista de notícias deste template.
+- home de discovery público + cards de habilidade (Analisar / Auditar / Comparar)
+- definição pública: “Assistente virtual especializado em logística”
+- inclui `partials/app_global_header.html` e componente de chat discovery
+- CTA público participa de `home_chat_cta_v1`
+- conteúdo editorial está no `/feed`
 
-### `chat_julia.html`
+### `chat_julia.html` / `julia_chat_operational.html`
 
-Componente oficial do chat da Júlia.
+Componente e superfície do chat operacional **AgenteFrete** (nome de arquivo técnico `julia`).
 
 Estado atual esperado:
 
-- campo de entrada em `textarea`;
-- `Shift+Enter` para quebra de linha e `Enter` para envio, controlados no JS;
-- não exibe dica visual de teclado;
-- texto inicial depende da superfície autenticada/discovery e de `home_cta_text`; não fixar uma única mensagem para todos os contextos
-- suporta sugestões clicáveis;
-- renderização visual preparada para markdown básico seguro da Júlia;
-- mensagens do usuário continuam simples e puras.
+- labels, alt e placeholders: **AgenteFrete**
+- campo de entrada em `textarea`; `Shift+Enter` quebra linha; `Enter` envia
+- texto inicial depende do contexto (discovery vs operacional / CTA)
+- histórico montado no cliente a partir do DOM; sem threads persistentes de produto
+- sugestões clicáveis e markdown básico seguro nas respostas do assistente
 
 ### `fretes.html` + `roberto_bi.html`
 
-Estado visual por perfil:
+Superfície autenticada (`/fretes`). Estado visual por perfil:
 
-- admin autenticado:
-  - vê formulário de consulta por rota (`UF + Cidade`);
-  - vê o módulo BI completo;
-- usuário comum autenticado:
-  - não vê o formulário de consulta por rota;
-  - experiência foca no upload/BI;
-  - blocos `Qualidade da base analisada`, `Recomendações` e `Custo médio (período)` ficam ocultos;
-  - `Proporção por modal` ocupa o slot lateral;
-  - `Mapa Brasil` aparece no final em card dedicado e maior.
-
-Comportamento visual complementar:
-
-- mensagens de erro de upload aceitam links markdown simples vindos do backend;
-- links exibidos devem abrir em nova aba com `rel="noopener noreferrer"`.
+- admin autenticado: formulário de consulta por rota + BI completo
+- usuário comum: foco em upload/BI; blocos de qualidade/recomendações/custo médio ocultos conforme regras existentes; mapa no final
 
 ### `chat_roberto_fretes.html`
 
-Componente oficial do chat do Roberto na tela `/fretes`.
+Chat do Roberto em `/fretes` (balao próprio, separado do chat AgenteFrete).
 
-Estado visual atual esperado:
+### `cleide_auditoria.html` / `agente_compara.html`
 
-- balao flutuante proprio, separado visualmente da Julia;
-- mensagem inicial orientativa antes do upload:
-  - `Realize o upload do arquivo para que possamos analisa-lo juntos.`
-- mensagens do Roberto exibem acao discreta de `Copiar`;
-- feedback visual curto apos copia:
-  - `Copiado`
-- a copia deve atuar apenas sobre o texto ja renderizado da resposta;
-- acoes visuais deste componente nao devem introduzir chamada extra de rede nem telemetria paralela.
+Superfícies de habilidades sob o shell/`base.html` — respeitam o tema global.
 
 ### `user_area.html` + `contrate_plano.html`
 
-- card `Pagamento` em `/perfil` é clicável;
-- redireciona para `/contrate-um-plano`;
-- `contrate_plano.html` oferece planos Free, Starter, Pro e Multiuser, resumo de contratação e início de Checkout Stripe;
-- Multiuser coleta dados empresariais, CNPJ e quantity antes do checkout;
-- perfil apresenta acesso à gestão Multiuser conforme autorização;
-- `/perfil` apresenta segurança e conta, link de alteração de senha pelo fluxo de recuperação por e-mail, plano e notificações internas; a leitura é marcada sem navegar para JSON e o badge acompanha o total não lido. [Estado de produção](../docs/estado_producao.md#pendências-conhecidas-e-pós-release).
-- `/contrate-um-plano` usa Checkout Stripe incorporado quando iniciado; a consulta online ao ViaCEP auxilia o formulário Multiuser, com endereço editável e preenchimento manual em falha.
+- `/perfil`: Central de Segurança e Conta, proteção, credenciais, alteração de senha (fluxo de recuperação por e-mail), Conta, notificações, Multiuser e contratação — tema global
+- `contrate_plano.html`: Free / Starter / Pro / Multiusuário
+- Starter/Pro: checkout embedded
+- ao selecionar Multiusuário: destrói/limpa checkout anterior, colapsa container, mostra formulário; checkout só após **Ir para o checkout**
+- ViaCEP auxilia endereço Multiuser com fallback manual
 
 ### Gestão Multiuser
 
-O painel `/gestao-multiuser` é do contratante ativo. Visibilidade de botões não substitui autorização no backend. Membros não compartilham documentos, chats ou resultados apenas por pertencerem à mesma Conta. Regras em [Multiuser V1](../docs/multiuser_v1.md).
+`/gestao-multiuser` do contratante ativo. Regras em [Multiuser V1](../docs/multiuser_v1.md).
 
-A tabela “Membros e assentos” usa a identidade dark com `table-responsive`; o ajuste visual não altera autorização nem regras de assentos.
+### `noticia_interna.html` / `feed.html`
 
-### `noticia_interna.html`
+- detalhe em `/noticia/<id>` com SEO, meta description, alt, JSON-LD e CTA contextual de habilidade quando aplicável
+- intenções editoriais: news / analysis / evergreen
+- bloco editorial da persona Júlia (Editora) permanece no conteúdo público; isso não redefine a identidade do chat operacional
+- Feed: coluna única, misturado, cronológico, limite de 5 itens
 
-Template oficial de detalhe de notícia/artigo.
+### `acesso_desktop.html`
 
-Estado atual esperado:
+Landing de campanha opcional/legada. Standalone (não herda `base.html`). **Não** é gate técnico nem requisito de uso do AgenteFrete.
 
-- conteúdo editorial em superfície legível;
-- separação clara entre insight rápido e artigo;
-- bloco “Análise da Editora”;
-- botão final de navegação com:
-  - destino para `index`
-  - texto `Voltar Para Home`
-  - estilo alinhado à paleta principal do site
+### `login.html`
 
-## Padrões de Conteúdo Rico
-
-Para HTML vindo do banco:
-
-- usar superfície de leitura adequada;
-- preservar contraste no tema dark;
-- não introduzir cores inline arbitrárias;
-- quando houver botões ou CTAs, preferir classes do tema já existente.
+Autenticação com preservação de `next` interno seguro; tema global via `base.html`; layout mobile corrigido.
 
 ## Checklist de Frontend
 
-- o template estende `base.html`;
-- o layout não replica sidebar/navbar manualmente;
-- botões têm rótulos claros e atuais;
-- chat da Júlia continua consistente com o comportamento documentado no `README.md`;
-- páginas de notícia/artigo mantêm navegação clara de retorno.
+- o template do shell estende `base.html` e respeita `af-theme`
+- layout não replica sidebar/navbar manualmente
+- chat operacional exibe identidade AgenteFrete
+- páginas de notícia/artigo mantêm navegação clara de retorno
+- Multiusuário não deixa iframe residual do checkout anterior
 
 ## Referência Principal
 
-O [README](../README.md) é o índice; regras funcionais ficam nos guias canônicos de cada domínio.
-Este arquivo deve focar apenas em padrão visual e estrutural.
+O [README](../README.md) e o [estado de produção](../docs/estado_producao.md) são a entrada; este arquivo foca padrão visual e estrutural.

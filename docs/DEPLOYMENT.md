@@ -1,6 +1,6 @@
 # Deploy, Ambientes e Promoção
 
-Documentação operacional auditada contra a árvore de produção `bd874ee`, `render.yaml`, `start.sh` e `build.sh`.
+Documentação operacional auditada contra a árvore de produção `fa98317` (Sprint 12), `render.yaml`, `start.sh` e `build.sh`.
 
 ## Ambientes e branches
 
@@ -14,76 +14,94 @@ No `render.yaml` atual:
 
 Mapeamento de ambiente:
 
-- `APP_ENV=homolog` para homologação
-- `APP_ENV=prod` para produção
-- `APP_ENV` válido: `dev`, `homolog`, `prod`
+| Ambiente | Branch típica | `APP_ENV` |
+|---|---|---|
+| DEV | feature / local | `dev` |
+| HOMOLOG | `homolog` | `homolog` |
+| PROD | `producao` | `prod` |
+
+`APP_ENV` válido: `dev`, `homolog`, `prod`.
+
+## Precedência de env
+
+1. Variáveis já definidas no processo (ex.: painel Render) prevalecem.
+2. `load_app_env()` carrega somente `app/.env.{APP_ENV}` com `override=False`.
+3. Arquivos `.env.*` locais podem estar gitignored e **não** são fonte autoritativa de produção.
+4. Divergência entre `.env.prod` local e Render: prevalece o remoto.
+
+Não registrar API keys na documentação.
 
 ## Build e start reais
 
-`build.sh` e `start.sh` inferem `APP_ENV` pelo branch quando necessário:
+### `build.sh`
+
+- instala dependências de runtime (`requirements.txt`)
+- **não** contém a lógica de inferência de `APP_ENV` por branch (essa lógica está em `start.sh`)
+
+### `start.sh`
+
+Quando `APP_ENV` não vem explícito, infere pelo branch (`RENDER_GIT_BRANCH`):
 
 - `homolog` → `homolog`
 - `main|master|producao|prod` → `prod`
-- qualquer outro branch → `dev`
+- qualquer outro → `dev`
 
-Fluxo real de start:
+Fluxo de start:
 
 1. validar `APP_ENV`
-2. executar `python -m flask --app app.web db upgrade`
-3. subir `gunicorn --config gunicorn_config.py app.web:app`
+2. `python -m flask --app app.web db upgrade`
+3. `gunicorn --config gunicorn_config.py app.web:app`
 
 ## Consequência operacional
 
-- migrations pendentes são aplicadas antes do boot da aplicação
+- migrations pendentes aplicam-se antes do boot
 - upgrade faz parte do deploy normal
-- downgrade não é procedimento normal de deploy
+- downgrade não é procedimento normal
+- não há pipeline CI/CD separado que execute testes automaticamente no `build.sh`; a promoção permanece operacional/manual com Auto-Deploy por push na branch do serviço
 
 ## Persistência obrigatória
 
-Em homolog/prod, o projeto depende de storage persistente para:
-
-- uploads e artefatos técnicos
-- índices
-- documentos legais ativos
-
-Entradas relevantes:
+Em homolog/prod:
 
 - `APP_DATA_DIR`
 - `INDICES_FILE_PATH`
-- `DATABASE_URL`
+- `DATABASE_URL` (PostgreSQL)
 
-## Health checks
+## Health checks e smoke
 
 - `healthCheckPath` no Render: `/health`
-- a aplicação também expõe `/health/liveness` e `/health/readiness`
+- também: `/health/liveness`, `/health/readiness`
+- smoke sugerido pós-deploy: login, shell/habilidades, tema, `/perfil`, planos, `/fretes` (auth), Feed, chat operacional AgenteFrete
+- validar HEAD implantado contra o commit esperado (`fa98317` na Sprint 12, ou o commit promovido depois)
 
 ## Fluxo cauteloso de promoção
 
-O procedimento atual de promoção é:
+Procedimento atual:
 
 1. desenvolver em branch própria
 2. promover para `homolog`
 3. validar em homologação
 4. atualizar a referência remota de `producao`
-5. verificar divergência
-6. promover por fast-forward only
-7. fazer push em `producao`
-8. deixar o deploy automático ocorrer
+5. verificar divergência (`git log` / diff FF)
+6. promover por **fast-forward only**
+7. push em `producao`
+8. deixar o Auto-Deploy ocorrer
+9. após validar produção, retornar o trabalho ativo para `homolog` quando for o fluxo do time
 
 Orientações:
 
 - não recomendar `force push`
-- não tratar downgrade de banco como rotina de promoção
+- não tratar downgrade de banco como rotina
 - não substituir validação de homologação por merge destrutivo
 
 ## Promoção e rollback
 
-Validar `homolog`, fazer merge controlado em `producao`, push, conferir o deploy no Render, `/health` e smoke test de login, sidebar, plano/créditos, `/perfil` e telas principais. O Multiuser V1 e a Sprint 11 já integram o produto; a identificação do commit implantado fica em [estado de produção](estado_producao.md).
+Validar `homolog`, fazer merge controlado em `producao`, push, conferir deploy no Render, `/health` e smoke. Identificação do commit implantado: [estado de produção](estado_producao.md).
 
-Antes de uma promoção, registrar uma tag imutável no commit de produção anterior. Em caso de rollback, identificar a tag anterior, restaurar o commit pelo fluxo de promoção controlada e conferir compatibilidade de banco antes do deploy. A tag `pre-sprint11-prod-20260921` identifica apenas o ponto anterior à Sprint 11; não é convenção permanente.
+Antes de uma promoção, registrar tag imutável no commit de produção anterior. Em rollback, restaurar pelo fluxo controlado e conferir compatibilidade de banco. A tag `pre-sprint11-prod-20260921` identifica apenas o ponto anterior à Sprint 11.
 
-O head versionado é `f7g8h9i0j1k2`. A cadeia física está em [Banco e Migrations](DATABASE_AND_MIGRATIONS.md); não há migration Fase 8. Novos deploys aplicam os upgrades pendentes antes do Gunicorn.
+Head versionado: `g8h9i0j1k2l3`, com `down_revision=f7g8h9i0j1k2`. A migration Growth do SCRUM-148 altera apenas a nulabilidade da identidade em `FunnelEvent`. Cadeia em [Banco e Migrations](DATABASE_AND_MIGRATIONS.md).
 
-Render mantém serviços separados e Auto-Deploy por commit também em produção. Enviar commits para `producao` pode iniciar deploy.
+Enviar commits para `producao` inicia deploy (Auto-Deploy).
 
-A configuração comercial está no [guia Multiuser V1](multiuser_v1.md). Limitações atuais e evidência financeira estão no [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).
+Configuração comercial: [Multiuser V1](multiuser_v1.md). Limitações: [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).

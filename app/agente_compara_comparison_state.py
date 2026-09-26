@@ -7,9 +7,12 @@ Sem banco, Redis ou rotas por slot.
 from __future__ import annotations
 
 import copy
+import logging
 from uuid import uuid4
 
 from flask import has_request_context, session
+
+logger = logging.getLogger(__name__)
 
 AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY = "agente_compara_comparison_state"
 
@@ -307,6 +310,29 @@ def start_comparison_for_session(*, session_obj=None) -> dict:
             "idempotent_replay": True,
         }
     state = create_comparison(session_obj=session_obj)
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+            FUNNEL_SOURCE_AGENTE_COMPARA,
+            TASK_TYPE_AGENTE_COMPARA,
+            try_record_growth_task_event,
+        )
+
+        cmp_id = str(state.get("comparison_id") or "").strip()
+        if cmp_id:
+            try_record_growth_task_event(
+                event_name=FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+                source=FUNNEL_SOURCE_AGENTE_COMPARA,
+                task_type=TASK_TYPE_AGENTE_COMPARA,
+                idempotency_key=f"growth:agente_compara:{cmp_id}:task_preparation_started",
+                task_stage=STEP_PREPARE_TABLE_1,
+                comparison_id=cmp_id,
+            )
+    except Exception:
+        logger.exception(
+            "agente_compara_growth_task_preparation_started_failed comparison_id=%s",
+            state.get("comparison_id"),
+        )
     return {
         "state": state,
         "comparison_started": True,
@@ -600,7 +626,31 @@ def advance_to_configuration_ready(state: dict, *, session_obj=None) -> dict:
         )
     state["current_step"] = STEP_CONFIGURATION_READY
     state["status"] = COMPARISON_STATUS_CONFIGURATION_READY
-    return persist_comparison_state(state, session_obj=session_obj)
+    persisted = persist_comparison_state(state, session_obj=session_obj)
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+            FUNNEL_SOURCE_AGENTE_COMPARA,
+            TASK_TYPE_AGENTE_COMPARA,
+            try_record_growth_task_event,
+        )
+
+        cmp_id = str(persisted.get("comparison_id") or "").strip()
+        if cmp_id:
+            try_record_growth_task_event(
+                event_name=FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+                source=FUNNEL_SOURCE_AGENTE_COMPARA,
+                task_type=TASK_TYPE_AGENTE_COMPARA,
+                idempotency_key=f"growth:agente_compara:{cmp_id}:task_preparation_completed",
+                task_stage=STEP_CONFIGURATION_READY,
+                comparison_id=cmp_id,
+            )
+    except Exception:
+        logger.exception(
+            "agente_compara_growth_task_preparation_completed_failed comparison_id=%s",
+            state.get("comparison_id"),
+        )
+    return persisted
 
 
 def is_comparison_common_params_step(state: dict | None) -> bool:

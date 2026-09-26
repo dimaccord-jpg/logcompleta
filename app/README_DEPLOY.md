@@ -1,12 +1,13 @@
 # Deploy e Operação
 
-Referência operacional da árvore de produção `bd874ee`. Este arquivo descreve o deploy real. Detalhes adicionais estão em [DEPLOYMENT](../docs/DEPLOYMENT.md) e [DATABASE_AND_MIGRATIONS](../docs/DATABASE_AND_MIGRATIONS.md). O estado operacional consolidado está em [estado de produção](../docs/estado_producao.md).
+Referência operacional da árvore de produção `fa98317` (Sprint 12). Este arquivo descreve o deploy real. Detalhes adicionais estão em [DEPLOYMENT](../docs/DEPLOYMENT.md) e [DATABASE_AND_MIGRATIONS](../docs/DATABASE_AND_MIGRATIONS.md). O estado operacional consolidado está em [estado de produção](../docs/estado_producao.md).
 
 ## Ambientes e branches
 
 - `APP_ENV` é obrigatório.
 - Valores aceitos: `dev`, `homolog`, `prod`.
-- O carregamento de ambiente usa `app/.env.{APP_ENV}`.
+- O carregamento de ambiente usa `app/.env.{APP_ENV}` via `load_app_env()` com `override=False` (variáveis do processo vencem o arquivo).
+- Arquivos `.env.*` locais podem estar gitignored; o Render é a fonte de verdade de produção.
 - No `render.yaml` atual:
   - homologação usa a branch `homolog` (`APP_ENV=homolog`);
   - produção usa a branch `producao` (`APP_ENV=prod`);
@@ -16,27 +17,28 @@ Referência operacional da árvore de produção `bd874ee`. Este arquivo descrev
 
 ### `build.sh`
 
-- infere `APP_ENV` pelo branch quando o serviço não o informar;
-- trata `homolog` como homologação;
-- trata `main|master|producao|prod` como aliases de produção;
-- qualquer outro branch cai em `dev`;
-- rejeita valores fora de `dev|homolog|prod`;
-- instala as dependências de runtime em `requirements.txt`.
+- instala as dependências de runtime em `requirements.txt`;
+- **não** contém a inferência de `APP_ENV` por branch (essa lógica está em `start.sh`).
 
 ### `start.sh`
 
-Repete a validação de `APP_ENV` e executa, nesta ordem:
+Quando `APP_ENV` não vem explícito, infere pelo branch:
+
+- `homolog` → homologação;
+- `main|master|producao|prod` → produção;
+- qualquer outro branch → `dev`;
+- rejeita valores fora de `dev|homolog|prod`.
+
+Executa, nesta ordem:
 
 ```bash
 python -m flask --app app.web db upgrade
 gunicorn --config gunicorn_config.py app.web:app
 ```
 
-Isso significa que o deploy atual aplica migrations pendentes antes de subir a aplicação. Downgrade não faz parte do fluxo normal.
+Deploy atual aplica migrations pendentes antes de subir a aplicação. Downgrade não faz parte do fluxo normal. Não há CI separado no `build.sh` que rode a suíte de testes automaticamente.
 
 ## Persistência obrigatória em homolog/prod
-
-O runtime depende de caminhos persistentes válidos para uploads, artefatos técnicos, índices e documentos legais ativos.
 
 Prioridade de resolução:
 
@@ -48,7 +50,7 @@ Também é necessário configurar:
 
 - `INDICES_FILE_PATH`, ou deixar que ele derive de `APP_DATA_DIR`;
 - `DATABASE_URL` apontando para PostgreSQL;
-- volume persistente compatível com os uploads, índices e documentos legais.
+- volume persistente compatível com uploads, índices e documentos legais.
 
 Em homolog/prod, o sistema não aceita fallback silencioso para a pasta efêmera da release.
 
@@ -83,19 +85,18 @@ Sem expor segredos reais, o contrato operacional atual inclui pelo menos:
 - `MAIL_DEFAULT_SENDER`
 - `OPENAI_ADS_PIXEL_ID`
 - `OPENAI_ADS_DEBUG`
-- `GEMINI_API_KEY`
-- `GEMINI_API_KEY_1`
-- `GEMINI_API_KEY_2`
-- `GEMINI_API_KEY_ROBERTO`
+- `GEMINI_API_KEY` / `GEMINI_API_KEY_1` / `GEMINI_API_KEY_2` / `GEMINI_API_KEY_ROBERTO`
+- `GEMINI_MODEL_IMAGE` (default de código: `gemini-3.1-flash-image`; valor efetivo no Render é autoritativo)
+- `IMAGE_PROVIDER`
 
 Use sempre placeholders em exemplos. Não versionar valores reais.
 
 ## Migration head atual
 
-- head atual versionado: `f7g8h9i0j1k2`
-- `down_revision`: `e6f7a8b9c0d1`
-- migration: `f7g8h9i0j1k2_fase7_lifecycle_comercial.py`
-- Multiuser V1 já implantado; cadeia em [Banco e Migrations](../docs/DATABASE_AND_MIGRATIONS.md).
+- head atual versionado: `g8h9i0j1k2l3`
+- `down_revision`: `f7g8h9i0j1k2`
+- migration: `g8h9i0j1k2l3_funnel_event_nullable_identity.py`
+- a migration Growth do SCRUM-148 torna `FunnelEvent.user_id`, `conta_id` e `franquia_id` nullable, sem criar nova tabela/modelo; cadeia em [Banco e Migrations](../docs/DATABASE_AND_MIGRATIONS.md).
 
 Antes de promover, confirmar que as migrations versionadas são compatíveis com esse head.
 
@@ -110,10 +111,11 @@ Antes de promover, confirmar que as migrations versionadas são compatíveis com
 
 1. Validar branch, diff e conteúdo a promover.
 2. Confirmar que o conteúdo destinado a `producao` é o mesmo já validado em `homolog`.
-3. Confirmar migrations versionadas compatíveis com o head `f7g8h9i0j1k2`.
+3. Confirmar migrations versionadas compatíveis com o head `g8h9i0j1k2l3`.
 4. Garantir secrets e volume persistente no ambiente-alvo, via placeholders/configuração externa.
 5. Promover por fast-forward only. Não usar force push.
 6. Publicar e observar build, `db upgrade`, boot e health.
-7. Executar smoke mínimo pós-deploy.
+7. Executar smoke mínimo pós-deploy (login, shell/tema, chat AgenteFrete, `/fretes` auth, Feed, checkout).
+8. Retornar o trabalho ativo para `homolog` quando for o fluxo do time.
 
 Não tratar downgrade de banco como rotina de promoção.

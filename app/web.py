@@ -22,7 +22,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from urllib.parse import quote, urlparse, urlsplit
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 from pathlib import Path
 
 from sqlalchemy import text
@@ -44,6 +44,14 @@ from app.cleide_routes import cleide_bp
 from app.julia_documents_routes import julia_documents_bp
 from app.conta_multiuser_convite_routes import convite_bp
 from app.conta_multiuser_painel_routes import painel_bp
+from app.growth_routes import growth_bp
+from app.funnel_event_service import (
+    SIGNUP_METHOD_GOOGLE,
+    SIGNUP_METHOD_PASSWORD,
+    try_record_session_origin_observed,
+    try_record_signup_completed,
+    try_record_signup_started,
+)
 from app.infra import (
     load_user_for_flask_login,
     admin_required,
@@ -106,12 +114,12 @@ from app.env_loader import mask_database_url_for_log, log_database_boot_diagnost
 from app.privacy_marketing import (
     PRIVACY_MARKETING_DECISIONS,
     PRIVACY_MARKETING_STATE_REJECTED,
-    SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION as _SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION,
-    SESSION_PIXEL_EVENT_LEAD as _SESSION_PIXEL_EVENT_LEAD,
     apply_privacy_marketing_cookie,
     discard_pending_marketing_pixel_flags,
     is_privacy_marketing_allowed,
     parse_privacy_marketing_cookie,
+    pop_all_pending_external_events_if_allowed,
+    store_pending_external_event,
 )
 
 _SESSION_ONBOARDING_DISCOVERY_COUNT = "onboarding_discovery_count"
@@ -242,6 +250,7 @@ app.config['SESSION_COOKIE_HTTPONLY'] = settings.session_cookie_httponly
 app.config['SESSION_COOKIE_SAMESITE'] = settings.session_cookie_samesite
 app.config['PLANOS_UPGRADE_URL'] = settings.planos_upgrade_url
 app.config['FACEBOOK_PIXEL_ID'] = settings.facebook_pixel_id
+app.config['GOOGLE_ANALYTICS_MEASUREMENT_ID'] = settings.google_analytics_measurement_id
 app.config['OPENAI_ADS_PIXEL_ID'] = settings.openai_ads_pixel_id
 app.config['OPENAI_ADS_DEBUG'] = settings.openai_ads_debug
 app.config['PRIVACY_MARKETING_COOKIE_NAME'] = settings.privacy_marketing_cookie_name
@@ -249,6 +258,20 @@ app.config['PRIVACY_MARKETING_COOKIE_MAX_AGE_SECONDS'] = settings.privacy_market
 app.config['COMMUNICATION_SUPPRESSION_HMAC_SECRET'] = (
     settings.communication_suppression_hmac_secret
 )
+app.config['GROWTH_EXTERNAL_EVENT_TOKEN_SECRET'] = (
+    settings.growth_external_event_token_secret
+)
+app.config['META_CAPI_ENABLED'] = settings.meta_capi_enabled
+app.config['META_CAPI_ACCESS_TOKEN'] = settings.meta_capi_access_token
+app.config['META_GRAPH_API_VERSION'] = settings.meta_graph_api_version
+app.config['META_CAPI_TEST_EVENT_CODE'] = settings.meta_capi_test_event_code
+app.config['META_CAPI_CONNECT_TIMEOUT_SECONDS'] = (
+    settings.meta_capi_connect_timeout_seconds
+)
+app.config['META_CAPI_READ_TIMEOUT_SECONDS'] = (
+    settings.meta_capi_read_timeout_seconds
+)
+app.config['PUBLIC_BASE_URL'] = settings.public_base_url
 
 # Configuração para OAuth em HTTPS com auto-redirecionamento
 # Só permite OAuth em HTTP quando explicitado no .env (ex.: .env.dev). Em prod/homolog não definir ou usar 0.
@@ -282,6 +305,7 @@ app.register_blueprint(agente_compara_api_bp)
 app.register_blueprint(julia_documents_bp)
 app.register_blueprint(convite_bp)
 app.register_blueprint(painel_bp)
+app.register_blueprint(growth_bp)
 
 @app.context_processor
 def inject_facebook_pixel_context():
@@ -289,20 +313,31 @@ def inject_facebook_pixel_context():
     privacy_state = parse_privacy_marketing_cookie(request.cookies.get(cookie_name))
     marketing_allowed = is_privacy_marketing_allowed(privacy_state)
 
-    complete_registration = False
-    lead = False
+    pending_external_events: list = []
     if marketing_allowed:
-        complete_registration = bool(
-            session.pop(_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION, False)
+        pending_external_events = pop_all_pending_external_events_if_allowed(
+            session,
+            marketing_allowed=True,
         )
-        lead = bool(session.pop(_SESSION_PIXEL_EVENT_LEAD, False))
     elif privacy_state == PRIVACY_MARKETING_STATE_REJECTED:
         discard_pending_marketing_pixel_flags(session)
 
+    # OpenAI Ads Measurement: sinal derivado do envelope signup (sem flag Meta booleana).
+    complete_registration = any(
+        isinstance(env, dict) and env.get("event") == "signup_completed"
+        for env in pending_external_events
+    )
+    # Compat: primeiro envelope (signup tem prioridade na ordem de pop).
+    pending_external = pending_external_events[0] if pending_external_events else None
+
     return {
         "facebook_pixel_id": (app.config.get("FACEBOOK_PIXEL_ID") or "").strip(),
+        "google_analytics_measurement_id": (
+            app.config.get("GOOGLE_ANALYTICS_MEASUREMENT_ID") or ""
+        ).strip(),
+        "pending_external_event": pending_external,
+        "pending_external_events": pending_external_events,
         "pixel_event_complete_registration": complete_registration,
-        "pixel_event_lead": lead,
         "privacy_marketing_state": privacy_state,
         "privacy_marketing_allowed": marketing_allowed,
     }
@@ -388,6 +423,16 @@ def inject_falha_mensal_vigente_context():
 
 
 @app.before_request
+def _growth_attribution_before_request():
+    """SCRUM-159 Lote 159A: captura UTM first-party cedo (antes de redirects de pagina)."""
+    from app.services.growth_attribution_service import (
+        apply_growth_attribution_before_request,
+    )
+
+    apply_growth_attribution_before_request()
+
+
+@app.before_request
 def _consumo_identidade_before_request():
     """Fase 2 etapa 1: injeta g.identidade em todo request HTTP (exceto static)."""
     from app.consumo_identidade import apply_consumo_identidade_before_request
@@ -418,7 +463,7 @@ def _handle_unauthorized_access():
         request.path,
         request.method,
         request.host,
-        request.headers.get("Referer", ""),
+        _safe_referer_for_log(request.headers.get("Referer", "")),
         request.headers.get("Origin", ""),
     )
     # APIs devem responder em JSON/401 para consumo via fetch,
@@ -436,6 +481,20 @@ def _handle_unauthorized_access():
     if request.query_string:
         next_target = f"{next_target}?{request.query_string.decode('utf-8', errors='ignore')}"
     return redirect(_login_url_with_next(next_target))
+
+
+def _safe_referer_for_log(raw: str | None) -> str:
+    """Referer para log diagnostico: scheme/host/path sem query nem fragment."""
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        if not parsed.scheme and not parsed.netloc and not parsed.path:
+            return ""
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    except Exception:
+        return ""
 
 
 def _safe_next_redirect(target: str | None):
@@ -1019,7 +1078,9 @@ def login():
     logging.info("=== Acessando /login (método: %s) ===", request.method)
     nxt = _safe_next_redirect(request.args.get('next'))
     if nxt:
-        session['post_login_next'] = nxt
+        from app.services.growth_attribution_service import sanitize_next_url_for_consent
+
+        session['post_login_next'] = sanitize_next_url_for_consent(nxt)
     if current_user.is_authenticated:
         return _post_login_redirect(current_user)
     if request.method == 'POST':
@@ -1029,6 +1090,8 @@ def login():
         user, error = authenticate_user(email_input or "", password or "")
         if user:
             login_user(user)
+            # Growth 159A: login existente com origem conhecida → session_origin_observed.
+            try_record_session_origin_observed(user)
             return _post_login_redirect(user)
         flash(error or 'Email ou senha incorretos.', 'danger')
     # mode=register só controla a aba inicial da UI; não autentica nem redireciona.
@@ -1197,7 +1260,33 @@ def google_callback():
         return redirect(url_for('login'))
     login_user(user)
     if created_new_user:
-        session[_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION] = True
+        # Growth first-party; envelope externo so se ocorrencia nova persistida.
+        _signup_result = try_record_signup_completed(
+            user, signup_method=SIGNUP_METHOD_GOOGLE
+        )
+        try:
+            from app.services.growth_external_event_service import (
+                build_external_event_envelope_if_new,
+            )
+
+            store_pending_external_event(
+                session,
+                build_external_event_envelope_if_new(_signup_result),
+            )
+        except Exception:
+            logger.debug("signup oauth: envelope externo indisponivel", exc_info=True)
+        try:
+            from app.services.growth_external_server_service import (
+                try_send_growth_meta_capi_if_new,
+            )
+
+            # CAPI so com FunnelEvent signup_completed novo; OAuth existente nao chega aqui.
+            try_send_growth_meta_capi_if_new(_signup_result)
+        except Exception:
+            logger.debug("signup oauth: meta capi fail-open", exc_info=True)
+    else:
+        # OAuth usuario existente: nao emite signup_completed; observa origem se conhecida.
+        try_record_session_origin_observed(user)
     flash('Login com Google realizado com sucesso.', 'success')
     session.pop('oauth_state', None)
     if state and state in session_states:
@@ -1234,8 +1323,7 @@ def complete_profile():
         flash(message, 'success' if success else 'danger')
         if not success:
             return redirect(url_for('complete_profile'))
-        if accept_terms:
-            session[_SESSION_PIXEL_EVENT_LEAD] = True
+        # Completar perfil nao e Lead comercial no contrato Growth (SCRUM-157A).
         session.pop('pending_profile_completion', None)
         return _post_login_redirect(user)
     return render_template('complete_profile.html', active_term=get_active_term())
@@ -1243,6 +1331,9 @@ def complete_profile():
 
 @app.route('/register', methods=['POST'])
 def register():
+    # Tentativa de entrada no cadastro (antes de qualquer validação que rejeite).
+    try_record_signup_started(signup_method=SIGNUP_METHOD_PASSWORD)
+
     accept_terms = bool(request.form.get('accept_terms'))
     if not accept_terms:
         flash('É obrigatório aceitar os Termos de Uso para criar sua conta.', 'danger')
@@ -1269,6 +1360,7 @@ def register():
             flash(replay.get("message") or "Erro ao cadastrar.", "danger")
             return redirect(url_for("login", mode="register"))
         # Mesmo redirect de sucesso da Registration real; sem CompleteRegistration Meta.
+        # Replay nao cria User → sem signup_completed.
         flash(replay.get("message") or "Conta criada com sucesso! Faça login.", "success")
         pending_next = _safe_next_redirect(session.get("post_login_next"))
         if pending_next:
@@ -1285,7 +1377,30 @@ def register():
     if new_user is None:
         flash(error or 'Erro ao cadastrar.', 'danger')
         return redirect(url_for('login', mode='register'))
-    session[_SESSION_PIXEL_EVENT_COMPLETE_REGISTRATION] = True
+    # Growth first-party; envelope externo so se ocorrencia nova persistida.
+    _signup_result = try_record_signup_completed(
+        new_user, signup_method=SIGNUP_METHOD_PASSWORD
+    )
+    try:
+        from app.services.growth_external_event_service import (
+            build_external_event_envelope_if_new,
+        )
+
+        store_pending_external_event(
+            session,
+            build_external_event_envelope_if_new(_signup_result),
+        )
+    except Exception:
+        logger.debug("signup password: envelope externo indisponivel", exc_info=True)
+    try:
+        from app.services.growth_external_server_service import (
+            try_send_growth_meta_capi_if_new,
+        )
+
+        # CAPI apos signup_completed Growth novo commitado; fail-open.
+        try_send_growth_meta_capi_if_new(_signup_result)
+    except Exception:
+        logger.debug("signup password: meta capi fail-open", exc_info=True)
     flash('Conta criada com sucesso! Faça login.', 'success')
     # Cadastro por senha exige login posterior; preserva next seguro até o login.
     pending_next = _safe_next_redirect(session.get('post_login_next'))
@@ -1557,6 +1672,15 @@ def privacy_marketing_consent():
 
     if decision == PRIVACY_MARKETING_STATE_REJECTED:
         discard_pending_marketing_pixel_flags(session)
+        # Decisao recebida e a autoridade desta operacao (cookie da request
+        # ainda pode refletir o estado anterior).
+        from app.services.growth_attribution_service import (
+            purge_click_ids_from_session_attribution,
+            sanitize_post_login_next_in_session,
+        )
+
+        purge_click_ids_from_session_attribution()
+        sanitize_post_login_next_in_session(state=PRIVACY_MARKETING_STATE_REJECTED)
 
     response = jsonify({"ok": True, "decision": decision})
     apply_privacy_marketing_cookie(
@@ -2352,6 +2476,10 @@ def detalhe_noticia(noticia_id):
 
     # Redirecionamos ambos para o mesmo template,
     # pois ele já gerencia a lógica de exibição interna.
+    content_type = (noticia.tipo or "noticia").strip().lower()
+    if content_type not in ("noticia", "artigo"):
+        content_type = "noticia"
+
     return render_template(
         'noticia_interna.html',
         noticia=noticia,
@@ -2364,6 +2492,8 @@ def detalhe_noticia(noticia_id):
         seo=seo,
         conteudo_html=conteudo_html,
         titulo_original_exibicao=titulo_original_exibicao,
+        growth_content_id=noticia.id,
+        growth_content_type=content_type,
     )
 
 # Criando lazy: importar dentro da função, na hora que você realmente vai usar.

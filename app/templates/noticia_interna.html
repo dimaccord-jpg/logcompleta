@@ -159,7 +159,7 @@
 
             {% if seo.habilidade_href %}
                 <div class="mt-4 pt-4 border-top border-primary">
-                    <a class="btn btn-primary" href="{{ seo.habilidade_href }}">{{ seo.habilidade_rotulo }}</a>
+                    <a class="btn btn-primary" href="{{ seo.habilidade_href }}" {% if ('article_skill_' ~ seo.habilidade_id) in growth_allowed_cta_ids|default([]) %}data-growth-cta="article_skill_{{ seo.habilidade_id }}"{% endif %}>{{ seo.habilidade_rotulo }}</a>
                 </div>
             {% elif noticia.tipo == 'artigo' and noticia.cta %}
                 <div class="mt-4 pt-4 border-top border-primary">

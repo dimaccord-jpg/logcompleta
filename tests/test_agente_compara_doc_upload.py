@@ -788,8 +788,8 @@ def test_upload_success_creates_funnel_event_and_response_flag(web_client, app, 
     resp = _upload(web_client, "dados.csv", content, slot="1")
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["funnel_event"]["allow_meta_pixel"] is True
     assert body["funnel_event"]["event_name"] == "file_uploaded"
+    assert "allow_meta_pixel" not in body["funnel_event"]
 
     with app.app_context():
         db.session.remove()
@@ -815,7 +815,8 @@ def test_upload_replay_omits_funnel_event_and_does_not_duplicate_row(web_client,
     first = _upload(web_client, "dados.csv", content, slot="1")
     assert first.status_code == 200
     first_body = first.get_json()
-    assert first_body["funnel_event"]["allow_meta_pixel"] is True
+    assert first_body["funnel_event"]["event_name"] == "file_uploaded"
+    assert "allow_meta_pixel" not in first_body["funnel_event"]
 
     with app.app_context():
         db.session.remove()
@@ -848,7 +849,6 @@ def test_upload_replay_omits_funnel_event_and_does_not_duplicate_row(web_client,
             replay_payload["funnel_event"] = {
                 "event_name": "file_uploaded",
                 "source": "agente_compara",
-                "allow_meta_pixel": True,
                 "is_first_audit": False,
             }
 

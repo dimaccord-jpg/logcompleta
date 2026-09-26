@@ -65,6 +65,41 @@ _CLEIDE_FILTER_KEYS = (
 )
 
 
+def _try_record_cleide_bi_growth_task(
+    *,
+    event_name: str,
+    execution_id: str,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Observabilidade Growth fail-open; nao altera o fluxo funcional do BI Cleide."""
+    exec_id = (execution_id or "").strip()
+    if not exec_id:
+        return
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_SOURCE_CLEIDE_BI,
+            TASK_TYPE_CLEIDE_BI,
+            try_record_growth_task_event,
+        )
+
+        try_record_growth_task_event(
+            event_name=event_name,
+            source=FUNNEL_SOURCE_CLEIDE_BI,
+            task_type=TASK_TYPE_CLEIDE_BI,
+            idempotency_key=f"growth:cleide_bi:{exec_id}:{event_name}",
+            task_stage=task_stage,
+            error_code=error_code,
+            execution_id=exec_id,
+        )
+    except Exception:
+        logger.exception(
+            "cleide_bi_growth_task_failed event=%s execution_id=%s",
+            event_name,
+            exec_id,
+        )
+
+
 def _count_non_empty_data_rows(*, raw_bytes: bytes, extension: str, delimiter_default: str) -> int:
     ext = (extension or "").strip().lower()
     if ext == ".csv":
@@ -229,7 +264,10 @@ def process_cleide_upload() -> tuple[Any, int]:
     mark_cleide_upload_in_progress(session)
     started_at = time.perf_counter()
     emitted_processing_event = False
-    upload_ref_for_key = _resolve_cleide_execution_id()
+    execution_id = _resolve_cleide_execution_id()
+    upload_ref_for_key = execution_id
+    growth_prep_started = False
+    growth_task_started = False
 
     def _resolve_rows_processed_from_analytics(analytics_payload: dict[str, Any] | None) -> int:
         if not isinstance(analytics_payload, dict):
@@ -274,6 +312,19 @@ def process_cleide_upload() -> tuple[Any, int]:
                 )
             except Exception:
                 logger.exception("Falha no fallback de ProcessingEvent do upload Cleide.")
+
+    def _emit_growth_failed(error_code: str, *, task_stage: str | None = None) -> None:
+        if not (growth_prep_started or growth_task_started):
+            return
+        from app.funnel_event_service import FUNNEL_EVENT_TASK_FAILED
+
+        _try_record_cleide_bi_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            execution_id=execution_id,
+            task_stage=task_stage,
+            error_code=error_code,
+        )
+
     try:
         if not request.content_type or "multipart/form-data" not in request.content_type.lower():
             return _json_error("Requisicao deve ser multipart/form-data.", code="invalid_multipart")
@@ -331,6 +382,22 @@ def process_cleide_upload() -> tuple[Any, int]:
                 ),
                 413,
             )
+
+        # Upload aceito: inicia preparação estrutural (sem alteração ORM pendente).
+        from app.funnel_event_service import (
+            FUNNEL_EVENT_TASK_COMPLETED,
+            FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+            FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+            FUNNEL_EVENT_TASK_STARTED,
+        )
+
+        _try_record_cleide_bi_growth_task(
+            event_name=FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+            execution_id=execution_id,
+            task_stage="structural_validation",
+        )
+        growth_prep_started = True
+
         try:
             structural = analyze_structural_layout(
                 raw_bytes=raw,
@@ -342,7 +409,27 @@ def process_cleide_upload() -> tuple[Any, int]:
         except StructuralValidationError as exc:
             logger.warning("Falha estrutural no upload Cleide: %s (%s)", exc.message, exc.code)
             _emit_processing_event("failure", 0, exc.message)
+            _emit_growth_failed(str(exc.code or "structural_validation_failed"), task_stage="structural_validation")
             return _json_error(exc.message, code=exc.code)
+
+        if not bool(structural.get("dataset_validado")):
+            # Preparação iniciada e reprovada estruturalmente (sem exception).
+            # Não marca dataset_ready / task_started / task_completed.
+            _emit_growth_failed("structural_validation_failed", task_stage="structural_validation")
+        else:
+            # Dataset estrutural pronto para analytics (ainda sem commit funcional ORM).
+            _try_record_cleide_bi_growth_task(
+                event_name=FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+                execution_id=execution_id,
+                task_stage="dataset_ready",
+            )
+            _try_record_cleide_bi_growth_task(
+                event_name=FUNNEL_EVENT_TASK_STARTED,
+                execution_id=execution_id,
+                task_stage="analytics_generation",
+            )
+            growth_task_started = True
+
         try:
             analytics = build_analytics_context(
                 raw_bytes=raw,
@@ -355,6 +442,7 @@ def process_cleide_upload() -> tuple[Any, int]:
         except AnalyticsProcessingError as exc:
             logger.warning("Falha analytics no upload Cleide: %s (%s)", exc.message, exc.code)
             _emit_processing_event("failure", 0, exc.message)
+            _emit_growth_failed(str(exc.code or "analytics_processing_failed"), task_stage="analytics_generation")
             return _json_error(exc.message, code=exc.code)
 
         maybe_cleanup_expired_cleide_uploads(cfg.upload_ttl_minutes)
@@ -419,11 +507,18 @@ def process_cleide_upload() -> tuple[Any, int]:
             },
         )
         replaced_previous = bool(previous_ref)
+        # Billing/ProcessingEvent já commitam; sessão Flask + arquivo já duráveis.
         _emit_processing_event(
             "success",
             _resolve_rows_processed_from_analytics(analytics),
             None,
         )
+        if growth_task_started and bool(analytics.get("analytics_ready")):
+            _try_record_cleide_bi_growth_task(
+                event_name=FUNNEL_EVENT_TASK_COMPLETED,
+                execution_id=execution_id,
+                task_stage="analytics_ready",
+            )
 
         return (
             jsonify(
@@ -495,6 +590,7 @@ def process_cleide_upload() -> tuple[Any, int]:
     except ValueError as exc:
         logger.warning("Falha de validacao no upload Cleide: %s", exc)
         _emit_processing_event("failure", 0, str(exc))
+        _emit_growth_failed("invalid_upload", task_stage="upload_validation")
         return _json_error(str(exc), code="invalid_upload")
     finally:
         clear_cleide_upload_in_progress(session)

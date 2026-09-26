@@ -121,6 +121,15 @@ TEMP_TABLE_STATUS_FAILED = "failed"
 TEMP_TABLE_STATUS_EXPIRED = "expired"
 TEMP_TABLE_STATUS_DISCARDED = "discarded"
 
+# Estados em que a temp_table ja e artefato util para seguir o fluxo de auditoria.
+TEMP_TABLE_READY_STATUSES = frozenset(
+    {
+        TEMP_TABLE_STATUS_AWAITING_VALIDATION,
+        TEMP_TABLE_STATUS_NEEDS_REVIEW,
+        TEMP_TABLE_STATUS_VALIDATED,
+    }
+)
+
 TEMP_TABLE_VERSION_MARKER = "cleide_audit_temp_table_v1"
 TEMP_TABLE_OPERATIONAL_OWNER = "cleiton"
 TEMP_TABLE_UI_DISPLAY_NAME = "Tabela temporária extraída"
@@ -452,6 +461,43 @@ def cleide_audit_batch_run_idempotency_key(session_id: str, audit_batch_id: str,
         f"cleide-audit-batch-run:{(session_id or '').strip()}:"
         f"{(audit_batch_id or '').strip()}:{(run_version or '').strip()}"
     )
+
+
+def _try_record_cleide_audit_growth_task(
+    *,
+    event_name: str,
+    idempotency_key: str,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+    audit_batch_id: str | None = None,
+    execution_id: str | None = None,
+    document_id: str | None = None,
+) -> None:
+    """Observabilidade Growth fail-open; nao altera o fluxo funcional."""
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_SOURCE_CLEIDE_AUDIT,
+            TASK_TYPE_CLEIDE_AUDIT,
+            try_record_growth_task_event,
+        )
+
+        try_record_growth_task_event(
+            event_name=event_name,
+            source=FUNNEL_SOURCE_CLEIDE_AUDIT,
+            task_type=TASK_TYPE_CLEIDE_AUDIT,
+            idempotency_key=idempotency_key,
+            task_stage=task_stage,
+            error_code=error_code,
+            audit_batch_id=audit_batch_id,
+            execution_id=execution_id,
+            document_id=document_id,
+        )
+    except Exception:
+        logger.exception(
+            "cleide_audit_growth_task_failed event=%s key=%s",
+            event_name,
+            idempotency_key,
+        )
 
 
 def _emit_cleide_audit_operational_billing(
@@ -5032,37 +5078,82 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
 
     should_bill_operational_run = _audit_batch_should_bill_operational_run(audit_batch)
 
-    outputs = compute_audit_outputs(record, normalized_rows)
-    results = outputs["results"]
-    now = outputs["generated_at"]
-    summary = outputs["summary"]
-    audit_diagnostics = outputs["audit_diagnostics"]
-    fiscal_snapshot = outputs.get("fiscal_snapshot") or {}
-    preserved_expires_at = record.get("expires_at")
-    updated_batch = dict(audit_batch)
-    updated_batch["status"] = AUDIT_BATCH_STATUS_PROCESSED
-    updated_batch["results"] = results
-    updated_batch["summary"] = summary
-    updated_batch["audit_diagnostics"] = audit_diagnostics
-    updated_batch["updated_at"] = now
-    updated_batch["processed_at"] = now
-    updated_batch["expires_at"] = audit_batch.get("expires_at") or preserved_expires_at
-    updated_batch = _apply_tax_fiscal_snapshot_to_audit_batch(updated_batch, fiscal_snapshot)
-    updated_batch["pricing_rule_parser_version"] = PRICING_RULE_PARSER_VERSION
-    updated_batch["pricing_rule_fingerprint"] = _pricing_rule_fingerprint(record)
+    from app.funnel_event_service import (
+        FUNNEL_EVENT_TASK_COMPLETED,
+        FUNNEL_EVENT_TASK_FAILED,
+        FUNNEL_EVENT_TASK_STARTED,
+    )
 
-    updated = dict(record)
-    updated["audit_batch"] = updated_batch
-    updated["updated_at"] = now
-    updated["expires_at"] = preserved_expires_at
+    _try_record_cleide_audit_growth_task(
+        event_name=FUNNEL_EVENT_TASK_STARTED,
+        idempotency_key=(
+            f"growth:cleide_audit:{str(audit_batch.get('audit_batch_id') or '')}:"
+            f"{execution_id}:task_started"
+        ),
+        task_stage=AUDIT_BATCH_STATUS_UPLOADED,
+        audit_batch_id=str(audit_batch.get("audit_batch_id") or "") or None,
+        execution_id=execution_id,
+    )
 
-    saved = save_temp_table_record(updated)
-    public = _public_temp_table(saved)
-    if public is None:
-        raise CleideAuditBatchError(
-            ERROR_AUDIT_NO_TEMP_TABLE,
-            "Não foi possível retornar a tabela temporária processada.",
+    try:
+        outputs = compute_audit_outputs(record, normalized_rows)
+        results = outputs["results"]
+        now = outputs["generated_at"]
+        summary = outputs["summary"]
+        audit_diagnostics = outputs["audit_diagnostics"]
+        fiscal_snapshot = outputs.get("fiscal_snapshot") or {}
+        preserved_expires_at = record.get("expires_at")
+        updated_batch = dict(audit_batch)
+        updated_batch["status"] = AUDIT_BATCH_STATUS_PROCESSED
+        updated_batch["results"] = results
+        updated_batch["summary"] = summary
+        updated_batch["audit_diagnostics"] = audit_diagnostics
+        updated_batch["updated_at"] = now
+        updated_batch["processed_at"] = now
+        updated_batch["expires_at"] = audit_batch.get("expires_at") or preserved_expires_at
+        updated_batch = _apply_tax_fiscal_snapshot_to_audit_batch(updated_batch, fiscal_snapshot)
+        updated_batch["pricing_rule_parser_version"] = PRICING_RULE_PARSER_VERSION
+        updated_batch["pricing_rule_fingerprint"] = _pricing_rule_fingerprint(record)
+
+        updated = dict(record)
+        updated["audit_batch"] = updated_batch
+        updated["updated_at"] = now
+        updated["expires_at"] = preserved_expires_at
+
+        saved = save_temp_table_record(updated)
+        public = _public_temp_table(saved)
+        if public is None:
+            raise CleideAuditBatchError(
+                ERROR_AUDIT_NO_TEMP_TABLE,
+                "Não foi possível retornar a tabela temporária processada.",
+            )
+    except CleideAuditBatchError as exc:
+        _try_record_cleide_audit_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            idempotency_key=(
+                f"growth:cleide_audit:{str(audit_batch.get('audit_batch_id') or '')}:"
+                f"{execution_id}:task_failed"
+            ),
+            task_stage=AUDIT_BATCH_STATUS_UPLOADED,
+            error_code=exc.error_code,
+            audit_batch_id=str(audit_batch.get("audit_batch_id") or "") or None,
+            execution_id=execution_id,
         )
+        raise
+    except Exception:
+        _try_record_cleide_audit_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            idempotency_key=(
+                f"growth:cleide_audit:{str(audit_batch.get('audit_batch_id') or '')}:"
+                f"{execution_id}:task_failed"
+            ),
+            task_stage=AUDIT_BATCH_STATUS_UPLOADED,
+            error_code="cleide_audit_run_failed",
+            audit_batch_id=str(audit_batch.get("audit_batch_id") or "") or None,
+            execution_id=execution_id,
+        )
+        raise
+
     rows_evaluated = len(normalized_rows)
     processed_rows = int((summary or {}).get("processed_rows") or 0)
     billing_summary = None
@@ -5080,6 +5171,14 @@ def run_audit_batch_for_session(*, user_scope=None, franquia_scope=None) -> dict
             error_summary=billing_summary,
             execution_id=execution_id,
         )
+
+    _try_record_cleide_audit_growth_task(
+        event_name=FUNNEL_EVENT_TASK_COMPLETED,
+        idempotency_key=f"growth:cleide_audit:{audit_batch_id}:{execution_id}:task_completed",
+        task_stage=AUDIT_BATCH_STATUS_PROCESSED,
+        audit_batch_id=audit_batch_id or None,
+        execution_id=execution_id,
+    )
     return public
 
 
@@ -8141,7 +8240,15 @@ def mark_temp_table_processing(source_doc_ids: list[str], *, user_scope=None, fr
         },
         "version_marker": TEMP_TABLE_VERSION_MARKER,
     }
-    return save_temp_table_record(record)
+    saved = save_temp_table_record(record)
+    from app.funnel_event_service import FUNNEL_EVENT_TASK_PREPARATION_STARTED
+
+    _try_record_cleide_audit_growth_task(
+        event_name=FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+        idempotency_key=f"growth:cleide_audit:{temp_table_id}:task_preparation_started",
+        task_stage=TEMP_TABLE_STATUS_PROCESSING,
+    )
+    return saved
 
 
 def temp_table_status_message(status: str) -> str:
@@ -8918,9 +9025,41 @@ def apply_temp_table_extraction_from_model_payload(
 
     if not isinstance(payload, dict):
         record = _coerce_temp_table_payload({"status": TEMP_TABLE_STATUS_FAILED}, source_doc_ids=normalized)
-        return save_temp_table_record(record)
+        saved = save_temp_table_record(record)
+        _emit_cleide_temp_table_growth_outcome(saved)
+        return saved
     record = _coerce_temp_table_payload(payload, source_doc_ids=normalized)
-    return save_temp_table_record(record)
+    saved = save_temp_table_record(record)
+    _emit_cleide_temp_table_growth_outcome(saved)
+    return saved
+
+
+def _emit_cleide_temp_table_growth_outcome(record: dict | None) -> None:
+    if not isinstance(record, dict):
+        return
+    temp_table_id = str(record.get("temp_table_id") or "").strip()
+    if not temp_table_id:
+        return
+    status = str(record.get("status") or "").strip().lower()
+    from app.funnel_event_service import (
+        FUNNEL_EVENT_TASK_FAILED,
+        FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+    )
+
+    if status in TEMP_TABLE_READY_STATUSES:
+        _try_record_cleide_audit_growth_task(
+            event_name=FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+            idempotency_key=f"growth:cleide_audit:{temp_table_id}:task_preparation_completed",
+            task_stage=status,
+        )
+        return
+    if status == TEMP_TABLE_STATUS_FAILED:
+        _try_record_cleide_audit_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            idempotency_key=f"growth:cleide_audit:{temp_table_id}:task_failed",
+            task_stage=TEMP_TABLE_STATUS_FAILED,
+            error_code="cleide_audit_temp_table_failed",
+        )
 
 
 def split_temp_table_block_from_answer(answer_text: str) -> tuple[str, dict | None]:
