@@ -781,9 +781,9 @@ class FunnelEvent(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=False)
-    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    conta_id = db.Column(db.Integer, db.ForeignKey("conta.id"), nullable=True)
+    franquia_id = db.Column(db.Integer, db.ForeignKey("franquia.id"), nullable=True)
 
     event_name = db.Column(db.String(40), nullable=False)
     source = db.Column(db.String(40), nullable=False)

@@ -169,6 +169,7 @@
       el.appendChild(document.createTextNode(cta.message || ''));
       var link = document.createElement('a');
       link.href = safeUpgradeHref(cta.upgrade_url);
+      link.setAttribute('data-growth-cta', 'limit_upgrade_view_plans');
       link.textContent = cta.upgrade_label || PLAN_LIMIT_UPGRADE_LABEL;
       link.setAttribute('rel', 'noopener noreferrer');
       el.appendChild(link);
@@ -476,6 +477,14 @@
       if (!actionItem) return;
       var btn = document.createElement('button');
       btn.type = 'button';
+      if (DISCOVERY_MODE && window.AFGrowth) {
+        var growthCtaId = actionItem.kind === 'limit'
+          ? 'discovery_continue_free'
+          : 'discovery_handoff_' + actionItem.destination;
+        if (window.AFGrowth.isAllowedCta(growthCtaId)) {
+          btn.setAttribute('data-growth-cta', growthCtaId);
+        }
+      }
       if (actionItem.kind === 'limit') {
         btn.className = 'copilot-limit-btn';
         btn.setAttribute('data-handoff-url', actionItem.url);

@@ -41,6 +41,41 @@ EXTRA_ANTI_HALLUCINATION_INSTRUCTION = (
 )
 
 
+def _try_record_agente_compara_chat_growth_task(
+    *,
+    event_name: str,
+    execution_id: str,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Observabilidade Growth fail-open; nao altera o chat documental do Agente Compara."""
+    exec_id = (execution_id or "").strip()
+    if not exec_id:
+        return
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_SOURCE_AGENTE_COMPARA_CHAT,
+            TASK_TYPE_AGENTE_COMPARA_CHAT,
+            try_record_growth_task_event,
+        )
+
+        try_record_growth_task_event(
+            event_name=event_name,
+            source=FUNNEL_SOURCE_AGENTE_COMPARA_CHAT,
+            task_type=TASK_TYPE_AGENTE_COMPARA_CHAT,
+            idempotency_key=f"growth:agente_compara_chat:{exec_id}:{event_name}",
+            task_stage=task_stage,
+            error_code=error_code,
+            execution_id=exec_id,
+        )
+    except Exception:
+        logger.exception(
+            "agente_compara_chat_growth_task_failed event=%s execution_id=%s",
+            event_name,
+            exec_id,
+        )
+
+
 def _get_max_history(*, max_history: int | None = None) -> int:
     if max_history is not None:
         return max(0, int(max_history))
@@ -237,12 +272,19 @@ def chat_agente_compara_reply(
     question_max_chars: int | None = None,
     fallback_message: str | None = None,
     no_hallucination_instruction_enabled: bool | None = None,
+    execution_id: str | None = None,
 ) -> dict:
     """
     Envia mensagem ao LLM com histórico e contexto documental da Agente Compara.
 
     Retorna dict com answer, flow_type, documents_used e eventual error.
     """
+    from app.funnel_event_service import (
+        FUNNEL_EVENT_TASK_COMPLETED,
+        FUNNEL_EVENT_TASK_FAILED,
+        FUNNEL_EVENT_TASK_STARTED,
+    )
+
     audit_cfg = get_agente_compara_config()
     message_limit = (
         int(question_max_chars)
@@ -282,10 +324,49 @@ def chat_agente_compara_reply(
     history_slice = sanitize_chat_history(history, max_history=history_limit)
     documents_used = _documents_used_from_meta(documents_meta) if has_documents else []
 
+    growth_exec_id = (execution_id or "").strip() or str(uuid4())
+    growth_started = False
+
+    def _growth_start(*, task_stage: str = "llm_generation") -> None:
+        nonlocal growth_started
+        if growth_started:
+            return
+        _try_record_agente_compara_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_STARTED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+        )
+        growth_started = True
+
+    def _growth_complete(*, task_stage: str = "reply_ready") -> None:
+        if not growth_started:
+            return
+        _try_record_agente_compara_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_COMPLETED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+        )
+
+    def _growth_fail(error_code: str, *, task_stage: str | None = None) -> None:
+        if not growth_started:
+            return
+        _try_record_agente_compara_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+            error_code=error_code or "agente_compara_chat_failed",
+        )
+
     client = _get_client()
     if not client:
         logger.warning(
             "Agente Compara chat: nenhuma chave Gemini configurada (GEMINI_API_KEY ou GEMINI_API_KEY_1)."
+        )
+        _try_record_agente_compara_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            execution_id=growth_exec_id,
+            task_stage="provider_check",
+            error_code="agente_compara_chat_provider_unavailable",
         )
         return {
             "answer": "",
@@ -303,6 +384,8 @@ def chat_agente_compara_reply(
         no_hallucination_instruction_enabled=anti_hallucination_enabled,
     )
 
+    _growth_start()
+
     last_error: Exception | None = None
     for model in _get_model_candidates():
         try:
@@ -316,6 +399,8 @@ def chat_agente_compara_reply(
             )
             text = (getattr(response, "text", None) or "").strip()
             if text:
+                # IaConsumoEvento já commitado pela governança Cleiton.
+                _growth_complete()
                 return {
                     "answer": text,
                     "flow_type": AGENTE_COMPARA_CHAT_FLOW_TYPE,
@@ -333,6 +418,7 @@ def chat_agente_compara_reply(
 
     if last_error:
         logger.exception("Agente Compara chat falhou após fallbacks: %s", last_error)
+    _growth_fail("agente_compara_chat_processing_failed", task_stage="llm_generation")
     return {
         "answer": "",
         "flow_type": AGENTE_COMPARA_CHAT_FLOW_TYPE,

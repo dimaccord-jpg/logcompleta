@@ -1,0 +1,26 @@
+{% set _ga_measurement_id = (google_analytics_measurement_id or '')|trim %}
+{% if _ga_measurement_id and privacy_marketing_allowed %}
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('consent', 'default', {
+    analytics_storage: 'denied',
+    ad_storage: 'denied',
+    ad_user_data: 'denied',
+    ad_personalization: 'denied'
+  });
+  gtag('consent', 'update', {
+    analytics_storage: 'granted',
+    ad_storage: 'granted',
+    ad_user_data: 'granted',
+    ad_personalization: 'granted'
+  });
+</script>
+<script async src="https://www.googletagmanager.com/gtag/js?id={{ _ga_measurement_id }}"></script>
+<script>
+  gtag('js', new Date());
+  gtag('config', '{{ _ga_measurement_id }}', {
+    send_page_view: false
+  });
+</script>
+{% endif %}

@@ -1,8 +1,10 @@
-"""Cobertura estrutural da Etapa 2 do Meta Pixel (eventos personalizados de funil)."""
+"""Cobertura estrutural Meta Pixel apos SCRUM-157B (legados Audit* removidos)."""
 from __future__ import annotations
 
 import pathlib
 import re
+
+from app.funnel_event_service import META_PIXEL_ALLOWED_EVENTS, is_meta_pixel_allowed
 
 
 PIXEL_EVENTS = pathlib.Path("app/templates/partials/pixel_events.html")
@@ -10,6 +12,7 @@ PIXEL_BASE = pathlib.Path("app/templates/partials/pixel_base.html")
 CLEIDE_JS = pathlib.Path("app/static/js/cleide_auditoria.js")
 AGENTE_JS = pathlib.Path("app/static/js/agente_compara.js")
 CONTRATE_PLANO = pathlib.Path("app/templates/contrate_plano.html")
+EXTERNAL_JS = pathlib.Path("app/static/js/af_external_tracking.js")
 
 
 def _read(path: pathlib.Path) -> str:
@@ -45,128 +48,60 @@ def test_track_standard_events_still_use_fbq_track():
     assert "trackCustom" not in track_fn
 
 
-def test_track_custom_uses_fbq_track_custom_only():
+def test_track_custom_helper_preserved_without_legacy_funnel_map():
     helper = _pixel_helper()
-    custom_fn = helper[
-        helper.index("function trackCustomEvent") : helper.index("function trackFunnelEvent")
-    ]
-    assert 'window.fbq("trackCustom", eventName, params)' in custom_fn
-    assert 'window.fbq("trackCustom", eventName)' in custom_fn
-    assert 'window.fbq("track"' not in custom_fn
+    assert "function trackCustomEvent" in helper
     assert "trackCustom: trackCustomEvent" in helper
-    assert "trackFunnelEvent: trackFunnelEvent" in helper
+    assert "trackFunnelEvent" not in helper
+    assert 'trackCustomEvent("AuditStarted"' not in helper
+    assert 'trackCustomEvent("FirstAuditCompleted"' not in helper
 
 
-def test_track_funnel_event_maps_file_uploaded_to_audit_started():
-    helper = _pixel_helper()
-    funnel_fn = helper[
-        helper.index("function trackFunnelEvent") : helper.index("function trackEventOnceBySessionId")
-    ]
-    assert 'funnelEvent.allow_meta_pixel !== true' in funnel_fn
-    assert 'funnelEvent.event_name === "file_uploaded"' in funnel_fn
-    assert 'trackCustomEvent("AuditStarted", params)' in funnel_fn
-
-
-def test_track_funnel_event_maps_first_audit_completed_only_when_authorized():
-    helper = _pixel_helper()
-    funnel_fn = helper[
-        helper.index("function trackFunnelEvent") : helper.index("function trackEventOnceBySessionId")
-    ]
-    assert 'funnelEvent.event_name === "freight_calculated"' in funnel_fn
-    assert "funnelEvent.is_first_audit === true" in funnel_fn
-    assert 'trackCustomEvent("FirstAuditCompleted", params)' in funnel_fn
-    # freight_calculated sem is_first_audit true não dispara FirstAuditCompleted
-    assert (
-        funnel_fn.index('funnelEvent.event_name === "freight_calculated"')
-        < funnel_fn.index("funnelEvent.is_first_audit === true")
-        < funnel_fn.index('trackCustomEvent("FirstAuditCompleted", params)')
-    )
-
-
-def test_track_funnel_event_rejects_unknown_and_invalid_payloads():
-    helper = _pixel_helper()
-    funnel_fn = helper[
-        helper.index("function trackFunnelEvent") : helper.index("function trackEventOnceBySessionId")
-    ]
-    assert 'typeof funnelEvent !== "object"' in funnel_fn
-    assert "return false;" in funnel_fn
-    assert "catch (err)" in funnel_fn
-    # Não há mapeamento genérico que envie event_name cru à Meta
-    assert "trackCustomEvent(funnelEvent.event_name" not in funnel_fn
-    assert 'trackCustomEvent(eventName' not in funnel_fn
-
-
-def test_standard_pixel_events_remain_intact():
+def test_standard_pixel_events_curated_by_157():
     helper = _pixel_helper()
     base = _read(PIXEL_BASE)
     contrate = _read(CONTRATE_PLANO)
 
-    assert "fbq('track', 'PageView')" in base or 'fbq("track", "PageView")' in base
-    assert 'trackEvent("CompleteRegistration")' in helper
-    assert 'trackEvent("Lead")' in helper
-    assert 'subscribeEvent.event_name || "Purchase"' in helper
-    assert 'window.LogCompletaPixel.track("InitiateCheckout")' in contrate
-    # track padrão continua exposto
+    assert "fbq('track', 'PageView')" not in base
+    assert 'fbq("track", "PageView")' not in base
+    assert "fbq('init'" in base or 'fbq("init"' in base
+
+    assert 'trackEvent("CompleteRegistration")' not in helper
+    assert 'trackEvent("Lead")' not in helper
+    assert "Purchase" not in helper
+    assert "trackEventOnceBySessionId" not in helper
+    assert 'window.LogCompletaPixel.track("InitiateCheckout")' not in contrate
+
+    assert 'trackCustomEvent("AuditStarted"' not in helper
+    assert 'trackCustomEvent("FirstAuditCompleted"' not in helper
     assert "track: trackEvent" in helper
 
 
-def test_cleide_calls_track_funnel_event_after_successful_upload():
+def test_meta_pixel_allowed_events_empty_after_157b():
+    assert META_PIXEL_ALLOWED_EVENTS == set()
+    assert is_meta_pixel_allowed("file_uploaded") is False
+    assert is_meta_pixel_allowed("freight_calculated") is False
+    assert is_meta_pixel_allowed("first_audit_completed") is False
+
+
+def test_cleide_no_longer_calls_track_funnel_event():
     js = _read(CLEIDE_JS)
     upload_fn = _fn(js, "uploadDocument", "removeDocument")
-    assert "res.data.ok !== true" in upload_fn
-    assert "window.LogCompletaPixel.trackFunnelEvent" in upload_fn
-    assert "res.data.funnel_event" in upload_fn
-    assert "Auditoria da Cleide" in upload_fn
-    # Disparo só depois do ok === true
-    ok_idx = upload_fn.index("res.data.ok !== true")
-    track_idx = upload_fn.index("window.LogCompletaPixel.trackFunnelEvent")
-    assert ok_idx < track_idx
-    assert "window.fbq" not in upload_fn
-
-
-def test_cleide_calls_track_funnel_event_after_successful_audit():
-    js = _read(CLEIDE_JS)
+    assert "window.LogCompletaPixel.trackFunnelEvent" not in upload_fn
+    assert "AuditStarted" not in upload_fn
     audit_fn = _fn(js, "runAuditProcessing", "normalizeTaxLocationText")
-    assert "API_AUDIT_RUN" in audit_fn
-    assert "res.data.ok !== true" in audit_fn
-    assert "window.LogCompletaPixel.trackFunnelEvent" in audit_fn
-    assert "res.data.funnel_event" in audit_fn
-    assert "Auditoria da Cleide" in audit_fn
-    ok_idx = audit_fn.index("res.data.ok !== true")
-    track_idx = audit_fn.index("window.LogCompletaPixel.trackFunnelEvent")
-    assert ok_idx < track_idx
-    assert "window.fbq" not in audit_fn
+    assert "window.LogCompletaPixel.trackFunnelEvent" not in audit_fn
+    assert "FirstAuditCompleted" not in audit_fn
 
 
-def test_agente_compara_calls_track_funnel_event_after_validated_upload():
+def test_agente_compara_no_longer_calls_track_funnel_event():
     js = _read(AGENTE_JS)
     upload_fn = _fn(js, "uploadDocument", "removeDocument")
-    assert "uploadAttemptStillActive()" in upload_fn
-    assert "responseMatchesUploadAttempt(res.data)" in upload_fn
-    assert "res.data.ok !== true" in upload_fn
-    assert "window.LogCompletaPixel.trackFunnelEvent" in upload_fn
-    assert "res.data.funnel_event" in upload_fn
-    assert "Agente Compara" in upload_fn
-
-    match_idx = upload_fn.index("responseMatchesUploadAttempt(res.data)")
-    track_idx = upload_fn.index("window.LogCompletaPixel.trackFunnelEvent")
-    assert match_idx < track_idx
-    assert "window.fbq" not in upload_fn
-
-
-def test_agente_compara_calls_track_funnel_event_in_calculation_ready_block():
-    js = _read(AGENTE_JS)
+    assert "window.LogCompletaPixel.trackFunnelEvent" not in upload_fn
+    assert "AuditStarted" not in upload_fn
     process_fn = _fn(js, "processComparisonCalculations", "clearCalculationFileSummary")
-    ready_blocks = list(
-        re.finditer(r"data\.status === ['\"]CALCULATION_READY['\"]", process_fn)
-    )
-    assert ready_blocks, "Bloco CALCULATION_READY não encontrado"
-    ready_idx = ready_blocks[0].start()
-    track_idx = process_fn.index("window.LogCompletaPixel.trackFunnelEvent", ready_idx)
-    failed_idx = process_fn.index("CALCULATION_FAILED", ready_idx)
-    assert ready_idx < track_idx < failed_idx
-    assert "data.funnel_event" in process_fn[ready_idx:failed_idx]
-    assert "Agente Compara" in process_fn[ready_idx:failed_idx]
+    assert "window.LogCompletaPixel.trackFunnelEvent" not in process_fn
+    assert "FirstAuditCompleted" not in process_fn
 
 
 def test_cleide_and_agente_never_call_fbq_directly():
@@ -178,11 +113,13 @@ def test_cleide_and_agente_never_call_fbq_directly():
     assert "fbq(" not in agente
 
 
-def test_pixel_degradation_guards_present_in_integrations():
-    cleide = _read(CLEIDE_JS)
-    agente = _read(AGENTE_JS)
-    guard = "typeof window.LogCompletaPixel.trackFunnelEvent === 'function'"
-    assert cleide.count(guard) >= 2
-    assert agente.count(guard) >= 2
-    assert "catch (pixelErr)" in cleide
-    assert "catch (pixelErr)" in agente
+def test_af_external_tracking_first_relevant_meta_ga4():
+    src = _read(EXTERNAL_JS)
+    assert "first_relevant_task_completed: true" in src
+    assert 'FirstRelevantTaskCompleted"' in src or "FirstRelevantTaskCompleted" in src
+    assert 'trackCustom"' in src or "trackCustom" in src
+    assert re.search(
+        r'first_relevant_task_completed:\s*"first_relevant_task_completed"',
+        src,
+    )
+    assert "eventID" in src

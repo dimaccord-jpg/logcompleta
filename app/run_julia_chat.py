@@ -5,6 +5,7 @@ Histórico limitado por JULIA_CHAT_MAX_HISTORY (settings ou env).
 """
 import logging
 import os
+from uuid import uuid4
 
 from app.cleiton_doc_contracts import FLOW_TYPE_JULIA_CHAT, FLOW_TYPE_JULIA_CHAT_DOCUMENTAL
 from app.prompts import JULIA_CHAT_SYSTEM_PROMPT
@@ -34,6 +35,41 @@ DOCUMENTAL_DEADLINE_REPLY = (
 GENERIC_REPLY_FALLBACK = (
     "Desculpe, não consegui processar sua mensagem no momento. Tente de novo em instantes."
 )
+
+
+def _try_record_julia_chat_growth_task(
+    *,
+    event_name: str,
+    execution_id: str,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Observabilidade Growth fail-open; nao altera o chat operacional AgenteFrete/Júlia."""
+    exec_id = (execution_id or "").strip()
+    if not exec_id:
+        return
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_SOURCE_JULIA_CHAT,
+            TASK_TYPE_JULIA_CHAT,
+            try_record_growth_task_event,
+        )
+
+        try_record_growth_task_event(
+            event_name=event_name,
+            source=FUNNEL_SOURCE_JULIA_CHAT,
+            task_type=TASK_TYPE_JULIA_CHAT,
+            idempotency_key=f"growth:julia_chat:{exec_id}:{event_name}",
+            task_stage=task_stage,
+            error_code=error_code,
+            execution_id=exec_id,
+        )
+    except Exception:
+        logger.exception(
+            "julia_chat_growth_task_failed event=%s execution_id=%s",
+            event_name,
+            exec_id,
+        )
 
 
 def _api_key_label_chat() -> str:
@@ -279,6 +315,7 @@ def chat_julia_reply(
     document_context_block: str | None = None,
     document_file_parts: list | None = None,
     flow_type: str | None = None,
+    execution_id: str | None = None,
 ) -> dict:
     """
     Envia a mensagem do usuário ao LLM com histórico limitado.
@@ -287,10 +324,49 @@ def chat_julia_reply(
     document_context_block: bloco interno montado pelo Cleiton (Fase 4); não processa arquivos aqui.
     document_file_parts: partes de arquivo Gemini autorizadas pelo Cleiton (PDF real).
     flow_type: trilho de governança; padrão julia_chat ou julia_chat_documental quando há contexto.
+    execution_id: identidade efêmera da execução Growth (opcional; UUID gerado se ausente).
     Retorna {"reply": str} em sucesso ou {"reply": str, "error": str} em fallback.
     """
+    from app.funnel_event_service import (
+        FUNNEL_EVENT_TASK_COMPLETED,
+        FUNNEL_EVENT_TASK_FAILED,
+        FUNNEL_EVENT_TASK_STARTED,
+    )
+
+    growth_exec_id = (execution_id or "").strip() or str(uuid4())
+    growth_started = False
+
+    def _growth_start(*, task_stage: str = "llm_generation") -> None:
+        nonlocal growth_started
+        if growth_started:
+            return
+        _try_record_julia_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_STARTED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+        )
+        growth_started = True
+
+    def _growth_complete(*, task_stage: str = "reply_ready") -> None:
+        if not growth_started:
+            return
+        _try_record_julia_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_COMPLETED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+        )
+
+    def _growth_fail(error_code: str, *, task_stage: str | None = None) -> None:
+        _try_record_julia_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+            error_code=error_code or "julia_chat_failed",
+        )
+
     clean_user_message, suggestion_meta = _extract_suggestion_metadata(user_message)
     if not (clean_user_message or "").strip():
+        # Validação pré-execução: sem marcos Growth.
         return {
             "reply": "Envie uma mensagem sobre logistica, fretes ou supply chain que eu respondo com prazer.",
             "suggestions": _build_follow_up_suggestions(""),
@@ -303,6 +379,7 @@ def chat_julia_reply(
     client = _get_client()
     if not client:
         logger.warning("Chat Júlia: nenhuma chave Gemini configurada (GEMINI_API_KEY ou GEMINI_API_KEY_1).")
+        _growth_fail("julia_chat_provider_unavailable", task_stage="provider_check")
         return {"reply": "Assistente temporariamente indisponível. Verifique a configuração do serviço."}
 
     alias_session = CleitonAiAliasSession()
@@ -333,6 +410,7 @@ def chat_julia_reply(
             )
             document_context_block = str(governed_doc.safe_content)
     except CleitonAiGovernanceBlockedError:
+        _growth_fail("julia_chat_governance_blocked", task_stage="governance")
         return {
             "reply": USER_SAFE_PREPARATION_FAILED,
             "suggestions": _build_follow_up_suggestions(""),
@@ -369,6 +447,9 @@ def chat_julia_reply(
     failed_models: list[str] = []
     model_candidates = _get_chat_model_candidates()
     documental_pdf = _is_documental_pdf_context(resolved_flow_type, document_file_parts)
+
+    # Autorizações/validações ok: início real da geração de resposta.
+    _growth_start()
 
     for idx, model in enumerate(model_candidates):
         if idx > 0:
@@ -409,10 +490,13 @@ def chat_julia_reply(
                 out = {"reply": text, "suggestions": _build_follow_up_suggestions(clean_user_message)}
                 if web_links:
                     out["web_links"] = web_links
+                # IaConsumoEvento já commitado pela governança Cleiton.
+                _growth_complete()
                 return out
             last_error = ValueError("Resposta vazia do modelo")
             failed_models.append(model)
         except CleitonAiGovernanceBlockedError:
+            _growth_fail("julia_chat_governance_blocked", task_stage="llm_generation")
             return {
                 "reply": USER_SAFE_PREPARATION_FAILED,
                 "suggestions": _build_follow_up_suggestions(""),
@@ -447,4 +531,6 @@ def chat_julia_reply(
     out = {"reply": reply_text, "suggestions": _build_follow_up_suggestions(clean_user_message)}
     if web_links:
         out["web_links"] = web_links
+    # Degradação textual ainda entrega resposta utilizável ao usuário → completed.
+    _growth_complete(task_stage="reply_degraded")
     return out

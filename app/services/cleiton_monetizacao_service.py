@@ -43,6 +43,39 @@ STATUS_TEC_SEM_EFEITO = "registrado_sem_efeito_operacional"
 STATUS_TEC_APLICADO = "efeito_operacional_aplicado"
 STATUS_TEC_IGNORADO = "evento_nao_relevante"
 
+
+def _try_growth_paid_pos_commit(conta_id: Any) -> None:
+    """
+    Pos-commit comercial seguro: so chamar imediatamente apos db.session.commit()
+    nos finais de processar_evento_stripe / processar_fato_stripe_conciliado.
+
+    Fail-open: nunca propaga para Stripe/webhook/conciliacao.
+    """
+    cid = _to_int_or_none(conta_id)
+    if cid is None:
+        return
+    try:
+        from app.funnel_event_service import try_ensure_growth_paid_for_conta
+
+        try_ensure_growth_paid_for_conta(cid)
+    except Exception:
+        logger.exception("growth paid pos-commit failed conta_id=%s", cid)
+
+
+def _anotar_billing_domain_no_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    evento: dict[str, Any] | None,
+    object_data: dict[str, Any] | None,
+) -> None:
+    """Persiste classificacao controlada de dominio no snapshot tecnico."""
+    if not isinstance(snapshot, dict):
+        return
+    from app.funnel_event_service import classificar_billing_domain_ingestao
+
+    snapshot["dominio"] = classificar_billing_domain_ingestao(evento, object_data)
+
+
 STRIPE_EVENTOS_RELEVANTES = {
     "checkout.session.completed",
     "invoice.paid",
@@ -2423,6 +2456,11 @@ def processar_fato_stripe_conciliado(
         "origem_ingestao": "conciliacao_checkout_session",
         "checkout_session_id": _norm_text(session_id),
     }
+    _anotar_billing_domain_no_snapshot(
+        snapshot_normalizado,
+        evento=evento_interno,
+        object_data=object_payload,
+    )
 
     if event_type_n not in STRIPE_EVENTOS_RELEVANTES:
         fato = _persistir_fato_evento_stripe(
@@ -2723,6 +2761,7 @@ def processar_fato_stripe_conciliado(
             event_type_n,
             fato.status_tecnico,
         )
+    _try_growth_paid_pos_commit(fato.conta_id or correlacao.get("conta_id"))
     return {
         "ok": True,
         "replay": False,
@@ -2805,6 +2844,11 @@ def processar_evento_stripe(
         "correlacao": correlacao,
         "ids_externos": ids,
     }
+    _anotar_billing_domain_no_snapshot(
+        snapshot_normalizado,
+        evento=evento,
+        object_data=object_data,
+    )
     if is_reprocessamento_admin:
         snapshot_normalizado["reprocessamento_admin"] = _montar_contexto_reprocessamento_admin(
             fato_reprocessado=fato_reprocessado,
@@ -3020,6 +3064,7 @@ def processar_evento_stripe(
         evento=evento,
     )
     db.session.commit()
+    _try_growth_paid_pos_commit(fato.conta_id or correlacao.get("conta_id"))
     return {
         "ok": True,
         "replay": False,

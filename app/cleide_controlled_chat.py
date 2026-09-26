@@ -6,6 +6,7 @@ import threading
 import time
 import unicodedata
 from typing import Any
+from uuid import uuid4
 
 from flask import has_request_context
 from flask_login import current_user
@@ -31,6 +32,41 @@ from app.services.cleiton_operacao_autorizacao_service import (
 from app.services.cleide_config_service import get_cleide_config
 
 logger = logging.getLogger(__name__)
+
+
+def _try_record_cleide_bi_chat_growth_task(
+    *,
+    event_name: str,
+    execution_id: str,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Observabilidade Growth fail-open; nao altera o chat Cleide BI."""
+    exec_id = (execution_id or "").strip()
+    if not exec_id:
+        return
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_SOURCE_CLEIDE_BI_CHAT,
+            TASK_TYPE_CLEIDE_BI_CHAT,
+            try_record_growth_task_event,
+        )
+
+        try_record_growth_task_event(
+            event_name=event_name,
+            source=FUNNEL_SOURCE_CLEIDE_BI_CHAT,
+            task_type=TASK_TYPE_CLEIDE_BI_CHAT,
+            idempotency_key=f"growth:cleide_bi_chat:{exec_id}:{event_name}",
+            task_stage=task_stage,
+            error_code=error_code,
+            execution_id=exec_id,
+        )
+    except Exception:
+        logger.exception(
+            "cleide_bi_chat_growth_task_failed event=%s execution_id=%s",
+            event_name,
+            exec_id,
+        )
 
 MAX_QUESTION_LEN = 320
 DEFAULT_RESPONSE_MAX_LEN = 3000
@@ -226,22 +262,80 @@ def run_cleide_controlled_chat(
             ),
         ), 200
 
+    # Autorizado a produzir resposta: marcos Growth a partir daqui (sem prep separada).
+    from app.funnel_event_service import (
+        FUNNEL_EVENT_TASK_COMPLETED,
+        FUNNEL_EVENT_TASK_FAILED,
+        FUNNEL_EVENT_TASK_STARTED,
+    )
+
+    growth_exec_id = str(uuid4())
+    growth_started = False
+
+    def _growth_start(*, task_stage: str = "reply_generation") -> None:
+        nonlocal growth_started
+        if growth_started:
+            return
+        _try_record_cleide_bi_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_STARTED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+        )
+        growth_started = True
+
+    def _growth_complete(*, task_stage: str = "reply_ready") -> None:
+        if not growth_started:
+            return
+        _try_record_cleide_bi_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_COMPLETED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+        )
+
+    def _growth_fail(error_code: str, *, task_stage: str | None = None) -> None:
+        if not growth_started:
+            return
+        _try_record_cleide_bi_chat_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+            error_code=error_code or "cleide_bi_chat_failed",
+        )
+
+    def _return_success(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+        _growth_start()
+        _growth_complete()
+        return payload, 200
+
+    def _return_failure(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+        _growth_start()
+        code = ""
+        if isinstance(payload, dict):
+            code = str(payload.get("error_code") or "").strip()
+            obs = payload.get("observability")
+            if not code and isinstance(obs, dict):
+                code = str(obs.get("error_code") or "").strip()
+        _growth_fail(code or "cleide_bi_chat_failed")
+        return payload, 200
+
     intent = _classify_intent(normalized)
     contextual_followup_reply = ""
     contextual_followup_resolved = False
     if intent != "unknown" and _is_dataset_insufficient(safe_context):
-        return _build_success(
-            intent="dados_insuficientes",
-            reply="Dados insuficientes para leitura operacional consistente no recorte atual.",
-            chat_ctx=chat_ctx,
-            observability=_observability(
-                flags=flags,
-                ai_used=False,
-                fallback_used=False,
-                reason="dataset_insufficient",
-                error_code="",
-            ),
-        ), 200
+        return _return_success(
+            _build_success(
+                intent="dados_insuficientes",
+                reply="Dados insuficientes para leitura operacional consistente no recorte atual.",
+                chat_ctx=chat_ctx,
+                observability=_observability(
+                    flags=flags,
+                    ai_used=False,
+                    fallback_used=False,
+                    reason="dataset_insufficient",
+                    error_code="",
+                ),
+            )
+        )
     if intent == "unknown":
         contextual_followup = _resolve_contextual_followup(
             normalized_question=normalized_question,
@@ -288,21 +382,24 @@ def run_cleide_controlled_chat(
         flags=flags,
     ):
         logger.info("Cleide chat: intent desconhecida sem elegibilidade para IA supervisionada.")
-        return _fallback(
-            "fallback_intent_desconhecida",
-            "Não reconheci essa intenção. Posso ajudar com ranking operacional, UF origem/destino, período e dados insuficientes.",
-            observability=_observability(
-                flags=flags,
-                ai_used=False,
-                fallback_used=True,
-                reason="unknown_intent",
-                error_code="unknown_intent",
-            ),
-        ), 200
+        return _return_failure(
+            _fallback(
+                "fallback_intent_desconhecida",
+                "Não reconheci essa intenção. Posso ajudar com ranking operacional, UF origem/destino, período e dados insuficientes.",
+                observability=_observability(
+                    flags=flags,
+                    ai_used=False,
+                    fallback_used=True,
+                    reason="unknown_intent",
+                    error_code="unknown_intent",
+                ),
+            )
+        )
 
     ai_failure_observability: dict[str, Any] | None = None
 
     if flags.ai_enabled and not contextual_followup_resolved:
+        _growth_start(task_stage="ai_generation")
         ai_kwargs: dict[str, Any] = {
             "question": normalized_question,
             "safe_operational_context": safe_context,
@@ -327,47 +424,51 @@ def run_cleide_controlled_chat(
                 reason_code = str(policy_eval.get("reason_code") or "other")
                 _breaker_mark_policy_blocked()
                 logger.warning("Cleide chat: resposta IA bloqueada por policy (%s).", reason_code)
-                return _fallback(
-                    "fallback_bloqueio_semantico",
-                    POLICY_SAFE_FALLBACK_REPLY,
-                    observability=_observability(
-                        flags=flags,
-                        ai_used=True,
-                        fallback_used=True,
-                        policy_blocked=True,
-                        policy_block_reason_code=reason_code,
-                        policy_warning_reason_code="",
-                        provider=str(ai_result.get("provider") or "gemini"),
-                        model=str(ai_result.get("model") or ""),
-                        latency_ms=int(ai_result.get("latency_ms") or 0),
-                        usage=dict(ai_result.get("usage") or {}),
-                        error_code="policy_blocked",
-                        reason=f"policy_blocked_{reason_code}",
-                    ),
-                ), 200
+                return _return_failure(
+                    _fallback(
+                        "fallback_bloqueio_semantico",
+                        POLICY_SAFE_FALLBACK_REPLY,
+                        observability=_observability(
+                            flags=flags,
+                            ai_used=True,
+                            fallback_used=True,
+                            policy_blocked=True,
+                            policy_block_reason_code=reason_code,
+                            policy_warning_reason_code="",
+                            provider=str(ai_result.get("provider") or "gemini"),
+                            model=str(ai_result.get("model") or ""),
+                            latency_ms=int(ai_result.get("latency_ms") or 0),
+                            usage=dict(ai_result.get("usage") or {}),
+                            error_code="policy_blocked",
+                            reason=f"policy_blocked_{reason_code}",
+                        ),
+                    )
+                )
             warning_code = str(policy_eval.get("warning_reason_code") or "")
             if warning_code:
                 logger.warning("Cleide chat: resposta IA aprovada com warning de policy (%s).", warning_code)
             _breaker_mark_success()
-            return _build_success(
-                intent=intent,
-                reply=safe_reply,
-                chat_ctx=chat_ctx,
-                response_truncated=truncated,
-                mode=AI_MODE,
-                observability=_observability(
-                    flags=flags,
-                    ai_used=True,
-                    fallback_used=False,
-                    policy_warning_reason_code=warning_code,
-                    provider=str(ai_result.get("provider") or "gemini"),
-                    model=str(ai_result.get("model") or ""),
-                    latency_ms=int(ai_result.get("latency_ms") or 0),
-                    usage=dict(ai_result.get("usage") or {}),
-                    error_code="",
-                    reason="gemini_success",
-                ),
-            ), 200
+            return _return_success(
+                _build_success(
+                    intent=intent,
+                    reply=safe_reply,
+                    chat_ctx=chat_ctx,
+                    response_truncated=truncated,
+                    mode=AI_MODE,
+                    observability=_observability(
+                        flags=flags,
+                        ai_used=True,
+                        fallback_used=False,
+                        policy_warning_reason_code=warning_code,
+                        provider=str(ai_result.get("provider") or "gemini"),
+                        model=str(ai_result.get("model") or ""),
+                        latency_ms=int(ai_result.get("latency_ms") or 0),
+                        usage=dict(ai_result.get("usage") or {}),
+                        error_code="",
+                        reason="gemini_success",
+                    ),
+                )
+            )
 
         error_code = str(ai_result.get("error_code") or "provider_error")
         reason = str(ai_result.get("reason") or error_code)
@@ -387,52 +488,59 @@ def run_cleide_controlled_chat(
 
     if intent == "unknown":
         logger.info("Cleide chat: fallback por intent desconhecida apos tentativa de IA.")
-        return _fallback(
-            "fallback_intent_desconhecida",
-            "Não reconheci essa intenção. Posso ajudar com ranking operacional, UF origem/destino, período e dados insuficientes.",
-            observability=(
-                ai_failure_observability
-                if isinstance(ai_failure_observability, dict)
-                else _observability(
-                    flags=flags,
-                    ai_used=False,
-                    fallback_used=True,
-                    reason="unknown_intent",
-                    error_code="unknown_intent",
-                )
-            ),
-        ), 200
+        return _return_failure(
+            _fallback(
+                "fallback_intent_desconhecida",
+                "Não reconheci essa intenção. Posso ajudar com ranking operacional, UF origem/destino, período e dados insuficientes.",
+                observability=(
+                    ai_failure_observability
+                    if isinstance(ai_failure_observability, dict)
+                    else _observability(
+                        flags=flags,
+                        ai_used=False,
+                        fallback_used=True,
+                        reason="unknown_intent",
+                        error_code="unknown_intent",
+                    )
+                ),
+            )
+        )
 
+    _growth_start(task_stage="deterministic_reply")
     reply = contextual_followup_reply or _reply_for_intent(intent, safe_context)
     if not reply:
         logger.info("Cleide chat: fallback por intent sem dados suficientes (%s).", intent)
-        return _build_success(
-            intent="dados_insuficientes",
-            reply="Dados insuficientes para responder essa pergunta com segurança no recorte atual.",
-            chat_ctx=chat_ctx,
-            observability=_observability(
-                flags=flags,
-                ai_used=False,
-                fallback_used=False,
-                reason="deterministic_intent_without_reply",
-                error_code="",
-            ),
-        ), 200
+        return _return_success(
+            _build_success(
+                intent="dados_insuficientes",
+                reply="Dados insuficientes para responder essa pergunta com segurança no recorte atual.",
+                chat_ctx=chat_ctx,
+                observability=_observability(
+                    flags=flags,
+                    ai_used=False,
+                    fallback_used=False,
+                    reason="deterministic_intent_without_reply",
+                    error_code="",
+                ),
+            )
+        )
 
     safe_reply, truncated = _safe_reply(reply)
     if _contains_forbidden(_normalize_for_match(safe_reply), guardrail_sets["forbidden"]):
         logger.warning("Cleide chat: resposta bloqueada por linguagem proibida.")
-        return _fallback(
-            "fallback_bloqueio_semantico",
-            "Resposta bloqueada por política de linguagem. Reformule a pergunta com foco operacional.",
-            observability=_observability(
-                flags=flags,
-                ai_used=False,
-                fallback_used=True,
-                reason="deterministic_forbidden_reply",
-                error_code="semantic_block",
-            ),
-        ), 200
+        return _return_failure(
+            _fallback(
+                "fallback_bloqueio_semantico",
+                "Resposta bloqueada por política de linguagem. Reformule a pergunta com foco operacional.",
+                observability=_observability(
+                    flags=flags,
+                    ai_used=False,
+                    fallback_used=True,
+                    reason="deterministic_forbidden_reply",
+                    error_code="semantic_block",
+                ),
+            )
+        )
     policy_eval = _evaluate_reply_policy(
         _normalize_for_match(safe_reply),
         allowed_terms=guardrail_sets["allowed"],
@@ -443,64 +551,68 @@ def run_cleide_controlled_chat(
     if not bool(policy_eval.get("ok")):
         reason_code = str(policy_eval.get("reason_code") or "other")
         logger.warning("Cleide chat: resposta bloqueada por drift de policy permitida (%s).", reason_code)
-        return _fallback(
-            "fallback_bloqueio_semantico",
-            "Resposta bloqueada por política de linguagem. Reformule a pergunta com foco operacional.",
-            observability=_observability(
-                flags=flags,
-                ai_used=False,
-                fallback_used=True,
-                policy_block_reason_code=reason_code,
-                policy_warning_reason_code="",
-                reason=f"deterministic_policy_drift_{reason_code}",
-                error_code="policy_drift",
-            ),
-        ), 200
+        return _return_failure(
+            _fallback(
+                "fallback_bloqueio_semantico",
+                "Resposta bloqueada por política de linguagem. Reformule a pergunta com foco operacional.",
+                observability=_observability(
+                    flags=flags,
+                    ai_used=False,
+                    fallback_used=True,
+                    policy_block_reason_code=reason_code,
+                    policy_warning_reason_code="",
+                    reason=f"deterministic_policy_drift_{reason_code}",
+                    error_code="policy_drift",
+                ),
+            )
+        )
     warning_code = str(policy_eval.get("warning_reason_code") or "")
     if warning_code:
         logger.warning("Cleide chat: resposta deterministica aprovada com warning de policy (%s).", warning_code)
-    return _build_success(
-        intent=intent,
-        reply=safe_reply,
-        chat_ctx=chat_ctx,
-        response_truncated=truncated,
-        observability=_observability(
-            flags=flags,
-            ai_used=bool(ai_failure_observability),
-            fallback_used=bool(ai_failure_observability),
-            policy_warning_reason_code=warning_code,
-            reason=(
-                str(ai_failure_observability.get("reason") or "")
-                if isinstance(ai_failure_observability, dict)
-                else "deterministic_success"
+    return _return_success(
+        _build_success(
+            intent=intent,
+            reply=safe_reply,
+            chat_ctx=chat_ctx,
+            response_truncated=truncated,
+            observability=_observability(
+                flags=flags,
+                ai_used=bool(ai_failure_observability),
+                fallback_used=bool(ai_failure_observability),
+                policy_warning_reason_code=warning_code,
+                reason=(
+                    str(ai_failure_observability.get("reason") or "")
+                    if isinstance(ai_failure_observability, dict)
+                    else "deterministic_success"
+                ),
+                error_code=(
+                    str(ai_failure_observability.get("error_code") or "")
+                    if isinstance(ai_failure_observability, dict)
+                    else ""
+                ),
+                provider=(
+                    str(ai_failure_observability.get("provider") or "gemini")
+                    if isinstance(ai_failure_observability, dict)
+                    else "gemini"
+                ),
+                model=(
+                    str(ai_failure_observability.get("model") or "")
+                    if isinstance(ai_failure_observability, dict)
+                    else ""
+                ),
+                latency_ms=(
+                    int(ai_failure_observability.get("latency_ms") or 0)
+                    if isinstance(ai_failure_observability, dict)
+                    else 0
+                ),
+                usage=(
+                    dict(ai_failure_observability.get("token_usage") or {})
+                    if isinstance(ai_failure_observability, dict)
+                    else None
+                ),
             ),
-            error_code=(
-                str(ai_failure_observability.get("error_code") or "")
-                if isinstance(ai_failure_observability, dict)
-                else ""
-            ),
-            provider=(
-                str(ai_failure_observability.get("provider") or "gemini")
-                if isinstance(ai_failure_observability, dict)
-                else "gemini"
-            ),
-            model=(
-                str(ai_failure_observability.get("model") or "")
-                if isinstance(ai_failure_observability, dict)
-                else ""
-            ),
-            latency_ms=(
-                int(ai_failure_observability.get("latency_ms") or 0)
-                if isinstance(ai_failure_observability, dict)
-                else 0
-            ),
-            usage=(
-                dict(ai_failure_observability.get("token_usage") or {})
-                if isinstance(ai_failure_observability, dict)
-                else None
-            ),
-        ),
-    ), 200
+        )
+    )
 
 
 def _classify_intent(normalized: str) -> str:

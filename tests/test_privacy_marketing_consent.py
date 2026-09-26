@@ -22,7 +22,6 @@ META_MARKERS = (
     "connect.facebook.net",
     "fbevents.js",
     "fbq('init'",
-    "PageView",
 )
 OPENAI_MARKERS = (
     "bzrcdn.openai.com",
@@ -33,7 +32,6 @@ BANNER_COPY = (
     "Utilizamos tecnologias necessárias para o funcionamento do AgenteFrete"
 )
 PRIVACY_JS = pathlib.Path("app/static/js/privacy_consent.js")
-PIXEL_EVENTS = pathlib.Path("app/templates/partials/pixel_events.html")
 
 
 def _load_web_module():
@@ -97,14 +95,16 @@ def _assert_marketing_blocked(html: str) -> None:
     for marker in META_MARKERS + OPENAI_MARKERS:
         assert marker not in html
     assert "window.LogCompletaPixel" not in html
-    assert "trackEventOnceBySessionId" not in html
-    assert 'storageKey = "fb_pixel_"' not in html
+    assert "googletagmanager.com/gtag/js" not in html
+    assert "af_external_tracking.js" not in html
 
 
 def _assert_marketing_present(html: str) -> None:
     for marker in META_MARKERS + OPENAI_MARKERS:
         assert marker in html
-
+    # PageView automatico removido no 157A
+    assert "fbq('track', 'PageView')" not in html
+    assert 'fbq("track", "PageView")' not in html
 
 def test_parse_privacy_marketing_cookie_unknown_and_invalid():
     assert parse_privacy_marketing_cookie(None) == "unknown"
@@ -296,84 +296,80 @@ def test_rejected_cookie_does_not_block_onboarding_session(web, monkeypatch):
         assert sess.get("onboarding_discovery_count") == 1
 
 
-def test_registration_flag_stays_pending_while_unknown(web):
+def test_registration_envelope_stays_pending_while_unknown(web):
     _enable_pixels(web)
     client = _client(web)
+    envelope = {
+        "event": "signup_completed",
+        "token": "v1_" + ("a" * 32),
+        "params": {"signup_method": "password"},
+    }
     with client.session_transaction() as sess:
-        sess["pixel_event_complete_registration_once"] = True
+        sess["af_external_event_pending"] = envelope
     html = client.get("/login").get_data(as_text=True)
     assert "CompleteRegistration" not in html
     assert "registration_completed" not in html
     with client.session_transaction() as sess:
-        assert sess.get("pixel_event_complete_registration_once") is True
+        assert sess.get("af_external_event_pending") == envelope
 
 
-def test_registration_flag_fires_once_after_accepted(web):
+def test_registration_envelope_fires_once_after_accepted(web):
     _enable_pixels(web)
     client = _client(web)
+    envelope = {
+        "event": "signup_completed",
+        "token": "v1_" + ("b" * 32),
+        "params": {"signup_method": "password"},
+    }
     with client.session_transaction() as sess:
-        sess["pixel_event_complete_registration_once"] = True
+        sess["af_external_event_pending"] = envelope
     client.post(CONSENT_ENDPOINT, json={"decision": "accepted"})
     html = client.get("/login").get_data(as_text=True)
-    assert 'trackEvent("CompleteRegistration")' in html
-    assert "const completeRegistrationEnabled = true" in html
+    assert "AFExternalTracking.dispatch" in html
+    assert "signup_completed" in html
     assert 'window.oaiq("measure", "registration_completed"' in html
+    assert "const completeRegistrationEnabled = true" in html
+    assert 'trackEvent("CompleteRegistration")' not in html
     with client.session_transaction() as sess:
-        assert sess.get("pixel_event_complete_registration_once") is not True
+        assert sess.get("af_external_event_pending") is None
 
 
-def test_rejected_discards_pending_registration_flag(web):
+def test_rejected_discards_pending_registration_envelope(web):
     _enable_pixels(web)
     client = _client(web)
     with client.session_transaction() as sess:
-        sess["pixel_event_complete_registration_once"] = True
+        sess["af_external_event_pending"] = {
+            "event": "signup_completed",
+            "token": "v1_" + ("c" * 32),
+            "params": {"signup_method": "google"},
+        }
     resp = client.post(CONSENT_ENDPOINT, json={"decision": "rejected"})
     assert resp.status_code == 200
     with client.session_transaction() as sess:
-        assert "pixel_event_complete_registration_once" not in sess
+        assert "af_external_event_pending" not in sess
     html = client.get("/login").get_data(as_text=True)
     assert "CompleteRegistration" not in html
     assert "registration_completed" not in html
 
 
-def test_lead_flag_stays_pending_while_unknown_then_fires_when_accepted(web):
+def test_lead_meta_flag_removed_from_contract(web):
+    """Completar perfil nao dispara mais Lead; chave de sessao legado nao e consumida."""
     _enable_pixels(web)
     client = _client(web)
     with client.session_transaction() as sess:
         sess["pixel_event_lead_once"] = True
-    html_unknown = client.get("/login").get_data(as_text=True)
-    assert 'trackEvent("Lead")' not in html_unknown
+    client.post(CONSENT_ENDPOINT, json={"decision": "accepted"})
+    html = client.get("/login").get_data(as_text=True)
+    assert 'trackEvent("Lead")' not in html
     with client.session_transaction() as sess:
         assert sess.get("pixel_event_lead_once") is True
 
-    client.post(CONSENT_ENDPOINT, json={"decision": "accepted"})
-    html_accepted = client.get("/login").get_data(as_text=True)
-    assert 'trackEvent("Lead")' in html_accepted
-    assert "const leadEnabled = true" in html_accepted
-    with client.session_transaction() as sess:
-        assert sess.get("pixel_event_lead_once") is not True
 
-
-def test_rejected_discards_pending_lead_flag(web):
-    _enable_pixels(web)
-    client = _client(web)
-    with client.session_transaction() as sess:
-        sess["pixel_event_lead_once"] = True
-    client.post(CONSENT_ENDPOINT, json={"decision": "rejected"})
-    with client.session_transaction() as sess:
-        assert "pixel_event_lead_once" not in sess
-    html = client.get("/login").get_data(as_text=True)
-    assert 'trackEvent("Lead")' not in html
-
-
-def test_html_without_consent_does_not_include_meta_dedupe_logic(web):
+def test_html_without_consent_does_not_include_meta_helper(web):
     _enable_pixels(web)
     html = _client(web).get("/").get_data(as_text=True)
-    pixel_events = PIXEL_EVENTS.read_text(encoding="utf-8")
-    assert 'storageKey = "fb_pixel_"' in pixel_events
-    assert 'storageKey = "fb_pixel_"' not in html
     assert "window.LogCompletaPixel" not in html
-    assert "trackEventOnceBySessionId" not in html
+    assert "af_external_tracking.js" not in html
 
 
 def test_privacy_js_cleans_own_fb_pixel_storage_only():
@@ -384,6 +380,7 @@ def test_privacy_js_cleans_own_fb_pixel_storage_only():
     assert "setItem" not in source
     assert "location.reload()" in source
     assert 'credentials: "same-origin"' in source
+    assert "AFExternalTracking.disable" in source
 
 
 def test_accept_and_reject_buttons_have_equivalent_visual_weight():

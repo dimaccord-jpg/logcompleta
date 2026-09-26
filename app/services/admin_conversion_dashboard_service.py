@@ -17,6 +17,12 @@ from app.models import FunnelEvent, utcnow_naive
 _ALLOWED_SOURCES = {"all", FUNNEL_SOURCE_CLEIDE_AUDIT, FUNNEL_SOURCE_AGENTE_COMPARA}
 _ALLOWED_DAYS = {7, 30, 90}
 _TZ_SP = ZoneInfo("America/Sao_Paulo")
+# Dashboard atual so usa eventos legados; filtrar no banco evita materializar page_view etc.
+_DASHBOARD_EVENT_NAMES = {
+    FUNNEL_EVENT_FILE_UPLOADED,
+    FUNNEL_EVENT_FREIGHT_CALCULATED,
+    FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+}
 
 
 def _normalize_source(source: str | None) -> str:
@@ -114,7 +120,11 @@ def get_conversion_dashboard_payload(*, source: str = "all", days: int = 30, now
     start_utc = (end_utc - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
     payload = _empty_payload(source=source, days=days, start_utc=start_utc, end_utc=end_utc)
 
-    query = FunnelEvent.query.filter(FunnelEvent.occurred_at >= start_utc, FunnelEvent.occurred_at <= end_utc)
+    query = FunnelEvent.query.filter(
+        FunnelEvent.occurred_at >= start_utc,
+        FunnelEvent.occurred_at <= end_utc,
+        FunnelEvent.event_name.in_(_DASHBOARD_EVENT_NAMES),
+    )
     if source != "all":
         query = query.filter(FunnelEvent.source == source)
     events = query.order_by(FunnelEvent.occurred_at.asc(), FunnelEvent.id.asc()).all()

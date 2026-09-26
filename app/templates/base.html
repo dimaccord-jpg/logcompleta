@@ -77,7 +77,9 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/privacy_consent.css') }}">
     {% if privacy_marketing_allowed %}
     {% include "partials/pixel_base.html" %}
+    {% include "partials/google_analytics_base.html" %}
     {% include "partials/openai_ads_pixel.html" %}
+    <script src="{{ url_for('static', filename='js/af_external_tracking.js') }}"></script>
     {% endif %}
     {% block extra_head %}{% endblock %}
 </head>
@@ -148,7 +150,7 @@
                         <i class="bi bi-box-arrow-right me-1"></i> Sair
                     </a>
                 {% else %}
-                    <a href="{{ url_for('login') }}" class="btn btn-outline-light btn-sm text-start">
+                    <a href="{{ url_for('login') }}" data-growth-cta="nav_login_cadastro" class="btn btn-outline-light btn-sm text-start">
                         <i class="bi bi-box-arrow-in-right me-1"></i> Login / Cadastro
                     </a>
                 {% endif %}
@@ -213,7 +215,7 @@
                         {% if falha_mensal_vigente %}
                             <small class="d-block text-warning mt-1 sidebar-footer-renovacao">
                                 Renovação pendente.
-                                <a href="{{ regularizacao_url }}" class="text-warning">Regularizar pagamento</a>
+                                <a href="{{ regularizacao_url }}" data-growth-cta="shell_regularize_payment" class="text-warning">Regularizar pagamento</a>
                             </small>
                         {% endif %}
                         {% if current_user.franquia %}
@@ -234,7 +236,7 @@
                     </div>
                 </div>
             {% else %}
-                <a href="{{ url_for('login') }}" class="nav-item p-0 text-white">
+                <a href="{{ url_for('login') }}" data-growth-cta="nav_login_cadastro" class="nav-item p-0 text-white">
                     <i class="bi bi-box-arrow-in-right"></i>
                     <span class="menu-text">Login / Cadastro</span>
                 </a>
@@ -332,6 +334,108 @@
     {% if privacy_marketing_allowed %}
     {% include "partials/pixel_events.html" %}
     {% include "partials/openai_ads_pixel_events.html" %}
+    {% if pending_external_events %}
+    <script>
+    (function () {
+      try {
+        var pending = {{ pending_external_events|tojson }};
+        if (!Array.isArray(pending)) return;
+        if (window.AFExternalTracking && typeof window.AFExternalTracking.dispatch === "function") {
+          for (var i = 0; i < pending.length; i++) {
+            try {
+              window.AFExternalTracking.dispatch(pending[i]);
+            } catch (inner) {}
+          }
+        }
+      } catch (e) {}
+    })();
+    </script>
     {% endif %}
+    {% endif %}
+    <script>
+    (function () {
+      var allowedCtaIds = {{ growth_allowed_cta_ids|default([])|tojson }};
+      function isAllowedCta(ctaId) {
+        return typeof ctaId === "string" && allowedCtaIds.indexOf(ctaId) !== -1;
+      }
+      function trackCta(ctaId, eventId) {
+        try {
+          if (!isAllowedCta(ctaId)) return;
+          var occurrenceId = eventId || window.crypto.randomUUID();
+          fetch({{ url_for("growth.growth_cta_clicked")|tojson }}, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ event_id: occurrenceId, cta_id: ctaId }),
+            credentials: "same-origin",
+            keepalive: true
+          }).catch(function () {});
+          return occurrenceId;
+        } catch (error) {}
+      }
+      window.AFGrowth = Object.assign(window.AFGrowth || {}, {
+        trackCta: trackCta,
+        isAllowedCta: isAllowedCta
+      });
+      document.addEventListener("click", function (event) {
+        try {
+          var element = event.target && event.target.closest
+            ? event.target.closest("[data-growth-cta]") : null;
+          if (element) trackCta(element.getAttribute("data-growth-cta"));
+        } catch (error) {}
+      }, true);
+    })();
+    </script>
+    {# Growth first-party page_view: independente de consentimento de marketing. Sem visitor ID. #}
+    <script>
+    (function () {
+      try {
+        var page = {{ (request.endpoint or "")|tojson }};
+        if (!page) return;
+        var contentId = {{ growth_content_id|default(none)|tojson }};
+        var contentType = {{ growth_content_type|default(none)|tojson }};
+        var endpoint = {{ url_for("growth.growth_page_view")|tojson }};
+        function newEventId() {
+          try {
+            if (window.crypto && typeof window.crypto.randomUUID === "function") {
+              return window.crypto.randomUUID();
+            }
+          } catch (e) {}
+          return "pv-" + String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+        }
+        function sendPageView() {
+          var body = { event_id: newEventId(), page: page };
+          if (contentId != null && contentType) {
+            body.content_id = contentId;
+            body.content_type = contentType;
+          }
+          fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify(body),
+            credentials: "same-origin",
+            keepalive: true
+          }).then(function (resp) {
+            return resp.json();
+          }).then(function (data) {
+            try {
+              if (
+                data
+                && data.external_event
+                && window.AFExternalTracking
+                && typeof window.AFExternalTracking.dispatch === "function"
+              ) {
+                window.AFExternalTracking.dispatch(data.external_event);
+              }
+            } catch (e) {}
+          }).catch(function () {});
+        }
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", sendPageView);
+        } else {
+          sendPageView();
+        }
+      } catch (e) {}
+    })();
+    </script>
 </body>
 </html>

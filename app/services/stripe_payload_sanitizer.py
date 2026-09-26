@@ -85,14 +85,43 @@ def _norm_key(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _omitir_chaves_pii_never(value: Any) -> Any:
+    """
+    Limpeza recursiva por nome de chave (_PII_NEVER) em qualquer profundidade.
+
+    - dict: remove chaves cujo nome esteja em _PII_NEVER; desce nos valores restantes
+    - list: aplica em cada item
+    - escalares: preserva sem interpretação de conteúdo
+    """
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            if _norm_key(k) in _PII_NEVER:
+                continue
+            out[k] = _omitir_chaves_pii_never(v)
+        return out
+    if isinstance(value, list):
+        return [_omitir_chaves_pii_never(x) for x in value]
+    return value
+
+
 def _metadata_tecnica(metadata: Any) -> dict[str, Any] | None:
     if not isinstance(metadata, dict):
         return None
-    out = {
-        str(k): v
-        for k, v in metadata.items()
-        if str(k).strip() in METADATA_TECNICA_ALLOWLIST and v not in (None, "")
-    }
+    out: dict[str, Any] = {}
+    for k, v in metadata.items():
+        key = str(k).strip()
+        if key not in METADATA_TECNICA_ALLOWLIST:
+            continue
+        # Somente string tecnica; nunca dict/list/bool; nao converter objeto via str().
+        if isinstance(v, bool) or isinstance(v, (dict, list, int, float)):
+            continue
+        if not isinstance(v, str):
+            continue
+        text = v.strip()
+        if not text or len(text) > 120:
+            continue
+        out[key] = text
     return out or None
 
 
@@ -282,13 +311,16 @@ def sanitizar_payload_stripe(payload: Any) -> dict[str, Any]:
     """
     Projeta evento ou objeto Stripe para persistência.
     Remove e-mail, endereço, billing details, cartão e metadata livre.
+
+    Invariante de saída: nenhuma chave de _PII_NEVER permanece em qualquer
+    profundidade do dict retornado (limpeza recursiva final única).
     """
     if not isinstance(payload, dict):
         return {}
     if payload.get("object") == "event" or "type" in payload and "data" in payload:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
         objeto = data.get("object") if isinstance(data, dict) else {}
-        return {
+        resultado: dict[str, Any] = {
             "id": payload.get("id"),
             "object": payload.get("object") or "event",
             "type": payload.get("type"),
@@ -296,10 +328,16 @@ def sanitizar_payload_stripe(payload: Any) -> dict[str, Any]:
             "livemode": payload.get("livemode"),
             "data": {"object": sanitizar_objeto_stripe(objeto)},
         }
-    origem = payload.get("origem")
-    if origem and len(payload) <= 3 and not any(_norm_key(k) in _PII_NEVER for k in payload):
-        return dict(payload)
-    return sanitizar_objeto_stripe(payload)
+    else:
+        origem = payload.get("origem")
+        if origem and len(payload) <= 3 and not any(
+            _norm_key(k) in _PII_NEVER for k in payload
+        ):
+            resultado = dict(payload)
+        else:
+            resultado = sanitizar_objeto_stripe(payload)
+    limpo = _omitir_chaves_pii_never(resultado)
+    return limpo if isinstance(limpo, dict) else {}
 
 
 def payload_contem_pii_proibida(payload: Any) -> bool:

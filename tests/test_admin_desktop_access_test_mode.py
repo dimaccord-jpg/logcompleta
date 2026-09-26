@@ -953,7 +953,7 @@ def test_fora_de_test_mode_completion_grava_normal(app, monkeypatch):
             },
         )
         assert created is True
-        assert payload["funnel_event"]["allow_meta_pixel"] is True
+        assert "allow_meta_pixel" not in payload["funnel_event"]
         assert payload["is_first_audit"] is True
 
 

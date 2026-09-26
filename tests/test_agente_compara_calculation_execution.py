@@ -1851,7 +1851,7 @@ def test_api_calculate_success_creates_funnel_event_and_first_audit(web_client, 
     _patch_billing_success(monkeypatch)
     monkeypatch.setattr(
         "app.agente_compara_calculation_execution_service._record_calculation_funnel_event",
-        lambda **_kwargs: ({"is_first_audit": True, "funnel_event": {"event_name": "freight_calculated", "source": "agente_compara", "allow_meta_pixel": True, "is_first_audit": True}}, True),
+        lambda **_kwargs: ({"is_first_audit": True, "funnel_event": {"event_name": "freight_calculated", "source": "agente_compara", "is_first_audit": True}}, True),
     )
 
     state = _ready_comparison_state()
@@ -1866,7 +1866,7 @@ def test_api_calculate_success_creates_funnel_event_and_first_audit(web_client, 
     assert body["billing_status"] == BILLING_STATUS_APPLIED
     assert body["is_first_audit"] is True
     assert body["funnel_event"]["event_name"] == "freight_calculated"
-    assert body["funnel_event"]["allow_meta_pixel"] is True
+    assert "allow_meta_pixel" not in body["funnel_event"]
     assert body["funnel_event"]["is_first_audit"] is True
 
 
@@ -1968,7 +1968,7 @@ def test_record_calculation_funnel_event_persists_and_marks_first_audit(app, mon
 
         assert created is True
         assert payload["is_first_audit"] is True
-        assert payload["funnel_event"]["allow_meta_pixel"] is True
+        assert "allow_meta_pixel" not in payload["funnel_event"]
         db.session.remove()
         refreshed = db.session.get(User, user_id)
         event = FunnelEvent.query.order_by(FunnelEvent.id.desc()).first()

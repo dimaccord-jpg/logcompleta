@@ -74,9 +74,14 @@ from app.extensions import db
 from app.funnel_event_service import (
     FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
     FUNNEL_EVENT_FREIGHT_CALCULATED,
+    FUNNEL_EVENT_TASK_COMPLETED,
+    FUNNEL_EVENT_TASK_FAILED,
+    FUNNEL_EVENT_TASK_STARTED,
     FUNNEL_SOURCE_AGENTE_COMPARA,
+    TASK_TYPE_AGENTE_COMPARA,
     record_completion_with_first_audit,
     record_funnel_event,
+    try_record_growth_task_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,6 +185,42 @@ def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _try_record_agente_compara_growth_task(
+    *,
+    event_name: str,
+    comparison_id: str,
+    execution_id: str | None = None,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+    allow_external_first_relevant: bool = True,
+) -> None:
+    cmp_id = (comparison_id or "").strip()
+    exec_id = (execution_id or "").strip()
+    if not cmp_id:
+        return
+    if event_name in {
+        FUNNEL_EVENT_TASK_STARTED,
+        FUNNEL_EVENT_TASK_COMPLETED,
+        FUNNEL_EVENT_TASK_FAILED,
+    }:
+        if not exec_id:
+            return
+        key = f"growth:agente_compara:{cmp_id}:{exec_id}:{event_name}"
+    else:
+        key = f"growth:agente_compara:{cmp_id}:{event_name}"
+    try_record_growth_task_event(
+        event_name=event_name,
+        source=FUNNEL_SOURCE_AGENTE_COMPARA,
+        task_type=TASK_TYPE_AGENTE_COMPARA,
+        idempotency_key=key,
+        task_stage=task_stage,
+        error_code=error_code,
+        comparison_id=cmp_id,
+        execution_id=exec_id or None,
+        allow_external_first_relevant=allow_external_first_relevant,
+    )
+
+
 def _build_calculation_funnel_idempotency_key(*, user_id: int, comparison_id: str, execution_id: str) -> str:
     payload = {
         "source": FUNNEL_SOURCE_AGENTE_COMPARA,
@@ -264,7 +305,6 @@ def _record_calculation_funnel_event(
         payload["funnel_event"] = {
             "event_name": FUNNEL_EVENT_FREIGHT_CALCULATED,
             "source": FUNNEL_SOURCE_AGENTE_COMPARA,
-            "allow_meta_pixel": True,
             "is_first_audit": is_first_audit,
         }
         if is_first_audit:
@@ -553,6 +593,14 @@ def _build_ready_response(
         payload["error_code"] = ERROR_BILLING_FAILED
         payload["message"] = "Cálculo concluído, mas a regularização da execução falhou. Tente novamente."
     if release and not stale:
+        # Replay funcional pode recuperar Growth; externo browser e proibido (157B).
+        _try_record_agente_compara_growth_task(
+            event_name=FUNNEL_EVENT_TASK_COMPLETED,
+            comparison_id=str(state.get("comparison_id") or ""),
+            execution_id=str(calc.get("execution_id") or ""),
+            task_stage=STEP_CALCULATION_READY,
+            allow_external_first_relevant=not bool(idempotent_replay),
+        )
         funnel_payload, _created = _record_calculation_funnel_event(
             comparison_id=str(state.get("comparison_id") or ""),
             execution_id=str(calc.get("execution_id") or ""),
@@ -1359,6 +1407,13 @@ def execute_comparison_calculation(
                     http_status=500,
                 ) from exc
 
+            _try_record_agente_compara_growth_task(
+                event_name=FUNNEL_EVENT_TASK_STARTED,
+                comparison_id=cmp_id,
+                execution_id=exec_id,
+                task_stage=STEP_CALCULATION_RUNNING,
+            )
+
             if after_running_hook is not None:
                 after_running_hook(copy.deepcopy(state))
 
@@ -1770,6 +1825,14 @@ def _persist_failure(
     new_state["status"] = COMPARISON_STATUS_CALCULATION_FAILED
     new_state["comparison_calculation"] = _lightweight_calc_for_session(failed)
     persist_comparison_state(new_state, session_obj=session_obj)
+
+    _try_record_agente_compara_growth_task(
+        event_name=FUNNEL_EVENT_TASK_FAILED,
+        comparison_id=str(new_state.get("comparison_id") or ""),
+        execution_id=str(failed.get("execution_id") or ""),
+        task_stage=STEP_CALCULATION_FAILED,
+        error_code=error_code,
+    )
 
     duration_ms = int((time.perf_counter() - started_perf) * 1000)
     logger.info(

@@ -211,10 +211,85 @@
     const qtyEl = document.getElementById("mu-quantity");
     const csrfEl = document.getElementById("csrf-contratacao");
     const urlResumo = "{{ url_for('user.resumo_contratacao_multiuser') }}";
+    const urlGrowthPlanSelected = "{{ url_for('growth.growth_plan_selected') }}";
+    const urlGrowthCheckoutStarted = "{{ url_for('growth.growth_checkout_started') }}";
+    const planosGrowthRastreaveis = { starter: true, pro: true, multiuser: true };
     let embeddedCheckout = null;
     let confirmacaoPendente = null;
     let checkoutInFlight = false;
     let checkoutGeneration = 0;
+
+    function newGrowthEventId() {
+        try {
+            if (window.crypto && typeof window.crypto.randomUUID === "function") {
+                return window.crypto.randomUUID();
+            }
+        } catch (_err) {}
+        return "g-" + String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+    }
+
+    function sendGrowthEvent(endpoint, body) {
+        try {
+            fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify(body),
+                credentials: "same-origin",
+                keepalive: true,
+            }).then(function (resp) {
+                return resp.json();
+            }).then(function (data) {
+                try {
+                    if (
+                        data
+                        && data.external_event
+                        && window.AFExternalTracking
+                        && typeof window.AFExternalTracking.dispatch === "function"
+                    ) {
+                        window.AFExternalTracking.dispatch(data.external_event);
+                    }
+                } catch (_dispatchErr) {}
+            }).catch(function () {});
+        } catch (_err) {}
+    }
+
+    function trackPlanSelected(planoCodigo) {
+        const plan = String(planoCodigo || "").toLowerCase();
+        if (!planosGrowthRastreaveis[plan]) {
+            return;
+        }
+        sendGrowthEvent(urlGrowthPlanSelected, {
+            event_id: newGrowthEventId(),
+            plan: plan,
+        });
+    }
+
+    function trackCheckoutStarted(planoCodigo, checkoutSessionId) {
+        const plan = String(planoCodigo || "").toLowerCase();
+        const sessionId = String(checkoutSessionId || "").trim();
+        if (!planosGrowthRastreaveis[plan] || !sessionId) {
+            return;
+        }
+        sendGrowthEvent(urlGrowthCheckoutStarted, {
+            event_id: newGrowthEventId(),
+            plan: plan,
+            checkout_session_id: sessionId,
+        });
+    }
+
+    function respostaCheckoutEmbeddedDisponivel(payload) {
+        if (!payload || payload.ok !== true) {
+            return false;
+        }
+        if (payload.downgrade_agendado || payload.assinatura_atualizada_sem_checkout) {
+            return false;
+        }
+        return Boolean(
+            payload.checkout_session_id
+            && payload.checkout_client_secret
+            && payload.publishable_key
+        );
+    }
 
     function limparCheckoutEmbedded() {
         if (embeddedCheckout && typeof embeddedCheckout.destroy === "function") {
@@ -310,9 +385,6 @@
             if (!resp.ok || !payload.ok) {
                 throw new Error(payload.erro || "Falha ao iniciar checkout.");
             }
-            if (window.LogCompletaPixel && typeof window.LogCompletaPixel.track === "function") {
-                window.LogCompletaPixel.track("InitiateCheckout");
-            }
             if (payload.downgrade_agendado) {
                 statusEl.className = "alert alert-success small mb-3";
                 const planoAtualExibicao = obterNomeExibivelPlano(planoAtual);
@@ -334,6 +406,11 @@
             }
             if (!payload.publishable_key || !payload.checkout_client_secret) {
                 throw new Error("Resposta de checkout incompleta.");
+            }
+            // Growth checkout_started: 2a request apos resposta comercial valida.
+            // Isolado da transacao Stripe; fail-open e nao bloqueia o embed.
+            if (respostaCheckoutEmbeddedDisponivel(payload)) {
+                trackCheckoutStarted(planoCodigo, payload.checkout_session_id);
             }
             const stripe = window.Stripe(payload.publishable_key);
             if (!stripe) {
@@ -629,7 +706,10 @@
             if (!planoCodigo) {
                 return;
             }
-            if ((planoCodigo || "").toLowerCase() === "multiuser") {
+            const planoNormalizado = (planoCodigo || "").toLowerCase();
+            // plan_selected: selecao explicita starter|pro|multiuser (Multiuser = abrir form).
+            trackPlanSelected(planoNormalizado);
+            if (planoNormalizado === "multiuser") {
                 invalidarCheckoutPendente();
                 if (formMultiuser) {
                     formMultiuser.classList.remove("d-none");

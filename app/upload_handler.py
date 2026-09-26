@@ -50,6 +50,42 @@ COLUNA_OPCIONAL_IMPOSTO = "valor_imposto"
 SESSION_KEY_UPLOAD_REF = "roberto_upload_ref"
 
 
+def _try_record_roberto_bi_growth_task(
+    *,
+    event_name: str,
+    idempotency_key: str,
+    execution_id: str | None = None,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Observabilidade Growth fail-open; nao altera upload/BI do Roberto."""
+    key = (idempotency_key or "").strip()
+    if not key:
+        return
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_SOURCE_ROBERTO_BI,
+            TASK_TYPE_ROBERTO_BI,
+            try_record_growth_task_event,
+        )
+
+        try_record_growth_task_event(
+            event_name=event_name,
+            source=FUNNEL_SOURCE_ROBERTO_BI,
+            task_type=TASK_TYPE_ROBERTO_BI,
+            idempotency_key=key,
+            task_stage=task_stage,
+            error_code=error_code,
+            execution_id=(execution_id or "").strip() or None,
+        )
+    except Exception:
+        logger.exception(
+            "roberto_bi_growth_task_failed event=%s key=%s",
+            event_name,
+            key,
+        )
+
+
 def _normalizar_texto(val: Any) -> str:
     """Converte valor para string e coloca em minúsculas, sem remover acentos."""
     if val is None:
@@ -206,6 +242,7 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
 
     t0 = time.perf_counter()
     emitted = False
+    growth_prep_started = False
 
     def _emit_upload_proc(status: str, rows: int, err: str | None = None) -> None:
         nonlocal emitted
@@ -224,6 +261,19 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
             status=status,
             error_summary=err,
             execution_id=execution_id,
+        )
+
+    def _growth_prep_failed(error_code: str) -> None:
+        if not growth_prep_started:
+            return
+        from app.funnel_event_service import FUNNEL_EVENT_TASK_FAILED
+
+        _try_record_roberto_bi_growth_task(
+            event_name=FUNNEL_EVENT_TASK_FAILED,
+            idempotency_key=f"growth:roberto_bi:{execution_id}:task_failed",
+            execution_id=execution_id,
+            task_stage="upload_processing",
+            error_code=error_code,
         )
 
     try:
@@ -247,21 +297,38 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
         _emit_upload_proc("failure", 0, "Falha ao salvar arquivo de upload.")
         return jsonify({"success": False, "error": "Falha ao salvar arquivo de upload."}), 500
 
+    # Arquivo aceito e persistido: inicia preparação (sem ORM funcional pendente).
+    from app.funnel_event_service import (
+        FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+        FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+    )
+
+    _try_record_roberto_bi_growth_task(
+        event_name=FUNNEL_EVENT_TASK_PREPARATION_STARTED,
+        idempotency_key=f"growth:roberto_bi:{execution_id}:task_preparation_started",
+        execution_id=execution_id,
+        task_stage="excel_processing",
+    )
+    growth_prep_started = True
+
     try:
         wb = openpyxl.load_workbook(caminho_arquivo, read_only=True, data_only=True)
         ws = wb.active
         if ws is None:
             _emit_upload_proc("failure", 0, "Planilha vazia.")
+            _growth_prep_failed("roberto_bi_empty_sheet")
             return jsonify({"success": False, "error": "Planilha vazia."}), 400
     except Exception as e:
         logger.debug("Erro ao abrir Excel em %s: %s", caminho_arquivo, e)
         _emit_upload_proc("failure", 0, "Arquivo Excel inválido ou corrompido.")
+        _growth_prep_failed("roberto_bi_invalid_excel")
         return jsonify({"success": False, "error": "Arquivo Excel inválido ou corrompido."}), 400
 
     colunas = _ler_cabecalho_normalizado(ws)
     ok, msg = _validar_colunas(colunas)
     if not ok:
         _emit_upload_proc("failure", 0, msg)
+        _growth_prep_failed("roberto_bi_invalid_columns")
         return jsonify({"success": False, "error": msg}), 400
 
     idx_imposto = colunas.index(COLUNA_OPCIONAL_IMPOSTO) if COLUNA_OPCIONAL_IMPOSTO in colunas else None
@@ -372,6 +439,7 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
             0,
             "Nenhuma linha válida após processamento.",
         )
+        _growth_prep_failed("roberto_bi_no_valid_rows")
         return jsonify({
             "success": False,
             "error": "Nenhuma linha válida após processamento.",
@@ -407,6 +475,14 @@ def processar_upload_frete_excel() -> tuple[dict, int]:
     except Exception:
         logger.exception("Falha ao apropriar billing do upload Roberto.")
         _emit_upload_proc("success", len(linhas_processadas))
+
+    # Contexto/upload_ref + billing já duráveis.
+    _try_record_roberto_bi_growth_task(
+        event_name=FUNNEL_EVENT_TASK_PREPARATION_COMPLETED,
+        idempotency_key=f"growth:roberto_bi:{execution_id}:task_preparation_completed",
+        execution_id=execution_id,
+        task_stage="upload_ref_ready",
+    )
 
     return jsonify({
         "success": True,

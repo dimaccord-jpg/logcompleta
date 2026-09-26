@@ -70,12 +70,21 @@ class Settings:
     # URL da página comercial de planos (CTA operacional)
     planos_upgrade_url: str
     facebook_pixel_id: str
+    google_analytics_measurement_id: str
     openai_ads_pixel_id: str
     openai_ads_debug: bool
     public_base_url: str
     privacy_marketing_cookie_name: str
     privacy_marketing_cookie_max_age_seconds: int
     communication_suppression_hmac_secret: str
+    growth_external_event_token_secret: str
+    # Meta CAPI (SCRUM-158A). Default OFF; homolog-first com test_event_code.
+    meta_capi_enabled: bool
+    meta_capi_access_token: str
+    meta_graph_api_version: str
+    meta_capi_test_event_code: str
+    meta_capi_connect_timeout_seconds: float
+    meta_capi_read_timeout_seconds: float
 
 
 def _build_settings() -> Settings:
@@ -158,6 +167,9 @@ def _build_settings() -> Settings:
         julia_chat_max_history = 10
     planos_upgrade_url = (os.getenv("PLANOS_UPGRADE_URL") or "").strip()
     facebook_pixel_id = (os.getenv("FACEBOOK_PIXEL_ID") or "").strip()
+    google_analytics_measurement_id = (
+        os.getenv("GOOGLE_ANALYTICS_MEASUREMENT_ID") or ""
+    ).strip()
     openai_ads_pixel_id = (os.getenv("OPENAI_ADS_PIXEL_ID") or "").strip()
     openai_ads_debug = (os.getenv("OPENAI_ADS_DEBUG") or "").strip().lower() in (
         "true",
@@ -172,11 +184,40 @@ def _build_settings() -> Settings:
     communication_suppression_hmac_secret = (
         os.getenv("COMMUNICATION_SUPPRESSION_HMAC_SECRET") or ""
     ).strip()
+    growth_external_event_token_secret = (
+        os.getenv("GROWTH_EXTERNAL_EVENT_TOKEN_SECRET") or ""
+    ).strip()
+    # Meta CAPI server-side (158A). Somente "true" habilita; default false.
+    # Sem Google Measurement Protocol / Ads server-side neste lote.
+    meta_capi_enabled = (os.getenv("META_CAPI_ENABLED") or "false").strip().lower() == "true"
+    meta_capi_access_token = (os.getenv("META_CAPI_ACCESS_TOKEN") or "").strip()
+    meta_graph_api_version = (os.getenv("META_GRAPH_API_VERSION") or "").strip()
+    meta_capi_test_event_code = (os.getenv("META_CAPI_TEST_EVENT_CODE") or "").strip()
+    try:
+        meta_capi_connect_timeout_seconds = float(
+            (os.getenv("META_CAPI_CONNECT_TIMEOUT_SECONDS") or "0.5").strip() or "0.5"
+        )
+        if meta_capi_connect_timeout_seconds <= 0:
+            meta_capi_connect_timeout_seconds = 0.5
+    except (ValueError, TypeError):
+        meta_capi_connect_timeout_seconds = 0.5
+    try:
+        meta_capi_read_timeout_seconds = float(
+            (os.getenv("META_CAPI_READ_TIMEOUT_SECONDS") or "1.0").strip() or "1.0"
+        )
+        if meta_capi_read_timeout_seconds <= 0:
+            meta_capi_read_timeout_seconds = 1.0
+    except (ValueError, TypeError):
+        meta_capi_read_timeout_seconds = 1.0
     print(
         "[VALIDAÇÃO] COMMUNICATION_SUPPRESSION_HMAC_SECRET:",
         "configurado"
         if communication_suppression_hmac_secret
         else "ausente (suppression desabilitada)",
+    )
+    print(
+        "[VALIDAÇÃO] META_CAPI_ENABLED:",
+        "true" if meta_capi_enabled else "false (default OFF)",
     )
 
     # 11) Debug: forçamos False em homolog/prod por segurança
@@ -214,12 +255,20 @@ def _build_settings() -> Settings:
         julia_chat_max_history=julia_chat_max_history,
         planos_upgrade_url=planos_upgrade_url,
         facebook_pixel_id=facebook_pixel_id,
+        google_analytics_measurement_id=google_analytics_measurement_id,
         openai_ads_pixel_id=openai_ads_pixel_id,
         openai_ads_debug=openai_ads_debug,
         public_base_url=public_base_url,
         privacy_marketing_cookie_name=privacy_marketing_cookie_name,
         privacy_marketing_cookie_max_age_seconds=privacy_marketing_cookie_max_age_seconds,
         communication_suppression_hmac_secret=communication_suppression_hmac_secret,
+        growth_external_event_token_secret=growth_external_event_token_secret,
+        meta_capi_enabled=meta_capi_enabled,
+        meta_capi_access_token=meta_capi_access_token,
+        meta_graph_api_version=meta_graph_api_version,
+        meta_capi_test_event_code=meta_capi_test_event_code,
+        meta_capi_connect_timeout_seconds=meta_capi_connect_timeout_seconds,
+        meta_capi_read_timeout_seconds=meta_capi_read_timeout_seconds,
     )
 
 

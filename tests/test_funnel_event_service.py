@@ -6,11 +6,17 @@ import pytest
 
 from app.extensions import db
 from app.funnel_event_service import (
+    FUNNEL_EVENT_CHECKOUT_STARTED,
     FUNNEL_EVENT_FILE_UPLOADED,
     FUNNEL_EVENT_FIRST_AUDIT_COMPLETED,
+    FUNNEL_EVENT_FIRST_RELEVANT_TASK_COMPLETED,
     FUNNEL_EVENT_FREIGHT_CALCULATED,
+    FUNNEL_EVENT_PAGE_VIEW,
+    FUNNEL_EVENT_PAID,
     FUNNEL_SOURCE_AGENTE_COMPARA,
     FUNNEL_SOURCE_CLEIDE_AUDIT,
+    FUNNEL_SOURCE_GROWTH,
+    is_meta_pixel_allowed,
     record_completion_with_first_audit,
     record_funnel_event,
 )
@@ -562,3 +568,145 @@ def test_no_monetization_fact_is_created(app):
         db.session.commit()
 
         assert MonetizacaoFato.query.count() == before
+
+
+def test_anonymous_page_view_can_be_persisted_without_identity(app):
+    with app.app_context():
+        result = record_funnel_event(
+            event_name=FUNNEL_EVENT_PAGE_VIEW,
+            source=FUNNEL_SOURCE_GROWTH,
+            user_id=None,
+            conta_id=None,
+            franquia_id=None,
+            idempotency_key="anon-page-view-1",
+            metadata_json={"page": "home"},
+        )
+        db.session.commit()
+
+        assert result["created"] is True
+        event = result["event"]
+        assert event.event_name == FUNNEL_EVENT_PAGE_VIEW
+        assert event.user_id is None
+        assert event.conta_id is None
+        assert event.franquia_id is None
+
+
+def test_user_required_event_rejects_missing_user_id(app):
+    with app.app_context():
+        with pytest.raises(ValueError, match="user_id e obrigatorio"):
+            record_funnel_event(
+                event_name=FUNNEL_EVENT_FIRST_RELEVANT_TASK_COMPLETED,
+                source=FUNNEL_SOURCE_GROWTH,
+                user_id=None,
+                conta_id=None,
+                franquia_id=None,
+                idempotency_key="missing-user-first-relevant-1",
+                metadata_json={"task_type": "audit"},
+            )
+
+
+def test_account_required_event_rejects_missing_conta_id(app):
+    with app.app_context():
+        _, _, user = _seed_identity("account-required@test.com")
+        with pytest.raises(ValueError, match="conta_id e obrigatorio"):
+            record_funnel_event(
+                event_name=FUNNEL_EVENT_CHECKOUT_STARTED,
+                source=FUNNEL_SOURCE_GROWTH,
+                user_id=user.id,
+                conta_id=None,
+                franquia_id=None,
+                idempotency_key="missing-conta-checkout-1",
+            )
+
+
+def test_new_internal_event_does_not_allow_meta_pixel():
+    assert is_meta_pixel_allowed(FUNNEL_EVENT_PAGE_VIEW) is False
+    assert is_meta_pixel_allowed(FUNNEL_EVENT_PAID) is False
+    assert is_meta_pixel_allowed(FUNNEL_EVENT_FIRST_RELEVANT_TASK_COMPLETED) is False
+
+
+def test_legacy_events_meta_pixel_allowlist_empty_after_157b():
+    # SCRUM-157B: allowlist legada vazia; Growth file_uploaded/freight_calculated
+    # permanecem first-party sem autorizacao Meta via trackFunnelEvent.
+    assert is_meta_pixel_allowed(FUNNEL_EVENT_FILE_UPLOADED) is False
+    assert is_meta_pixel_allowed(FUNNEL_EVENT_FREIGHT_CALCULATED) is False
+    assert is_meta_pixel_allowed(FUNNEL_EVENT_FIRST_AUDIT_COMPLETED) is False
+    from app.funnel_event_service import META_PIXEL_ALLOWED_EVENTS
+
+    assert META_PIXEL_ALLOWED_EVENTS == set() or META_PIXEL_ALLOWED_EVENTS == frozenset()
+
+
+def test_first_relevant_task_completed_requires_task_type_metadata(app):
+    with app.app_context():
+        _, _, user = _seed_identity("first-relevant@test.com")
+        with pytest.raises(ValueError, match="task_type e obrigatorio"):
+            record_funnel_event(
+                event_name=FUNNEL_EVENT_FIRST_RELEVANT_TASK_COMPLETED,
+                source=FUNNEL_SOURCE_GROWTH,
+                user_id=user.id,
+                conta_id=user.conta_id,
+                franquia_id=user.franquia_id,
+                idempotency_key="first-relevant-no-task-1",
+            )
+
+        result = record_funnel_event(
+            event_name=FUNNEL_EVENT_FIRST_RELEVANT_TASK_COMPLETED,
+            source=FUNNEL_SOURCE_GROWTH,
+            user_id=user.id,
+            conta_id=user.conta_id,
+            franquia_id=user.franquia_id,
+            idempotency_key="first-relevant-ok-1",
+            metadata_json={"task_type": "audit"},
+        )
+        db.session.commit()
+        assert result["created"] is True
+        assert result["event"].metadata_json == {"task_type": "audit"}
+
+
+@pytest.mark.parametrize(
+    "invalid_task_type",
+    [123, True, ["audit"], "", "   "],
+)
+def test_first_relevant_task_completed_rejects_non_string_or_blank_task_type(app, invalid_task_type):
+    with app.app_context():
+        _, _, user = _seed_identity(f"first-relevant-bad-{id(invalid_task_type)}@test.com")
+        with pytest.raises(ValueError, match="task_type e obrigatorio"):
+            record_funnel_event(
+                event_name=FUNNEL_EVENT_FIRST_RELEVANT_TASK_COMPLETED,
+                source=FUNNEL_SOURCE_GROWTH,
+                user_id=user.id,
+                conta_id=user.conta_id,
+                franquia_id=user.franquia_id,
+                idempotency_key=f"first-relevant-bad-{id(invalid_task_type)}",
+                metadata_json={"task_type": invalid_task_type},
+            )
+
+
+def test_agente_compara_legacy_metadata_table_id_and_slot_accepted(app):
+    with app.app_context():
+        _, _, user = _seed_identity("ac-meta-slot@test.com")
+        result = record_funnel_event(
+            event_name=FUNNEL_EVENT_FILE_UPLOADED,
+            source=FUNNEL_SOURCE_AGENTE_COMPARA,
+            user_id=user.id,
+            conta_id=user.conta_id,
+            franquia_id=user.franquia_id,
+            idempotency_key="ac-meta-slot-1",
+            metadata_json={"table_id": "tbl-1", "slot": "a"},
+        )
+        db.session.commit()
+
+        assert result["created"] is True
+        assert result["event"].metadata_json == {"table_id": "tbl-1", "slot": "a"}
+
+
+def test_metadata_rejects_disallowed_keys(app):
+    with app.app_context():
+        _, _, user = _seed_identity("meta-keys@test.com")
+        with pytest.raises(ValueError, match="metadata_json contem chaves nao permitidas"):
+            record_funnel_event(
+                event_name=FUNNEL_EVENT_PAGE_VIEW,
+                source=FUNNEL_SOURCE_GROWTH,
+                idempotency_key="meta-keys-1",
+                metadata_json={"email": "x@y.com", "page": "home"},
+            )

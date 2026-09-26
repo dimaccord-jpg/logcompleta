@@ -30,6 +30,7 @@
         <a class="home-skill-card"
            href="{{ skill.href }}"
            data-home-skill="{{ skill.id }}"
+           {% if ('home_skill_' ~ skill.id) in growth_allowed_cta_ids|default([]) %}data-growth-cta="home_skill_{{ skill.id }}"{% endif %}
            data-destination-id="{{ skill.destination_id or '' }}">
           <i class="bi {{ skill.icon }}" aria-hidden="true"></i>
           <span class="home-skill-label">{{ skill.label }}</span>

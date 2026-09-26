@@ -1,6 +1,6 @@
 # Banco e Migrations
 
-Documentação revisada contra a árvore de produção `bd874ee`, models e cadeia física Alembic. A Sprint 11 não adicionou migration executável em `migrations/versions`; mudanças de documentação não alteram o schema.
+Documentação revisada contra a árvore de produção `fa98317` (Sprint 12), models e cadeia física Alembic. O SCRUM-148 adiciona a migration `g8h9i0j1k2l3`, que torna `FunnelEvent.user_id`, `conta_id` e `franquia_id` nullable, preservando as foreign keys e sem criar nova tabela/modelo.
 
 ## Fonte de verdade
 

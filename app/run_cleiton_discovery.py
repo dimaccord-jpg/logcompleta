@@ -11,6 +11,7 @@ import logging
 import os
 import re
 from typing import Any
+from uuid import uuid4
 
 from app.capability_taxonomy import CTA_BY_ID, DESTINATIONS
 from app.consumo_identidade import get_consumo_identidade
@@ -45,6 +46,42 @@ logger = logging.getLogger(__name__)
 
 FLOW_TYPE_ONBOARDING_DISCOVERY = "onboarding_discovery"
 AGENT_CLEITON = "cleiton"
+
+
+def _try_record_onboarding_discovery_growth_task(
+    *,
+    event_name: str,
+    execution_id: str,
+    task_stage: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Observabilidade Growth fail-open; nao altera o onboarding discovery."""
+    exec_id = (execution_id or "").strip()
+    if not exec_id:
+        return
+    try:
+        from app.funnel_event_service import (
+            FUNNEL_SOURCE_ONBOARDING_DISCOVERY,
+            TASK_TYPE_ONBOARDING_DISCOVERY,
+            try_record_growth_task_event,
+        )
+
+        try_record_growth_task_event(
+            event_name=event_name,
+            source=FUNNEL_SOURCE_ONBOARDING_DISCOVERY,
+            task_type=TASK_TYPE_ONBOARDING_DISCOVERY,
+            idempotency_key=f"growth:onboarding_discovery:{exec_id}:{event_name}",
+            task_stage=task_stage,
+            error_code=error_code,
+            execution_id=exec_id,
+        )
+    except Exception:
+        logger.exception(
+            "onboarding_discovery_growth_task_failed event=%s execution_id=%s",
+            event_name,
+            exec_id,
+        )
+
 
 VALID_CONFIDENCE = frozenset({"high", "medium", "low"})
 VALID_DESTINATIONS = frozenset(DESTINATIONS.keys())
@@ -670,6 +707,12 @@ def cleiton_discovery_reply(
     Processa mensagem do Copilot via Gemini governado + guardrails.
     Retorna reply natural + metadados opcionais de handoff para o frontend.
     """
+    from app.funnel_event_service import (
+        FUNNEL_EVENT_TASK_COMPLETED,
+        FUNNEL_EVENT_TASK_FAILED,
+        FUNNEL_EVENT_TASK_STARTED,
+    )
+
     history_list = list(history) if isinstance(history, list) else []
     clean_message = (user_message or "").strip()
     history_turns = len([m for m in history_list if (m.get("role") or "").lower() == "user"]) + 1
@@ -690,6 +733,7 @@ def cleiton_discovery_reply(
     }
 
     if not clean_message:
+        # Entrada inválida: sem marcos Growth.
         empty = {
             "reply": EMPTY_MESSAGE_REPLY,
             "recommended_agent": None,
@@ -714,6 +758,82 @@ def cleiton_discovery_reply(
             history_turns=history_turns,
         )
 
+    growth_exec_id = str(uuid4())
+    growth_started = False
+
+    def _growth_start(*, task_stage: str = "discovery_execution") -> None:
+        nonlocal growth_started
+        if growth_started:
+            return
+        _try_record_onboarding_discovery_growth_task(
+            event_name=FUNNEL_EVENT_TASK_STARTED,
+            execution_id=growth_exec_id,
+            task_stage=task_stage,
+        )
+        growth_started = True
+
+    def _finish(
+        payload: dict[str, Any],
+        *,
+        audit_user_message: str,
+        success: bool,
+        error_code: str | None = None,
+        task_stage: str | None = None,
+    ) -> dict[str, Any]:
+        # AuditoriaGerencial já commitada; Growth observa depois do estado durável.
+        audited = _attach_onboarding_audit(
+            payload,
+            user_message=audit_user_message,
+            cta_id=cta_id,
+            history_turns=history_turns,
+        )
+        if not growth_started:
+            return audited
+        if success:
+            _try_record_onboarding_discovery_growth_task(
+                event_name=FUNNEL_EVENT_TASK_COMPLETED,
+                execution_id=growth_exec_id,
+                task_stage=task_stage or "reply_ready",
+            )
+        else:
+            _try_record_onboarding_discovery_growth_task(
+                event_name=FUNNEL_EVENT_TASK_FAILED,
+                execution_id=growth_exec_id,
+                task_stage=task_stage,
+                error_code=error_code or "onboarding_discovery_failed",
+            )
+        return audited
+
+    # Entrada válida: início real da descoberta (antes de governance/LLM/fallback).
+    _growth_start()
+
+    try:
+        return _cleiton_discovery_reply_after_start(
+            clean_message=clean_message,
+            history_list=history_list,
+            cta_id=cta_id,
+            pipeline_trace=pipeline_trace,
+            _finish=_finish,
+        )
+    except Exception:
+        if growth_started:
+            _try_record_onboarding_discovery_growth_task(
+                event_name=FUNNEL_EVENT_TASK_FAILED,
+                execution_id=growth_exec_id,
+                task_stage="discovery_execution",
+                error_code="onboarding_discovery_execution_failed",
+            )
+        raise
+
+
+def _cleiton_discovery_reply_after_start(
+    *,
+    clean_message: str,
+    history_list: list,
+    cta_id: str | None,
+    pipeline_trace: dict[str, Any],
+    _finish,
+) -> dict[str, Any]:
     client = _get_client()
     pipeline_trace["gemini_client_present"] = client is not None
 
@@ -753,11 +873,12 @@ def cleiton_discovery_reply(
             },
         }
         _log_pipeline_trace(clean_message, pipeline_trace)
-        return _attach_onboarding_audit(
+        return _finish(
             blocked,
-            user_message="",
-            cta_id=cta_id,
-            history_turns=history_turns,
+            audit_user_message="",
+            success=False,
+            error_code="onboarding_discovery_governance_blocked",
+            task_stage="governance",
         )
 
     if not client:
@@ -778,11 +899,12 @@ def cleiton_discovery_reply(
         result = _local_fallback_response(clean_message, reason=fallback_reason)
         pipeline_trace["reply_len"] = len(str(result.get("reply") or ""))
         _log_pipeline_trace(clean_message, {**pipeline_trace, **(result.get("discovery", {}).get("pipeline") or {})})
-        return _attach_onboarding_audit(
+        # Fallback local é resposta funcional de descoberta (não falha técnica).
+        return _finish(
             result,
-            user_message=clean_message,
-            cta_id=cta_id,
-            history_turns=history_turns,
+            audit_user_message=clean_message,
+            success=True,
+            task_stage="local_fallback",
         )
 
     system_prompt = _build_system_prompt()
@@ -833,11 +955,12 @@ def cleiton_discovery_reply(
                 },
             }
             _log_pipeline_trace(clean_message, pipeline_trace)
-            return _attach_onboarding_audit(
+            return _finish(
                 blocked,
-                user_message="",
-                cta_id=cta_id,
-                history_turns=history_turns,
+                audit_user_message="",
+                success=False,
+                error_code="onboarding_discovery_governance_blocked",
+                task_stage="governance",
             )
         except Exception as e:
             last_error = e
@@ -861,19 +984,20 @@ def cleiton_discovery_reply(
         discovery["pipeline"] = {**(discovery.get("pipeline") or {}), **pipeline_trace}
         result["discovery"] = discovery
         _log_pipeline_trace(clean_message, pipeline_trace)
-        return _attach_onboarding_audit(
+        # Fallback local pós-parse ainda entrega descoberta funcional.
+        return _finish(
             result,
-            user_message=clean_message,
-            cta_id=cta_id,
-            history_turns=history_turns,
+            audit_user_message=clean_message,
+            success=True,
+            task_stage="local_fallback",
         )
 
     result = _apply_guardrails(parsed, clean_message, pipeline=pipeline_trace)
     pipeline_trace["reply_len"] = len(str(result.get("reply") or ""))
     _log_pipeline_trace(clean_message, pipeline_trace)
-    return _attach_onboarding_audit(
+    return _finish(
         result,
-        user_message=clean_message,
-        cta_id=cta_id,
-        history_turns=history_turns,
+        audit_user_message=clean_message,
+        success=True,
+        task_stage="reply_ready",
     )
