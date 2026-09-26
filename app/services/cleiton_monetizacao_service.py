@@ -1904,6 +1904,10 @@ def iniciar_jornada_assinatura_stripe(
         },
         payload_bruto_sanitizado=response,
     )
+    # Commit comercial: prova stripe_checkout_session_created precisa estar
+    # durável antes da resposta — Growth/checkout_started roda em request posterior.
+    # Nao substitui o commit Multiuser anterior (intencao); este confirma o fato.
+    db.session.commit()
 
     return {
         "checkout_session_id": session_id,
