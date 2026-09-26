@@ -1,5 +1,7 @@
 # Testes removidos ou substituidos
 
+**Status:** historical. Registro de remoções; não descreve a suíte vigente da Sprint 12.
+
 ## Objetivo
 
 Registrar testes antigos identificados por referencias documentais ou residuos compilados, mantendo historico minimo para futuras limpezas seguras.

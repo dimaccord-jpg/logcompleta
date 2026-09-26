@@ -1,50 +1,57 @@
-# Runbook Onboarding Copilot
+# Runbook Onboarding / Discovery
 
-Revisão funcional: produção `bd874ee` (Sprint 11, Multiuser V1).
+Revisão funcional: produção `fa98317` (Sprint 12).
+
+O trilho público de discovery é frequentemente chamado de “Copilot” no código e em prompts (`app/copilot_capabilities.md`). **Copilot não é a identidade pública do produto** — a marca é AgenteFrete; o discovery é o modo anônimo da home.
 
 ## Arquitetura atual
 
 Fluxo oficial:
 
-`Home pública -> Copilot discovery -> Gemini governado ou fallback local -> resposta natural -> handoff opcional conforme objetivo`
+`Home pública → discovery AgenteFrete → Gemini governado ou fallback local → resposta natural → handoff opcional (habilidade) → login se necessário → superfície operacional`
 
-Superficies envolvidas:
+Superfícies:
 
-- Copilot: `/`
+- Discovery (home): `/`
 - API discovery: `POST /api/onboarding_discovery`
 - Reset: `POST /api/onboarding_discovery/reset`
-- Julia operacional: Home logada e `/chat_julia?mode=operational`
+- Chat operacional AgenteFrete: `/chat_julia?mode=operational` (nome de rota técnico)
 
 ## Limites
 
-- sessao anonima permitida
-- limite de `5` interacoes anonimas por sessao
+- sessão anônima permitida
+- limite de `5` interações anônimas por sessão
 - ao atingir o limite, o backend bloqueia novas chamadas discovery e devolve CTA de login
 
-## Handoffs
+## Habilidades e handoffs
 
-Regra-mae:
+Regra-mãe:
 
-- artefato nao define agente
-- atividade-fim e horizonte temporal definem agente
+- artefato não define agente
+- atividade-fim e horizonte temporal definem o destino
 
-Encaminhamentos:
+Encaminhamentos (rótulos externos / destinos):
 
-- Roberto: destino `/fretes`, com BI e chat quantitativo. A taxonomia/prompt menciona previsão, mas não deve ser tomada como prova de capacidades além do runtime.
-- AgenteAudita (Cleide): auditoria de fretes e leitura retrospectiva em `/auditoria-frete`.
-- AgenteFrete/Júlia: estratégia, negociação, supply chain e interpretação em `/chat_julia?mode=operational`.
-- AgenteCompara: comparação multitabela em `/agente-compara`.
-- Feed: notícias em `/feed`.
+| Habilidade | Destino | Auth |
+|---|---|---|
+| Consultar o AgenteFrete | `/chat_julia?mode=operational` | autenticado |
+| Analisar fretes | `/fretes` | autenticado |
+| Auditar cobranças de frete | `/auditoria-frete` | autenticado (APIs) |
+| Comparar tabelas | `/agente-compara` | autenticado (APIs) |
+| Feed | `/feed` | público |
 
-O documento `app/copilot_capabilities.md` é consumido pelo runtime como prompt; sua alteração é funcional. Descrição canônica dos agentes em [AGENTS](AGENTS.md).
+Anônimo recebe `/login?next=<destino canônico>`. `_safe_next_redirect` rejeita destino externo.
 
-## Integracao com Julia
+O documento `app/copilot_capabilities.md` é consumido pelo runtime como prompt; sua alteração é funcional. Descrição canônica: [AGENTS](AGENTS.md).
 
-Quando o usuario autentica e continua no trilho operacional:
+## Continuidade após login
 
-- a Home logada passa a operar com Julia
-- o contexto do onboarding so e preservado quando o handoff for `julia_operational`
-- a experiencia documental da Julia fica no trilho logado, nao no onboarding publico
+Quando o usuário autentica e continua no trilho operacional:
+
+- a experiência autenticada principal é o **AgenteFrete** (não se apresenta como Júlia)
+- o contexto do onboarding só é preservado quando o handoff for `julia_operational` (ID técnico)
+- a experiência documental autenticada fica no trilho logado, não no onboarding público
+- histórico conversacional do chat operacional permanece client-side (sem threads persistentes de produto)
 
 ## Observabilidade
 
@@ -52,17 +59,13 @@ Quando o usuario autentica e continua no trilho operacional:
 - `ProcessingEvent`
 - `AuditoriaGerencial`
 
-Fluxos rastreados:
+Fluxos rastreados: `onboarding_discovery`, `operacional`, `administrativo`.
 
-- `onboarding_discovery`
-- `operacional`
-- `administrativo`
-
-Regra critica:
+Regra crítica:
 
 - onboarding conta como consumo interno
-- onboarding nao abate franquia
+- onboarding não abate franquia
 
 ## Multiuser e privacidade
 
-A continuidade logada respeita o usuário, sua Franquia e a sessão. Pertencer à mesma Conta não transfere memória ou documentos de outro membro para o discovery ou para Júlia. O [Multiuser V1](multiuser_v1.md) não altera essa separação.
+A continuidade logada respeita o usuário, sua Franquia e a sessão. Pertencer à mesma Conta não transfere memória ou documentos de outro membro. O [Multiuser V1](multiuser_v1.md) não altera essa separação.

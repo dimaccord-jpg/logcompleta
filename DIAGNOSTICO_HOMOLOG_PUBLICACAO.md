@@ -1,5 +1,7 @@
 # Diagnóstico de Homologação e Publicação
 
+**Status:** historical (2026-08-05). Fotografia da publicação AgenteCompara; superseded como estado de produção. Estado vivo: [docs/estado_producao.md](docs/estado_producao.md).
+
 Referência auditada em 2026-08-05.
 
 ## Estado consolidado

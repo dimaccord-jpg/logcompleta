@@ -1,8 +1,16 @@
 # Changelog Consolidado
 
+**Status:** historical / superseded (2026-05-26).
+
+Este arquivo é um marco documental de maio de 2026. **Não** descreve o estado de produção atual (Sprint 12, `fa98317`). Para o estado vivo, use [estado de produção](estado_producao.md) e o [índice](indice_documentacao.md).
+
+O conteúdo abaixo permanece como registro histórico e não deve ser reescrito como se a decisão antiga nunca tivesse existido. Contagens de testes e “consolidado vigente” abaixo valem apenas para a data do marco.
+
+---
+
 Data de consolidacao: `2026-05-26`
 
-Este changelog consolida o estado funcional e operacional atualmente promovido no projeto. Ele nao substitui o historico de `git`, mas registra o que ja deve ser tratado como comportamento oficial.
+Este changelog consolida o estado funcional e operacional **naquela data**. Ele nao substitui o historico de `git`.
 
 ## Consolidado vigente
 

@@ -1,9 +1,11 @@
 # Auditoria Documental
 
+**Status:** historical (2026-05-29). Não é guia vivo da Sprint 12.
+
 Data da auditoria: `2026-05-29`
 Commit de referencia original: `20fa165`
 
-Objetivo desta auditoria: localizar a documentacao existente, mapear aderencia ao codigo atual e registrar o que foi atualizado para refletir o estado real promovido.
+Objetivo desta auditoria: localizar a documentacao existente, mapear aderencia ao codigo atual e registrar o que foi atualizado para refletir o estado real promovido **naquela data**. Para o estado atual, use [estado de produção](estado_producao.md).
 
 ## Documentacao atualizada
 

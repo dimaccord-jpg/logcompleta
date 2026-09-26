@@ -1,6 +1,6 @@
 # Troubleshooting Operacional
 
-Revisão documental: árvore de produção `bd874ee` (Sprint 11, Multiuser V1).
+Revisão documental: árvore de produção `fa98317` (Sprint 12).
 
 ## 1. Home pública sem responder
 
@@ -10,24 +10,25 @@ Conferir:
 2. chaves/configuração do discovery
 3. fallback local previsto para discovery
 
-## 2. Home logada não mostra a experiência correta
+## 2. Home / chat não mostra a identidade correta
 
 Comportamento esperado:
 
-- usuário anônimo: Copiloto público
-- usuário logado: experiência principal com Júlia
-- `/chat_julia?mode=operational`: rota dedicada para o modo operacional
+- usuário anônimo: discovery público AgenteFrete (às vezes chamado Copilot no código)
+- usuário logado no chat operacional: identidade **AgenteFrete** (não Júlia)
+- rota: `/chat_julia?mode=operational` (nome técnico)
+- labels/prompt: AgenteFrete; Júlia é editorial/interna
 
 ## 3. Handoff e login com `next` falham
 
 Conferir:
 
-1. `app/copilot_capabilities.md`
-2. `app/capability_taxonomy.py`
-3. `_safe_next_redirect`
-4. `tests/test_auth_next_redirect.py`
+1. `app/shell_navigation.py` e `app/capability_taxonomy.py`
+2. `_safe_next_redirect` / `_login_href` em `app/web.py`
+3. `tests/test_auth_next_redirect.py` e `tests/test_scrum211_fretes_login_gate.py`
+4. destino externo deve ser rejeitado; `/fretes` exige login
 
-## 4. Upload documental da Júlia falha
+## 4. Upload documental do chat autenticado falha
 
 Conferir:
 
@@ -45,6 +46,7 @@ Conferir:
 1. `app/cleiton_doc_gemini_files.py`
 2. `app/julia_doc_context.py`
 3. cobertura de testes documentais/PDF
+4. governança Cleiton (fail-closed) em [cleiton_ai_data_governance](cleiton_ai_data_governance.md)
 
 ## 6. Arquivos temporários apareceram no Git
 
@@ -62,9 +64,7 @@ Conferir:
 
 1. `render.yaml`
 2. `app/web.py`
-3. rotas reais `/health`, `/health/liveness` e `/health/readiness`
-
-`healthCheckPath` continua em `/health`, enquanto o código também expõe checks mais específicos.
+3. rotas `/health`, `/health/liveness` e `/health/readiness`
 
 ## 8. Branch errada no Render
 
@@ -72,111 +72,59 @@ Conferir:
 
 1. `render.yaml`
 2. painel do Render
-3. branch efetivamente conectada ao serviço
+3. branch conectada: homolog → `homolog`; produção → `producao`
 
-No arquivo versionado atual:
+## 9. Tema incorreto (claro/escuro)
 
-- homolog: `homolog`
-- produção: `producao`
+Esperado:
 
-## 9. Onboarding abatendo franquia
+- preferência em `localStorage` `af-theme`: `system` | `dark` | `light`
+- templates `base.html` respeitam preferência global
+- admin e `/acesso-desktop` fora do contrato
+- se a UI “sempre dark” em página do shell, verificar se o template herda `base.html` e se o init `af-theme-init` está presente
 
-Isso continua incorreto.
-
-Conferir:
-
-1. `flow_type = onboarding_discovery`
-2. dashboard admin
-3. cobertura de métricas/IA
-
-## 10. Tabela temporária da Cleide não aparece após upload
+## 10. Evergreen não dispara / pauta errada
 
 Conferir:
 
-1. `POST /api/cleide-auditoria/documents/upload`
-2. `GET /api/cleide-auditoria/documents/status`
-3. runner da `temp_table`
-4. service documental da auditoria
+1. admin Júlia: intenção evergreen / analysis e `pauta_id`
+2. `ConfigRegras`: `evergreen_automatico_habilitado`, `evergreen_frequencia_minutos`
+3. ID inválido deve falhar fechado (sem fallback)
+4. cadência independente de `decidir_tipo_missao`
+5. testes `test_scrum_215a_*` / `test_scrum_215b_*`
 
-## 11. Chat analítico da Cleide continua bloqueado
+## 11. Imagem editorial 404 / modelo obsoleto
 
-Conferir, nesta ordem:
-
-1. lote processado
-2. BI pronto
-3. unlock do chat analítico
-4. `batch_scope`
-5. autenticação e autorização
-
-## 12. Consumo de linhas da Cleide parece duplicado
-
-Correlacionar `CleitonBillingApropriacao`, `ProcessingEvent`, `execution_id` e a chave idempotente do fluxo.
-
-## 13. Tabela temporária do AgenteCompara não aparece após upload
+Esperado: `GEMINI_MODEL_IMAGE` default `gemini-3.1-flash-image` via `generate_content`.
 
 Conferir:
 
-1. `POST /api/agente-compara/documents/upload`
-2. `GET /api/agente-compara/documents/status`
-3. runner da `temp_table`
-4. service documental do AgenteCompara
+1. variável no **Render** (não assumir `.env.prod` local)
+2. `app/run_julia_agente_imagem.py`
+3. `scripts/diagnose_julia_image_provider.py`
+4. não usar `imagen-3.0-generate-002` como default atual
 
-## 14. Chat analítico do AgenteCompara continua bloqueado
+## 12. Checkout Multiusuário com iframe residual
 
-Conferir:
+Esperado: ao escolher Multiusuário, checkout Starter/Pro é destruído; formulário aparece; checkout só após “Ir para o checkout”.
 
-1. lote processado
-2. BI válido
-3. `POST /api/agente-compara/audit-chat/unlock`
-4. `batch_scope`
-5. autenticação e autorização
+Conferir `contrate_plano.html` e `tests/test_scrum216_checkout_cleanup.py`.
 
-## 15. Chat contextual da comparação continua bloqueado
+## 13. `/acesso-desktop` parece obrigatório
 
-Conferir:
+Não é. É landing de campanha opcional/legada. O fluxo principal é Home → habilidade → login → operacional.
 
-1. comparação ativa na sessão correta
-2. `GET /api/agente-compara/comparison/calculation`
-3. `status = CALCULATION_READY`
-4. `stale = false`
-5. `billing_status = applied`
-6. presença simultânea de `result` e `analytics`
-7. `POST /api/agente-compara/comparison-chat`
-8. autenticação e autorização por franquia
+## 14. Multiuser / billing
 
-## 16. Consumo de linhas do AgenteCompara parece duplicado
+Seguir [Multiuser V1](multiuser_v1.md), [monetização](guia_monetizacao_franquias.md) e [estado de produção](estado_producao.md).
 
-Correlacionar `CleitonBillingApropriacao`, `ProcessingEvent`, `execution_id` e a chave idempotente do namespace `agente-compara-`.
+## Checklist rápido pós-deploy
 
-## 17. Documento removido incorretamente entre agentes
-
-Conferir:
-
-1. `source_agent`
-2. `session_key`
-3. ownership antes da remoção física
-4. testes de isolamento entre Júlia, Cleide e AgenteCompara
-
-## 18. Cron falha por autenticação
-
-Conferir:
-
-1. header `X-Cron-Secret`
-2. valor de `CRON_SECRET`
-3. `tests/test_cron_auth.py`
-
-`?secret=` ainda existe apenas por compatibilidade temporária.
-
-## 19. Multiuser: capacidade, pagamento e vínculo
-
-1. Consultar o diagnóstico read-only e os campos `multiuser_status_diagnostico`, `multiuser_achado_codigo`, `multiuser_achado_detalhe` do CSV administrativo.
-2. Distinguir quantity contratada, vínculos ativos e reservas de convites válidas. O contratante ocupa assento; revogação não reduz quantity.
-3. Correlacionar intenção/solicitação, `MonetizacaoFato`, invoice e vínculo comercial antes de concluir falha de pagamento. `invoice.paid` é autoridade para ativação/renovação.
-4. Em redução, `quantity_futura` não limita o ciclo atual. Ocupação acima da futura no corte impede efetivação; não corrigir por revogação automática.
-5. `RECONCILIACAO_NECESSARIA` requer revisão manual e risco pelo menos atenção. Recuperação causal SCRUM-190 depende de evidência durável correlacionada; não é executada pela consulta do diagnóstico.
-
-## 20. Multiuser: acesso revogado e reentrada
-
-Verificar vínculo encerrado e geração de contexto da sessão. A perda de acesso à organização é esperada; User, Franquia, consumo e histórico permanecem. Reentrada exige novo convite/aceite elegível. A Conta comum não autoriza consultar documentos de outro membro, e o histórico preservado não implica acesso ao contexto revogado.
-
-Notificações internas e CTA de continuidade individual após revogação estão disponíveis. Conferir produtores e semântica de cada evento antes de assumir que toda comunicação gera item interno. Contrato e limites em [Multiuser V1](multiuser_v1.md); evidência financeira em [estado de produção](estado_producao.md#pendências-conhecidas-e-pós-release).
+1. `/health` ok
+2. login + `next` interno
+3. shell/habilidades + tema
+4. chat AgenteFrete
+5. `/fretes` exige auth
+6. Feed / uma `/noticia/<id>`
+7. checkout Starter e fluxo Multiusuário limpo
+8. isolamento entre chat AgenteFrete, Cleide e AgenteCompara quando a mudança tocar esses domínios

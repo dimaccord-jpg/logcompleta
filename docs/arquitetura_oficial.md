@@ -1,85 +1,107 @@
 # Arquitetura do Produto
 
-Referência revisada em 2026-09-19. O código atual é a fonte de verdade.
+Referência revisada em 2026-09-23 (Sprint 12). O código atual é a fonte de verdade; o release de produção informado é `fa98317`.
 
 ## Identidade do produto
 
-- produto: `AgenteFrete`
+- produto público: **AgenteFrete**
+- definição: Assistente virtual especializado em logística da LogCompleta
 - empresa: `Logcompleta Agentes Inteligentes LTDA`
 - domínio principal: `https://www.agentefrete.com.br/`
-- stack principal: Flask + templates + Bootstrap
+- stack principal: Flask + templates + Bootstrap + JS vanilla
+- nomes internos (Júlia, Roberto, Cleide, Cleiton, AgenteCompara) são módulos/personas técnicas, não produtos públicos separados
 
 ## Experiência pública versus autenticada
 
-- a home pública é uma superfície de discovery do AgenteFrete;
-- a home pública não deve ser documentada como Julia pública principal;
-- a superfície operacional autenticada da Julia continua em `/chat_julia?mode=operational`;
-- a aplicação reúne superfícies públicas, autenticadas, administrativas e operacionais na mesma base Flask.
+- home pública `/`: discovery do AgenteFrete + habilidades sugeridas
+- não documentar a home como “Julia pública principal”
+- chat operacional autenticado: `/chat_julia?mode=operational` com identidade pública **AgenteFrete** (nome de rota técnico preservado)
+- histórico do chat operacional: client-side; sem threads persistentes de produto
+- a aplicação reúne superfícies públicas, autenticadas, administrativas e operacionais na mesma base Flask
 
 ## Superfícies principais
 
 | Superfície | Acesso | Papel atual |
 |---|---|---|
-| `/` | público/logado | home, discovery, onboarding e CTA experimental |
-| `/chat_julia` | autenticado em `mode=operational` | superfície operacional da Julia/AgenteFrete |
-| `/auditoria-frete` | página pública; APIs autenticadas | AgenteAudita (APIs técnicas `/api/cleide-auditoria/*`) |
-| `/agente-compara` | página pública; APIs autenticadas | comparação multitabela |
-| `/fretes` | autenticado | Roberto BI e chat quantitativo |
-| `/feed` | público | feed editorial misto |
+| `/` | público/logado | home, discovery, habilidades e CTA experimental |
+| `/chat_julia?mode=operational` | autenticado | chat operacional AgenteFrete |
+| `/auditoria-frete` | shell; APIs autenticadas | AgenteAudita (`/api/cleide-auditoria/*`) |
+| `/agente-compara` | shell; APIs autenticadas | comparação multitabela |
+| `/fretes` | autenticado (`@login_required`) | Roberto BI e chat quantitativo |
+| `/feed`, `/noticia/<id>` | público | Feed editorial (news / analysis / evergreen) |
 | `/contrate-um-plano`, `/perfil/*` | autenticado | billing e área do usuário |
 | `/gestao-multiuser` | contratante ativo | membros, convites e capacidade |
 | `/convite/<token>` | token; aceite autenticado | ingresso explícito Multiuser |
-| `/admin/*` | admin global | dashboards, configuração, titularidade e governança |
+| `/acesso-desktop` | público | landing de campanha opcional/legada — **não** gate técnico |
+| `/login` | público | autenticação; preserva `next` interno seguro |
+| `/admin/*` | admin global | dashboards, configuração editorial, governança |
 | `/cron/*`, `/ops/*`, `/health*` | operacional | automação, suporte e health |
+
+## Shell, habilidades e autenticação
+
+- catálogo único: `app/shell_navigation.py` (desktop, mobile e cards da Home)
+- habilidades Home: Analisar fretes, Auditar cobranças de frete, Comparar tabelas
+- shell: Consultar o AgenteFrete + as três acima + Feed
+- destinos protegidos usam `/login?next=<canônica>`
+- `_safe_next_redirect` rejeita URL absoluta, scheme externo, `//`, paths `/api/*` e `/admin*`
+- `/fretes` não entra no sitemap público
+
+## Tema global
+
+- preferências: `system` | `dark` | `light`
+- persistência: `localStorage` `af-theme`
+- contrato em `base.html` + `agentefrete-theme.css`
+- **sem** opt-in por página (`af_theme_enabled` removido)
+- `system` segue `prefers-color-scheme`
+- `base_admin.html` e `/acesso-desktop` fora do contrato
 
 ## Domínios e agentes
 
-### AgenteFrete e Julia
+### AgenteFrete (público) e módulo técnico Julia
 
-- AgenteFrete é a identidade priorizada nas superfícies públicas
-- Julia continua como identidade operacional interna e autenticada
-- o chat autenticado pode usar contexto documental temporário governado pelo Cleiton
-- após a resposta normal, o AgenteFrete operacional pode oferecer orientação determinística para ferramentas internas, sem segunda chamada LLM, com URLs da taxonomy, abertura em nova aba e fail-open; casos ambíguos não recebem handoff automático
+- AgenteFrete é a identidade nas superfícies voltadas ao usuário
+- módulos `julia_*` / rotas `chat_julia` são compatibilidade técnica
+- Júlia editorial permanece no pipeline de conteúdo
+- orientação determinística pós-resposta para ferramentas internas (sem 2ª LLM; fail-open)
 
-### AgenteAudita
+### AgenteAudita / Cleide
 
-- identidade pública da auditoria de fretes
-- identidade técnica/histórica: Cleide
-- rota pública: `/auditoria-frete`
-- APIs autenticadas: `/api/cleide-auditoria/*`
-- fluxo com upload, `temp_table`, coverage opcional, lote auditado, BI executivo e chat analítico
+- identidade pública AgenteAudita; técnica Cleide
+- `/auditoria-frete` + `/api/cleide-auditoria/*`
 - isolamento de sessão, eventos, billing e artefatos
 
 ### AgenteCompara
 
-- comparação de 2 tabelas obrigatórias e 1 opcional
-- fluxo com `comparison_id`, `table_id` e `slot`
-- revisão, cálculo comparativo, analytics, memória pública e chats separados
+- 2 tabelas obrigatórias + 1 opcional
+- `comparison_id` / `table_id` / `slot`
+- storage e billing próprios
 
 ### Roberto
 
-- domínio de BI de fretes em `/fretes`
-- upload, leitura quantitativa e chat autenticado
-- documentar somente o que está implementado, separando eventuais visões futuras
+- `/fretes` autenticado: upload, BI e chat quantitativo
 
 ### Cleiton
 
-- camada transversal de governança
-- franquias, autorização operacional, billing técnico, configuração documental e observabilidade
-- também governa parte do discovery e das rotas cron
+- governança transversal: franquias, billing técnico, discovery, cron, orquestração editorial (incl. evergreen)
+
+## Editorial e evergreen
+
+- intenções: `news`, `analysis`, `evergreen` (`app/editorial_metadata.py`)
+- SEO / JSON-LD / CTA contextual em `/noticia/<id>`
+- evergreen: admin + `ConfigRegras` (`evergreen_automatico_habilitado`, `evergreen_frequencia_minutos`)
+- cadência independente do ciclo legado; `pauta_id` explícito fail-closed
+- imagem: default `gemini-3.1-flash-image` via `generate_content`
 
 ## Composição técnica
 
-- núcleo Flask em `app/web.py`;
-- blueprints ativos incluem admin, ops, user, Cleide legado (`cleide_bp`), AgenteAudita (`cleide_audit_bp`), AgenteCompara (`agente_compara_bp` e `agente_compara_api_bp`) e documentos da Julia (`julia_documents_bp`);
-- Roberto, OAuth, onboarding, newsletter, webhooks e rotas gerais permanecem no `app/web.py`;
-- persistência transacional em PostgreSQL via `DATABASE_URL`;
-- schema evoluído via Alembic;
-- persistência técnica em disco para documentos, índices, resultados e artefatos temporários.
+- núcleo Flask em `app/web.py`
+- blueprints: admin, ops, user, Cleide legado (`cleide_bp`), AgenteAudita (`cleide_audit_bp`), AgenteCompara (`agente_compara_bp` / `agente_compara_api_bp`), documentos (`julia_documents_bp`)
+- Roberto, OAuth, onboarding, newsletter, webhooks e rotas gerais em `app/web.py`
+- PostgreSQL via `DATABASE_URL`; Alembic; disco em `APP_DATA_DIR`
 
 ## Organização comercial Multiuser V1
 
-O [Multiuser V1](multiuser_v1.md) está implantado. `Conta` é a raiz comercial; `ContaVinculoOrganizacional` registra contratante/membro e histórico. Cada usuário ativo ocupa uma Franquia individual, inclusive o contratante. Capacidade contratada e ciclo são da Conta; consumo é individual. Stripe mantém um Customer, uma Subscription e um Item com quantity de assentos.
+O [Multiuser V1](multiuser_v1.md) está implantado. `Conta` é a raiz comercial; cada usuário ativo ocupa Franquia individual. Capacidade/ciclo da Conta; consumo individual. Stripe: Customer + Subscription + Item com quantity.
 
 ```mermaid
 flowchart TD
@@ -91,46 +113,32 @@ flowchart TD
     Membros --> FranquiasM[Uma Franquia por membro]
 ```
 
-`User.categoria` define plano; `User.is_admin` define admin global. Não existe org-admin. Blueprints Multiuser cobrem painel e convites, com serviços de contratação, ciclo, aumentos, redução, revogação, titularidade e diagnóstico. Endpoints internos não equivalem a API pública Multiuser.
+Checkout: Starter/Pro embedded; Multiusuário limpa checkout anterior e só inicia após “Ir para o checkout”.
 
 ## Isolamento entre domínios
 
-- Julia, o domínio técnico Cleide e AgenteCompara usam chaves e escopos distintos em sessão;
-- AgenteAudita/Cleide e AgenteCompara compartilham parte do trilho técnico documental do Cleiton, mas não compartilham identidade funcional;
-- AgenteCompara usa storage comparativo próprio;
-- AgenteAudita usa coverage, lote e contexto analítico próprios;
-- billing e eventos não devem ser misturados entre os domínios;
-- billing e observabilidade não devem ser documentados como compartilhados indistintamente;
-- membros da mesma Conta não compartilham documentos, chats, uploads, tabelas, resultados ou memória privada: `conta_id` não substitui ownership de usuário/sessão;
-- revogação encerra vínculo/acesso, preserva User, Franquia e histórico/consumo; reentrada exige aceite e não reseta consumo.
+- namespaces de sessão distintos entre chat AgenteFrete (Julia), Cleide e AgenteCompara
+- infraestrutura documental Cleiton é comum, não memória coletiva
+- membros da mesma Conta não compartilham artefatos privados; `conta_id` não autoriza ownership alheio
+- revogação encerra vínculo/acesso e preserva User/Franquia/histórico/consumo
 
 ## Persistência e runtime
 
-- `DATABASE_URL` é a fonte de persistência transacional;
-- `APP_DATA_DIR` sustenta storage técnico persistente fora da sessão;
-- `INDICES_FILE_PATH` fica fora da pasta efêmera da release em homolog/prod;
-- o schema evolui via Alembic;
-- `start.sh` executa `db upgrade` antes do Gunicorn;
-- `render.yaml` versionado define homologação na branch `homolog` com `APP_ENV=homolog` e produção na branch `producao` com `APP_ENV=prod`;
-- os dois serviços versionados usam `autoDeploy: true`, `build.sh`, `start.sh` e `healthCheckPath: /health`;
-- quando `APP_ENV` não vem explícito, `start.sh` reconhece `main`, `master`, `producao` e `prod` como ambiente de produção;
-- o runtime também expõe `/health/liveness` e `/health/readiness`.
-
-Head atual: `f7g8h9i0j1k2`. Cadeia canônica em [Banco e Migrations](DATABASE_AND_MIGRATIONS.md).
+- `DATABASE_URL`, `APP_DATA_DIR`, `INDICES_FILE_PATH`
+- `start.sh`: valida `APP_ENV`, `db upgrade`, Gunicorn; pode inferir `APP_ENV` pelo branch se ausente
+- `render.yaml`: `homolog` → homolog; `producao` → prod; `autoDeploy: true`; `healthCheckPath: /health`
+- também: `/health/liveness`, `/health/readiness`
+- `load_app_env()`: `app/.env.{APP_ENV}` com `override=False`
+- head Alembic versionado: `g8h9i0j1k2l3` (`down_revision=f7g8h9i0j1k2`) — [Banco e Migrations](DATABASE_AND_MIGRATIONS.md)
 
 ## Home e experimento de CTA
 
-- a home registra assignment e telemetria do experimento `home_chat_cta_v1`;
-- a tabela isolada é `home_cta_experiment_event`;
-- usuários anônimos recebem assignment aleatório por sessão;
-- usuários autenticados recebem assignment determinístico derivado de `user.id`, sem persistir esse id em claro na tabela;
-- eventos de `impression` e `conversion` são fail-open;
-- a tabela não reutiliza `FunnelEvent` e não cria relacionamento com `User`, `Conta` ou `Franquia`.
+- `home_chat_cta_v1` / tabela `home_cta_experiment_event`
+- assignment anônimo aleatório; autenticado determinístico sem gravar `user.id` em claro
+- impression/conversion fail-open
 
 ## Relações importantes
 
-- autenticação e lifecycle do usuário convivem com billing e auditoria, mas não apagam estrutura contratual;
-- documentos legais têm governança própria por upload/admin e storage persistente;
-- consentimento de marketing é separado de cookies/sessão necessários;
-- masking para IA externa acontece na boundary outbound, não no dado persistido interno;
-- billing técnico e observabilidade passam pelo Cleiton, com eventos e apropriações por domínio.
+- autenticação e lifecycle convivem com billing sem apagar estrutura contratual
+- documentos legais, consentimento de marketing e masking outbound têm contratos próprios
+- billing técnico e observabilidade passam pelo Cleiton

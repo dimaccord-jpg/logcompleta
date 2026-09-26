@@ -1,19 +1,39 @@
 # Agentes e Identidades
 
-Documentação revisada em 2026-09-19. Este guia separa identidade pública, identidade interna e escopo operacional dos agentes no código atual.
+Documentação revisada em 2026-09-23 (Sprint 12). Separa identidade pública, identidade interna e escopo operacional no código atual.
 
-## Identidade do produto
+## Identidade do produto (PUBLIC)
 
-- marca principal nas superfícies públicas: `AgenteFrete`
+- marca pública: **AgenteFrete**
+- definição pública: **Assistente virtual especializado em logística da LogCompleta**
 - empresa: `Logcompleta Agentes Inteligentes LTDA`
-- a plataforma não é apenas uma coleção de chatbots; o código atual organiza capacidades especializadas com governança transversal do Cleiton
+- o usuário **não** precisa conhecer nomes de agentes internos
+- habilidades são apresentadas como capacidades do AgenteFrete, não como produtos separados
+- a plataforma não é TMS, WMS nem ERP
 
-## Home pública e identidade estratégica atual
+## Identidades internas (INTERNAL)
 
-- a home pública usa discovery e reforça a marca AgenteFrete
-- o template `app/templates/index.html` alterna o título entre discovery público e superfície operacional
-- o CTA principal da home participa do experimento `home_chat_cta_v1`
-- o fluxo público não deve ser documentado como "Julia pública principal"
+Preservadas por compatibilidade arquitetural. **Não** são marcas públicas nem produtos distintos:
+
+| Nome interno | Papel |
+|---|---|
+| Júlia | Persona editorial / módulos técnicos `julia_*`, rotas `/chat_julia`, `/api/chat_julia` |
+| Roberto | BI e chat quantitativo em `/fretes` |
+| Cleide | Identidade técnica/histórica da auditoria (`/api/cleide-auditoria/*`, services, `flow_type`) |
+| AgenteAudita | Nome público da superfície de auditoria (mesmo domínio Cleide) |
+| Cleiton | Governança transversal, discovery, billing, franquias, orquestração editorial |
+| AgenteCompara | Comparação multitabela |
+
+Não renomear módulos apenas para “bater” com a marca pública.
+
+## Home pública e jornada
+
+- home `/` usa discovery e reforça AgenteFrete
+- cards de habilidade (Home): Analisar fretes, Auditar cobranças de frete, Comparar tabelas
+- shell também oferece **Consultar o AgenteFrete** (chat operacional)
+- CTA experimental `home_chat_cta_v1` permanece
+- o fluxo público **não** deve ser documentado como “Julia pública principal”
+- discovery permanece público; habilidades operacionais exigem login conforme taxonomia
 
 ## Cleiton
 
@@ -21,112 +41,90 @@ Escopo atual confirmado:
 
 - governança transversal de discovery, billing técnico, franquias e observabilidade
 - trilho oficial do onboarding/discovery na home
-- contratos e configurações documentais reutilizadas por Julia, AgenteAudita/Cleide e AgenteCompara
+- contratos documentais reutilizados pelos módulos internos
 - autorização operacional por franquia antes de consumo
 - reconciliação e validação de franquia
-- logs, eventos de processamento e parte das automações cron
+- logs, eventos de processamento, automações cron e orquestração editorial (incl. side-car evergreen)
 
 O que não deve ser atribuído ao Cleiton sem evidência:
 
 - identidade pública principal da home
 - ownership funcional exclusivo de AgenteAudita/Cleide, AgenteCompara ou Roberto
 
-## Julia e AgenteFrete
+## Chat operacional AgenteFrete (módulo técnico Julia)
 
 Estado atual:
 
-- a superfície autenticada principal continua em `/chat_julia?mode=operational`
-- o endpoint operacional é `/api/chat_julia`
-- para usuário não autenticado, o sistema apresenta a marca AgenteFrete e o trilho de discovery, não a Julia como rosto público principal
-- a mensagem de bloqueio do endpoint autenticado diz: "É necessário estar logado para conversar com o AgenteFrete."
+- superfície autenticada principal: `/chat_julia?mode=operational`
+- endpoint: `/api/chat_julia`
+- system prompt e labels de UI: identidade **AgenteFrete** (“Nunca se apresente como Júlia”)
+- para anônimos: marca AgenteFrete + discovery; não Júlia como rosto público
+- bloqueio do endpoint: “É necessário estar logado para conversar com o AgenteFrete.”
+- histórico: client-side; sem threads persistentes de produto
+- Júlia permanece persona **editorial** (pipeline `/noticia/<id>`, admin editorial)
 
-Leitura recomendada para documentação:
+Leitura recomendada:
 
-- "Julia" permanece como identidade interna e superfície operacional autenticada
-- "AgenteFrete" é a identidade priorizada na home, em CTAs públicos e em várias mensagens voltadas ao usuário
-- o uso documental real da Julia acontece logado, com contexto temporário governado pelo Cleiton
+- **AgenteFrete** = identidade priorizada em home, CTAs, chat operacional e mensagens ao usuário
+- **Júlia** = nome interno/editorial e surface técnica preservada
+- uso documental autenticado com contexto temporário governado pelo Cleiton
 
 ### Orientação determinística para ferramentas internas
 
-O AgenteFrete operacional possui orientação determinística para ferramentas internas após a resposta normal do chat.
-
-Características confirmadas:
+Após a resposta normal do chat:
 
 - não altera o motor conversacional
 - não cria segunda chamada LLM
-- usa o capability resolver local
-- as URLs vêm da taxonomy
-- destinos iniciais:
-  - AgenteAudita → `/auditoria-frete` (handoff técnico `cleide_freight_audit`)
-  - Roberto → `/fretes`
-  - AgenteCompara → `/agente-compara`
-- a ação abre a ferramenta em nova aba
-- casos ambíguos não recebem handoff automático
-- a resolução é fail-open
+- usa o capability resolver local e URLs da taxonomy
+- destinos: AgenteAudita → `/auditoria-frete`; Roberto → `/fretes`; AgenteCompara → `/agente-compara`
+- abre em nova aba; ambíguos sem handoff; fail-open
 
 ## AgenteAudita
 
-Identidade pública da auditoria de fretes: `AgenteAudita`.
+Identidade pública: `AgenteAudita`. Identidade técnica/histórica: `Cleide`.
 
-Identidade técnica/histórica/interna: `Cleide`.
-
-Escopo atual:
-
-- página principal: `/auditoria-frete`
-- APIs autenticadas em `/api/cleide-auditoria/*`
-- fluxo com upload documental, `temp_table`, coverage opcional, lote auditado, BI executivo e chat analítico
+- página: `/auditoria-frete`
+- APIs: `/api/cleide-auditoria/*`
+- upload, `temp_table`, coverage opcional, lote, BI executivo e chat analítico
 - isolamento por usuário, franquia, sessão, billing e artefatos
-- billing operacional próprio no domínio Cleiton
 
-Importante:
-
-- em textos voltados ao produto/superfície pública, usar AgenteAudita
-- em nomes técnicos, endpoints, arquivos, classes, services, agent IDs, `flow_type` ou contexto histórico, manter Cleide quando tecnicamente correto
-- a documentação deve tratar a Auditoria de Fretes como superfície atual
-- qualquer referência a BI Cleide legado precisa ser marcada como legado ou secundária
+Em texto de produto usar AgenteAudita; em código/endpoints/histórico manter Cleide quando tecnicamente correto.
 
 ## Roberto
 
-O que existe hoje:
-
-- rota `/fretes`
-- upload, BI e chat quantitativo autenticado
-- configuração operacional própria
-- suporte a leitura quantitativa de fretes
-
-Separação obrigatória:
-
-- implementado agora: superfície `/fretes`, upload, BI e chat
-- visão futura: previsibilidade mais ampla, estratégia futura ou outros cenários não comprovados pelo runtime devem permanecer como roadmap, nunca como fato implementado sem confirmação
+- rota `/fretes` (**autenticada**; SCRUM-211)
+- upload, BI e chat quantitativo
+- documentar somente o implementado; previsibilidade ampla é roadmap se não comprovada no runtime
 
 ## AgenteCompara
 
-O que existe hoje:
-
 - página `/agente-compara`
-- comparação de 2 tabelas obrigatórias e 1 opcional
-- fluxo com `comparison_id`, `table_id` e `slot`
-- revisão, coverage opcional, arquivo operacional, cálculo comparativo, analytics e chats separados
-- isolamento forte frente a Julia e ao domínio técnico Cleide
+- 2 tabelas obrigatórias + 1 opcional
+- `comparison_id`, `table_id`, `slot`; revisão, coverage, cálculo, analytics e chats
+- isolamento forte frente ao chat AgenteFrete e ao domínio técnico Cleide
+- não prometer decisão automática, contratação ou concorrência de mercado não suportadas
 
-Limite documental importante:
+## Editorial (persona Júlia)
 
-- o sistema já calcula e consolida resultados comparativos, mas a documentação não deve prometer decisão automática, contratação, envio de concorrência ao mercado ou "cálculo comparativo definitivo" para regras não suportadas
+- intenções: `news`, `analysis`, `evergreen`
+- admin editorial permite Analysis/Evergreen e `pauta_id` explícito (fail-closed se inválido)
+- evergreen automático via `ConfigRegras` (`evergreen_automatico_habilitado`, `evergreen_frequencia_minutos`)
+- imagem: `gemini-3.1-flash-image` / `generate_content`
+
+Detalhes em [estado de produção](estado_producao.md) e [marketing/SEO](guia_de_mkt.md).
 
 ## Roadmap versus implementação
 
-Sempre separar:
-
-- implementado agora: o que está em rotas, serviços, templates, models e testes atuais
-- planejado/roadmap: previsões futuras, automações comerciais, contratação automática, concorrência aberta de mercado e outras capacidades não comprovadas no código atual
+- implementado agora: rotas, serviços, templates, models e testes atuais
+- roadmap: capacidades futuras sem evidência no runtime — nunca como fato
 
 ## Isolamento Multiuser em produção
 
-Multiuser V1 não altera as responsabilidades acima. Conta e contrato comuns não compartilham memória ou artefatos privados entre membros.
+Multiuser V1 não altera as responsabilidades acima. Conta comum não compartilha memória ou artefatos privados.
 
-- Cleiton governa autorização pela Franquia individual, consumo, eventos e infraestrutura documental; isso não concede leitura coletiva.
-- Júlia mantém contexto documental e conversa do usuário/sessão autenticados.
-- Cleide/AgenteAudita mantém documentos, tabelas, lote, BI e chats no escopo autorizado do usuário.
-- AgenteCompara mantém comparação, tabelas, resultados e memória de cálculo vinculados ao ownership e à sessão.
+- Cleiton governa autorização por Franquia individual; não concede leitura coletiva
+- o chat AgenteFrete (módulo Julia) mantém contexto do usuário/sessão autenticados
+- Cleide/AgenteAudita e AgenteCompara mantêm artefatos no ownership autorizado
+- `conta_id` sozinho não autoriza artefatos privados
 
-O contratante ocupa assento e administra o vínculo comercial; não é admin global nem leitor automático dos arquivos dos membros. `conta_id` sozinho não autoriza artefatos privados. Revogação invalida o contexto organizacional da sessão, preservando histórico e consumo; reentrada exige aceite. Contrato completo em [Multiuser V1](multiuser_v1.md).
+Contrato completo em [Multiuser V1](multiuser_v1.md).

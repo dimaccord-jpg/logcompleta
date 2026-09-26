@@ -1,6 +1,6 @@
 # Runtime IA e Observabilidade
 
-Referência revisada em 2026-09-19. Estado funcional consolidado em `docs/estado_producao.md`.
+Referência revisada em 2026-09-23 (Sprint 12). Estado funcional consolidado em `docs/estado_producao.md`. A instrumentação temporária de diagnóstico da SCRUM-214 não faz parte da arquitetura permanente; o utilitário versionado é `scripts/diagnose_julia_image_provider.py`.
 
 ## Trilhas separadas
 
@@ -39,9 +39,9 @@ Observações do runtime atual:
 - o chat contextual da comparação (`comparison-chat`) usa `flow_type` próprio (`agente_compara_comparison_chat`) e só fica disponível quando há `result` liberado e `analytics` válidos em estado READY;
 - o `comparison-chat` é separado do `audit-chat`, permanece bloqueado antes de READY e não faz fetch pré-READY.
 
-## AgenteAudita/Cleide e Julia
+## AgenteAudita/Cleide e chat AgenteFrete (módulo Julia)
 
-- Julia consome IA, mas não tem billing documental próprio nessa camada;
+- o chat operacional AgenteFrete (módulos `julia_*`) consome IA, mas não tem billing documental próprio nessa camada;
 - o domínio técnico Cleide (superfície pública AgenteAudita) mantém namespace de métricas e processamento separado do AgenteCompara;
 - testes confirmam que eventos do AgenteCompara não contaminam os agregados da Cleide.
 
@@ -67,7 +67,7 @@ A autenticação do cron continua por `X-Cron-Secret`, com `?secret=` mantido co
 
 ## Banco e deploy
 
-- o head atual versionado no repositório é `f7g8h9i0j1k2`
+- o head atual versionado no repositório é `g8h9i0j1k2l3`, com `down_revision=f7g8h9i0j1k2`
 - `start.sh` executa `python -m flask --app app.web db upgrade` antes do Gunicorn
 - o guard de `app/db_operational_safety.py` bloqueia downgrade sem confirmação explícita, mas não bloqueia `upgrade` normal
 
