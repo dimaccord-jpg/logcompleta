@@ -174,7 +174,11 @@ def test_accepted_with_ids_loads_meta_and_google(web):
     _set_privacy(client, "v1:accepted")
     html = client.get("/").get_data(as_text=True)
     assert "fbevents.js" in html
-    assert f"fbq('init', '{META_PIXEL_ID}')" in html or META_PIXEL_ID in html
+    set_call = f"fbq('set', 'autoConfig', false, '{META_PIXEL_ID}')"
+    init_call = f"fbq('init', '{META_PIXEL_ID}')"
+    assert set_call in html
+    assert html.index(set_call) < html.index(init_call)
+    assert html.count("fbq('init'") == 1
     assert "googletagmanager.com/gtag/js" in html
     assert GA_MEASUREMENT_ID in html
     assert "af_external_tracking.js" in html
@@ -202,9 +206,25 @@ def test_google_config_send_page_view_false():
 
 def test_pixel_loader_does_not_auto_pageview():
     src = PIXEL_BASE.read_text(encoding="utf-8")
-    assert "fbq('init'" in src
+    set_call = "fbq('set', 'autoConfig', false, '{{ facebook_pixel_id }}')"
+    init_call = "fbq('init', '{{ facebook_pixel_id }}')"
+    assert "privacy_marketing_allowed" in src
+    assert set_call in src
+    assert src.index(set_call) < src.index(init_call)
+    assert src.count("fbq('init'") == 1
+    assert "autoConfig', 'false'" not in src
     assert "fbq('track', 'PageView')" not in src
     assert 'fbq("track", "PageView")' not in src
+
+
+def test_accepted_without_pixel_id_skips_meta_loader(web):
+    web.app.config["FACEBOOK_PIXEL_ID"] = ""
+    client = web.app.test_client()
+    _set_privacy(client, "v1:accepted")
+    html = client.get("/").get_data(as_text=True)
+    assert "fbevents.js" not in html
+    assert "fbq('init'" not in html
+    assert "autoConfig" not in html
 
 
 # --- PAGE VIEW ---------------------------------------------------------------

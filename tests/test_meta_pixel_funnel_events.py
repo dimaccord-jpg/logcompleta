@@ -64,7 +64,11 @@ def test_standard_pixel_events_curated_by_157():
 
     assert "fbq('track', 'PageView')" not in base
     assert 'fbq("track", "PageView")' not in base
-    assert "fbq('init'" in base or 'fbq("init"' in base
+    set_call = "fbq('set', 'autoConfig', false, '{{ facebook_pixel_id }}')"
+    init_call = "fbq('init', '{{ facebook_pixel_id }}')"
+    assert set_call in base
+    assert base.index(set_call) < base.index(init_call)
+    assert base.count("fbq('init'") == 1
 
     assert 'trackEvent("CompleteRegistration")' not in helper
     assert 'trackEvent("Lead")' not in helper

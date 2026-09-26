@@ -21,6 +21,7 @@ OPENAI_PIXEL_ID = "px_test_openai_ads"
 META_MARKERS = (
     "connect.facebook.net",
     "fbevents.js",
+    "fbq('set', 'autoConfig', false",
     "fbq('init'",
 )
 OPENAI_MARKERS = (
