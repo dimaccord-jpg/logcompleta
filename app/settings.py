@@ -117,15 +117,7 @@ def _build_settings() -> Settings:
         raise RuntimeError(
             "SECRET_KEY insegura em homolog/prod. O fallback de desenvolvimento e proibido fora de dev."
         )
-    database_url_raw = (os.getenv("DATABASE_URL") or "").strip()
-    database_url_l = database_url_raw.lower()
-    if (not database_url_raw) or database_url_l.startswith("sqlite://") or not database_url_l.startswith("postgres"):
-        raise RuntimeError(
-            "DATABASE_URL ausente ou inválida. A aplicação exige uma URI PostgreSQL em DATABASE_URL "
-            "(banco único em todos os ambientes). Outros SGBDs ou esquemas de URI não são suportados."
-        )
-
-    sqlalchemy_database_uri = database_url_raw
+    sqlalchemy_database_uri = env_loader.resolve_postgresql_sqlalchemy_uri()
 
     # 7) Sessão
     session_type = "filesystem"

@@ -39,8 +39,16 @@ def resolve_postgresql_sqlalchemy_uri() -> str:
         raise RuntimeError(
             "DATABASE_URL inválida: é obrigatória uma URI PostgreSQL. SQLite e outros SGBDs não são suportados."
         )
-    make_url(raw)
-    return raw
+    # SQLAlchemy 2.1 mudou o driver PostgreSQL default para psycopg (v3).
+    # O projeto declara psycopg2-binary; torne o driver explícito para não
+    # depender do default da versão do SQLAlchemy.
+    if low.startswith("postgresql://"):
+        sqlalchemy_uri = "postgresql+psycopg2://" + raw[len("postgresql://"):]
+    else:
+        sqlalchemy_uri = raw
+
+    make_url(sqlalchemy_uri)
+    return sqlalchemy_uri
 
 
 def mask_database_url_for_log(url: str) -> str:

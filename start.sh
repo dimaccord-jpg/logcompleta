@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -o errexit
 
 # Resolve APP_ENV no Render quando nÃ£o vier explÃ­cito.
