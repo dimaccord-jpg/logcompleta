@@ -3,6 +3,10 @@
 Growth first-party permanece a fonte de verdade. Este adapter e best-effort:
 ausencia/rejeicao da Meta jamais altera produto, FunnelEvent ou resposta funcional.
 
+Diagnostico de log (SCRUM-160): cada avaliacao de envio registra attempted
+e consent_state (accepted|rejected|unknown). Isso nao altera gates, retorno
+nem HTTP. not_new/replay nao gera log de tentativa.
+
 Escopo deste lote (somente Meta CAPI):
   page_view -> PageView
   signup_completed -> CompleteRegistration
@@ -469,6 +473,35 @@ def _is_meta_capi_test_event_code_configured(raw: str | None) -> bool:
     return raw is not None and raw != ""
 
 
+_CONSENT_LOG_STATES = frozenset({"accepted", "rejected", "unknown"})
+
+
+def _normalize_consent_state(raw: Any) -> str:
+    """Estado controlado para log. Nao altera a decisao de envio."""
+    if isinstance(raw, str) and raw in _CONSENT_LOG_STATES:
+        return raw
+    return "unknown"
+
+
+def _read_request_consent_state() -> str:
+    """Le somente o estado de consentimento da request, para diagnostico.
+
+    Nao le cookies de clique, nao envia e nao substitui o gate funcional.
+    """
+    try:
+        from flask import has_request_context, request
+
+        if not has_request_context():
+            return "unknown"
+        return _normalize_consent_state(
+            parse_privacy_marketing_cookie(
+                request.cookies.get(PRIVACY_MARKETING_COOKIE_NAME)
+            )
+        )
+    except Exception:
+        return "unknown"
+
+
 def _log_capi(
     *,
     growth_event: str,
@@ -478,11 +511,15 @@ def _log_capi(
     timed_out: bool,
     duration_ms: int | None,
     graph_version: str | None,
+    attempted: bool,
+    consent_state: str,
 ) -> None:
-    # Allowlist estrita: sem token, cookies, payload, URL, IP, UA, body, exc.
+    # Allowlist estrita: sem token, cookies, payload, URL, IP, UA, body, exc,
+    # event_id, HMAC, fbp/fbc ou query string.
     logger.info(
         "growth_meta_capi provider=meta growth_event=%s meta_event=%s status=%s "
-        "http_status=%s timeout=%s duration_ms=%s graph_version=%s",
+        "http_status=%s timeout=%s duration_ms=%s graph_version=%s "
+        "attempted=%s consent_state=%s",
         growth_event or "-",
         meta_event or "-",
         status,
@@ -490,6 +527,8 @@ def _log_capi(
         bool(timed_out),
         duration_ms if duration_ms is not None else "-",
         graph_version or "-",
+        "true" if attempted else "false",
+        _normalize_consent_state(consent_state),
     )
 
 
@@ -590,39 +629,53 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
 
     Fail-open absoluto: nunca commit/rollback/flush; nunca edita entidades;
     nunca propaga excecao; nunca altera resposta funcional do caller.
+
+    SCRUM-160: cada avaliacao de envio emite diagnostico terminal
+    (attempted, consent_state, status). A leitura antecipada de
+    consent_state serve so ao log; o gate continua o mesmo.
     """
     growth_event = ""
     meta_event: str | None = None
     graph_version: str | None = None
+    consent_state = "unknown"
+
+    def _diag(
+        *,
+        status: str,
+        attempted: bool,
+        http_status: int | None = None,
+        timed_out: bool = False,
+        duration_ms: int | None = None,
+    ) -> None:
+        _log_capi(
+            growth_event=growth_event or "unknown",
+            meta_event=meta_event,
+            status=status,
+            http_status=http_status,
+            timed_out=timed_out,
+            duration_ms=duration_ms,
+            graph_version=graph_version,
+            attempted=attempted,
+            consent_state=consent_state,
+        )
+
     try:
+        # Somente log. O gate de consentimento permanece mais abaixo.
+        consent_state = _read_request_consent_state()
+
         if funnel_event is None:
+            _diag(status=STATUS_UNSUPPORTED_EVENT, attempted=False)
             return _result(attempted=False, success=False, status=STATUS_UNSUPPORTED_EVENT)
 
         growth_event = str(getattr(funnel_event, "event_name", "") or "").strip().lower()
         if growth_event not in META_CAPI_ALLOWED_GROWTH_EVENTS:
-            _log_capi(
-                growth_event=growth_event or "unknown",
-                meta_event=None,
-                status=STATUS_UNSUPPORTED_EVENT,
-                http_status=None,
-                timed_out=False,
-                duration_ms=None,
-                graph_version=None,
-            )
+            _diag(status=STATUS_UNSUPPORTED_EVENT, attempted=False)
             return _result(attempted=False, success=False, status=STATUS_UNSUPPORTED_EVENT)
 
         meta_event = META_CAPI_EVENT_NAME_MAP.get(growth_event)
 
         if not _resolve_meta_capi_enabled():
-            _log_capi(
-                growth_event=growth_event,
-                meta_event=meta_event,
-                status=STATUS_DISABLED,
-                http_status=None,
-                timed_out=False,
-                duration_ms=None,
-                graph_version=None,
-            )
+            _diag(status=STATUS_DISABLED, attempted=False)
             return _result(attempted=False, success=False, status=STATUS_DISABLED)
 
         pixel_id = _resolve_str(
@@ -645,15 +698,7 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
             or not access_token
             or not is_valid_meta_graph_api_version(graph_version)
         ):
-            _log_capi(
-                growth_event=growth_event,
-                meta_event=meta_event,
-                status=STATUS_CONFIG_MISSING,
-                http_status=None,
-                timed_out=False,
-                duration_ms=None,
-                graph_version=graph_version or None,
-            )
+            _diag(status=STATUS_CONFIG_MISSING, attempted=False)
             return _result(attempted=False, success=False, status=STATUS_CONFIG_MISSING)
 
         # Presenca bruta ANTES de strip/validacao/sanitizacao.
@@ -664,15 +709,7 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
         if _is_meta_capi_test_event_code_configured(test_code_raw):
             if app_env == "prod":
                 # Invalido presente NAO vira "nao configurado": bloqueia envio real.
-                _log_capi(
-                    growth_event=growth_event,
-                    meta_event=meta_event,
-                    status=STATUS_TEST_CODE_IN_PROD,
-                    http_status=None,
-                    timed_out=False,
-                    duration_ms=None,
-                    graph_version=graph_version,
-                )
+                _diag(status=STATUS_TEST_CODE_IN_PROD, attempted=False)
                 return _result(
                     attempted=False, success=False, status=STATUS_TEST_CODE_IN_PROD
                 )
@@ -684,30 +721,15 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
                     test_event_code = test_code_raw
 
         privacy_state, user_data = _read_request_consent_and_cookies()
+        consent_state = _normalize_consent_state(privacy_state)
         if privacy_state != PRIVACY_MARKETING_STATE_ACCEPTED:
-            _log_capi(
-                growth_event=growth_event,
-                meta_event=meta_event,
-                status=STATUS_CONSENT_NOT_ACCEPTED,
-                http_status=None,
-                timed_out=False,
-                duration_ms=None,
-                graph_version=graph_version,
-            )
+            _diag(status=STATUS_CONSENT_NOT_ACCEPTED, attempted=False)
             return _result(
                 attempted=False, success=False, status=STATUS_CONSENT_NOT_ACCEPTED
             )
 
         if not user_data:
-            _log_capi(
-                growth_event=growth_event,
-                meta_event=meta_event,
-                status=STATUS_USER_DATA_MISSING,
-                http_status=None,
-                timed_out=False,
-                duration_ms=None,
-                graph_version=graph_version,
-            )
+            _diag(status=STATUS_USER_DATA_MISSING, attempted=False)
             return _result(
                 attempted=False, success=False, status=STATUS_USER_DATA_MISSING
             )
@@ -717,36 +739,21 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
         )
         event_source_url = build_canonical_event_source_url(path) if path else None
         if not event_source_url:
-            _log_capi(
-                growth_event=growth_event,
-                meta_event=meta_event,
-                status=STATUS_URL_UNAVAILABLE,
-                http_status=None,
-                timed_out=False,
-                duration_ms=None,
-                graph_version=graph_version,
-            )
+            _diag(status=STATUS_URL_UNAVAILABLE, attempted=False)
             return _result(
                 attempted=False, success=False, status=STATUS_URL_UNAVAILABLE
             )
 
         event_time = funnel_event_time_unix(getattr(funnel_event, "occurred_at", None))
         if event_time is None:
-            _log_capi(
-                growth_event=growth_event,
-                meta_event=meta_event,
-                status=STATUS_EVENT_TIME_INVALID,
-                http_status=None,
-                timed_out=False,
-                duration_ms=None,
-                graph_version=graph_version,
-            )
+            _diag(status=STATUS_EVENT_TIME_INVALID, attempted=False)
             return _result(
                 attempted=False, success=False, status=STATUS_EVENT_TIME_INVALID
             )
 
         event_pk = getattr(funnel_event, "id", None)
         if event_pk is None:
+            _diag(status=STATUS_UNSUPPORTED_EVENT, attempted=False)
             return _result(attempted=False, success=False, status=STATUS_UNSUPPORTED_EVENT)
         try:
             event_id = build_external_event_token(
@@ -754,15 +761,7 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
                 funnel_event_id=int(event_pk),
             )
         except Exception:
-            _log_capi(
-                growth_event=growth_event,
-                meta_event=meta_event,
-                status=STATUS_INTERNAL_ERROR,
-                http_status=None,
-                timed_out=False,
-                duration_ms=None,
-                graph_version=graph_version,
-            )
+            _diag(status=STATUS_INTERNAL_ERROR, attempted=False)
             return _result(attempted=False, success=False, status=STATUS_INTERNAL_ERROR)
 
         event_payload = build_meta_capi_event_payload(
@@ -773,6 +772,7 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
             event_id=event_id,
         )
         if event_payload is None:
+            _diag(status=STATUS_USER_DATA_MISSING, attempted=False)
             return _result(
                 attempted=False, success=False, status=STATUS_USER_DATA_MISSING
             )
@@ -784,14 +784,12 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
             event_payload=event_payload,
             test_event_code=test_event_code,
         )
-        _log_capi(
-            growth_event=growth_event,
-            meta_event=meta_event,
+        _diag(
             status=status,
+            attempted=True,
             http_status=http_status,
             timed_out=timed_out,
             duration_ms=duration_ms,
-            graph_version=graph_version,
         )
         return _result(
             attempted=True,
@@ -800,15 +798,7 @@ def try_send_growth_meta_capi(funnel_event: Any) -> dict[str, Any]:
             http_status=http_status,
         )
     except Exception:
-        _log_capi(
-            growth_event=growth_event or "unknown",
-            meta_event=meta_event,
-            status=STATUS_INTERNAL_ERROR,
-            http_status=None,
-            timed_out=False,
-            duration_ms=None,
-            graph_version=graph_version,
-        )
+        _diag(status=STATUS_INTERNAL_ERROR, attempted=False)
         return _result(attempted=False, success=False, status=STATUS_INTERNAL_ERROR)
 
 
@@ -817,6 +807,7 @@ def try_send_growth_meta_capi_if_new(record_result: Any) -> dict[str, Any]:
     CAPI somente apos FunnelEvent novo (created=True) ja commitado.
 
     Replay/falha Growth => nenhum HTTP. Fail-open.
+    not_new nao representa nova avaliacao de envio e nao gera log.
     """
     try:
         if not isinstance(record_result, dict):
@@ -825,4 +816,15 @@ def try_send_growth_meta_capi_if_new(record_result: Any) -> dict[str, Any]:
             return _result(attempted=False, success=False, status=STATUS_NOT_NEW)
         return try_send_growth_meta_capi(record_result.get("event"))
     except Exception:
+        _log_capi(
+            growth_event="unknown",
+            meta_event=None,
+            status=STATUS_INTERNAL_ERROR,
+            http_status=None,
+            timed_out=False,
+            duration_ms=None,
+            graph_version=None,
+            attempted=False,
+            consent_state=_read_request_consent_state(),
+        )
         return _result(attempted=False, success=False, status=STATUS_INTERNAL_ERROR)
