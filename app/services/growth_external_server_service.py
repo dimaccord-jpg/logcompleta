@@ -96,7 +96,8 @@ META_CAPI_EVENT_NAME_MAP = {
 }
 
 # Allowlist CAPI propria (paths literais). Separada da Growth page allowlist.
-# Nao inclui detalhe_noticia, reset com token, newsletter cancel, OAuth,
+# detalhe_noticia nao entra aqui: /noticia/<id> so sai de _resolve_page_view_path.
+# Nao inclui reset com token, newsletter cancel, OAuth,
 # convite, admin com identificador, /acesso-desktop.
 META_CAPI_PAGE_VIEW_PATHS: dict[str, str] = {
     "index": "/",
@@ -389,13 +390,46 @@ def funnel_event_time_unix(occurred_at: Any) -> int | None:
     return unix_ts
 
 
+_DETALHE_NOTICIA_PAGE = "detalhe_noticia"
+_DETALHE_NOTICIA_CONTENT_TYPES = frozenset({"noticia", "artigo"})
+
+
+def _positive_noticia_content_id(raw: Any) -> int | None:
+    """Inteiro positivo para /noticia/<id>. Rejeita bool e string nao inteira."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        if not raw or any(ch < "0" or ch > "9" for ch in raw):
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
 def _resolve_page_view_path(metadata: Any) -> str | None:
     if not isinstance(metadata, dict):
         return None
     page = metadata.get("page")
     if not isinstance(page, str):
         return None
-    return META_CAPI_PAGE_VIEW_PATHS.get(page.strip())
+    page_n = page.strip()
+    if page_n == _DETALHE_NOTICIA_PAGE:
+        content_type = metadata.get("content_type")
+        if content_type not in _DETALHE_NOTICIA_CONTENT_TYPES:
+            return None
+        content_id = _positive_noticia_content_id(metadata.get("content_id"))
+        if content_id is None:
+            return None
+        return f"/noticia/{content_id}"
+    return META_CAPI_PAGE_VIEW_PATHS.get(page_n)
 
 
 def _resolve_first_relevant_path(metadata: Any) -> str | None:
