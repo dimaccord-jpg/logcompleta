@@ -29,6 +29,11 @@
                     </a>
                 </li>
                 <li>
+                    <a href="{{ url_for('admin.admin_growth') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.admin_growth', 'admin.admin_growth_experiments', 'admin.admin_growth_experiment_new', 'admin.admin_growth_experiment_edit'] }}">
+                        <i class="bi bi-graph-up me-2"></i> Growth
+                    </a>
+                </li>
+                <li>
                     <a href="{{ url_for('admin.gestao_planos') }}" class="nav-link {{ 'active' if request.endpoint == 'admin.gestao_planos' }}">
                         <i class="bi bi-tags me-2"></i> Planos & SaaS
                     </a>

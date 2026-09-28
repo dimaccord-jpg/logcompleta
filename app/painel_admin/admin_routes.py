@@ -535,6 +535,156 @@ def admin_dashboard():
     )
 
 
+@admin_bp.route("/growth", methods=["GET"])
+@login_required
+def admin_growth():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+
+    from app.services.admin_growth_dashboard_service import (
+        get_admin_growth_dashboard_payload,
+        unavailable_admin_growth_dashboard_payload,
+    )
+
+    days_raw = request.args.get("days")
+    try:
+        growth = get_admin_growth_dashboard_payload(days=days_raw or 30)
+    except Exception as exc:
+        logger.exception(
+            "admin_growth_dashboard_failed days=%s failure_type=%s",
+            days_raw,
+            exc.__class__.__name__,
+        )
+        growth = unavailable_admin_growth_dashboard_payload(days=days_raw or 30)
+
+    experiments = []
+    experiments_unavailable = False
+    period = growth.get("period") or {}
+    try:
+        from app.services.admin_growth_experiment_service import (
+            list_recent_growth_experiments,
+        )
+
+        start = datetime.fromisoformat(period["start_utc"])
+        end = datetime.fromisoformat(period["end_utc"])
+        experiments = list_recent_growth_experiments(start, end)
+    except Exception as exc:
+        logger.exception(
+            "admin_growth_experiments_failed failure_type=%s",
+            exc.__class__.__name__,
+        )
+        experiments = []
+        experiments_unavailable = True
+    return render_template(
+        "growth.html",
+        growth=growth,
+        experiments=experiments,
+        experiments_unavailable=experiments_unavailable,
+    )
+
+
+def _render_growth_experiment_form(*, mode: str, form: dict, errors: dict, experiment_id: int | None = None):
+    from app.services.admin_growth_experiment_service import status_options
+
+    return render_template(
+        "growth_experiment_form.html",
+        mode=mode,
+        form=form,
+        errors=errors,
+        experiment_id=experiment_id,
+        status_options=status_options(),
+    )
+
+
+@admin_bp.route("/growth/experiments", methods=["GET"])
+@login_required
+def admin_growth_experiments():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services.admin_growth_experiment_service import list_growth_experiments
+
+    return render_template(
+        "growth_experiments.html",
+        experiments=list_growth_experiments(),
+    )
+
+
+@admin_bp.route("/growth/experiments/new", methods=["GET", "POST"])
+@login_required
+def admin_growth_experiment_new():
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services.admin_growth_experiment_service import (
+        GrowthExperimentValidationError,
+        create_growth_experiment,
+        empty_growth_experiment_form,
+        form_values_from_mapping,
+    )
+
+    form = empty_growth_experiment_form()
+    errors: dict = {}
+    if request.method == "POST":
+        form = form_values_from_mapping(request.form)
+        try:
+            create_growth_experiment(form)
+        except GrowthExperimentValidationError as exc:
+            errors = exc.errors
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception(
+                "admin_growth_experiment_create_failed failure_type=%s",
+                exc.__class__.__name__,
+            )
+            flash("Não foi possível salvar o experimento.", "danger")
+        else:
+            flash("Experimento registrado.", "success")
+            return redirect(url_for("admin.admin_growth_experiments"))
+    return _render_growth_experiment_form(mode="create", form=form, errors=errors)
+
+
+@admin_bp.route("/growth/experiments/<int:experiment_id>/edit", methods=["GET", "POST"])
+@login_required
+def admin_growth_experiment_edit(experiment_id: int):
+    if not verificar_acesso_admin():
+        return "Acesso Negado", 403
+    from app.services.admin_growth_experiment_service import (
+        GrowthExperimentValidationError,
+        form_values_from_mapping,
+        get_growth_experiment,
+        growth_experiment_form_values,
+        update_growth_experiment,
+    )
+
+    row = get_growth_experiment(experiment_id)
+    if row is None:
+        return "Experimento não encontrado", 404
+    form = growth_experiment_form_values(row)
+    errors: dict = {}
+    if request.method == "POST":
+        form = form_values_from_mapping(request.form)
+        try:
+            update_growth_experiment(row, form)
+        except GrowthExperimentValidationError as exc:
+            errors = exc.errors
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception(
+                "admin_growth_experiment_update_failed id=%s failure_type=%s",
+                experiment_id,
+                exc.__class__.__name__,
+            )
+            flash("Não foi possível salvar o experimento.", "danger")
+        else:
+            flash("Experimento atualizado.", "success")
+            return redirect(url_for("admin.admin_growth_experiments"))
+    return _render_growth_experiment_form(
+        mode="edit",
+        form=form,
+        errors=errors,
+        experiment_id=experiment_id,
+    )
+
+
 @admin_bp.route("/onboarding-word-cloud/hidden-terms", methods=["POST"])
 @login_required
 def onboarding_word_cloud_hide_term():

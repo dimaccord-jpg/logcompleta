@@ -1,8 +1,8 @@
 # Migrations (Alembic)
 
-Referência documental da cadeia Alembic na produção `fa98317` (Sprint 12).
+Referência documental da cadeia Alembic na árvore versionada `dcda3ce` (pós-Sprint 12).
 
-O head versionado atual é `g8h9i0j1k2l3`, com `down_revision=f7g8h9i0j1k2`. A migration Growth do SCRUM-148 torna `FunnelEvent.user_id`, `conta_id` e `franquia_id` nullable, preservando as foreign keys e sem criar nova tabela/modelo.
+O head versionado atual é `h9i0j1k2l3m4`, com `down_revision=g8h9i0j1k2l3`. Essa migration cria somente a tabela administrativa `growth_experiment`. A migration Growth do SCRUM-148 (`g8h9i0j1k2l3`) torna `FunnelEvent.user_id`, `conta_id` e `franquia_id` nullable, preservando as foreign keys e sem criar nova tabela/modelo.
 
 A fonte canônica da cadeia, modelos e segurança operacional é [Banco e Migrations](../docs/DATABASE_AND_MIGRATIONS.md).
 

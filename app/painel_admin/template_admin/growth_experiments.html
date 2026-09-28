@@ -1,0 +1,51 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">Experimentos</h4>
+        <div class="d-flex gap-2">
+            <a href="{{ url_for('admin.admin_growth') }}" class="btn btn-outline-secondary btn-sm">Voltar ao Growth</a>
+            <a href="{{ url_for('admin.admin_growth_experiment_new') }}" class="btn btn-primary btn-sm">Novo experimento</a>
+        </div>
+    </div>
+    <p class="text-muted small">Registro manual. O status é escolhido pelo administrador.</p>
+
+    {% if not experiments %}
+    <div class="alert alert-info" role="status">Nenhum experimento registrado.</div>
+    {% else %}
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Hipótese</th>
+                        <th>Início</th>
+                        <th>Origem/campanha</th>
+                        <th>Métrica primária</th>
+                        <th>Status</th>
+                        <th>Decisão</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in experiments %}
+                    <tr>
+                        <td>{{ item.hypothesis }}</td>
+                        <td>{{ item.start_date.strftime('%d/%m/%Y') if item.start_date else '' }}</td>
+                        <td>{{ item.origin_campaign or '' }}</td>
+                        <td>{{ item.primary_metric }}</td>
+                        <td>{{ item.status_label }}</td>
+                        <td>{% if item.decision %}{{ item.decision }}{% endif %}</td>
+                        <td class="text-end">
+                            <a href="{{ url_for('admin.admin_growth_experiment_edit', experiment_id=item.id) }}">Editar</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1551,3 +1551,53 @@ class HomeCtaExperimentEvent(db.Model):
     event_type = db.Column(db.String(20), nullable=False)
     interaction_origin = db.Column(db.String(20), nullable=True)
     occurred_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class GrowthExperiment(db.Model):
+    """Registro administrativo manual de experimento e aprendizado de Growth.
+
+    Texto livre, sem vínculo a FunnelEvent, campanhas externas ou usuários.
+    """
+
+    __tablename__ = "growth_experiment"
+
+    STATUS_PLANNED = "planned"
+    STATUS_RUNNING = "running"
+    STATUS_COMPLETED = "completed"
+    STATUS_LEARNING_RECORDED = "learning_recorded"
+    STATUSES = (
+        STATUS_PLANNED,
+        STATUS_RUNNING,
+        STATUS_COMPLETED,
+        STATUS_LEARNING_RECORDED,
+    )
+    STATUS_LABELS = {
+        STATUS_PLANNED: "Planejado",
+        STATUS_RUNNING: "Executando",
+        STATUS_COMPLETED: "Concluído",
+        STATUS_LEARNING_RECORDED: "Aprendizado registrado",
+    }
+
+    id = db.Column(db.Integer, primary_key=True)
+    hypothesis = db.Column(db.Text, nullable=False)
+    start_date = db.Column(db.Date, nullable=False)
+    origin_campaign = db.Column(db.String(255), nullable=True)
+    change_description = db.Column(db.Text, nullable=True)
+    primary_metric = db.Column(db.String(255), nullable=False)
+    observed_result = db.Column(db.Text, nullable=True)
+    evidence = db.Column(db.Text, nullable=True)
+    interpretation = db.Column(db.Text, nullable=True)
+    decision = db.Column(db.Text, nullable=True)
+    next_action = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(32), nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=utcnow_naive,
+        onupdate=utcnow_naive,
+        nullable=False,
+    )
+
+    @property
+    def status_label(self) -> str:
+        return self.STATUS_LABELS.get(self.status or "", self.status or "")
