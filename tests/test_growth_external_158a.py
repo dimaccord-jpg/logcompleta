@@ -577,6 +577,158 @@ def test_detalhe_noticia_skips_capi(app, monkeypatch):
         post.assert_not_called()
 
 
+def _assert_page_view_canonical(app, metadata, expected_url):
+    app.config["SECRET_KEY"] = "test-secret-158a"
+    with app.app_context(), _request_ctx(app), patch.object(capi.requests, "post") as post:
+        post.return_value = MagicMock(status_code=200)
+        result = capi.try_send_growth_meta_capi(
+            _fake_event(event_name=FUNNEL_EVENT_PAGE_VIEW, metadata=metadata)
+        )
+        assert result["status"] == capi.STATUS_SUCCESS
+        data = json.loads(post.call_args.kwargs["data"]["data"])
+        assert data[0]["event_source_url"] == expected_url
+        return data[0]["event_source_url"]
+
+
+def _assert_page_view_url_unavailable(app, metadata):
+    with app.app_context(), _request_ctx(app), patch.object(capi.requests, "post") as post:
+        result = capi.try_send_growth_meta_capi(
+            _fake_event(event_name=FUNNEL_EVENT_PAGE_VIEW, metadata=metadata)
+        )
+        assert result["status"] == capi.STATUS_URL_UNAVAILABLE
+        assert result["attempted"] is False
+        post.assert_not_called()
+
+
+@pytest.mark.parametrize("content_type", ["noticia", "artigo"])
+def test_detalhe_noticia_positive_id_canonical(app, monkeypatch, content_type):
+    _enable_capi_env(monkeypatch)
+    _assert_page_view_canonical(
+        app,
+        {
+            "page": "detalhe_noticia",
+            "content_type": content_type,
+            "content_id": 428,
+        },
+        f"{PUBLIC_BASE}/noticia/428",
+    )
+
+
+def test_detalhe_noticia_integer_string_id_canonical(app, monkeypatch):
+    _enable_capi_env(monkeypatch)
+    _assert_page_view_canonical(
+        app,
+        {
+            "page": "detalhe_noticia",
+            "content_type": "noticia",
+            "content_id": "428",
+        },
+        f"{PUBLIC_BASE}/noticia/428",
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"page": "detalhe_noticia", "content_type": "noticia"},
+        {"page": "detalhe_noticia", "content_type": "artigo", "content_id": None},
+    ],
+)
+def test_detalhe_noticia_missing_content_id_skips(app, monkeypatch, metadata):
+    _enable_capi_env(monkeypatch)
+    _assert_page_view_url_unavailable(app, metadata)
+
+
+@pytest.mark.parametrize(
+    "content_id",
+    [0, -1, -428, True, False, "abc", "428abc", "1.5", "428?x=1", "428#frag", ""],
+)
+def test_detalhe_noticia_invalid_content_id_skips(app, monkeypatch, content_id):
+    _enable_capi_env(monkeypatch)
+    _assert_page_view_url_unavailable(
+        app,
+        {
+            "page": "detalhe_noticia",
+            "content_type": "noticia",
+            "content_id": content_id,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    ["post", "noticia ", "Noticia", "ARTIGO", "", None, 428],
+)
+def test_detalhe_noticia_invalid_content_type_skips(app, monkeypatch, content_type):
+    _enable_capi_env(monkeypatch)
+    _assert_page_view_url_unavailable(
+        app,
+        {
+            "page": "detalhe_noticia",
+            "content_type": content_type,
+            "content_id": 428,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "reset_password",
+        "newsletter_cancelar",
+        "admin_promocao_confirmar",
+        "admin_revogacao_confirmar",
+        "multiuser_convite.visualizar_convite",
+    ],
+)
+def test_token_routes_stay_blocked_with_noticia_context(app, monkeypatch, page):
+    _enable_capi_env(monkeypatch)
+    _assert_page_view_url_unavailable(
+        app,
+        {
+            "page": page,
+            "content_type": "noticia",
+            "content_id": 428,
+            "url": "https://evil.example/reset-password/secret-token",
+            "path": "/reset-password/secret-token",
+        },
+    )
+
+
+def test_detalhe_noticia_extra_fields_do_not_change_canonical(app, monkeypatch):
+    _enable_capi_env(monkeypatch)
+    url = _assert_page_view_canonical(
+        app,
+        {
+            "page": "detalhe_noticia",
+            "content_type": "artigo",
+            "content_id": 428,
+            "host": "evil.example",
+            "url": "https://evil.example/noticia/1?token=abc#frag",
+            "event_source_url": "https://evil.example/phish",
+            "path": "/reset-password/secret-token",
+            "query": "?token=abc",
+            "fragment": "#secret",
+            "referer": "https://evil.example/ref?x=1#y",
+        },
+        f"{PUBLIC_BASE}/noticia/428",
+    )
+    assert "evil.example" not in url
+    assert "?" not in url
+    assert "#" not in url
+    assert url.startswith(PUBLIC_BASE)
+
+
+@pytest.mark.parametrize("page,path", sorted(capi.META_CAPI_PAGE_VIEW_PATHS.items()))
+def test_literal_page_view_paths_unchanged(app, monkeypatch, page, path):
+    _enable_capi_env(monkeypatch)
+    _assert_page_view_canonical(
+        app,
+        {"page": page},
+        f"{PUBLIC_BASE}{path}",
+    )
+
+
 def test_token_paths_never_in_capi_map():
     assert "reset_password" not in capi.META_CAPI_PAGE_VIEW_PATHS
     assert "newsletter_cancelar" not in capi.META_CAPI_PAGE_VIEW_PATHS
