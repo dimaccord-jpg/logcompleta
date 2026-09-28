@@ -69,7 +69,11 @@
         {% endfor %}
     </div>
 
-    <h5 class="mb-3">Taxas com a mesma identidade</h5>
+    <h5 class="mb-2">Taxas com a mesma identidade</h5>
+    <p class="text-muted small mb-3">
+        Estas taxas medem a interseção de identidades cujos dois eventos ocorreram dentro do período selecionado.
+        Não são uma análise de coorte histórica: um cadastro anterior ao início da janela, por exemplo, não entra no denominador desta tela.
+    </p>
     <div class="row g-3 mb-4">
         {% for item in g.get('rates') or [] %}
         <div class="col-md-6">
@@ -129,6 +133,32 @@
     {% for note in acq.get('notes') or [] %}
     <p class="text-muted small mb-1">{{ note }}</p>
     {% endfor %}
+
+    <div class="card border-0 shadow-sm p-3 mt-3 mb-3" data-growth-acquisition-filters>
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label small text-muted mb-0" for="growth-acq-source">Source</label>
+                <select id="growth-acq-source" class="form-select form-select-sm" data-growth-filter-source>
+                    <option value="">Todos</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small text-muted mb-0" for="growth-acq-campaign">Campaign</label>
+                <select id="growth-acq-campaign" class="form-select form-select-sm" data-growth-filter-campaign>
+                    <option value="">Todas</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-growth-filter-clear>Limpar filtros</button>
+            </div>
+        </div>
+        <p class="text-muted small mb-0 mt-2">
+            Os filtros atuam somente no drilldown de aquisição já atribuído a source/campaign. Eles não reatribuem page view ou paid,
+            não alteram o funil acima e não transformam origem ausente em direct. Plataforma externa não é dimensão persistida neste BI.
+        </p>
+        <p class="text-muted small mb-0 mt-1" data-growth-filter-status aria-live="polite"></p>
+    </div>
+
     {% for touch in acq.get('touches') or [] %}
     <h6 class="mt-4 mb-1" data-growth-touch="{{ touch.key }}">{{ touch.title }}</h6>
     <p class="text-muted small">{{ touch.description }}</p>
@@ -151,7 +181,7 @@
         {% endfor %}
     </div>
     {% if touch.rows %}
-    <div class="card border-0 shadow-sm mb-3">
+    <div class="card border-0 shadow-sm mb-3" data-growth-acquisition-table>
         <div class="table-responsive">
             <table class="table table-sm mb-0">
                 <thead>
@@ -166,7 +196,7 @@
                 </thead>
                 <tbody>
                     {% for row in touch.rows %}
-                    <tr>
+                    <tr data-growth-acquisition-row data-growth-source="{{ row.source }}" data-growth-campaign="{{ row.campaign }}">
                         <td>{{ row.source }}</td>
                         <td>{{ row.medium }}</td>
                         <td>{{ row.campaign }}</td>
@@ -175,6 +205,9 @@
                         {% endfor %}
                     </tr>
                     {% endfor %}
+                    <tr class="d-none" data-growth-acquisition-empty>
+                        <td colspan="{{ 3 + (touch.columns|length) }}" class="text-muted small">Nenhuma linha corresponde aos filtros selecionados.</td>
+                    </tr>
                 </tbody>
             </table>
         </div>
@@ -306,4 +339,79 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const sourceSelect = document.querySelector('[data-growth-filter-source]');
+    const campaignSelect = document.querySelector('[data-growth-filter-campaign]');
+    const clearButton = document.querySelector('[data-growth-filter-clear]');
+    const status = document.querySelector('[data-growth-filter-status]');
+    const rows = Array.from(document.querySelectorAll('[data-growth-acquisition-row]'));
+
+    if (!sourceSelect || !campaignSelect || !rows.length) {
+        return;
+    }
+
+    const normalize = (value) => (value || '').trim();
+    const uniqueSorted = (attribute) => Array.from(new Set(
+        rows.map((row) => normalize(row.getAttribute(attribute))).filter(Boolean)
+    )).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+
+    const appendOptions = (select, values) => {
+        values.forEach((value) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = value;
+            select.appendChild(option);
+        });
+    };
+
+    appendOptions(sourceSelect, uniqueSorted('data-growth-source'));
+    appendOptions(campaignSelect, uniqueSorted('data-growth-campaign'));
+
+    const applyFilters = () => {
+        const source = normalize(sourceSelect.value);
+        const campaign = normalize(campaignSelect.value);
+        let visible = 0;
+
+        rows.forEach((row) => {
+            const rowSource = normalize(row.getAttribute('data-growth-source'));
+            const rowCampaign = normalize(row.getAttribute('data-growth-campaign'));
+            const matchesSource = !source || rowSource === source;
+            const matchesCampaign = !campaign || rowCampaign === campaign;
+            const show = matchesSource && matchesCampaign;
+            row.classList.toggle('d-none', !show);
+            if (show) visible += 1;
+        });
+
+        document.querySelectorAll('[data-growth-acquisition-table]').forEach((table) => {
+            const tableRows = Array.from(table.querySelectorAll('[data-growth-acquisition-row]'));
+            const emptyRow = table.querySelector('[data-growth-acquisition-empty]');
+            const hasVisible = tableRows.some((row) => !row.classList.contains('d-none'));
+            if (emptyRow) emptyRow.classList.toggle('d-none', hasVisible);
+        });
+
+        if (status) {
+            const active = [];
+            if (source) active.push(`source: ${source}`);
+            if (campaign) active.push(`campaign: ${campaign}`);
+            status.textContent = active.length
+                ? `${visible} linha(s) exibida(s). Filtros ativos — ${active.join(' | ')}.`
+                : `${visible} linha(s) de aquisição exibida(s).`;
+        }
+    };
+
+    sourceSelect.addEventListener('change', applyFilters);
+    campaignSelect.addEventListener('change', applyFilters);
+    if (clearButton) {
+        clearButton.addEventListener('click', function () {
+            sourceSelect.value = '';
+            campaignSelect.value = '';
+            applyFilters();
+        });
+    }
+
+    applyFilters();
+});
+</script>
 {% endblock %}
