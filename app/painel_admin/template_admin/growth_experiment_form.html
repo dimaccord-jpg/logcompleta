@@ -1,0 +1,93 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">{% if mode == 'edit' %}Editar experimento{% else %}Novo experimento{% endif %}</h4>
+        <a href="{{ url_for('admin.admin_growth_experiments') }}" class="btn btn-outline-secondary btn-sm">Voltar</a>
+    </div>
+    <p class="text-muted small">Registro manual de hipótese e aprendizado. Não altera campanhas nem o produto.</p>
+
+    {% if errors %}
+    <div class="alert alert-warning" role="alert">Corrija os campos indicados.</div>
+    {% endif %}
+
+    <form method="post" class="card border-0 shadow-sm">
+        <div class="card-body row g-3">
+            <div class="col-12">
+                <label class="form-label" for="hypothesis">Hipótese *</label>
+                <textarea id="hypothesis" name="hypothesis" class="form-control" rows="3" required>{{ form.hypothesis }}</textarea>
+                {% if errors.get('hypothesis') %}<div class="text-danger small">{{ errors.hypothesis }}</div>{% endif %}
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="start_date">Data de início *</label>
+                <input id="start_date" type="date" name="start_date" class="form-control" value="{{ form.start_date }}" required>
+                {% if errors.get('start_date') %}<div class="text-danger small">{{ errors.start_date }}</div>{% endif %}
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="primary_metric">Métrica primária *</label>
+                <select id="primary_metric" name="primary_metric" class="form-select" required>
+                    <option value="">Selecione</option>
+                    {% for value, label in primary_metric_options %}
+                    <option value="{{ value }}" {% if form.primary_metric == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                    <option value="{{ primary_metric_custom_sentinel }}" {% if form.primary_metric == primary_metric_custom_sentinel %}selected{% endif %}>Outra métrica</option>
+                </select>
+                {% if errors.get('primary_metric') %}<div class="text-danger small">{{ errors.primary_metric }}</div>{% endif %}
+                <div class="mt-2" id="primary_metric_custom_wrap"{% if form.primary_metric != primary_metric_custom_sentinel %} hidden{% endif %}>
+                    <label class="form-label" for="primary_metric_custom">Métrica personalizada *</label>
+                    <input id="primary_metric_custom" type="text" name="primary_metric_custom" class="form-control" maxlength="255" value="{{ form.primary_metric_custom }}">
+                </div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="status">Status *</label>
+                <select id="status" name="status" class="form-select" required>
+                    <option value="">Selecione</option>
+                    {% for value, label in status_options %}
+                    <option value="{{ value }}" {% if form.status == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+                {% if errors.get('status') %}<div class="text-danger small">{{ errors.status }}</div>{% endif %}
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="origin_campaign">Origem/campanha</label>
+                <input id="origin_campaign" type="text" name="origin_campaign" class="form-control" maxlength="255" value="{{ form.origin_campaign }}">
+                {% if errors.get('origin_campaign') %}<div class="text-danger small">{{ errors.origin_campaign }}</div>{% endif %}
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="change_description">Mudança realizada</label>
+                <textarea id="change_description" name="change_description" class="form-control" rows="3">{{ form.change_description }}</textarea>
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="observed_result">Resultado observado</label>
+                <textarea id="observed_result" name="observed_result" class="form-control" rows="3">{{ form.observed_result }}</textarea>
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="evidence">Evidências</label>
+                <textarea id="evidence" name="evidence" class="form-control" rows="3">{{ form.evidence }}</textarea>
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="interpretation">Interpretação</label>
+                <textarea id="interpretation" name="interpretation" class="form-control" rows="3">{{ form.interpretation }}</textarea>
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="decision">Decisão</label>
+                <textarea id="decision" name="decision" class="form-control" rows="2">{{ form.decision }}</textarea>
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="next_action">Próxima ação</label>
+                <textarea id="next_action" name="next_action" class="form-control" rows="2">{{ form.next_action }}</textarea>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary btn-sm">Salvar</button>
+            </div>
+        </div>
+    </form>
+</div>
+<script>
+document.getElementById("primary_metric").addEventListener("change", function () {
+    var wrap = document.getElementById("primary_metric_custom_wrap");
+    wrap.hidden = this.value !== "{{ primary_metric_custom_sentinel }}";
+});
+</script>
+{% endblock %}

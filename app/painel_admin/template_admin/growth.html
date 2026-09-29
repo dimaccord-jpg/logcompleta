@@ -1,0 +1,417 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+{% set g = growth or {} %}
+{% set period = g.get('period') or {} %}
+{% set filters = g.get('filters') or {} %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">Growth</h4>
+        <span class="text-muted small">{{ period.get('label') or 'Últimos 30 dias' }}</span>
+    </div>
+
+    <form method="get" action="{{ url_for('admin.admin_growth') }}" class="card border-0 shadow-sm p-3 mb-4">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label small text-muted mb-0" for="growth-days">Período</label>
+                <select id="growth-days" name="days" class="form-select form-select-sm">
+                    {% for opt in filters.get('period_options') or [] %}
+                    <option value="{{ opt.value }}" {% if filters.get('days') == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-primary btn-sm">Aplicar</button>
+            </div>
+        </div>
+        <p class="text-muted small mb-0 mt-2">
+            Intervalo UTC [{{ period.get('start_utc') }}, {{ period.get('end_utc') }}).
+            O fim é exclusivo.
+        </p>
+    </form>
+
+    {% if g.get('service_failed') %}
+    <div class="alert alert-warning" role="alert">{{ g.get('message') }}</div>
+    {% elif not g.get('has_data') %}
+    <div class="alert alert-info" role="alert">{{ g.get('message') or 'Nenhum evento Growth neste período.' }}</div>
+    {% endif %}
+
+    <div class="row g-3 mb-4">
+        {% for stage in g.get('stages') or [] %}
+        <div class="col-md-6 col-xl-4">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h6 class="mb-0">{{ stage.title }}</h6>
+                        {% if stage.complementary %}
+                        <span class="badge bg-secondary">complementar</span>
+                        {% endif %}
+                    </div>
+                    {% for metric in stage.metrics %}
+                        {% if metric.key != 'anonymous_occurrences' or (metric.value or 0) > 0 %}
+                        <div class="mb-2">
+                            <small class="text-muted d-block">{{ metric.label }}</small>
+                            {% if metric.value is none %}
+                            <span class="fw-semibold text-muted">sem dados</span>
+                            {% else %}
+                            <span class="fs-5 fw-semibold">{{ metric.value }}</span>
+                            <span class="text-muted small">{{ metric.unit }}</span>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    {% endfor %}
+                    {% for note in stage.notes %}
+                    <p class="text-muted small mb-1">{{ note }}</p>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <h5 class="mb-2">Taxas com a mesma identidade</h5>
+    <p class="text-muted small mb-3">
+        Estas taxas medem a interseção de identidades cujos dois eventos ocorreram dentro do período selecionado.
+        Não são uma análise de coorte histórica: um cadastro anterior ao início da janela, por exemplo, não entra no denominador desta tela.
+    </p>
+    <div class="row g-3 mb-4">
+        {% for item in g.get('rates') or [] %}
+        <div class="col-md-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="mb-1">{{ item.label }}</h6>
+                    <p class="text-muted small">{{ item.description }}</p>
+                    {% if item.rate is none %}
+                    <p class="mb-0 fw-semibold text-muted">sem base comparável</p>
+                    {% else %}
+                    <p class="mb-0">
+                        <span class="fs-5 fw-semibold">{{ '%.1f'|format(item.rate * 100) }}%</span>
+                        <span class="text-muted small">{{ item.numerator }} de {{ item.denominator }} {{ item.unit }}</span>
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <h5 class="mb-3">Resumo</h5>
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Estágio</th>
+                        <th>Métrica</th>
+                        <th>Valor</th>
+                        <th>Unidade</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for stage in g.get('stages') or [] %}
+                        {% for metric in stage.metrics %}
+                            {% if metric.key != 'anonymous_occurrences' or (metric.value or 0) > 0 %}
+                            <tr>
+                                <td>{{ stage.title }}</td>
+                                <td>{{ metric.label }}</td>
+                                <td>{% if metric.value is none %}sem dados{% else %}{{ metric.value }}{% endif %}</td>
+                                <td>{{ metric.unit }}</td>
+                            </tr>
+                            {% endif %}
+                        {% endfor %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <h5 class="mb-3 mt-4" data-growth-section="acquisition">Aquisição</h5>
+    {% set acq = g.get('acquisition') or {} %}
+    {% if not acq.get('available') %}
+    <div class="alert alert-warning" role="alert">{{ acq.get('message') or 'Aquisição indisponível temporariamente.' }}</div>
+    {% else %}
+    {% for note in acq.get('notes') or [] %}
+    <p class="text-muted small mb-1">{{ note }}</p>
+    {% endfor %}
+
+    <div class="card border-0 shadow-sm p-3 mt-3 mb-3" data-growth-acquisition-filters>
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label small text-muted mb-0" for="growth-acq-source">Source</label>
+                <select id="growth-acq-source" class="form-select form-select-sm" data-growth-filter-source>
+                    <option value="">Todos</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label small text-muted mb-0" for="growth-acq-campaign">Campaign</label>
+                <select id="growth-acq-campaign" class="form-select form-select-sm" data-growth-filter-campaign>
+                    <option value="">Todas</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-growth-filter-clear>Limpar filtros</button>
+            </div>
+        </div>
+        <p class="text-muted small mb-0 mt-2">
+            Os filtros atuam somente no drilldown de aquisição já atribuído a source/campaign. Eles não reatribuem page view ou paid,
+            não alteram o funil acima e não transformam origem ausente em direct. Plataforma externa não é dimensão persistida neste BI.
+        </p>
+        <p class="text-muted small mb-0 mt-1" data-growth-filter-status aria-live="polite"></p>
+    </div>
+
+    {% for touch in acq.get('touches') or [] %}
+    <h6 class="mt-4 mb-1" data-growth-touch="{{ touch.key }}">{{ touch.title }}</h6>
+    <p class="text-muted small">{{ touch.description }}</p>
+    <div class="row g-3 mb-3">
+        {% for item in touch.summary %}
+        <div class="col-md-6 col-xl-4">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">{{ item.label }}</h6>
+                    {% if item.known_source is none %}
+                    <p class="mb-0 fw-semibold text-muted">sem dados</p>
+                    {% else %}
+                    <p class="mb-1"><span class="fw-semibold">{{ item.known_source }}</span> <span class="text-muted small">com source conhecido</span></p>
+                    <p class="mb-1"><span class="fw-semibold">{{ item.not_recorded }}</span> <span class="text-muted small">não registrado</span></p>
+                    <p class="mb-0 text-muted small">{{ item.unit }}</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% if touch.rows %}
+    <div class="card border-0 shadow-sm mb-3" data-growth-acquisition-table>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Source</th>
+                        <th>Medium</th>
+                        <th>Campaign</th>
+                        {% for col in touch.columns %}
+                        <th>{{ col.label }}<div class="fw-normal text-muted">{{ col.unit }}</div></th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in touch.rows %}
+                    <tr data-growth-acquisition-row data-growth-source="{{ row.source }}" data-growth-campaign="{{ row.campaign }}">
+                        <td>{{ row.source }}</td>
+                        <td>{{ row.medium }}</td>
+                        <td>{{ row.campaign }}</td>
+                        {% for col in touch.columns %}
+                        <td>{{ row[col.key] }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                    <tr class="d-none" data-growth-acquisition-empty>
+                        <td colspan="{{ 3 + (touch.columns|length) }}" class="text-muted small">Nenhuma linha corresponde aos filtros selecionados.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <p class="text-muted small">Nenhum evento aplicável neste período.</p>
+    {% endif %}
+    {% if touch.footnote %}
+    <p class="text-muted small">{{ touch.footnote }}</p>
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+
+    <h5 class="mb-3 mt-4" data-growth-section="tracking-quality">Qualidade da mensuração</h5>
+    {% set q = g.get('tracking_quality') or {} %}
+    {% set confirmation = q.get('external_confirmation') or {} %}
+    <div class="alert alert-secondary" role="status" data-growth-external-confirmation="{{ confirmation.get('kind') or 'unavailable' }}">
+        {{ confirmation.get('display') or 'Confirmação externa histórica indisponível' }}
+    </div>
+    {% if q.get('discrepancy_note') %}
+    <p class="text-muted small">{{ q.get('discrepancy_note') }}</p>
+    {% endif %}
+    {% if not q.get('available') %}
+    <div class="alert alert-warning" role="alert">{{ q.get('message') or 'Qualidade da mensuração indisponível temporariamente.' }}</div>
+    {% else %}
+    {% for block in q.get('blocks') or [] %}
+    <h6 class="mt-4 mb-1">{{ block.title }}</h6>
+    {% if block.note %}
+    <p class="text-muted small">{{ block.note }}</p>
+    {% endif %}
+    {% if block.get('items') %}
+    <div class="row g-3 mb-3">
+        {% for item in block.get('items') %}
+        <div class="col-md-6 col-xl-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <small class="text-muted d-block">{{ item.label }}</small>
+                    {% if item.kind == 'unavailable' %}
+                    <span class="fw-semibold">{{ item.display }}</span>
+                    {% elif item.value is none %}
+                    <span class="fw-semibold text-muted">sem dados</span>
+                    {% else %}
+                    <span class="fs-5 fw-semibold">{{ item.value }}</span>
+                    {% if item.unit %}<span class="text-muted small">{{ item.unit }}</span>{% endif %}
+                    {% if item.rate_display %}<span class="text-muted small">{{ item.rate_display }}</span>{% endif %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% if block.get('rows') %}
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                {% if block.get('headers') %}
+                <thead>
+                    <tr>
+                        {% for head in block.get('headers') %}
+                        <th>{{ head }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                {% endif %}
+                <tbody>
+                    {% for row in block.get('rows') %}
+                    <tr>
+                        {% for cell in row %}
+                        <td>{{ cell }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    {% for extra in block.get('notes') or [] %}
+    <p class="text-muted small mb-1">{{ extra }}</p>
+    {% endfor %}
+    {% endfor %}
+    {% endif %}
+
+    <div class="d-flex justify-content-between align-items-center mb-3 mt-4" data-growth-section="experiments">
+        <h5 class="mb-0">Experimentos</h5>
+        <div class="d-flex gap-2">
+            <a href="{{ url_for('admin.admin_growth_experiments') }}" class="btn btn-outline-secondary btn-sm">Ver todos</a>
+            <a href="{{ url_for('admin.admin_growth_experiment_new') }}" class="btn btn-primary btn-sm">Novo experimento</a>
+        </div>
+    </div>
+    <p class="text-muted small">Registro manual de hipótese e aprendizado. Não altera campanhas nem o produto.</p>
+    {% if experiments_unavailable %}
+    <div class="alert alert-warning" role="alert">Não foi possível carregar os experimentos.</div>
+    {% elif not experiments %}
+    <div class="alert alert-info" role="status">Nenhum experimento registrado neste período.</div>
+    {% else %}
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Hipótese</th>
+                        <th>Início</th>
+                        <th>Origem/campanha</th>
+                        <th>Métrica primária</th>
+                        <th>Status</th>
+                        <th>Decisão</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in experiments %}
+                    <tr data-growth-experiment-id="{{ item.id }}">
+                        <td>{{ item.hypothesis }}</td>
+                        <td>{{ item.start_date.strftime('%d/%m/%Y') if item.start_date else '' }}</td>
+                        <td>{{ item.origin_campaign or '' }}</td>
+                        <td>{{ item.primary_metric }}</td>
+                        <td>{{ item.status_label }}</td>
+                        <td>{% if item.decision %}{{ item.decision }}{% endif %}</td>
+                        <td class="text-end">
+                            <a href="{{ url_for('admin.admin_growth_experiment_edit', experiment_id=item.id) }}">Editar</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const sourceSelect = document.querySelector('[data-growth-filter-source]');
+    const campaignSelect = document.querySelector('[data-growth-filter-campaign]');
+    const clearButton = document.querySelector('[data-growth-filter-clear]');
+    const status = document.querySelector('[data-growth-filter-status]');
+    const rows = Array.from(document.querySelectorAll('[data-growth-acquisition-row]'));
+
+    if (!sourceSelect || !campaignSelect || !rows.length) {
+        return;
+    }
+
+    const normalize = (value) => (value || '').trim();
+    const uniqueSorted = (attribute) => Array.from(new Set(
+        rows.map((row) => normalize(row.getAttribute(attribute))).filter(Boolean)
+    )).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+
+    const appendOptions = (select, values) => {
+        values.forEach((value) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = value;
+            select.appendChild(option);
+        });
+    };
+
+    appendOptions(sourceSelect, uniqueSorted('data-growth-source'));
+    appendOptions(campaignSelect, uniqueSorted('data-growth-campaign'));
+
+    const applyFilters = () => {
+        const source = normalize(sourceSelect.value);
+        const campaign = normalize(campaignSelect.value);
+        let visible = 0;
+
+        rows.forEach((row) => {
+            const rowSource = normalize(row.getAttribute('data-growth-source'));
+            const rowCampaign = normalize(row.getAttribute('data-growth-campaign'));
+            const matchesSource = !source || rowSource === source;
+            const matchesCampaign = !campaign || rowCampaign === campaign;
+            const show = matchesSource && matchesCampaign;
+            row.classList.toggle('d-none', !show);
+            if (show) visible += 1;
+        });
+
+        document.querySelectorAll('[data-growth-acquisition-table]').forEach((table) => {
+            const tableRows = Array.from(table.querySelectorAll('[data-growth-acquisition-row]'));
+            const emptyRow = table.querySelector('[data-growth-acquisition-empty]');
+            const hasVisible = tableRows.some((row) => !row.classList.contains('d-none'));
+            if (emptyRow) emptyRow.classList.toggle('d-none', hasVisible);
+        });
+
+        if (status) {
+            const active = [];
+            if (source) active.push(`source: ${source}`);
+            if (campaign) active.push(`campaign: ${campaign}`);
+            status.textContent = active.length
+                ? `${visible} linha(s) exibida(s). Filtros ativos — ${active.join(' | ')}.`
+                : `${visible} linha(s) de aquisição exibida(s).`;
+        }
+    };
+
+    sourceSelect.addEventListener('change', applyFilters);
+    campaignSelect.addEventListener('change', applyFilters);
+    if (clearButton) {
+        clearButton.addEventListener('click', function () {
+            sourceSelect.value = '';
+            campaignSelect.value = '';
+            applyFilters();
+        });
+    }
+
+    applyFilters();
+});
+</script>
+{% endblock %}
