@@ -26,8 +26,18 @@
             </div>
             <div class="col-md-4">
                 <label class="form-label" for="primary_metric">Métrica primária *</label>
-                <input id="primary_metric" type="text" name="primary_metric" class="form-control" maxlength="255" value="{{ form.primary_metric }}" required>
+                <select id="primary_metric" name="primary_metric" class="form-select" required>
+                    <option value="">Selecione</option>
+                    {% for value, label in primary_metric_options %}
+                    <option value="{{ value }}" {% if form.primary_metric == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                    <option value="{{ primary_metric_custom_sentinel }}" {% if form.primary_metric == primary_metric_custom_sentinel %}selected{% endif %}>Outra métrica</option>
+                </select>
                 {% if errors.get('primary_metric') %}<div class="text-danger small">{{ errors.primary_metric }}</div>{% endif %}
+                <div class="mt-2" id="primary_metric_custom_wrap"{% if form.primary_metric != primary_metric_custom_sentinel %} hidden{% endif %}>
+                    <label class="form-label" for="primary_metric_custom">Métrica personalizada *</label>
+                    <input id="primary_metric_custom" type="text" name="primary_metric_custom" class="form-control" maxlength="255" value="{{ form.primary_metric_custom }}">
+                </div>
             </div>
             <div class="col-md-4">
                 <label class="form-label" for="status">Status *</label>
@@ -74,4 +84,10 @@
         </div>
     </form>
 </div>
+<script>
+document.getElementById("primary_metric").addEventListener("change", function () {
+    var wrap = document.getElementById("primary_metric_custom_wrap");
+    wrap.hidden = this.value !== "{{ primary_metric_custom_sentinel }}";
+});
+</script>
 {% endblock %}

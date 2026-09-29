@@ -9,6 +9,8 @@ import pytest
 from app.extensions import db
 from app.models import FunnelEvent, GrowthExperiment, HomeCtaExperimentEvent
 from app.services.admin_growth_experiment_service import (
+    PRIMARY_METRIC_CUSTOM_SENTINEL,
+    PRIMARY_METRIC_OPTIONS,
     list_recent_growth_experiments,
 )
 from tests.test_admin_growth_dashboard import (
@@ -20,7 +22,7 @@ from tests.test_admin_growth_dashboard import (
 _REQUIRED = {
     "hypothesis": "CTA da home aumenta cadastros.",
     "start_date": "2026-09-20",
-    "primary_metric": "Cadastros concluídos",
+    "primary_metric": "page_view",
     "status": "planned",
 }
 
@@ -182,7 +184,7 @@ def test_edit_updates_fields_and_status_without_workflow(app):
         data=_payload(
             hypothesis="Hipótese revisada.",
             start_date="2026-09-21",
-            primary_metric="Primeiro valor relevante",
+            primary_metric="paid",
             status="learning_recorded",
             decision="Encerrar e documentar.",
             evidence="Nota do administrador.",
@@ -194,7 +196,7 @@ def test_edit_updates_fields_and_status_without_workflow(app):
         row = db.session.get(GrowthExperiment, experiment_id)
         assert row.hypothesis == "Hipótese revisada."
         assert row.start_date == date(2026, 9, 21)
-        assert row.primary_metric == "Primeiro valor relevante"
+        assert row.primary_metric == "paid"
         assert row.status == "learning_recorded"
         assert row.decision == "Encerrar e documentar."
         assert row.evidence == "Nota do administrador."
@@ -254,7 +256,8 @@ def test_growth_page_lists_period_experiments_and_empty_state(app):
             hypothesis="Hipótese visível no período.",
             start_date=today,
             origin_campaign="Orgânico",
-            primary_metric="Cadastros do experimento",
+            primary_metric=PRIMARY_METRIC_CUSTOM_SENTINEL,
+            primary_metric_custom="Cadastros do experimento",
             status="running",
             decision="Continuar mais uma semana.",
         ),
@@ -304,3 +307,157 @@ def test_list_recent_growth_experiments_uses_half_open_period(app):
             datetime(2026, 9, 28, 15, 0, 0),
         )
         assert [row.hypothesis for row in rows] == ["No fim", "No início"]
+
+
+_CANONICAL_PRIMARY_METRICS = (
+    ("page_view", "Entrada — Page view"),
+    ("signup_started", "Cadastro iniciado"),
+    ("signup_completed", "Cadastro concluído"),
+    ("task_started", "Tarefa iniciada"),
+    ("task_completed", "Tarefa concluída"),
+    ("first_relevant_task_completed", "Primeiro valor"),
+    ("pricing_viewed", "Pricing visualizado"),
+    ("plan_selected", "Plano selecionado"),
+    ("checkout_started", "Checkout iniciado"),
+    ("paid", "Paid"),
+)
+
+
+def test_experiment_form_renders_primary_metric_select(app):
+    client, admin_id, _outsider_id = _admin_client(app)
+    _login_admin(app, client, admin_id)
+    html = client.get("/admin/growth/experiments/new").get_data(as_text=True)
+    assert '<select id="primary_metric" name="primary_metric"' in html
+    assert ">Outra métrica</option>" in html
+    assert 'id="primary_metric_custom_wrap" hidden' in html
+    assert 'name="primary_metric_custom"' in html
+
+
+def test_primary_metric_options_are_canonical(app):
+    assert PRIMARY_METRIC_OPTIONS == _CANONICAL_PRIMARY_METRICS
+    client, admin_id, _outsider_id = _admin_client(app)
+    _login_admin(app, client, admin_id)
+    html = client.get("/admin/growth/experiments/new").get_data(as_text=True)
+    for value, label in _CANONICAL_PRIMARY_METRICS:
+        assert f'value="{value}"' in html
+        assert f">{label}</option>" in html
+    custom_at = html.find('value="__custom__"')
+    paid_at = html.find('value="paid"')
+    assert paid_at != -1 and custom_at > paid_at
+
+
+def test_create_saves_canonical_checkout_started(app):
+    client, admin_id, _outsider_id = _admin_client(app)
+    _login_admin(app, client, admin_id)
+    response = client.post(
+        "/admin/growth/experiments/new",
+        data=_payload(
+            primary_metric="checkout_started",
+            primary_metric_custom="Checkout iniciado",
+        ),
+    )
+    assert response.status_code == 302
+    with app.app_context():
+        row = GrowthExperiment.query.one()
+        assert row.primary_metric == "checkout_started"
+
+
+def test_create_saves_custom_primary_metric(app):
+    client, admin_id, _outsider_id = _admin_client(app)
+    _login_admin(app, client, admin_id)
+    response = client.post(
+        "/admin/growth/experiments/new",
+        data=_payload(
+            primary_metric=PRIMARY_METRIC_CUSTOM_SENTINEL,
+            primary_metric_custom="CheckoutStarted",
+        ),
+    )
+    assert response.status_code == 302
+    with app.app_context():
+        row = GrowthExperiment.query.one()
+        assert row.primary_metric == "CheckoutStarted"
+
+
+def test_create_rejects_missing_or_unknown_primary_metric(app):
+    client, admin_id, _outsider_id = _admin_client(app)
+    _login_admin(app, client, admin_id)
+
+    missing = client.post(
+        "/admin/growth/experiments/new",
+        data=_payload(primary_metric="", hypothesis=""),
+    )
+    missing_html = missing.get_data(as_text=True)
+    assert missing.status_code == 200
+    assert "Informe a métrica primária." in missing_html
+
+    unknown = client.post(
+        "/admin/growth/experiments/new",
+        data=_payload(primary_metric="checkout started"),
+    )
+    assert unknown.status_code == 200
+    assert "Informe a métrica primária." in unknown.get_data(as_text=True)
+
+    blank_custom = client.post(
+        "/admin/growth/experiments/new",
+        data=_payload(
+            primary_metric=PRIMARY_METRIC_CUSTOM_SENTINEL,
+            primary_metric_custom="   ",
+            hypothesis="",
+        ),
+    )
+    blank_html = blank_custom.get_data(as_text=True)
+    assert blank_custom.status_code == 200
+    assert "Informe a métrica primária." in blank_html
+    assert 'value="__custom__" selected' in blank_html
+    assert 'id="primary_metric_custom_wrap"' in blank_html
+    assert 'id="primary_metric_custom_wrap" hidden' not in blank_html
+
+    preserved = client.post(
+        "/admin/growth/experiments/new",
+        data=_payload(primary_metric="checkout_started", hypothesis=""),
+    )
+    preserved_html = preserved.get_data(as_text=True)
+    assert preserved.status_code == 200
+    assert 'value="checkout_started" selected' in preserved_html
+    assert 'id="primary_metric_custom_wrap" hidden' in preserved_html
+
+    with app.app_context():
+        assert GrowthExperiment.query.count() == 0
+
+
+def test_edit_selects_canonical_primary_metric(app):
+    client, admin_id, _outsider_id = _admin_client(app)
+    _login_admin(app, client, admin_id)
+    created = client.post(
+        "/admin/growth/experiments/new",
+        data=_payload(primary_metric="checkout_started"),
+    )
+    assert created.status_code == 302
+    with app.app_context():
+        experiment_id = GrowthExperiment.query.one().id
+
+    html = client.get(f"/admin/growth/experiments/{experiment_id}/edit").get_data(as_text=True)
+    assert 'value="checkout_started" selected' in html
+    assert 'value="__custom__" selected' not in html
+    assert 'id="primary_metric_custom_wrap" hidden' in html
+
+
+def test_edit_opens_custom_metric_for_legacy_value(app):
+    client, admin_id, _outsider_id = _admin_client(app)
+    _login_admin(app, client, admin_id)
+    with app.app_context():
+        row = GrowthExperiment(
+            hypothesis="Métrica anterior ao select.",
+            start_date=date(2026, 9, 20),
+            primary_metric="Cadastros concluídos",
+            status="planned",
+        )
+        db.session.add(row)
+        db.session.commit()
+        experiment_id = row.id
+
+    html = client.get(f"/admin/growth/experiments/{experiment_id}/edit").get_data(as_text=True)
+    assert 'value="__custom__" selected' in html
+    assert 'value="Cadastros concluídos"' in html
+    assert 'id="primary_metric_custom_wrap" hidden' not in html
+    assert 'value="page_view" selected' not in html

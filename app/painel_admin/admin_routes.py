@@ -584,7 +584,11 @@ def admin_growth():
 
 
 def _render_growth_experiment_form(*, mode: str, form: dict, errors: dict, experiment_id: int | None = None):
-    from app.services.admin_growth_experiment_service import status_options
+    from app.services.admin_growth_experiment_service import (
+        PRIMARY_METRIC_CUSTOM_SENTINEL,
+        primary_metric_options,
+        status_options,
+    )
 
     return render_template(
         "growth_experiment_form.html",
@@ -593,6 +597,8 @@ def _render_growth_experiment_form(*, mode: str, form: dict, errors: dict, exper
         errors=errors,
         experiment_id=experiment_id,
         status_options=status_options(),
+        primary_metric_options=primary_metric_options(),
+        primary_metric_custom_sentinel=PRIMARY_METRIC_CUSTOM_SENTINEL,
     )
 
 

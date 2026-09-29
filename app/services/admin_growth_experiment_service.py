@@ -10,6 +10,20 @@ from app.models import GrowthExperiment
 RECENT_EXPERIMENT_LIMIT = 10
 _ORIGIN_CAMPAIGN_MAX = 255
 _PRIMARY_METRIC_MAX = 255
+PRIMARY_METRIC_CUSTOM_SENTINEL = "__custom__"
+PRIMARY_METRIC_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("page_view", "Entrada — Page view"),
+    ("signup_started", "Cadastro iniciado"),
+    ("signup_completed", "Cadastro concluído"),
+    ("task_started", "Tarefa iniciada"),
+    ("task_completed", "Tarefa concluída"),
+    ("first_relevant_task_completed", "Primeiro valor"),
+    ("pricing_viewed", "Pricing visualizado"),
+    ("plan_selected", "Plano selecionado"),
+    ("checkout_started", "Checkout iniciado"),
+    ("paid", "Paid"),
+)
+_CANONICAL_PRIMARY_METRICS = frozenset(value for value, _label in PRIMARY_METRIC_OPTIONS)
 
 FORM_FIELDS = (
     "hypothesis",
@@ -43,7 +57,9 @@ class GrowthExperimentValidationError(Exception):
 
 
 def empty_growth_experiment_form() -> dict[str, str]:
-    return {field: "" for field in FORM_FIELDS}
+    values = {field: "" for field in FORM_FIELDS}
+    values["primary_metric_custom"] = ""
+    return values
 
 
 def growth_experiment_form_values(row: GrowthExperiment) -> dict[str, str]:
@@ -55,7 +71,8 @@ def growth_experiment_form_values(row: GrowthExperiment) -> dict[str, str]:
             "start_date": start,
             "origin_campaign": row.origin_campaign or "",
             "change_description": row.change_description or "",
-            "primary_metric": row.primary_metric or "",
+            "primary_metric": _primary_metric_choice(row.primary_metric or ""),
+            "primary_metric_custom": _primary_metric_custom_text(row.primary_metric or ""),
             "observed_result": row.observed_result or "",
             "evidence": row.evidence or "",
             "interpretation": row.interpretation or "",
@@ -72,7 +89,13 @@ def form_values_from_mapping(raw) -> dict[str, str]:
     for field in FORM_FIELDS:
         value = raw.get(field) if raw is not None else None
         values[field] = "" if value is None else str(value).strip()
+    custom = raw.get("primary_metric_custom") if raw is not None else None
+    values["primary_metric_custom"] = "" if custom is None else str(custom).strip()
     return values
+
+
+def primary_metric_options() -> list[tuple[str, str]]:
+    return list(PRIMARY_METRIC_OPTIONS)
 
 
 def status_options() -> list[tuple[str, str]]:
@@ -147,11 +170,7 @@ def _validated_payload(raw) -> dict:
     if origin_campaign is not None and len(origin_campaign) > _ORIGIN_CAMPAIGN_MAX:
         errors["origin_campaign"] = "Origem/campanha deve ter no máximo 255 caracteres."
 
-    primary_metric = values["primary_metric"]
-    if not primary_metric:
-        errors["primary_metric"] = "Informe a métrica primária."
-    elif len(primary_metric) > _PRIMARY_METRIC_MAX:
-        errors["primary_metric"] = "Métrica primária deve ter no máximo 255 caracteres."
+    primary_metric = _resolve_primary_metric(values, errors)
 
     status = values["status"]
     if not status:
@@ -171,6 +190,39 @@ def _validated_payload(raw) -> dict:
     for field in _OPTIONAL_TEXT_FIELDS:
         payload[field] = _optional_text(values[field])
     return payload
+
+
+def _primary_metric_choice(stored: str) -> str:
+    value = (stored or "").strip()
+    if value in _CANONICAL_PRIMARY_METRICS:
+        return value
+    if not value:
+        return ""
+    return PRIMARY_METRIC_CUSTOM_SENTINEL
+
+
+def _primary_metric_custom_text(stored: str) -> str:
+    value = (stored or "").strip()
+    if not value or value in _CANONICAL_PRIMARY_METRICS:
+        return ""
+    return value
+
+
+def _resolve_primary_metric(values: dict[str, str], errors: dict[str, str]) -> str:
+    choice = values["primary_metric"]
+    if choice in _CANONICAL_PRIMARY_METRICS:
+        return choice
+    if choice == PRIMARY_METRIC_CUSTOM_SENTINEL:
+        custom = values.get("primary_metric_custom", "")
+        if not custom:
+            errors["primary_metric"] = "Informe a métrica primária."
+            return ""
+        if len(custom) > _PRIMARY_METRIC_MAX:
+            errors["primary_metric"] = "Métrica primária deve ter no máximo 255 caracteres."
+            return ""
+        return custom
+    errors["primary_metric"] = "Informe a métrica primária."
+    return ""
 
 
 def _parse_start_date(raw: str, errors: dict[str, str]) -> date | None:
