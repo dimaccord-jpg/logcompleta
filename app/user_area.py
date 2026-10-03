@@ -692,3 +692,8 @@ def encerrar_contrato_route():
     session.clear()
     return redirect(url_for("index"))
 
+
+from app.user_plugins_routes import registrar_rotas_plugins_usuario  # noqa: E402
+
+registrar_rotas_plugins_usuario(user_bp)
+

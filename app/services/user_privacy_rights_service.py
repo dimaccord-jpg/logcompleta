@@ -62,6 +62,7 @@ USER_FIELDS_PRESERVED = (
     "conta_id",
     "franquia_id",
     "sessao_contexto_geracao",
+    "cadastro_origem",
 )
 
 PRESERVED_CATEGORIES = (

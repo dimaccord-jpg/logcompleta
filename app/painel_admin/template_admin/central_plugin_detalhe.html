@@ -1,0 +1,329 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('admin.admin_dashboard') }}">Administrativo</a></li>
+            <li class="breadcrumb-item"><a href="{{ url_for('admin.central_plugins_listar') }}">Central de Plugins</a></li>
+            <li class="breadcrumb-item"><a href="{{ url_for('admin.central_plugins_listar') }}">Plugins</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Detalhe</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">{{ plugin.nome }}</h4>
+        <a href="{{ url_for('admin.central_plugins_listar') }}" class="btn btn-outline-secondary btn-sm">Voltar aos plugins</a>
+    </div>
+
+    {% if plugin.impede_execucao %}
+    <div class="alert alert-warning" role="status">
+        Este plugin está {{ plugin.status_label }}. As conexões existentes permanecem registradas e a autorização efetiva impede a execução.
+    </div>
+    {% endif %}
+
+    <div class="row g-4">
+        <div class="col-lg-7">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title">Identificação</h5>
+                    <p class="small text-muted mb-3">Slug <code>{{ plugin.slug }}</code> permanece estável.</p>
+                    <form method="post" action="{{ url_for('admin.central_plugins_metadados', plugin_id=plugin.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <div class="mb-3">
+                            <label for="nome" class="form-label small fw-bold">Nome</label>
+                            <input type="text" class="form-control" id="nome" name="nome" maxlength="255" value="{{ plugin.nome }}" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="descricao" class="form-label small fw-bold">Descrição</label>
+                            <textarea class="form-control" id="descricao" name="descricao" rows="3" maxlength="2000">{{ plugin.descricao or '' }}</textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="adapter_key" class="form-label small fw-bold">Adapter key</label>
+                            <input type="text" class="form-control" id="adapter_key" name="adapter_key" maxlength="80" value="{{ plugin.adapter_key }}" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-sm">Salvar identificação</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-5">
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-body">
+                    <h5 class="card-title">Status</h5>
+                    <p class="mb-2">
+                        <span class="badge bg-{{ plugin.status_badge }}">{{ plugin.status_label }}</span>
+                    </p>
+                    <p class="small text-muted">Bloquear ou desabilitar não desconecta usuários.</p>
+                    <form method="post" action="{{ url_for('admin.central_plugins_status', plugin_id=plugin.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <label for="status_plugin" class="form-label small fw-bold">Novo status</label>
+                        <select class="form-select form-select-sm mb-3" id="status_plugin" name="status">
+                            {% for opcao in opcoes.statuses_plugin %}
+                            <option value="{{ opcao.valor }}" {% if opcao.valor == plugin.status %}selected{% endif %}>{{ opcao.rotulo }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-outline-primary btn-sm">Atualizar status</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">Titularidade</h5>
+                    <p class="small text-muted">A declaração vale para o catálogo. Conexões já registradas não são reescritas.</p>
+                    <form method="post" action="{{ url_for('admin.central_plugins_titularidade', plugin_id=plugin.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="suporta_titularidade_pessoal" name="suporta_titularidade_pessoal" value="1" {% if plugin.suporta_titularidade_pessoal %}checked{% endif %}>
+                            <label class="form-check-label" for="suporta_titularidade_pessoal">Pessoal</label>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="suporta_titularidade_corporativa" name="suporta_titularidade_corporativa" value="1" {% if plugin.suporta_titularidade_corporativa %}checked{% endif %}>
+                            <label class="form-check-label" for="suporta_titularidade_corporativa">Corporativa</label>
+                        </div>
+                        <button type="submit" class="btn btn-outline-primary btn-sm">Salvar titularidade</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">Capabilities</h5>
+                    <p class="small text-muted">A política máxima é o teto da LogCompleta. Usuário e provider não reabrem o que estiver negado.</p>
+                    {% if not capabilities %}
+                    <div class="alert alert-info" role="status">Nenhuma capability cadastrada.</div>
+                    {% else %}
+                    <div class="table-responsive mb-4">
+                        <table class="table table-sm align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Chave</th>
+                                    <th>Nome</th>
+                                    <th>Descrição</th>
+                                    <th>Natureza</th>
+                                    <th>Status</th>
+                                    <th>Política máxima</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for capability in capabilities %}
+                                <tr>
+                                    <td><code>{{ capability.chave }}</code></td>
+                                    <td>{{ capability.nome }}</td>
+                                    <td>{{ capability.descricao or '' }}</td>
+                                    <td>{{ capability.natureza_label }}</td>
+                                    <td><span class="badge bg-{{ capability.status_badge }}">{{ capability.status_label }}</span></td>
+                                    <td><span class="badge bg-{{ capability.politica_badge }}">{{ capability.politica_label }}</span></td>
+                                    <td>
+                                        <form method="post" action="{{ url_for('admin.central_plugins_capability_governanca', plugin_id=plugin.id, capability_id=capability.id) }}" class="d-flex flex-wrap gap-2">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                            <select class="form-select form-select-sm" name="politica_maxima" aria-label="Política máxima de {{ capability.chave }}">
+                                                {% for opcao in opcoes.politicas %}
+                                                <option value="{{ opcao.valor }}" {% if opcao.valor == capability.politica_maxima %}selected{% endif %}>{{ opcao.rotulo }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            <select class="form-select form-select-sm" name="status" aria-label="Status de {{ capability.chave }}">
+                                                {% for opcao in opcoes.statuses_capability %}
+                                                <option value="{{ opcao.valor }}" {% if opcao.valor == capability.status %}selected{% endif %}>{{ opcao.rotulo }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            <button type="submit" class="btn btn-outline-primary btn-sm">Salvar</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+
+                    <h6 class="fw-bold">Nova capability</h6>
+                    <form method="post" action="{{ url_for('admin.central_plugins_capability_nova', plugin_id=plugin.id) }}" class="row g-2 align-items-end">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <div class="col-md-2">
+                            <label class="form-label small fw-bold" for="capability_chave">Chave</label>
+                            <input class="form-control form-control-sm" id="capability_chave" name="chave" maxlength="80" required>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-bold" for="capability_nome">Nome</label>
+                            <input class="form-control form-control-sm" id="capability_nome" name="nome" maxlength="255" required>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-bold" for="capability_descricao">Descrição</label>
+                            <input class="form-control form-control-sm" id="capability_descricao" name="descricao" maxlength="2000">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-bold" for="capability_natureza">Natureza</label>
+                            <select class="form-select form-select-sm" id="capability_natureza" name="natureza" required>
+                                {% for opcao in opcoes.naturezas %}
+                                <option value="{{ opcao.valor }}">{{ opcao.rotulo }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-1">
+                            <label class="form-label small fw-bold" for="capability_status">Status</label>
+                            <select class="form-select form-select-sm" id="capability_status" name="status">
+                                {% for opcao in opcoes.statuses_capability %}
+                                <option value="{{ opcao.valor }}">{{ opcao.rotulo }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-1">
+                            <label class="form-label small fw-bold" for="capability_politica">Política</label>
+                            <select class="form-select form-select-sm" id="capability_politica" name="politica_maxima">
+                                {% for opcao in opcoes.politicas %}
+                                <option value="{{ opcao.valor }}">{{ opcao.rotulo }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-1">
+                            <button type="submit" class="btn btn-primary btn-sm w-100">Criar</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">Conexões</h5>
+                    <p class="small text-muted">Visão de suporte. Sem credencial, referência de cofre ou concessão bruta.</p>
+                    {% if not conexoes %}
+                    <div class="alert alert-info" role="status">Nenhuma conexão registrada.</div>
+                    {% else %}
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Usuário</th>
+                                    <th>Conta</th>
+                                    <th>Titularidade</th>
+                                    <th>Estado</th>
+                                    <th>Identificador externo</th>
+                                    <th>Atualização</th>
+                                    <th>Diagnóstico</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for conexao in conexoes %}
+                                <tr>
+                                    <td>{{ conexao.id }}</td>
+                                    <td>{{ conexao.usuario_email }}</td>
+                                    <td>{{ conexao.conta_nome or '—' }}</td>
+                                    <td>{{ conexao.titularidade_label }}</td>
+                                    <td><span class="badge bg-{{ conexao.estado_badge }}">{{ conexao.estado_label }}</span></td>
+                                    <td>{{ conexao.identificador_externo_mascarado or '—' }}</td>
+                                    <td>{{ conexao.updated_at.strftime('%d/%m/%Y %H:%M') if conexao.updated_at else '' }}</td>
+                                    <td>
+                                        {% if conexao.diagnostico_codigo or conexao.diagnostico_resumo %}
+                                        <code>{{ conexao.diagnostico_codigo or '' }}</code>
+                                        {{ conexao.diagnostico_resumo or '' }}
+                                        {% else %}
+                                        —
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title">Auditoria administrativa</h5>
+                    <p class="small text-muted">Quem alterou o catálogo. Sem payload.</p>
+                    {% if not auditoria %}
+                    <div class="alert alert-info" role="status">Nenhuma alteração administrativa registrada.</div>
+                    {% else %}
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Quando</th>
+                                    <th>Ator</th>
+                                    <th>Alteração</th>
+                                    <th>Capability</th>
+                                    <th>Campo</th>
+                                    <th>Antes</th>
+                                    <th>Depois</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for linha in auditoria %}
+                                <tr>
+                                    <td>{{ linha.created_at.strftime('%d/%m/%Y %H:%M') if linha.created_at else '' }}</td>
+                                    <td>{{ linha.ator_email }}</td>
+                                    <td>{{ linha.alteracao_label }}</td>
+                                    <td>{{ linha.capability_nome or "—" }}</td>
+                                    <td><code>{{ linha.campo }}</code></td>
+                                    <td>{{ linha.valor_anterior or '—' }}</td>
+                                    <td>{{ linha.valor_novo or '—' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title">Eventos da Central</h5>
+                    <p class="small text-muted">Trilha operacional da conexão, em ordem cronológica recente.</p>
+                    {% if not eventos %}
+                    <div class="alert alert-info" role="status">Nenhum evento da Central para este plugin.</div>
+                    {% else %}
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Quando</th>
+                                    <th>Evento</th>
+                                    <th>Detalhe</th>
+                                    <th>Conexão</th>
+                                    <th>Usuário</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for evento in eventos %}
+                                <tr>
+                                    <td>{{ evento.created_at.strftime('%d/%m/%Y %H:%M') if evento.created_at else '' }}</td>
+                                    <td>{{ evento.tipo_label }}</td>
+                                    <td><code>{{ evento.detalhe_codigo or '' }}</code></td>
+                                    <td>{{ evento.conexao_id }}</td>
+                                    <td>{{ evento.usuario_email }}</td>
+                                    <td>
+                                        {% if evento.estado_anterior or evento.estado_novo %}
+                                        {{ evento.estado_anterior or '—' }} → {{ evento.estado_novo or '—' }}
+                                        {% else %}
+                                        —
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

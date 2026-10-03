@@ -35,6 +35,9 @@ DOCUMENTAL_DEADLINE_REPLY = (
 GENERIC_REPLY_FALLBACK = (
     "Desculpe, não consegui processar sua mensagem no momento. Tente de novo em instantes."
 )
+PROVIDER_UNAVAILABLE_REPLY = (
+    "Assistente temporariamente indisponível. Verifique a configuração do serviço."
+)
 
 
 def _try_record_julia_chat_growth_task(
@@ -316,6 +319,7 @@ def chat_julia_reply(
     document_file_parts: list | None = None,
     flow_type: str | None = None,
     execution_id: str | None = None,
+    allow_provider_fallback: bool = True,
 ) -> dict:
     """
     Envia a mensagem do usuário ao LLM com histórico limitado.
@@ -325,6 +329,7 @@ def chat_julia_reply(
     document_file_parts: partes de arquivo Gemini autorizadas pelo Cleiton (PDF real).
     flow_type: trilho de governança; padrão julia_chat ou julia_chat_documental quando há contexto.
     execution_id: identidade efêmera da execução Growth (opcional; UUID gerado se ausente).
+    allow_provider_fallback: False executa só o primeiro candidato, depois de governança.
     Retorna {"reply": str} em sucesso ou {"reply": str, "error": str} em fallback.
     """
     from app.funnel_event_service import (
@@ -380,7 +385,7 @@ def chat_julia_reply(
     if not client:
         logger.warning("Chat Júlia: nenhuma chave Gemini configurada (GEMINI_API_KEY ou GEMINI_API_KEY_1).")
         _growth_fail("julia_chat_provider_unavailable", task_stage="provider_check")
-        return {"reply": "Assistente temporariamente indisponível. Verifique a configuração do serviço."}
+        return {"reply": PROVIDER_UNAVAILABLE_REPLY}
 
     alias_session = CleitonAiAliasSession()
     try:
@@ -446,6 +451,8 @@ def chat_julia_reply(
     last_error = None
     failed_models: list[str] = []
     model_candidates = _get_chat_model_candidates()
+    if not allow_provider_fallback:
+        model_candidates = model_candidates[:1]
     documental_pdf = _is_documental_pdf_context(resolved_flow_type, document_file_parts)
 
     # Autorizações/validações ok: início real da geração de resposta.

@@ -1321,6 +1321,12 @@ def agentes_cleiton():
             cms_raw = (request.form.get("credit_ms_per_credit") or "").strip()
             credit_ms = float(cms_raw.replace(",", ".")) if cms_raw else None
 
+            from app.services.cleiton_cost_service import parse_regua_opcional
+
+            interacoes_whatsapp = parse_regua_opcional(
+                request.form.get("interacoes_whatsapp_por_credito")
+            )
+
             if month_seconds < 1:
                 raise ValueError("month_seconds deve ser >= 1.")
             salvar_agentes_cleiton_config(
@@ -1333,6 +1339,7 @@ def agentes_cleiton():
                     "credit_tokens_per_credit": credit_tokens,
                     "credit_lines_per_credit": credit_lines,
                     "credit_ms_per_credit": credit_ms,
+                    "interacoes_whatsapp_por_credito": interacoes_whatsapp,
                 },
                 doc_campos=doc_campos,
             )
@@ -2669,3 +2676,8 @@ def despublicar_noticia_editorial(noticia_id):
         )
         flash("Falha ao despublicar conteúdo.", "danger")
     return redirect(url_for("admin.pautas_admin", status="publicada"))
+
+
+from app.painel_admin.central_plugins_routes import registrar_rotas_central_plugins  # noqa: E402
+
+registrar_rotas_central_plugins(admin_bp)

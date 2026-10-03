@@ -88,21 +88,10 @@
                                 <input type="text" name="nome" class="form-control" placeholder="Ex: Joao Silva" required>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label small fw-bold">E-mail Corporativo</label>
+                                <label class="form-label small fw-bold">E-mail</label>
                                 <input type="email" name="email" class="form-control" placeholder="empresa@email.com" required>
                             </div>
-                            <div class="mb-3">
-                                <label class="form-label small fw-bold">Cargo</label>
-                                <select name="job_role" class="form-select" required>
-                                    <option value="" selected disabled>Selecione seu cargo</option>
-                                    <option value="analista">Analista</option>
-                                    <option value="coordenador">Coordenador</option>
-                                    <option value="gerente">Gerente</option>
-                                    <option value="diretor">Diretor</option>
-                                    <option value="proprietario">Proprietário / Sócio</option>
-                                    <option value="outro">Outro</option>
-                                </select>
-                            </div>
+                            {% include "partials/onboarding_entrevista_campos.html" %}
                             <div class="mb-3">
                                 <label class="form-label small fw-bold d-block">Objetivo de uso</label>
                                 <div class="form-check form-check-inline">
@@ -120,7 +109,7 @@
                             </div>
                             <div class="mb-3">
                                 <label class="form-label small fw-bold">Senha</label>
-                                <input type="password" name="password" class="form-control" placeholder="Minimo 8 caracteres" required>
+                                <input type="password" name="password" class="form-control" minlength="8" autocomplete="new-password" placeholder="Minimo 8 caracteres" required>
                             </div>
                             <div class="mb-3 form-check">
                                 <input class="form-check-input" type="checkbox" value="1" id="newsletter" name="subscribes_to_newsletter">

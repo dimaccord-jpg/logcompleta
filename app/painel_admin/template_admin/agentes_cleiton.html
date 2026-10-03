@@ -120,6 +120,12 @@
                            value="{{ cfg.credit_ms_per_credit if cfg.credit_ms_per_credit is not none else '' }}"
                            placeholder="ex.: 60000" inputmode="decimal">
                 </div>
+                <div class="col-md-4">
+                    <label class="form-label">Interações WhatsApp por 1 crédito</label>
+                    <input type="text" name="interacoes_whatsapp_por_credito" class="form-control"
+                           value="{% if cfg.interacoes_whatsapp_por_credito is defined and cfg.interacoes_whatsapp_por_credito is not none %}{{ cfg.interacoes_whatsapp_por_credito }}{% endif %}"
+                           placeholder="ex.: 10" inputmode="decimal">
+                </div>
             </div>
 
             <hr class="my-4">

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import calendar
 import logging
+import math
 from datetime import datetime
 from typing import Any
 
@@ -106,6 +107,33 @@ def total_processing_estimated_cost_month(
     }
 
 
+def parse_regua_opcional(raw: object) -> float | None:
+    """Número positivo da régua, ou None se o campo veio em branco.
+
+    Aceita vírgula decimal, como os demais campos do Bloco D.
+    Zero, negativo e texto inválido não são taxa.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        raise ValueError("A taxa deve ser maior que zero.")
+    if isinstance(raw, (int, float)):
+        if isinstance(raw, float) and not math.isfinite(raw):
+            raise ValueError("A taxa deve ser maior que zero.")
+        texto = str(raw).strip()
+    else:
+        texto = str(raw).strip()
+    if not texto:
+        return None
+    try:
+        valor = float(texto.replace(",", "."))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Informe um número válido ou deixe em branco.") from exc
+    if not math.isfinite(valor) or valor <= 0:
+        raise ValueError("A taxa deve ser maior que zero.")
+    return valor
+
+
 def save_config(
     *,
     runtime_monthly_cost: float | None,
@@ -116,6 +144,7 @@ def save_config(
     credit_tokens_per_credit: float | None = None,
     credit_lines_per_credit: float | None = None,
     credit_ms_per_credit: float | None = None,
+    interacoes_whatsapp_por_credito: float | None = None,
     commit: bool = True,
 ) -> CleitonCostConfig:
     row = get_or_create_config()
@@ -127,6 +156,9 @@ def save_config(
     row.credit_tokens_per_credit = credit_tokens_per_credit
     row.credit_lines_per_credit = credit_lines_per_credit
     row.credit_ms_per_credit = credit_ms_per_credit
+    row.interacoes_whatsapp_por_credito = parse_regua_opcional(
+        interacoes_whatsapp_por_credito
+    )
     row.updated_at = utcnow_naive()
     db.session.add(row)
     if commit:

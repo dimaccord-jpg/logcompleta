@@ -73,6 +73,7 @@ from app.auth_services import (
     get_google_oauth_login_url,
     handle_google_oauth_callback,
     complete_user_profile as auth_complete_user_profile,
+    perfil_cadastro_completo,
     register_user,
     send_email,
 )
@@ -283,6 +284,12 @@ migrate.init_app(app, db)
 
 login_manager.init_app(app)
 
+from app.onboarding_canal_routes import register_onboarding_canal_routes
+from app.whatsapp_meta_webhook_routes import register_whatsapp_meta_webhook_routes
+
+register_onboarding_canal_routes(app)
+register_whatsapp_meta_webhook_routes(app)
+
 # Inicializar Flask-Session
 session_mgr = Session(app)
 
@@ -341,6 +348,13 @@ def inject_facebook_pixel_context():
         "privacy_marketing_state": privacy_state,
         "privacy_marketing_allowed": marketing_allowed,
     }
+
+
+@app.context_processor
+def inject_onboarding_entrevista():
+    from app.services.onboarding_entrevista_definicao import contexto_template
+
+    return contexto_template()
 
 
 @app.context_processor
@@ -1050,6 +1064,7 @@ def robots_txt():
         "/register",
         "/reset-password/",
         "/request-password-reset",
+        "/onboarding/canal/",
         "/executar-cleiton",
         "/executar-insight",
         "/stripe",
@@ -1077,6 +1092,10 @@ def robots_txt():
 def login():
     logging.info("=== Acessando /login (método: %s) ===", request.method)
     nxt = _safe_next_redirect(request.args.get('next'))
+    if nxt:
+        from app.onboarding_canal_routes import ajustar_next_login_onboarding_canal
+
+        nxt = _safe_next_redirect(ajustar_next_login_onboarding_canal(nxt))
     if nxt:
         from app.services.growth_attribution_service import sanitize_next_url_for_consent
 
@@ -1306,10 +1325,13 @@ def complete_profile():
     """Rota para completar o perfil do usuário após login via OAuth"""
     logging.info("=== Acessando /complete-profile (método: %s) ===", request.method)
     user = current_user
-    if request.method == 'GET' and (user.job_role or '').strip() and (user.usage_purpose or '').strip():
+    if request.method == 'GET' and perfil_cadastro_completo(user):
         flash('Seu perfil já está completo.', 'info')
         return _post_login_redirect(user)
     if request.method == 'POST':
+        from app.services.onboarding_entrevista_definicao import ORIGEM_CADASTRO_WEB
+        from app.services.onboarding_entrevista_service import extrair_respostas_formulario
+
         accept_terms = bool(request.form.get('accept_terms'))
         if not accept_terms:
             flash('É obrigatório aceitar os Termos de Uso para continuar.', 'danger')
@@ -1318,7 +1340,13 @@ def complete_profile():
         usage_purpose = (request.form.get('usage_purpose') or '').strip()
         subscribes_to_newsletter = bool(request.form.get('subscribes_to_newsletter'))
         success, message = auth_complete_user_profile(
-            user, job_role, usage_purpose, subscribes_to_newsletter, accept_terms=True
+            user,
+            job_role,
+            usage_purpose,
+            subscribes_to_newsletter,
+            accept_terms=True,
+            respostas_entrevista=extrair_respostas_formulario(request.form),
+            origem_entrevista=ORIGEM_CADASTRO_WEB,
         )
         flash(message, 'success' if success else 'danger')
         if not success:
@@ -1341,9 +1369,13 @@ def register():
     full_name = request.form.get('nome') or ""
     email = request.form.get('email') or ""
     password = request.form.get('password') or ""
+    from app.services.onboarding_entrevista_definicao import ORIGEM_CADASTRO_WEB
+    from app.services.onboarding_entrevista_service import extrair_respostas_formulario
+
     job_role = request.form.get('job_role') or ""
     usage_purpose = request.form.get('usage_purpose') or ""
     subscribes_to_newsletter = bool(request.form.get('subscribes_to_newsletter'))
+    respostas_entrevista = extrair_respostas_formulario(request.form)
 
     # E2E Replay: branch invisível — mesmas validações visíveis, sem criar User.
     from app.services import admin_desktop_access_test_service as desktop_test
@@ -1373,6 +1405,8 @@ def register():
         usage_purpose=usage_purpose,
         subscribes_to_newsletter=subscribes_to_newsletter,
         accept_terms=True,
+        respostas_entrevista=respostas_entrevista,
+        origem_entrevista=ORIGEM_CADASTRO_WEB,
     )
     if new_user is None:
         flash(error or 'Erro ao cadastrar.', 'danger')

@@ -5,6 +5,7 @@ Toda a lógica de negócio de auth fica aqui; web.py apenas chama e redireciona.
 import os
 import secrets
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -16,6 +17,15 @@ from app.extensions import db
 from app.infra import user_is_admin
 from app.models import User
 from app.services import plano_service
+from app.services.onboarding_entrevista_definicao import (
+    ORIGEM_CADASTRO_WEB,
+    validar_declaracao,
+)
+from app.services.onboarding_entrevista_service import (
+    declarar_cargo_e_entrevista,
+    entrevista_complementar_satisfeita,
+)
+from app.services.senha_cadastro import validar_senha_cadastro
 
 logger = logging.getLogger(__name__)
 
@@ -168,9 +178,31 @@ def _normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
+def perfil_cadastro_completo(user) -> bool:
+    """
+    Perfil exigido no cadastro: job_role, usage_purpose e, só quando houver
+    entrevista ativa para aquele job_role, as respostas complementares.
+
+    Cargo sem entrevista ativa continua completo só com job_role + usage_purpose.
+    Usuário legado sem as respostas novas permanece válido. Não reclassifica
+    job_role e não força o redirecionamento de OAuth.
+
+    A conta criada pelo canal não coleta usage_purpose. cadastro_origem
+    onboarding_whatsapp distingue esse caso. Cadastro web e usuários antigos
+    continuam exigindo o objetivo.
+    """
+    if not (getattr(user, "job_role", None) or "").strip():
+        return False
+    purpose = (getattr(user, "usage_purpose", None) or "").strip()
+    origem = (getattr(user, "cadastro_origem", None) or "").strip()
+    if not purpose and origem != User.CADASTRO_ORIGEM_WHATSAPP:
+        return False
+    return entrevista_complementar_satisfeita(user)
+
+
 def _is_profile_complete(user: User) -> bool:
-    """Perfil completo exige os dois campos obrigatorios preenchidos."""
-    return bool((user.job_role or "").strip()) and bool((user.usage_purpose or "").strip())
+    """Perfil completo para seleção canônica e leitura de onboarding."""
+    return perfil_cadastro_completo(user)
 
 
 def _get_free_franquia_limite_onboarding():
@@ -352,6 +384,9 @@ def reset_password_with_token(
         return False, "Preencha todos os campos.", None
     if password != confirm_password:
         return False, "As senhas não conferem.", None
+    erro_senha = validar_senha_cadastro(password)
+    if erro_senha:
+        return False, erro_senha, None
 
     user.set_password(password)
     db.session.commit()
@@ -533,18 +568,122 @@ def complete_user_profile(
     subscribes_to_newsletter: bool,
     *,
     accept_terms: bool = False,
+    respostas_entrevista: Mapping[str, str] | None = None,
+    origem_entrevista: str = ORIGEM_CADASTRO_WEB,
 ):
     """Atualiza perfil do usuário. Retorna (success: bool, message: str)."""
-    if not (job_role or "").strip() or not (usage_purpose or "").strip():
+    role = (job_role or "").strip()
+    purpose = (usage_purpose or "").strip()
+    if not role or not purpose:
         return False, "Por favor, preencha todos os campos obrigatórios."
-    user.job_role = (job_role or "").strip()
-    user.usage_purpose = (usage_purpose or "").strip()
+    validacao = validar_declaracao(role, respostas_entrevista, origem_entrevista)
+    if not validacao.ok:
+        return False, validacao.mensagem or "Não foi possível salvar o perfil."
+    user.usage_purpose = purpose
     user.subscribes_to_newsletter = bool(subscribes_to_newsletter)
     _sync_newsletter_preference(user.email, bool(subscribes_to_newsletter), commit=False)
     if accept_terms:
         user.accepted_terms_at = _utcnow_naive()
+    aplicado = declarar_cargo_e_entrevista(
+        user,
+        job_role=role,
+        respostas=respostas_entrevista,
+        origem=origem_entrevista,
+    )
+    if not aplicado.ok:
+        db.session.rollback()
+        return False, aplicado.mensagem or "Não foi possível salvar o perfil."
     db.session.commit()
     return True, "Perfil completado com sucesso! Bem-vindo!"
+
+
+class CadastroLocalError(Exception):
+    """Falha de cadastro antes do commit. A mensagem é a do contrato público."""
+
+    def __init__(self, mensagem: str):
+        self.mensagem = mensagem
+        super().__init__(mensagem)
+
+
+def montar_usuario_cadastro_local(
+    full_name: str,
+    email: str,
+    password: str,
+    job_role: str = "",
+    usage_purpose: str = "",
+    subscribes_to_newsletter: bool = False,
+    *,
+    accept_terms: bool = False,
+    accepted_terms_at: datetime | None = None,
+    respostas_entrevista: Mapping[str, str] | None = None,
+    origem_entrevista: str = ORIGEM_CADASTRO_WEB,
+    cadastro_origem: str | None = None,
+) -> User:
+    """
+    Cria User, Conta e Franquia Free na sessão atual.
+
+    Não faz commit nem rollback. O cadastro web confirma a transação em
+    register_user. A conclusão do canal entra na mesma unidade e confirma
+    junto com identidade, termos e token.
+    """
+    full_name = (full_name or "").strip()
+    email = _normalize_email(email)
+    role = (job_role or "").strip()
+    purpose = (usage_purpose or "").strip()
+    if not full_name or not email or not (password or "").strip():
+        raise CadastroLocalError("Por favor, preencha nome, e-mail e senha.")
+    erro_senha = validar_senha_cadastro(password)
+    if erro_senha:
+        raise CadastroLocalError(erro_senha)
+    if cadastro_origem not in (None, User.CADASTRO_ORIGEM_WHATSAPP):
+        raise CadastroLocalError("Não foi possível criar a conta.")
+    validacao = validar_declaracao(role, respostas_entrevista, origem_entrevista)
+    if not validacao.ok:
+        raise CadastroLocalError(validacao.mensagem or "Não foi possível criar a conta.")
+    if User.query.filter(func.lower(User.email) == email).first():
+        raise CadastroLocalError("Este e-mail já está cadastrado.")
+
+    now = _utcnow_naive()
+    from app.services.conta_franquia_service import criar_conta_franquia_para_cadastro
+
+    try:
+        limite_free = _get_free_franquia_limite_onboarding()
+    except ValueError as e:
+        logger.warning("Cadastro local bloqueado por configuração de plano Free: %s", e)
+        raise CadastroLocalError(str(e)) from e
+
+    conta, franquia = criar_conta_franquia_para_cadastro(email, full_name or email)
+    franquia.limite_total = limite_free
+    db.session.add(franquia)
+    new_user = User(
+        email=email,
+        full_name=full_name or email,
+        is_admin=False,
+        categoria="free",
+        subscribes_to_newsletter=subscribes_to_newsletter,
+        usage_purpose=purpose or None,
+        job_role=None,
+        cadastro_origem=cadastro_origem,
+        trial_start_date=now,
+        conta_id=conta.id,
+        franquia_id=franquia.id,
+    )
+    new_user.set_password(password)
+    if accepted_terms_at is not None:
+        new_user.accepted_terms_at = accepted_terms_at
+    elif accept_terms:
+        new_user.accepted_terms_at = now
+    db.session.add(new_user)
+    db.session.flush()
+    aplicado = declarar_cargo_e_entrevista(
+        new_user,
+        job_role=role,
+        respostas=respostas_entrevista,
+        origem=origem_entrevista,
+    )
+    if not aplicado.ok:
+        raise CadastroLocalError(aplicado.mensagem or "Não foi possível criar a conta.")
+    return new_user
 
 
 def register_user(
@@ -556,49 +695,30 @@ def register_user(
     subscribes_to_newsletter: bool = False,
     *,
     accept_terms: bool = False,
+    respostas_entrevista: Mapping[str, str] | None = None,
+    origem_entrevista: str = ORIGEM_CADASTRO_WEB,
 ):
     """
     Cria novo usuário (cadastro local).
     Retorna (user, None) em sucesso ou (None, mensagem_erro) em falha.
     """
-    full_name = (full_name or "").strip()
-    email = _normalize_email(email)
-    if not full_name or not email or not (password or "").strip():
-        return None, "Por favor, preencha nome, e-mail e senha."
-
-    if User.query.filter(func.lower(User.email) == email).first():
-        return None, "Este e-mail já está cadastrado."
-
-    now = _utcnow_naive()
-    from app.services.conta_franquia_service import criar_conta_franquia_para_cadastro
-
     try:
-        limite_free = _get_free_franquia_limite_onboarding()
-    except ValueError as e:
-        logger.warning("Cadastro local bloqueado por configuração de plano Free: %s", e)
-        return None, str(e)
-
-    conta, franquia = criar_conta_franquia_para_cadastro(email, full_name or email)
-    franquia.limite_total = limite_free
-    db.session.add(franquia)
-    new_user = User(
-        email=email,
-        full_name=full_name or email,
-        is_admin=False,
-        categoria="free",
-        subscribes_to_newsletter=subscribes_to_newsletter,
-        usage_purpose=usage_purpose or None,
-        job_role=job_role or None,
-        trial_start_date=now,
-        conta_id=conta.id,
-        franquia_id=franquia.id,
-    )
-    new_user.set_password(password)
-    if accept_terms:
-        new_user.accepted_terms_at = now
-    db.session.add(new_user)
+        new_user = montar_usuario_cadastro_local(
+            full_name,
+            email,
+            password,
+            job_role=job_role,
+            usage_purpose=usage_purpose,
+            subscribes_to_newsletter=subscribes_to_newsletter,
+            accept_terms=accept_terms,
+            respostas_entrevista=respostas_entrevista,
+            origem_entrevista=origem_entrevista,
+        )
+    except CadastroLocalError as exc:
+        db.session.rollback()
+        return None, exc.mensagem
     _sync_newsletter_preference(
-        email, bool(subscribes_to_newsletter), commit=False
+        new_user.email, bool(subscribes_to_newsletter), commit=False
     )
     db.session.commit()
     return new_user, None

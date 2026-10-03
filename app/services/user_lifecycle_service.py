@@ -83,7 +83,14 @@ def _desidentificar_usuario(user: User) -> User:
 
     Reutilizado pelo encerramento operacional e pelo exercício de privacidade.
     Não apaga o row nem altera Conta/Franquia/billing/eventos/leads.
+    Remove as respostas complementares de onboarding na mesma sessão.
     """
+    if getattr(user, "id", None) is not None:
+        from app.services.onboarding_canal_conclusao_service import (
+            revogar_conclusoes_relacionadas_ao_usuario,
+        )
+
+        revogar_conclusoes_relacionadas_ao_usuario(user)
     user.email = email_operacional_apos_encerramento(user.id)
     user.full_name = NOME_OPERACIONAL_APOS_ENCERRAMENTO
     user.password_hash = None
@@ -92,6 +99,10 @@ def _desidentificar_usuario(user: User) -> User:
     user.subscribes_to_newsletter = False
     user.job_role = None
     user.usage_purpose = None
+    if getattr(user, "id", None) is not None:
+        from app.services.onboarding_entrevista_service import remover_respostas_declaradas
+
+        remover_respostas_declaradas(user)
     return user
 
 

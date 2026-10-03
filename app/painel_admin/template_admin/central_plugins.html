@@ -1,0 +1,73 @@
+{% extends "base_admin.html" %}
+
+{% block admin_content %}
+<div class="container-fluid">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('admin.admin_dashboard') }}">Administrativo</a></li>
+            <li class="breadcrumb-item">Central de Plugins</li>
+            <li class="breadcrumb-item active" aria-current="page">Plugins</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">Plugins homologados</h4>
+        <a href="{{ url_for('admin.central_plugins_novo') }}" class="btn btn-primary btn-sm">Cadastrar plugin</a>
+    </div>
+    <p class="text-muted small">Catálogo interno da LogCompleta. Esta tela não conecta nem executa plugins.</p>
+
+    <form method="get" class="row g-2 align-items-end mb-3">
+        <div class="col-sm-4 col-md-3">
+            <label for="filtro_status" class="form-label small fw-bold">Status</label>
+            <select id="filtro_status" name="status" class="form-select form-select-sm">
+                <option value="">Todos</option>
+                {% for opcao in opcoes.statuses_plugin %}
+                <option value="{{ opcao.valor }}" {% if filtro_status == opcao.valor %}selected{% endif %}>{{ opcao.rotulo }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-outline-secondary btn-sm">Filtrar</button>
+        </div>
+    </form>
+
+    {% if not plugins %}
+    <div class="alert alert-info" role="status">Nenhum plugin cadastrado neste filtro.</div>
+    {% else %}
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Slug</th>
+                        <th>Status</th>
+                        <th>Adapter key</th>
+                        <th>Titularidade</th>
+                        <th>Capabilities</th>
+                        <th>Conexões</th>
+                        <th>Atualização</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for plugin in plugins %}
+                    <tr>
+                        <td>
+                            <a href="{{ url_for('admin.central_plugins_detalhe', plugin_id=plugin.id) }}">{{ plugin.nome }}</a>
+                        </td>
+                        <td><code>{{ plugin.slug }}</code></td>
+                        <td><span class="badge bg-{{ plugin.status_badge }}">{{ plugin.status_label }}</span></td>
+                        <td><code>{{ plugin.adapter_key }}</code></td>
+                        <td>{{ plugin.titularidade_label }}</td>
+                        <td>{{ plugin.quantidade_capabilities }}</td>
+                        <td>{{ plugin.quantidade_conexoes }}</td>
+                        <td>{{ plugin.updated_at.strftime('%d/%m/%Y %H:%M') if plugin.updated_at else '' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

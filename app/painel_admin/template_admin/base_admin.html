@@ -49,6 +49,11 @@
                     </a>
                 </li>
                 <li>
+                    <a href="{{ url_for('admin.central_plugins_listar') }}" class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('admin.central_plugins') }}">
+                        <i class="bi bi-plug me-2"></i> Central de Plugins
+                    </a>
+                </li>
+                <li>
                     <a href="{{ url_for('admin.pautas_admin') }}" class="nav-link {{ 'active' if request.endpoint in ['admin.pautas_admin', 'admin.pautas_salvar'] }}">
                         <i class="bi bi-journal-text me-2"></i> Pautas
                     </a>
