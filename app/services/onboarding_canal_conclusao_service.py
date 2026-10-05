@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 import threading
 from collections.abc import Callable
@@ -42,6 +43,10 @@ logger = logging.getLogger(__name__)
 SALT_CONCLUSAO_ONBOARDING = "onboarding-canal-conclusao-v1"
 VALIDADE_LINK_CONCLUSAO = timedelta(hours=24)
 _TOKEN_MAX_CHARS = 500
+# 16 bytes = 128 bits. token_urlsafe produz 22 caracteres base64url, sem padding.
+ALIAS_ENTROPIA_BYTES = 16
+ALIAS_TAMANHO = 22
+_ALIAS_RE = re.compile(r"^[A-Za-z0-9_-]{22}$")
 
 CODIGO_LINK_EMITIDO = "link_emitido"
 CODIGO_CONTA_EXISTENTE = "existing_account_verification_required"
@@ -191,6 +196,52 @@ def _hash_token(token: str) -> str:
 
 def _hash_aleatorio() -> str:
     return hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+
+
+def _hash_alias(alias: str) -> str:
+    return hashlib.sha256(alias.encode("utf-8")).hexdigest()
+
+
+def _alias_formato_valido(alias: object) -> bool:
+    return isinstance(alias, str) and _ALIAS_RE.fullmatch(alias) is not None
+
+
+def gerar_alias_opaco() -> str:
+    """Alias aleatório. Não carrega id, e-mail nem telefone e não é reversível."""
+    alias = secrets.token_urlsafe(ALIAS_ENTROPIA_BYTES)
+    if not _alias_formato_valido(alias):
+        return ""
+    return alias
+
+
+def alias_confere(alias: str, row: OnboardingCanalConclusao) -> bool:
+    if not _alias_formato_valido(alias) or not isinstance(row.alias_hash, str):
+        return False
+    digest = _hash_alias(alias)
+    if len(digest) != len(row.alias_hash):
+        return False
+    return hmac.compare_digest(row.alias_hash, digest)
+
+
+def associar_alias_conclusao(conclusao_id: int) -> str | None:
+    """Grava só o hash. O valor bruto volta para a URL e não é persistido."""
+    if isinstance(conclusao_id, bool) or not isinstance(conclusao_id, int) or conclusao_id <= 0:
+        return None
+    row = db.session.get(OnboardingCanalConclusao, conclusao_id)
+    if row is None or row.estado != OnboardingCanalConclusao.ESTADO_EMITIDO:
+        return None
+    if row.alias_hash is not None:
+        return None
+    alias = gerar_alias_opaco()
+    if not alias:
+        return None
+    digest = _hash_alias(alias)
+    ocupado = OnboardingCanalConclusao.query.filter_by(alias_hash=digest).first()
+    if ocupado is not None:
+        return None
+    row.alias_hash = digest
+    db.session.flush()
+    return alias
 
 
 def _email(valor: str | None) -> str:
@@ -667,6 +718,75 @@ def inspecionar_link_conclusao(
     return resultado
 
 
+def inspecionar_alias_conclusao(
+    alias: str,
+    *,
+    commit: bool = True,
+) -> ResultadoConclusaoOnboarding:
+    """Abre a conclusão pelo alias curto. Não reconstrói o token assinado."""
+    onboarding_id = _onboarding_do_alias(alias)
+    if onboarding_id is None:
+        resultado = _resultado(CODIGO_TOKEN_INVALIDO)
+        _log(resultado)
+        return resultado
+    with _trava(onboarding_id):
+        resultado = _executar(
+            onboarding_id,
+            lambda: _inspecionar_alias_dentro(alias),
+            commit,
+            travar=False,
+        )
+    _log(resultado)
+    return resultado
+
+
+def concluir_definicao_senha_por_alias(
+    alias: str,
+    password: str,
+    confirm_password: str,
+    *,
+    commit: bool = True,
+) -> ResultadoConclusaoOnboarding:
+    """Cria a conta pelo alias curto. O consumo é o mesmo do token assinado."""
+    onboarding_id = _onboarding_do_alias(alias)
+    if onboarding_id is None:
+        resultado = _resultado(CODIGO_TOKEN_INVALIDO)
+        _log(resultado)
+        return resultado
+    with _trava(onboarding_id):
+        resultado = _executar(
+            onboarding_id,
+            lambda: _concluir_senha_alias_dentro(alias, password, confirm_password),
+            commit,
+            travar=False,
+        )
+    _log(resultado)
+    return resultado
+
+
+def confirmar_vinculo_conta_por_alias(
+    alias: str,
+    user: User | None,
+    *,
+    commit: bool = True,
+) -> ResultadoConclusaoOnboarding:
+    """Confirma o vínculo pelo alias curto, com as mesmas regras do token."""
+    onboarding_id = _onboarding_do_alias(alias)
+    if onboarding_id is None:
+        resultado = _resultado(CODIGO_TOKEN_INVALIDO)
+        _log(resultado)
+        return resultado
+    with _trava(onboarding_id):
+        resultado = _executar(
+            onboarding_id,
+            lambda: _confirmar_vinculo_alias_dentro(alias, user),
+            commit,
+            travar=False,
+        )
+    _log(resultado)
+    return resultado
+
+
 def concluir_definicao_senha(
     token: str,
     password: str,
@@ -757,6 +877,43 @@ def confirmar_vinculo_handoff(
         )
     _log(resultado)
     return resultado
+
+
+def _localizar_alias(alias: str, *, travar: bool) -> OnboardingCanalConclusao | None:
+    if not _alias_formato_valido(alias):
+        return None
+    digest = _hash_alias(alias)
+    query = db.session.query(OnboardingCanalConclusao).filter_by(alias_hash=digest)
+    if travar:
+        bind = db.session.get_bind()
+        if getattr(getattr(bind, "dialect", None), "name", None) == "postgresql":
+            query = query.with_for_update()
+    row = query.one_or_none()
+    if row is None or not alias_confere(alias, row):
+        return None
+    return row
+
+
+def _onboarding_do_alias(alias: str) -> int | None:
+    row = _localizar_alias(alias, travar=False)
+    if row is None:
+        return None
+    return int(row.onboarding_id)
+
+
+def _abrir_alias(
+    alias: str,
+) -> tuple[OnboardingCanalConclusao, OnboardingCanal, IdentidadeCanalExterna] | ResultadoConclusaoOnboarding:
+    row = _localizar_alias(alias, travar=True)
+    if row is None:
+        return _resultado(CODIGO_TOKEN_INVALIDO)
+    aberto = _abrir_por_id(int(row.id))
+    if isinstance(aberto, ResultadoConclusaoOnboarding):
+        return aberto
+    atual, _jornada, _identidade = aberto
+    if not alias_confere(alias, atual):
+        return _resultado(CODIGO_TOKEN_INVALIDO, onboarding_id=int(atual.onboarding_id))
+    return aberto
 
 
 def _onboarding_do_handoff(conclusao_id: int) -> int | None:
@@ -965,14 +1122,11 @@ def _formulario(jornada: OnboardingCanal, finalidade: str) -> str:
     return "senha"
 
 
-def _inspecionar_dentro(
-    token: str,
-    assinatura: _Assinatura,
+def _inspecionar_aberto(
+    row: OnboardingCanalConclusao,
+    jornada: OnboardingCanal,
+    identidade: IdentidadeCanalExterna,
 ) -> ResultadoConclusaoOnboarding:
-    aberto = _abrir_row(token, assinatura)
-    if isinstance(aberto, ResultadoConclusaoOnboarding):
-        return aberto
-    row, jornada, identidade = aberto
     nome, email = _mascaras(jornada)
     formulario = _formulario(jornada, row.finalidade)
     return _resultado(
@@ -986,6 +1140,23 @@ def _inspecionar_dentro(
     )
 
 
+def _inspecionar_dentro(
+    token: str,
+    assinatura: _Assinatura,
+) -> ResultadoConclusaoOnboarding:
+    aberto = _abrir_row(token, assinatura)
+    if isinstance(aberto, ResultadoConclusaoOnboarding):
+        return aberto
+    return _inspecionar_aberto(*aberto)
+
+
+def _inspecionar_alias_dentro(alias: str) -> ResultadoConclusaoOnboarding:
+    aberto = _abrir_alias(alias)
+    if isinstance(aberto, ResultadoConclusaoOnboarding):
+        return aberto
+    return _inspecionar_aberto(*aberto)
+
+
 def _concluir_senha_dentro(
     token: str,
     assinatura: _Assinatura,
@@ -995,7 +1166,27 @@ def _concluir_senha_dentro(
     aberto = _abrir_row(token, assinatura)
     if isinstance(aberto, ResultadoConclusaoOnboarding):
         return aberto
-    row, jornada, identidade = aberto
+    return _concluir_senha_aberta(*aberto, password, confirm_password)
+
+
+def _concluir_senha_alias_dentro(
+    alias: str,
+    password: str,
+    confirm_password: str,
+) -> ResultadoConclusaoOnboarding:
+    aberto = _abrir_alias(alias)
+    if isinstance(aberto, ResultadoConclusaoOnboarding):
+        return aberto
+    return _concluir_senha_aberta(*aberto, password, confirm_password)
+
+
+def _concluir_senha_aberta(
+    row: OnboardingCanalConclusao,
+    jornada: OnboardingCanal,
+    identidade: IdentidadeCanalExterna,
+    password: str,
+    confirm_password: str,
+) -> ResultadoConclusaoOnboarding:
     existente = _email_cadastrado(jornada.email_normalizado or "")
     if existente is not None or row.finalidade == OnboardingCanalConclusao.FINALIDADE_VINCULAR_CONTA:
         nome, email = _mascaras(jornada)
@@ -1081,8 +1272,17 @@ def _confirmar_vinculo_dentro(
     aberto = _abrir_row(token, assinatura)
     if isinstance(aberto, ResultadoConclusaoOnboarding):
         return aberto
-    row, jornada, identidade = aberto
-    return _aplicar_vinculo(row, jornada, identidade, user)
+    return _aplicar_vinculo(*aberto, user)
+
+
+def _confirmar_vinculo_alias_dentro(
+    alias: str,
+    user: User | None,
+) -> ResultadoConclusaoOnboarding:
+    aberto = _abrir_alias(alias)
+    if isinstance(aberto, ResultadoConclusaoOnboarding):
+        return aberto
+    return _aplicar_vinculo(*aberto, user)
 
 
 def _inspecionar_handoff_dentro(conclusao_id: int) -> ResultadoConclusaoOnboarding:

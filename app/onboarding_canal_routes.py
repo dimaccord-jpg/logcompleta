@@ -21,8 +21,11 @@ from app.services.onboarding_canal_conclusao_service import (
     CODIGO_VINCULO_CONFIRMADO,
     CODIGO_VINCULO_DIVERGENTE,
     concluir_definicao_senha,
+    concluir_definicao_senha_por_alias,
     confirmar_vinculo_conta_existente,
+    confirmar_vinculo_conta_por_alias,
     confirmar_vinculo_handoff,
+    inspecionar_alias_conclusao,
     inspecionar_handoff_conclusao,
     inspecionar_link_conclusao,
 )
@@ -62,6 +65,12 @@ _SUCESSO = {CODIGO_CONTA_CRIADA, CODIGO_VINCULO_CONFIRMADO}
 
 def register_onboarding_canal_routes(app) -> None:
     app.add_url_rule(
+        "/c/<alias>",
+        endpoint="onboarding_canal_alias",
+        view_func=onboarding_canal_alias,
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
         "/onboarding/canal/concluir/<token>",
         endpoint="onboarding_canal_concluir",
         view_func=onboarding_canal_concluir,
@@ -86,33 +95,55 @@ def ajustar_next_login_onboarding_canal(nxt: str | None) -> str | None:
     if not nxt:
         return None
     path = urlsplit(nxt).path or ""
-    if path == "/onboarding/canal/concluir" or path.startswith(_PREFIXO_LINK_CONCLUSAO):
+    alias_no_login = path.startswith("/c/") and "/" not in path[3:] and path != "/c/"
+    if path == "/onboarding/canal/concluir" or path.startswith(_PREFIXO_LINK_CONCLUSAO) or alias_no_login:
         if _id_handoff(session.get(SESSION_HANDOFF_ID)) is not None:
             return CAMINHO_CONTINUAR
         return None
     return nxt
 
 
+def onboarding_canal_alias(alias: str):
+    """Conclusão pelo alias curto. O token assinado não volta para a barra."""
+    return _pagina_conclusao(
+        inspecionar=lambda: inspecionar_alias_conclusao(alias),
+        concluir_senha=lambda: concluir_definicao_senha_por_alias(
+            alias,
+            request.form.get("password") or "",
+            request.form.get("confirm_password") or "",
+        ),
+        confirmar_vinculo=lambda usuario: confirmar_vinculo_conta_por_alias(alias, usuario),
+    )
+
+
 def onboarding_canal_concluir(token: str):
     secret_key = current_app.config["SECRET_KEY"]
+    return _pagina_conclusao(
+        inspecionar=lambda: inspecionar_link_conclusao(token, secret_key=secret_key),
+        concluir_senha=lambda: concluir_definicao_senha(
+            token,
+            request.form.get("password") or "",
+            request.form.get("confirm_password") or "",
+            secret_key=secret_key,
+        ),
+        confirmar_vinculo=lambda usuario: confirmar_vinculo_conta_existente(
+            token,
+            usuario,
+            secret_key=secret_key,
+        ),
+    )
+
+
+def _pagina_conclusao(*, inspecionar, concluir_senha, confirmar_vinculo):
     erro = None
     sucesso = False
     if request.method == "POST":
         acao = (request.form.get("acao") or "definir_senha").strip()
         if acao == "vincular":
             usuario = current_user if getattr(current_user, "is_authenticated", False) else None
-            resultado = confirmar_vinculo_conta_existente(
-                token,
-                usuario,
-                secret_key=secret_key,
-            )
+            resultado = confirmar_vinculo(usuario)
         else:
-            resultado = concluir_definicao_senha(
-                token,
-                request.form.get("password") or "",
-                request.form.get("confirm_password") or "",
-                secret_key=secret_key,
-            )
+            resultado = concluir_senha()
         if resultado.autenticar and resultado.user_id:
             novo = db.session.get(User, resultado.user_id)
             if novo is not None:
@@ -128,7 +159,7 @@ def onboarding_canal_concluir(token: str):
             erro = _mensagem(resultado.codigo, request.form.get("password") or "")
         else:
             return _render(resultado.codigo, erro=_mensagem(resultado.codigo, ""))
-    estado = inspecionar_link_conclusao(token, secret_key=secret_key)
+    estado = inspecionar()
     if (
         estado.formulario == "vinculo"
         and estado.codigo in _FORMULARIO

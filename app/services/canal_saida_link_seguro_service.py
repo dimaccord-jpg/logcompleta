@@ -16,8 +16,10 @@ preparando_link não fala com a Meta de novo. Não há retry.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
+from urllib.parse import urlparse
 
 from flask import current_app
 
@@ -46,6 +48,8 @@ from app.services.canal_tentativa_envio_service import espelhar_tentativa_persis
 from app.services.onboarding_canal_conclusao_service import (
     CODIGO_LINK_EMITIDO,
     _hash_token,
+    alias_confere,
+    associar_alias_conclusao,
     emitir_link_conclusao_onboarding,
     emitir_link_vinculo_conta_existente,
 )
@@ -61,9 +65,10 @@ CODIGO_SEGREDO_AUSENTE = "segredo_ausente"
 CODIGO_JORNADA_AUSENTE = "jornada_ausente"
 CODIGO_JORNADA_INELEGIVEL = "jornada_inelegivel"
 CODIGO_CONCLUSAO_DIVERGENTE = "conclusao_divergente"
+CODIGO_URL_PUBLICA_INVALIDA = "url_publica_invalida"
 
 _FRASE_DEFINIR_SENHA = (
-    "Seu cadastro está quase pronto. Por segurança, crie sua senha neste link: "
+    "Seu cadastro está quase pronto. Por segurança, crie sua senha neste link:\n"
 )
 _FRASE_VINCULAR_CONTA = (
     "Este e-mail já tem conta. Entre e confirme a conexão neste link: "
@@ -233,7 +238,49 @@ def _secret() -> str | None:
 
 
 def _url_conclusao(segredo: str) -> str:
+    """URL interna da emissão. Não é o texto enviado ao WhatsApp."""
     return f"/onboarding/canal/concluir/{segredo}"
+
+
+def _origem_publica() -> str | None:
+    """Só PUBLIC_BASE_URL. Sem host da request e sem fallback de produção."""
+    bruto = (os.getenv("PUBLIC_BASE_URL") or "").strip()
+    if not bruto or any(ch in bruto for ch in ("\r", "\n", "\x00", " ")):
+        return None
+    candidato = bruto.rstrip("/")
+    try:
+        parsed = urlparse(candidato)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"https", "http"} or not parsed.hostname:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    if parsed.query or parsed.fragment or "@" in parsed.netloc:
+        return None
+    if parsed.path not in ("", "/"):
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _link_curto(origem: str, alias: str) -> str:
+    return f"{origem}/c/{alias}"
+
+
+def _link_publico_valido(link: str, origem: str, alias: str, token: str) -> bool:
+    if not isinstance(link, str) or not link or not alias or token in link:
+        return False
+    if link.startswith("/") or link != f"{origem}/c/{alias}":
+        return False
+    try:
+        parsed = urlparse(link)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"https", "http"} or not parsed.hostname:
+        return False
+    if parsed.path != f"/c/{alias}" or parsed.query or parsed.fragment:
+        return False
+    return True
 
 
 def _emitir(identidade_id: int, finalidade: str, secret: str, onboarding_id: int):
@@ -258,6 +305,7 @@ def _mesma_conclusao(
     onboarding_id: int,
     finalidade: str,
     token: str,
+    alias: str,
 ) -> bool:
     db.session.refresh(saida)
     if saida.conclusao_id is None or int(saida.conclusao_id) != conclusao_id:
@@ -270,7 +318,9 @@ def _mesma_conclusao(
         return False
     if criada.finalidade != finalidade or criada.estado != OnboardingCanalConclusao.ESTADO_EMITIDO:
         return False
-    return _hash_confere(token, criada)
+    if not _hash_confere(token, criada):
+        return False
+    return alias_confere(alias, criada)
 
 
 def _postar(
@@ -412,6 +462,15 @@ def _entregar(saida_id: int) -> ResultadoSaidaCanal:
             evento_entrada_id=int(row.evento_entrada_id),
         )
     identidade_id = int(jornada.identidade_id)
+    origem = _origem_publica()
+    if origem is None:
+        return _resultado(
+            CODIGO_URL_PUBLICA_INVALIDA,
+            status_envio=row.status_envio,
+            correlation_id=row.correlation_id,
+            saida_id=int(row.id),
+            evento_entrada_id=int(row.evento_entrada_id),
+        )
     if _reivindicar(saida_id) != 1:
         return _recarregar(saida_id)
     emissao = _emitir(identidade_id, finalidade, secret, onboarding_id)
@@ -429,14 +488,21 @@ def _entregar(saida_id: int) -> ResultadoSaidaCanal:
         return _recarregar(saida_id, emissao.codigo)
     conclusao_id = int(emissao.conclusao_id)
     onboarding_emitido = int(emissao.onboarding_id)
-    link = emissao.url
+    relativo = emissao.url
     token = emissao.token
     del emissao
+    alias = None
+    link = ""
     codigo_falha = None
     try:
+        alias = associar_alias_conclusao(conclusao_id)
+        if alias:
+            link = _link_curto(origem, alias)
         if (
-            onboarding_emitido != int(interpretacao.onboarding_id)
-            or token not in link
+            not alias
+            or onboarding_emitido != int(interpretacao.onboarding_id)
+            or token not in relativo
+            or not _link_publico_valido(link, origem, alias, token)
             or _associar(saida_id, conclusao_id) != 1
             or not _mesma_conclusao(
                 row,
@@ -444,6 +510,7 @@ def _entregar(saida_id: int) -> ResultadoSaidaCanal:
                 onboarding_emitido,
                 finalidade,
                 token,
+                alias,
             )
         ):
             codigo_falha = CODIGO_CONCLUSAO_DIVERGENTE
@@ -453,8 +520,10 @@ def _entregar(saida_id: int) -> ResultadoSaidaCanal:
         codigo_falha = CODIGO_CONCLUSAO_DIVERGENTE
     finally:
         del token
+        del relativo
     if codigo_falha is not None:
         del link
+        del alias
         return _recarregar(saida_id, codigo_falha)
     try:
         http = _postar(
@@ -478,6 +547,7 @@ def _entregar(saida_id: int) -> ResultadoSaidaCanal:
         return _de_linha(atual)
     finally:
         del link
+        del alias
     if http.aceito:
         status_aceito = True
         message_id = http.provider_message_id

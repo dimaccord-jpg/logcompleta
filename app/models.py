@@ -2600,8 +2600,8 @@ class OnboardingCanalConclusao(db.Model):
     """
     Prova de uso único do link que conclui uma jornada de canal.
 
-    O segredo fica só na URL assinada. Aqui persiste o hash, a jornada e o
-    consumo. Não há senha, e-mail, nome nem telefone.
+    O segredo fica só na URL. Aqui persiste o hash do token assinado e, nas
+    emissões novas, o hash do alias curto. Não há senha, e-mail, nome nem telefone.
     """
 
     __tablename__ = "onboarding_canal_conclusao"
@@ -2627,6 +2627,7 @@ class OnboardingCanalConclusao(db.Model):
         ")"
     )
     _SQL_HASH = "length(token_hash) = 64"
+    _SQL_ALIAS = "alias_hash IS NULL OR length(alias_hash) = 64"
     _SQL_EMITIDO_ATIVO = "estado = 'emitido'"
 
     __table_args__ = (
@@ -2634,6 +2635,8 @@ class OnboardingCanalConclusao(db.Model):
         db.CheckConstraint(_SQL_ESTADO, name="ck_onboarding_canal_conclusao_estado"),
         db.CheckConstraint(_SQL_COERENCIA, name="ck_onboarding_canal_conclusao_coerencia"),
         db.CheckConstraint(_SQL_HASH, name="ck_onboarding_canal_conclusao_hash"),
+        db.CheckConstraint(_SQL_ALIAS, name="ck_onboarding_canal_conclusao_alias"),
+        db.UniqueConstraint("alias_hash", name="uq_onboarding_canal_conclusao_alias_hash"),
         db.Index(
             "uq_onboarding_canal_conclusao_emitida",
             "onboarding_id",
@@ -2652,6 +2655,7 @@ class OnboardingCanalConclusao(db.Model):
     )
     finalidade = db.Column(db.String(40), nullable=False)
     token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    alias_hash = db.Column(db.String(64), nullable=True)
     estado = db.Column(db.String(20), nullable=False, default=ESTADO_EMITIDO, index=True)
     emitido_em = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
     expira_em = db.Column(db.DateTime, nullable=False)

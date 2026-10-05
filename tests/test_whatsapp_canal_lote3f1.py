@@ -102,6 +102,7 @@ def _configurar(monkeypatch):
     monkeypatch.setenv(config.ENV_GRAPH_API_VERSION, VERSAO)
     monkeypatch.setenv(config.ENV_SEND_TIMEOUT_SECONDS, "4")
     monkeypatch.delenv(config.ENV_GRAPH_BASE_URL, raising=False)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://homolog.exemplo.test")
 
 
 def _mock(monkeypatch, efeito=None):
@@ -367,7 +368,9 @@ def test_usuario_novo_chega_ao_link_sem_chamada_manual(ctx, app, monkeypatch, ca
     assert all(MARCA_LINK not in _corpo(chamada) for chamada in chamadas[:7])
     link = _corpo(chamadas[7])
     assert "crie sua senha neste link:" in link
-    assert MARCA_LINK in link
+    assert "https://homolog.exemplo.test/c/" in link
+    assert MARCA_LINK not in link
+    assert "www.agentefrete.com.br" not in link
     token = link.rsplit("/", 1)[-1]
     saida = EventoCanalSaida.query.filter_by(
         evento_entrada_id=EventoCanalRecebido.query.filter_by(
@@ -378,7 +381,8 @@ def test_usuario_novo_chega_ao_link_sem_chamada_manual(ctx, app, monkeypatch, ca
     conclusao = db.session.get(OnboardingCanalConclusao, saida.conclusao_id)
     assert conclusao.finalidade == OnboardingCanalConclusao.FINALIDADE_DEFINIR_SENHA
     assert conclusao.estado == OnboardingCanalConclusao.ESTADO_EMITIDO
-    assert conclusao.token_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert conclusao.alias_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert conclusao.token_hash != conclusao.alias_hash
     gravada = db.session.get(InterpretacaoConversacionalCanal, saida.interpretacao_id)
     assert token not in (gravada.texto_resposta or "")
     assert EventoCanalSaida.query.count() == 8
@@ -432,10 +436,13 @@ def test_conta_existente_recebe_link_de_vinculo(ctx, app, monkeypatch, caplog):
     assert conclusao.estado == OnboardingCanalConclusao.ESTADO_EMITIDO
     link = _corpo(chamadas[-1])
     assert "já tem conta" in link
-    assert MARCA_LINK in link
+    assert "https://homolog.exemplo.test/c/" in link
+    assert MARCA_LINK not in link
+    assert "www.agentefrete.com.br" not in link
     assert EMAIL_EXISTENTE not in link
     token = link.rsplit("/", 1)[-1]
-    assert conclusao.token_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert conclusao.alias_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert conclusao.token_hash != conclusao.alias_hash
     assert User.query.count() == 1
     assert EMAIL_EXISTENTE not in caplog.text
     assert token not in caplog.text

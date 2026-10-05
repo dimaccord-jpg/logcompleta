@@ -52,7 +52,10 @@ from app.services.canal_interpretacao_conversacional_service import (
     TEXTO_CONTA,
     TEXTO_SENHA,
 )
-from app.services.onboarding_canal_conclusao_service import inspecionar_link_conclusao
+from app.services.onboarding_canal_conclusao_service import (
+    inspecionar_alias_conclusao,
+    inspecionar_link_conclusao,
+)
 from tests.conftest import (
     PYTEST_DISPOSABLE_SQLALCHEMY_URI,
     seed_conta_franquia_cliente,
@@ -70,8 +73,9 @@ MESSAGE_ID = "wamid.HBgLENTREGA3D2A"
 CORRELATION = "corr3d2a01"
 EMAIL_NOVA = "nova.conta.3d2a@example.com"
 EMAIL_EXISTENTE = "existente.3d2a@example.com"
+BASE_PUBLICA = "https://entrega.invalid"
 FRASE_SENHA = (
-    "Seu cadastro está quase pronto. Por segurança, crie sua senha neste link: "
+    "Seu cadastro está quase pronto. Por segurança, crie sua senha neste link:\n"
 )
 FRASE_CONTA = (
     "Este e-mail já tem conta. Entre e confirme a conexão neste link: "
@@ -90,6 +94,7 @@ def _configurar(monkeypatch, *, token=TOKEN_META, versao=VERSAO, timeout="4"):
     monkeypatch.setenv(config.ENV_GRAPH_API_VERSION, versao)
     monkeypatch.setenv(config.ENV_SEND_TIMEOUT_SECONDS, timeout)
     monkeypatch.delenv(config.ENV_GRAPH_BASE_URL, raising=False)
+    monkeypatch.setenv("PUBLIC_BASE_URL", BASE_PUBLICA)
 
 
 def _texto_de(row) -> str:
@@ -376,13 +381,31 @@ def _jornada_aberta_mais_recente(identidade_id: int) -> OnboardingCanal:
 
 def _link_do_body(chamadas) -> str:
     corpo = chamadas[0][1]["json"]["text"]["body"]
+    ultima = corpo.strip().rsplit("\n", 1)[-1].strip()
+    if ultima.startswith("https://") or ultima.startswith("http://"):
+        return ultima
     return corpo.rsplit(": ", 1)[1]
 
 
-def _token_do_link(link: str) -> str:
-    prefixo = "/onboarding/canal/concluir/"
+def _alias_do_link(link: str) -> str:
+    prefixo = f"{BASE_PUBLICA}/c/"
     assert link.startswith(prefixo)
-    return link[len(prefixo):]
+    alias = link[len(prefixo):]
+    assert alias and "/" not in alias
+    return alias
+
+
+def _token_do_link(link: str) -> str:
+    return _alias_do_link(link)
+
+
+def _assert_alias(alias: str, row: OnboardingCanalConclusao) -> None:
+    assert row.alias_hash == hashlib.sha256(alias.encode("utf-8")).hexdigest()
+    assert row.token_hash != row.alias_hash
+    assert alias not in (row.token_hash or "")
+    assert alias not in (row.alias_hash or "")
+    with pytest.raises(Exception):
+        _payload(alias)
 
 
 def _proibir(token: str, link: str, *textos: str) -> None:
@@ -457,9 +480,8 @@ def test_nova_conta_emite_conclusao_enviada_sem_gravar_segredo(ctx, app, monkeyp
     nova = db.session.get(OnboardingCanalConclusao, row.conclusao_id)
     assert nova.finalidade == OnboardingCanalConclusao.FINALIDADE_DEFINIR_SENHA
     assert nova.estado == OnboardingCanalConclusao.ESTADO_EMITIDO
-    assert nova.token_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    _assert_alias(token, nova)
     assert nova.token_hash != hash_antigo
-    assert _payload(token) == {"c": int(nova.id), "o": int(nova.onboarding_id)}
     db.session.refresh(antiga)
     assert antiga.estado == OnboardingCanalConclusao.ESTADO_REVOGADO
     assert antiga.token_hash != hash_antigo
@@ -470,9 +492,7 @@ def test_nova_conta_emite_conclusao_enviada_sem_gravar_segredo(ctx, app, monkeyp
     assert inspecionar_link_conclusao(token_antigo, secret_key=SECRET).codigo == (
         conclusao.CODIGO_TOKEN_REVOGADO
     )
-    assert inspecionar_link_conclusao(token, secret_key=SECRET).codigo == (
-        conclusao.CODIGO_LINK_EMITIDO
-    )
+    assert inspecionar_alias_conclusao(token).codigo == conclusao.CODIGO_LINK_EMITIDO
     _assert_sem_segredo(token, link, caplog)
     _proibir(token, link, repr(resultado), _texto_de(row))
     assert IaConsumoEvento.query.count() == 0
@@ -526,8 +546,7 @@ def test_conta_existente_emite_vinculo(ctx, app, monkeypatch):
     assert nova.estado == OnboardingCanalConclusao.ESTADO_EMITIDO
     assert nova.onboarding_id == jornada_id
     assert resultado.conclusao_id == nova.id
-    assert nova.token_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
-    assert _payload(token) == {"c": int(nova.id), "o": int(jornada_id)}
+    _assert_alias(token, nova)
     db.session.refresh(antiga)
     assert antiga.estado == OnboardingCanalConclusao.ESTADO_REVOGADO
     assert InterpretacaoConversacionalCanal.query.one().conclusao_id == antiga.id
@@ -600,7 +619,7 @@ def _assert_falha_sem_retry(app, monkeypatch, efeito, codigo: str) -> None:
     nova = db.session.get(OnboardingCanalConclusao, row.conclusao_id)
     assert nova.estado == OnboardingCanalConclusao.ESTADO_EMITIDO
     assert nova.id != antiga.id
-    assert nova.token_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    _assert_alias(token, nova)
     db.session.refresh(antiga)
     assert antiga.estado == OnboardingCanalConclusao.ESTADO_REVOGADO
     segundo = entrega.entregar_link_seguro(saida.id)
@@ -747,8 +766,7 @@ def test_j1_elegivel_nao_emite_token_da_j2(ctx, app, monkeypatch, caplog):
     assert nova.onboarding_id == j1_id
     assert nova.id != antiga.id
     assert nova.id != isca.id
-    assert nova.token_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
-    assert _payload(token) == {"c": int(nova.id), "o": j1_id}
+    _assert_alias(token, nova)
     assert OnboardingCanalConclusao.query.filter_by(onboarding_id=j2.id).one().id == isca.id
     db.session.refresh(isca)
     assert isca.estado == OnboardingCanalConclusao.ESTADO_EMITIDO
@@ -873,8 +891,7 @@ def test_conta_existente_j1_nao_migra_para_j2(ctx, app, monkeypatch, caplog):
     assert row.conclusao_id == nova.id == resultado.conclusao_id
     assert nova.onboarding_id == j1_id
     assert nova.finalidade == OnboardingCanalConclusao.FINALIDADE_VINCULAR_CONTA
-    assert nova.token_hash == hashlib.sha256(token.encode("utf-8")).hexdigest()
-    assert _payload(token) == {"c": int(nova.id), "o": j1_id}
+    _assert_alias(token, nova)
     assert OnboardingCanalConclusao.query.filter_by(onboarding_id=j2.id).one().id == isca.id
     db.session.refresh(isca)
     assert isca.estado == OnboardingCanalConclusao.ESTADO_EMITIDO
