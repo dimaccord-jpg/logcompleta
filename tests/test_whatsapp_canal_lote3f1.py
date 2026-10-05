@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -30,6 +31,7 @@ from app.models import (
     OnboardingCanal,
     OnboardingCanalConclusao,
     TentativaEnvioCanal,
+    TermsOfUse,
     User,
     utcnow_naive,
 )
@@ -297,8 +299,24 @@ def test_webhook_textual_percorre_o_pipeline_uma_vez(ctx, app, monkeypatch, capl
     assert limite_interacoes_guest() == 5
 
 
-def test_usuario_novo_chega_ao_link_sem_chamada_manual(ctx, app, monkeypatch, caplog):
+def _disponibilizar_termo(app, monkeypatch, tmp_path, base="https://homolog.exemplo.test"):
+    import app.legal_document_storage as legal_storage
+
+    monkeypatch.setenv("PUBLIC_BASE_URL", base)
+    app.config["PUBLIC_BASE_URL"] = base
+    monkeypatch.setattr(legal_storage, "settings", SimpleNamespace(data_dir=str(tmp_path)))
+    pasta = tmp_path / "legal" / "terms"
+    pasta.mkdir(parents=True)
+    (pasta / "termo-teste.pdf").write_bytes(b"%PDF-1.4\n")
+    termo = TermsOfUse(filename="termo-teste.pdf", is_active=True)
+    db.session.add(termo)
+    db.session.commit()
+    return f"{base}/termos-de-uso"
+
+
+def test_usuario_novo_chega_ao_link_sem_chamada_manual(ctx, app, monkeypatch, caplog, tmp_path):
     _configurar(monkeypatch)
+    url_termo = _disponibilizar_termo(app, monkeypatch, tmp_path)
     chamadas = _mock(monkeypatch)
     client = _cliente(app)
     passos = (
@@ -343,6 +361,9 @@ def test_usuario_novo_chega_ao_link_sem_chamada_manual(ctx, app, monkeypatch, ca
     assert _corpo(chamadas[2]) == TEXTO_EMAIL
     assert "Como você atua principalmente?" in _corpo(chamadas[4])
     assert "Qual veículo você utiliza principalmente?" in _corpo(chamadas[5])
+    assert url_termo in _corpo(chamadas[6])
+    assert "responda ACEITO" in _corpo(chamadas[6])
+    assert "1. ACEITO" not in _corpo(chamadas[6])
     assert all(MARCA_LINK not in _corpo(chamada) for chamada in chamadas[:7])
     link = _corpo(chamadas[7])
     assert "crie sua senha neste link:" in link

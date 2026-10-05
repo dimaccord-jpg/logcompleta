@@ -8,9 +8,12 @@ consulta cobrança.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
+from contextlib import nullcontext
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from sqlalchemy.exc import IntegrityError
 
@@ -92,7 +95,7 @@ ACAO_RESERVADA = "reservado"
 ACAO_ERRO = "erro_seguro"
 
 TEXTO_GUEST = (
-    "Recebi sua pergunta. Você pode continuar como visitante ou iniciar seu cadastro."
+    "Recebi sua pergunta. Se quiser se cadastrar, envie uma nova mensagem."
 )
 TEXTO_NOME = "Qual é o seu nome?"
 TEXTO_NOME_INVALIDO = "Não consegui usar esse nome. Envie seu nome para continuar."
@@ -101,9 +104,11 @@ TEXTO_EMAIL_INVALIDO = "Esse e-mail não é válido. Envie um e-mail para contin
 TEXTO_CARGO = "Qual é o seu cargo?"
 TEXTO_CARGO_INVALIDO = "Não reconheci esse cargo. Escolha uma opção:"
 TEXTO_ENTREVISTA_INVALIDA = "Não reconheci essa resposta. Escolha uma opção:"
-TEXTO_TERMOS = "Para continuar, aceite os termos respondendo ACEITO.\n1. ACEITO"
 TEXTO_TERMOS_RECUSA = (
-    "O aceite precisa ser explícito. Responda ACEITO para continuar.\n1. ACEITO"
+    "O aceite precisa ser explícito. Responda ACEITO para continuar."
+)
+TEXTO_TERMOS_INDISPONIVEL = (
+    "Não consegui abrir o Termo de Aceite agora. Envie uma nova mensagem para tentar de novo."
 )
 TEXTO_SENHA = (
     "Seu cadastro está quase pronto. Por segurança, crie sua senha no link enviado."
@@ -119,7 +124,7 @@ TEXTO_CONTA_SEM_LINK = "Este e-mail já tem conta. Entre e confirme a conexão c
 _MARCA_LINK = "/onboarding/canal/concluir/"
 TEXTO_EXPIRADA = "Esta jornada expirou."
 TEXTO_ENCERRADA = "Esta jornada não está mais aberta."
-TEXTO_CONVITE = "Para começar o cadastro, envie: quero me cadastrar."
+TEXTO_CONVITE = "Para continuar o cadastro, envie uma nova mensagem."
 
 _COMANDOS_INICIAR = frozenset(
     {
@@ -130,8 +135,10 @@ _COMANDOS_INICIAR = frozenset(
     }
 )
 _COMANDO_ACEITE = "aceito"
-_OPCAO_ACEITE = "1"
-_REFERENCIA_TERMOS = "terms-v1"
+_REFERENCIA_TERMO_LEGADA = "terms-v1"
+_PREFIXO_REFERENCIA_TERMO = "terms-of-use:"
+_CAMINHO_TERMOS = "/termos-de-uso"
+_PROVEDOR_IDENTIDADE = "whatsapp_meta"
 _ORIGEM = "whatsapp_meta"
 _CORRELATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 _ROTAS_OPERADAS = frozenset({ROTA_GUEST, ROTA_ONBOARDING})
@@ -148,6 +155,8 @@ _CODIGOS_INVALIDOS_ENTRADA = frozenset(
 
 _travas: dict[int, threading.Lock] = {}
 _travas_guard = threading.Lock()
+_travas_identidade: dict[int, threading.Lock] = {}
+_travas_identidade_guard = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -168,6 +177,16 @@ def _trava(evento_id: int) -> threading.Lock:
         if lock is None:
             lock = threading.Lock()
             _travas[evento_id] = lock
+        return lock
+
+
+def _trava_identidade(identidade_id: int) -> threading.Lock:
+    """Serializa duas mensagens da mesma identidade até o commit da primeira."""
+    with _travas_identidade_guard:
+        lock = _travas_identidade.get(identidade_id)
+        if lock is None:
+            lock = threading.Lock()
+            _travas_identidade[identidade_id] = lock
         return lock
 
 
@@ -256,14 +275,107 @@ def _resolver_opcao(texto: str, pares: tuple[tuple[str, str], ...]) -> str | Non
 
 
 def _aceite_explicito(texto: str) -> bool:
-    normal = normalizar_comando(texto)
-    return normal == _COMANDO_ACEITE or normal == _OPCAO_ACEITE
+    """Somente a palavra ACEITO, com caixa e espaços externos irrelevantes."""
+    return normalizar_comando(texto) == _COMANDO_ACEITE
+
+
+def _origem_publica() -> str | None:
+    """Origem de PUBLIC_BASE_URL. Não usa host da request nem URL fixa."""
+    bruto = (os.getenv("PUBLIC_BASE_URL") or "").strip()
+    if not bruto:
+        try:
+            from flask import current_app
+
+            valor = current_app.config.get("PUBLIC_BASE_URL")
+        except RuntimeError:
+            valor = None
+        if isinstance(valor, str):
+            bruto = valor.strip()
+    if not bruto or any(ch in bruto for ch in ("\r", "\n", "\x00", " ")):
+        return None
+    candidato = bruto.rstrip("/")
+    try:
+        parsed = urlparse(candidato)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"https", "http"} or not parsed.hostname:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    if parsed.query or parsed.fragment or "@" in parsed.netloc:
+        return None
+    if parsed.path not in ("", "/"):
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _url_publica_termos() -> str | None:
+    origem = _origem_publica()
+    if origem is None:
+        return None
+    return f"{origem}{_CAMINHO_TERMOS}"
+
+
+def _texto_termos(url: str) -> str:
+    return (
+        "Leia o Termo de Aceite:\n"
+        f"{url}\n"
+        "\n"
+        "Após a leitura, para continuar, responda ACEITO."
+    )
+
+
+def _texto_recusa_aceite() -> str:
+    url = _url_publica_termos()
+    if not url:
+        return TEXTO_TERMOS_RECUSA
+    return f"Leia o Termo de Aceite:\n{url}\n\n{TEXTO_TERMOS_RECUSA}"
+
+
+def _referencia_termo_valida(referencia: str | None) -> bool:
+    if not isinstance(referencia, str):
+        return False
+    texto = referencia.strip()
+    if texto == _REFERENCIA_TERMO_LEGADA or not texto.startswith(_PREFIXO_REFERENCIA_TERMO):
+        return False
+    sufixo = texto[len(_PREFIXO_REFERENCIA_TERMO) :]
+    if not sufixo.isdigit() or (len(sufixo) > 1 and sufixo.startswith("0")):
+        return False
+    return int(sufixo) > 0
+
+
+def _termo_efetivamente_apresentado(estado: EstadoOnboardingCanal) -> bool:
+    return bool(estado.termos_apresentados) and _referencia_termo_valida(estado.termos_referencia)
+
+
+def _referencia_termo_ativo() -> str | None:
+    from app.terms_services import get_active_term
+
+    termo = get_active_term()
+    if termo is None:
+        return None
+    termo_id = getattr(termo, "id", None)
+    if isinstance(termo_id, bool) or not isinstance(termo_id, int) or termo_id <= 0:
+        return None
+    referencia = f"{_PREFIXO_REFERENCIA_TERMO}{termo_id}"
+    if not _referencia_termo_valida(referencia):
+        return None
+    return referencia
+
+
+def _texto_etapa_termos(estado: EstadoOnboardingCanal) -> str:
+    if not _termo_efetivamente_apresentado(estado):
+        return TEXTO_TERMOS_INDISPONIVEL
+    url = _url_publica_termos()
+    if url:
+        return _texto_termos(url)
+    return "Após a leitura, para continuar, responda ACEITO."
 
 
 def _prompt_entrevista(estado: EstadoOnboardingCanal, prefixo: str | None = None) -> str:
     pergunta = proxima_pergunta(estado.job_role, estado.respostas_entrevista)
     if pergunta is None:
-        return TEXTO_TERMOS
+        return _texto_etapa_termos(estado)
     return _texto_pergunta(pergunta, prefixo)
 
 
@@ -280,7 +392,8 @@ def _prompt_etapa(estado: EstadoOnboardingCanal, prefixo: str | None = None) -> 
     if etapa == OnboardingCanal.ETAPA_ENTREVISTA:
         return _prompt_entrevista(estado, prefixo)
     if etapa == OnboardingCanal.ETAPA_TERMOS:
-        return TEXTO_TERMOS if prefixo is None else f"{prefixo}\n{TEXTO_TERMOS}"
+        texto = _texto_etapa_termos(estado)
+        return texto if prefixo is None else f"{prefixo}\n{texto}"
     if etapa == OnboardingCanal.ETAPA_SENHA:
         return TEXTO_SENHA_JA_EMITIDO
     if etapa == OnboardingCanal.ETAPA_EXPIRADO:
@@ -462,39 +575,61 @@ def _emitir_vinculo(
     )
 
 
+def _termos_indisponiveis(
+    estado: EstadoOnboardingCanal,
+    correlation_id: str | None,
+) -> ResultadoInterpretacaoCanal:
+    return _de_estado(
+        estado,
+        codigo=CODIGO_ERRO_SEGURO,
+        acao=ACAO_APRESENTAR_TERMOS,
+        texto=TEXTO_TERMOS_INDISPONIVEL,
+        correlation_id=correlation_id,
+    )
+
+
 def _apresentar_termos(
     estado: EstadoOnboardingCanal,
     correlation_id: str | None,
 ) -> ResultadoInterpretacaoCanal:
-    if not estado.termos_apresentados:
-        try:
-            estado = registrar_resposta_onboarding(
-                int(estado.identidade_id),
-                campo="apresentar_termos",
-                termos_referencia=_REFERENCIA_TERMOS,
-                commit=False,
-            )
-        except CanalAquisicaoError:
-            return _de_estado(
-                estado,
-                codigo=CODIGO_ERRO_SEGURO,
-                acao=ACAO_APRESENTAR_TERMOS,
-                texto=TEXTO_TERMOS,
-                correlation_id=correlation_id,
-            )
-    if estado.codigo == CODIGO_TRANSICAO_CONFLITO:
+    if _termo_efetivamente_apresentado(estado):
         return _de_estado(
             estado,
-            codigo=CODIGO_TRANSICAO_CONFLITO,
+            codigo=CODIGO_TERMOS_APRESENTADOS,
             acao=ACAO_APRESENTAR_TERMOS,
-            texto=TEXTO_TERMOS,
+            texto=_texto_etapa_termos(estado),
             correlation_id=correlation_id,
         )
+    url = _url_publica_termos()
+    referencia = _referencia_termo_ativo()
+    if url is None or referencia is None:
+        return _termos_indisponiveis(estado, correlation_id)
+    try:
+        estado = registrar_resposta_onboarding(
+            int(estado.identidade_id),
+            campo="apresentar_termos",
+            termos_referencia=referencia,
+            commit=False,
+        )
+    except CanalAquisicaoError:
+        return _termos_indisponiveis(estado, correlation_id)
+    if estado.codigo == CODIGO_TRANSICAO_CONFLITO:
+        if _termo_efetivamente_apresentado(estado):
+            return _de_estado(
+                estado,
+                codigo=CODIGO_TERMOS_APRESENTADOS,
+                acao=ACAO_APRESENTAR_TERMOS,
+                texto=_texto_termos(url),
+                correlation_id=correlation_id,
+            )
+        return _termos_indisponiveis(estado, correlation_id)
+    if not _termo_efetivamente_apresentado(estado) or estado.termos_referencia != referencia:
+        return _termos_indisponiveis(estado, correlation_id)
     return _de_estado(
         estado,
         codigo=CODIGO_TERMOS_APRESENTADOS,
         acao=ACAO_APRESENTAR_TERMOS,
-        texto=TEXTO_TERMOS,
+        texto=_texto_termos(url),
         correlation_id=correlation_id,
     )
 
@@ -545,19 +680,99 @@ def _entrada_invalida(
     )
 
 
-def _guest(
-    identidade_id: int,
-    texto: str,
+def _bloquear_identidade(identidade_id: int) -> IdentidadeCanalExterna | None:
+    """Relê a identidade na decisão. No Postgres a linha fica travada até o commit."""
+    return (
+        IdentidadeCanalExterna.query.filter_by(id=identidade_id)
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+
+
+def _jornada_aberta(identidade_id: int) -> OnboardingCanal | None:
+    return (
+        OnboardingCanal.query.filter_by(identidade_id=identidade_id)
+        .filter(OnboardingCanal.etapa.in_(OnboardingCanal.ETAPAS_ABERTAS))
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+
+
+def _orientacao_guest_concluida(
+    evento: EventoCanalRecebido,
+    identidade: IdentidadeCanalExterna,
+) -> bool:
+    """Histórico finalizado do mesmo provedor e sujeito. Ignora o evento atual."""
+    sujeito = evento.sujeito_externo
+    if identidade.estado == IdentidadeCanalExterna.ESTADO_REVOGADA:
+        return False
+    if identidade.provedor != _PROVEDOR_IDENTIDADE or identidade.sujeito_externo != sujeito:
+        return False
+    if evento.provider != EventoCanalRecebido.PROVIDER_META_WHATSAPP:
+        return False
+    if not isinstance(sujeito, str) or not sujeito:
+        return False
+    anterior = (
+        db.session.query(InterpretacaoConversacionalCanal.id)
+        .join(
+            EventoCanalRecebido,
+            InterpretacaoConversacionalCanal.evento_id == EventoCanalRecebido.id,
+        )
+        .filter(InterpretacaoConversacionalCanal.codigo == CODIGO_ORIENTACAO_GUEST)
+        .filter(InterpretacaoConversacionalCanal.codigo != CODIGO_EM_TRATAMENTO)
+        .filter(InterpretacaoConversacionalCanal.acao != ACAO_RESERVADA)
+        .filter(EventoCanalRecebido.id != int(evento.id))
+        .filter(EventoCanalRecebido.provider == evento.provider)
+        .filter(EventoCanalRecebido.sujeito_externo == sujeito)
+        .first()
+    )
+    return anterior is not None
+
+
+def _pedir_nome(
+    estado: EstadoOnboardingCanal,
     correlation_id: str | None,
 ) -> ResultadoInterpretacaoCanal:
-    if normalizar_comando(texto) not in _COMANDOS_INICIAR:
-        return _resultado(
-            CODIGO_ORIENTACAO_GUEST,
-            acao=ACAO_ORIENTAR_GUEST,
-            texto_resposta=TEXTO_GUEST,
-            identidade_id=identidade_id,
+    return _de_estado(
+        estado,
+        codigo=CODIGO_ONBOARDING_INICIADO,
+        acao=ACAO_INICIAR,
+        texto=TEXTO_NOME,
+        correlation_id=correlation_id,
+    )
+
+
+def _resposta_jornada_sem_consumir(
+    identidade_id: int,
+    correlation_id: str | None,
+) -> ResultadoInterpretacaoCanal:
+    """Mensagem guest que chegou com jornada já aberta não vira nome nem avança."""
+    estado = obter_proxima_etapa(identidade_id, commit=False)
+    if estado.etapa_atual == OnboardingCanal.ETAPA_NOME and not estado.nome:
+        return _pedir_nome(estado, correlation_id)
+    if estado.etapa_atual == OnboardingCanal.ETAPA_CONVITE:
+        return _de_estado(
+            estado,
+            codigo=estado.codigo,
+            acao=ACAO_INICIAR,
+            texto=TEXTO_CONVITE,
             correlation_id=correlation_id,
         )
+    return _de_estado(
+        estado,
+        codigo=estado.codigo,
+        acao=ACAO_INICIAR,
+        texto=_prompt_etapa(estado),
+        correlation_id=correlation_id,
+    )
+
+
+def _abrir_coleta_nome(
+    identidade_id: int,
+    correlation_id: str | None,
+) -> ResultadoInterpretacaoCanal:
     estado = iniciar_onboarding_canal(
         identidade_id,
         origem_aquisicao=_ORIGEM,
@@ -573,22 +788,20 @@ def _guest(
             correlation_id=correlation_id,
         )
     if estado.etapa_atual == OnboardingCanal.ETAPA_CONVITE:
-        estado = registrar_resposta_onboarding(
-            identidade_id,
-            campo="aceitar_convite",
-            commit=False,
-        )
-    if estado.etapa_atual == OnboardingCanal.ETAPA_NOME and estado.codigo in {
-        "resposta_registrada",
-        "onboarding_iniciado",
-    }:
-        return _de_estado(
-            estado,
-            codigo=CODIGO_ONBOARDING_INICIADO,
-            acao=ACAO_INICIAR,
-            texto=TEXTO_NOME,
-            correlation_id=correlation_id,
-        )
+        try:
+            estado = registrar_resposta_onboarding(
+                identidade_id,
+                campo="aceitar_convite",
+                commit=False,
+            )
+        except CanalAquisicaoError:
+            return _resposta_jornada_sem_consumir(identidade_id, correlation_id)
+    if estado.codigo == CODIGO_TRANSICAO_CONFLITO or (
+        estado.etapa_atual == OnboardingCanal.ETAPA_NOME and estado.nome
+    ):
+        return _resposta_jornada_sem_consumir(identidade_id, correlation_id)
+    if estado.etapa_atual == OnboardingCanal.ETAPA_NOME and not estado.nome:
+        return _pedir_nome(estado, correlation_id)
     return _de_estado(
         estado,
         codigo=estado.codigo,
@@ -596,6 +809,35 @@ def _guest(
         texto=_prompt_etapa(estado),
         correlation_id=correlation_id,
     )
+
+
+def _guest(
+    identidade_id: int,
+    texto: str,
+    correlation_id: str | None,
+    evento: EventoCanalRecebido,
+) -> ResultadoInterpretacaoCanal:
+    identidade = _bloquear_identidade(identidade_id)
+    if identidade is None or identidade.estado == IdentidadeCanalExterna.ESTADO_REVOGADA:
+        return _resultado(
+            CODIGO_JORNADA_INDISPONIVEL,
+            acao=ACAO_ERRO,
+            identidade_id=identidade_id,
+            correlation_id=correlation_id,
+        )
+    aberta = _jornada_aberta(identidade_id)
+    if aberta is not None and aberta.etapa != OnboardingCanal.ETAPA_CONVITE:
+        return _resposta_jornada_sem_consumir(identidade_id, correlation_id)
+    atalho = normalizar_comando(texto) in _COMANDOS_INICIAR
+    if aberta is None and not atalho and not _orientacao_guest_concluida(evento, identidade):
+        return _resultado(
+            CODIGO_ORIENTACAO_GUEST,
+            acao=ACAO_ORIENTAR_GUEST,
+            texto_resposta=TEXTO_GUEST,
+            identidade_id=identidade_id,
+            correlation_id=correlation_id,
+        )
+    return _abrir_coleta_nome(identidade_id, correlation_id)
 
 
 def _recusa_campo(
@@ -654,19 +896,16 @@ def _onboarding(
         )
     etapa = estado.etapa_atual
     if etapa == OnboardingCanal.ETAPA_CONVITE:
-        if normalizar_comando(texto) not in _COMANDOS_INICIAR:
-            return _entrada_invalida(
-                estado,
-                codigo=CODIGO_RESPOSTA_INVALIDA,
-                acao=ACAO_REJEITAR_NOME,
-                texto=TEXTO_CONVITE,
-                correlation_id=correlation_id,
+        try:
+            estado = registrar_resposta_onboarding(
+                identidade_id,
+                campo="aceitar_convite",
+                commit=False,
             )
-        estado = registrar_resposta_onboarding(
-            identidade_id,
-            campo="aceitar_convite",
-            commit=False,
-        )
+        except CanalAquisicaoError:
+            return _resposta_jornada_sem_consumir(identidade_id, correlation_id)
+        if estado.etapa_atual == OnboardingCanal.ETAPA_NOME and not estado.nome:
+            return _pedir_nome(estado, correlation_id)
         return _apos_avanco(estado, correlation_id, acao=ACAO_INICIAR)
     if etapa == OnboardingCanal.ETAPA_NOME:
         try:
@@ -730,14 +969,14 @@ def _onboarding(
         )
         return _apos_avanco(estado, correlation_id, acao=ACAO_REGISTRAR_ENTREVISTA)
     if etapa == OnboardingCanal.ETAPA_TERMOS:
-        if not estado.termos_apresentados:
+        if not _termo_efetivamente_apresentado(estado):
             return _apresentar_termos(estado, correlation_id)
         if not _aceite_explicito(texto):
             return _entrada_invalida(
                 estado,
                 codigo=CODIGO_ACEITE_NAO_RECONHECIDO,
                 acao=ACAO_REJEITAR_ACEITE,
-                texto=TEXTO_TERMOS_RECUSA,
+                texto=_texto_recusa_aceite(),
                 correlation_id=correlation_id,
             )
         estado = registrar_resposta_onboarding(
@@ -889,7 +1128,7 @@ def _produzir(
 ) -> ResultadoInterpretacaoCanal:
     correlation_id = evento.correlation_id
     if rota == ROTA_GUEST:
-        return _guest(identidade_id, texto, correlation_id)
+        return _guest(identidade_id, texto, correlation_id, evento)
     if rota == ROTA_ONBOARDING:
         return _onboarding(identidade_id, texto, correlation_id)
     return _resultado(
@@ -921,6 +1160,119 @@ def _encerrar(
     return resultado
 
 
+def _interpretar_evento_travado(roteamento: object, evento_id: int) -> ResultadoInterpretacaoCanal:
+    evento = db.session.get(EventoCanalRecebido, evento_id)
+    if evento is None:
+        resultado = _resultado(CODIGO_EVENTO_AUSENTE, acao=ACAO_ERRO)
+        _log(resultado, evento_id)
+        return resultado
+    gravado = _buscar(evento_id)
+    if gravado is not None and not _incompleta(gravado):
+        resultado = _replay(gravado, evento)
+        _log(resultado, evento_id)
+        return resultado
+    rota = getattr(roteamento, "rota", None)
+    correlation_id = evento.correlation_id
+    if rota not in _ROTAS_OPERADAS:
+        resultado = _resultado(
+            CODIGO_ROTA_NAO_OPERADA if isinstance(rota, str) else CODIGO_ROTEAMENTO_INDISPONIVEL,
+            acao=ACAO_IGNORAR_ROTA,
+            identidade_id=getattr(roteamento, "identidade_id", None)
+            if _id_valido(getattr(roteamento, "identidade_id", None))
+            else None,
+            correlation_id=correlation_id,
+        )
+        _log(resultado, evento_id)
+        return resultado
+    if evento.status_processamento != EventoCanalRecebido.STATUS_ROTEADO:
+        resultado = _resultado(
+            CODIGO_EVENTO_NAO_ROTEADO,
+            acao=ACAO_ERRO,
+            correlation_id=correlation_id,
+        )
+        _log(resultado, evento_id)
+        return resultado
+    identidade_id = getattr(roteamento, "identidade_id", None)
+    if not _id_valido(identidade_id):
+        identidade_id = _identidade_do_evento(evento)
+    if not _id_valido(identidade_id):
+        resultado = _resultado(
+            CODIGO_JORNADA_INDISPONIVEL,
+            acao=ACAO_ERRO,
+            correlation_id=correlation_id,
+        )
+        _log(resultado, evento_id)
+        return resultado
+    identidade_id = int(identidade_id)
+    texto = _texto_do_evento(evento)
+    if texto is None:
+        resultado = _resultado(
+            CODIGO_TEXTO_INDISPONIVEL,
+            acao=ACAO_ERRO,
+            identidade_id=identidade_id,
+            correlation_id=correlation_id,
+        )
+        _log(resultado, evento_id)
+        return resultado
+    if gravado is None:
+        if not _reservar(evento_id):
+            repetido = _buscar(evento_id)
+            if repetido is not None and not _incompleta(repetido):
+                resultado = _replay(repetido, evento)
+                _log(resultado, evento_id)
+                return resultado
+            if repetido is None or not _assumir_incompleta(evento_id):
+                resultado = _resultado(
+                    CODIGO_EVENTO_EM_TRATAMENTO,
+                    acao=ACAO_ERRO,
+                    identidade_id=identidade_id,
+                    correlation_id=correlation_id,
+                )
+                _log(resultado, evento_id)
+                return resultado
+    elif not _assumir_incompleta(evento_id):
+        atual = _buscar(evento_id)
+        if atual is not None and not _incompleta(atual):
+            resultado = _replay(atual, evento)
+            _log(resultado, evento_id)
+            return resultado
+        resultado = _resultado(
+            CODIGO_EVENTO_EM_TRATAMENTO,
+            acao=ACAO_ERRO,
+            identidade_id=identidade_id,
+            correlation_id=correlation_id,
+        )
+        _log(resultado, evento_id)
+        return resultado
+    try:
+        produzido = _produzir(
+            evento,
+            rota=str(rota),
+            identidade_id=int(identidade_id),
+            texto=texto,
+        )
+    except Exception:
+        db.session.rollback()
+        produzido = _resultado(
+            CODIGO_ERRO_SEGURO,
+            acao=ACAO_ERRO,
+            identidade_id=int(identidade_id),
+            correlation_id=correlation_id,
+        )
+    try:
+        produzido = _encerrar(evento_id, produzido)
+    except Exception:
+        db.session.rollback()
+        produzido = _resultado(
+            CODIGO_ERRO_SEGURO,
+            acao=ACAO_ERRO,
+            identidade_id=int(identidade_id),
+            correlation_id=correlation_id,
+        )
+    _log(produzido, evento_id)
+    return produzido
+
+
 def interpretar_mensagem_canal(roteamento: object) -> ResultadoInterpretacaoCanal:
     """Trata guest ou onboarding uma vez por evento. Não reenvia a mutação."""
     evento_id = getattr(roteamento, "evento_id", None)
@@ -929,114 +1281,12 @@ def interpretar_mensagem_canal(roteamento: object) -> ResultadoInterpretacaoCana
         _log(resultado, evento_id)
         return resultado
     evento_id = int(evento_id)
+    identidade_roteada = getattr(roteamento, "identidade_id", None)
+    trava_pessoa = (
+        _trava_identidade(int(identidade_roteada))
+        if _id_valido(identidade_roteada)
+        else nullcontext()
+    )
     with _trava(evento_id):
-        evento = db.session.get(EventoCanalRecebido, evento_id)
-        if evento is None:
-            resultado = _resultado(CODIGO_EVENTO_AUSENTE, acao=ACAO_ERRO)
-            _log(resultado, evento_id)
-            return resultado
-        gravado = _buscar(evento_id)
-        if gravado is not None and not _incompleta(gravado):
-            resultado = _replay(gravado, evento)
-            _log(resultado, evento_id)
-            return resultado
-        rota = getattr(roteamento, "rota", None)
-        correlation_id = evento.correlation_id
-        if rota not in _ROTAS_OPERADAS:
-            resultado = _resultado(
-                CODIGO_ROTA_NAO_OPERADA if isinstance(rota, str) else CODIGO_ROTEAMENTO_INDISPONIVEL,
-                acao=ACAO_IGNORAR_ROTA,
-                identidade_id=getattr(roteamento, "identidade_id", None)
-                if _id_valido(getattr(roteamento, "identidade_id", None))
-                else None,
-                correlation_id=correlation_id,
-            )
-            _log(resultado, evento_id)
-            return resultado
-        if evento.status_processamento != EventoCanalRecebido.STATUS_ROTEADO:
-            resultado = _resultado(
-                CODIGO_EVENTO_NAO_ROTEADO,
-                acao=ACAO_ERRO,
-                correlation_id=correlation_id,
-            )
-            _log(resultado, evento_id)
-            return resultado
-        identidade_id = getattr(roteamento, "identidade_id", None)
-        if not _id_valido(identidade_id):
-            identidade_id = _identidade_do_evento(evento)
-        if not _id_valido(identidade_id):
-            resultado = _resultado(
-                CODIGO_JORNADA_INDISPONIVEL,
-                acao=ACAO_ERRO,
-                correlation_id=correlation_id,
-            )
-            _log(resultado, evento_id)
-            return resultado
-        identidade_id = int(identidade_id)
-        texto = _texto_do_evento(evento)
-        if texto is None:
-            resultado = _resultado(
-                CODIGO_TEXTO_INDISPONIVEL,
-                acao=ACAO_ERRO,
-                identidade_id=identidade_id,
-                correlation_id=correlation_id,
-            )
-            _log(resultado, evento_id)
-            return resultado
-        if gravado is None:
-            if not _reservar(evento_id):
-                repetido = _buscar(evento_id)
-                if repetido is not None and not _incompleta(repetido):
-                    resultado = _replay(repetido, evento)
-                    _log(resultado, evento_id)
-                    return resultado
-                if repetido is None or not _assumir_incompleta(evento_id):
-                    resultado = _resultado(
-                        CODIGO_EVENTO_EM_TRATAMENTO,
-                        acao=ACAO_ERRO,
-                        identidade_id=identidade_id,
-                        correlation_id=correlation_id,
-                    )
-                    _log(resultado, evento_id)
-                    return resultado
-        elif not _assumir_incompleta(evento_id):
-            atual = _buscar(evento_id)
-            if atual is not None and not _incompleta(atual):
-                resultado = _replay(atual, evento)
-                _log(resultado, evento_id)
-                return resultado
-            resultado = _resultado(
-                CODIGO_EVENTO_EM_TRATAMENTO,
-                acao=ACAO_ERRO,
-                identidade_id=identidade_id,
-                correlation_id=correlation_id,
-            )
-            _log(resultado, evento_id)
-            return resultado
-        try:
-            produzido = _produzir(
-                evento,
-                rota=str(rota),
-                identidade_id=int(identidade_id),
-                texto=texto,
-            )
-        except Exception:
-            db.session.rollback()
-            produzido = _resultado(
-                CODIGO_ERRO_SEGURO,
-                acao=ACAO_ERRO,
-                identidade_id=int(identidade_id),
-                correlation_id=correlation_id,
-            )
-        try:
-            produzido = _encerrar(evento_id, produzido)
-        except Exception:
-            db.session.rollback()
-            produzido = _resultado(
-                CODIGO_ERRO_SEGURO,
-                acao=ACAO_ERRO,
-                identidade_id=int(identidade_id),
-                correlation_id=correlation_id,
-            )
-        _log(produzido, evento_id)
-        return produzido
+        with trava_pessoa:
+            return _interpretar_evento_travado(roteamento, evento_id)
