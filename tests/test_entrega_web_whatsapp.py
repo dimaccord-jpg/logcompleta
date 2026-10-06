@@ -732,7 +732,12 @@ def test_falha_meta_no_chat_nao_confirma_sucesso(ctx, monkeypatch):
 
 
 def _modelo(*, funcao=False):
-    nome = NOME_ENVIAR_PARA_MEU_WHATSAPP if funcao else NOME_NAO_ENVIAR_PARA_MEU_WHATSAPP
+    from app.services.canal_orquestracao_whatsapp_contextual_service import (
+        NOME_CONTINUAR,
+    )
+
+    nome = NOME_ENVIAR_PARA_MEU_WHATSAPP if funcao else NOME_CONTINUAR
+    argumentos = {"conteudo_ref": "[CONTEUDO_1]"} if funcao else {}
 
     class _Models:
         def __init__(self):
@@ -742,7 +747,7 @@ def _modelo(*, funcao=False):
             self.chamadas += 1
             return SimpleNamespace(
                 text="Resposta logistica de frete.",
-                function_calls=[SimpleNamespace(name=nome, args={})],
+                function_calls=[SimpleNamespace(name=nome, args=argumentos)],
                 candidates=[SimpleNamespace(finish_reason="STOP")],
                 usage_metadata=SimpleNamespace(
                     prompt_token_count=200,
@@ -810,6 +815,11 @@ def test_pedido_whatsapp_nao_abate_franquia_nem_consumo_de_canal(app, ctx, monke
     _configurar(monkeypatch)
     chamadas = _mock(monkeypatch)
     _vincular(user)
+    from app.services.canal_resposta_compartilhavel_service import (
+        montar_contexto,
+        registrar_resposta_compartilhavel,
+    )
+
     cliente, models = _modelo(funcao=True)
     monkeypatch.setattr(julia, "_get_client", lambda: cliente)
 
@@ -818,6 +828,16 @@ def test_pedido_whatsapp_nao_abate_franquia_nem_consumo_de_canal(app, ctx, monke
 
     monkeypatch.setattr(julia, "cleiton_governed_generate_content", _proibido)
     with app.test_request_context("/api/chat_julia"):
+        registrar_resposta_compartilhavel(
+            usuario=user,
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+            contexto_conversa=montar_contexto(
+                superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+                user_id=int(user.id),
+                historico=_historico(),
+            ),
+            texto=TEXTO,
+        )
         set_consumo_identidade(identidade_de_usuario(user, "http_usuario"))
         resposta = julia.chat_julia_reply(
             "envia isso para meu whatsapp",
@@ -1580,3 +1600,95 @@ def test_falha_tecnica_com_retry_nao_debita_e_restaura_identidade(app, ctx, monk
     assert all(item["origem_sistema"] is True for item in vistas)
     assert depois == anterior
     _assert_classificacao_sem_debito(user, eventos_internos=2)
+
+
+def _avaliar_entrega(user, historico=None):
+    return entrega.avaliar_pedido_de_entrega(
+        usuario=user,
+        superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+        mensagem="envia isso no whatsapp",
+        historico=_historico() if historico is None else historico,
+        agent="julia",
+        flow_type="julia_chat",
+        client=object(),
+        model="gemini-2.5-flash",
+        api_key_label="teste",
+    )
+
+
+def test_catalogo_indisponivel_com_continuar_falha_sem_llm(ctx, monkeypatch):
+    from app.services.canal_orquestracao_whatsapp_contextual_service import (
+        NOME_CONTINUAR,
+        AcaoWhatsAppContextual,
+    )
+
+    user = _usuario("catalogo.continuar@example.com")
+    chamadas = []
+
+    def _indisponivel(**_kwargs):
+        raise RuntimeError("catalogo")
+
+    def _decidir(**_kwargs):
+        chamadas.append(NOME_CONTINUAR)
+        return AcaoWhatsAppContextual(NOME_CONTINUAR, {})
+
+    monkeypatch.setattr(entrega, "construir_catalogo", _indisponivel)
+    monkeypatch.setattr(entrega, "decidir_enviar_para_meu_whatsapp", _decidir)
+    resultado = _avaliar_entrega(user)
+    assert resultado.codigo == entrega.CODIGO_FALHA_CLASSIFICACAO
+    assert entrega.mensagem_da_entrega(resultado) == entrega.MENSAGEM_FALHA_CLASSIFICACAO
+    assert chamadas == []
+
+
+def test_catalogo_indisponivel_com_qualquer_acao_falha_sem_llm(ctx, monkeypatch):
+    from app.services.canal_orquestracao_whatsapp_contextual_service import (
+        NOME_ENVIAR_PARA_MEU_WHATSAPP,
+        AcaoWhatsAppContextual,
+    )
+
+    user = _usuario("catalogo.acao@example.com")
+    chamadas = []
+
+    def _indisponivel(**_kwargs):
+        raise RuntimeError("catalogo")
+
+    def _decidir(**_kwargs):
+        chamadas.append(NOME_ENVIAR_PARA_MEU_WHATSAPP)
+        return AcaoWhatsAppContextual(NOME_ENVIAR_PARA_MEU_WHATSAPP, {"conteudo_ref": "[CONTEUDO_1]"})
+
+    monkeypatch.setattr(entrega, "construir_catalogo", _indisponivel)
+    monkeypatch.setattr(entrega, "decidir_enviar_para_meu_whatsapp", _decidir)
+    resultado = _avaliar_entrega(user)
+    assert resultado.codigo == entrega.CODIGO_FALHA_CLASSIFICACAO
+    assert entrega.mensagem_da_entrega(resultado) == entrega.MENSAGEM_FALHA_CLASSIFICACAO
+    assert chamadas == []
+
+
+def test_catalogo_disponivel_continuar_segue_conversa(ctx, monkeypatch):
+    from app.services.canal_orquestracao_whatsapp_contextual_service import (
+        NOME_CONTINUAR,
+        AcaoWhatsAppContextual,
+    )
+
+    user = _usuario("catalogo.segue@example.com")
+    chamadas = []
+
+    def _decidir(**_kwargs):
+        chamadas.append(NOME_CONTINUAR)
+        return AcaoWhatsAppContextual(NOME_CONTINUAR, {})
+
+    monkeypatch.setattr(entrega, "decidir_enviar_para_meu_whatsapp", _decidir)
+    assert _avaliar_entrega(user) is None
+    assert chamadas == [NOME_CONTINUAR]
+
+
+def test_catalogo_disponivel_acao_valida_segue_whatsapp(ctx, monkeypatch):
+    _configurar(monkeypatch)
+    chamadas = _mock(monkeypatch)
+    user = _usuario("catalogo.whatsapp@example.com")
+    _vincular(user)
+    _decidir(monkeypatch, True)
+    resultado = _avaliar_entrega(user)
+    assert resultado.codigo == entrega.CODIGO_ENVIADO
+    assert chamadas[0][1]["json"]["text"]["body"] == TEXTO
+    assert chamadas[0][1]["json"]["to"] == DESTINATARIO

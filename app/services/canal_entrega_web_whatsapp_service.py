@@ -25,10 +25,21 @@ from app.models import (
     utcnow_naive,
 )
 from app.services.canal_aquisicao_service import PROVEDOR_WHATSAPP_META
-from app.services.canal_intencao_entrega_whatsapp_service import (
-    DecisaoEntregaWhatsApp,
-    decidir_enviar_para_meu_whatsapp,
+from app.services.canal_execucao_whatsapp_contextual_service import (
+    executar_acao_whatsapp,
+    construir_catalogo,
 )
+from app.services.canal_intencao_entrega_whatsapp_service import DecisaoEntregaWhatsApp
+from app.services.canal_orquestracao_whatsapp_contextual_service import (
+    NOME_CONTINUAR,
+    AcaoWhatsAppContextual,
+    decidir_acao_whatsapp_contextual,
+)
+from app.services.canal_rascunho_entrega_whatsapp_service import (
+    finalizar_transporte,
+    trava_rascunho,
+)
+from app.services.canal_resposta_compartilhavel_service import montar_contexto
 from app.services.canal_saida_whatsapp_service import (
     concluir_envio_reservado,
     inserir_saida_canal,
@@ -84,6 +95,12 @@ class ResultadoEntregaWeb:
     correlation_id: str | None = None
     partes: int = 0
     partes_aceitas: int = 0
+    mensagem: str | None = None
+
+
+def decidir_enviar_para_meu_whatsapp(*args, **kwargs):
+    """Ponto único que os chats chamam. A decisão real é contextual."""
+    return decidir_acao_whatsapp_contextual(*args, **kwargs)
 
 
 def _trava(chave: str) -> threading.Lock:
@@ -350,6 +367,7 @@ def entregar_texto_no_whatsapp_do_usuario(
     superficie: str,
     texto: str,
     chave_idempotencia: str | None = None,
+    destino_autorizado: DestinoWhatsAppVinculado | None = None,
 ) -> ResultadoEntregaWeb:
     """Envia o texto ao WhatsApp vinculado. Replay da mesma chave não repete o HTTP."""
     user = _usuario_valido(usuario)
@@ -397,7 +415,10 @@ def entregar_texto_no_whatsapp_do_usuario(
                 resultado = _resultado_das_saidas(existente, len(partes))
                 _log(resultado, user_id=user_id, superficie=superficie)
                 return resultado
-        codigo_destino, destino = resolver_whatsapp_do_usuario(user)
+        if destino_autorizado is not None:
+            codigo_destino, destino = CODIGO_ENVIADO, destino_autorizado
+        else:
+            codigo_destino, destino = resolver_whatsapp_do_usuario(user)
         if destino is None:
             resultado = ResultadoEntregaWeb(codigo=codigo_destino)
             _log(resultado, user_id=user_id, superficie=superficie)
@@ -441,6 +462,13 @@ def entregar_texto_no_whatsapp_do_usuario(
         return resultado
 
 
+def _transporte_incerto(solicitacao_id: int | None) -> bool:
+    if solicitacao_id is None:
+        return False
+    saidas = _saidas_da_solicitacao(int(solicitacao_id))
+    return any(row.codigo_erro == EventoCanalSaida.CODIGO_TIMEOUT for row in saidas)
+
+
 def avaliar_pedido_de_entrega(
     *,
     usuario: object,
@@ -453,13 +481,59 @@ def avaliar_pedido_de_entrega(
     model: str,
     api_key_label: str,
     identidade_requisicao: str | None = None,
+    contexto_conversa: str | None = None,
+    comparison_id: str | None = None,
+    escopo_auditoria: str | None = None,
 ) -> ResultadoEntregaWeb | None:
-    """None quando a decisão é não enviar. Falha técnica não segue para o chat."""
+    """None segue o chat. Qualquer ação ou falha técnica responde sem nova análise."""
     if client is None or usuario is None:
+        return None
+    user_id = getattr(usuario, "id", None)
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        return None
+    contexto = contexto_conversa or montar_contexto(
+        superficie=superficie,
+        user_id=user_id,
+        comparison_id=comparison_id,
+        escopo_auditoria=escopo_auditoria,
+    )
+    falha_tecnica_resolucao_vinculo = False
+    try:
+        _codigo_vinculo, destino_proprio = resolver_whatsapp_do_usuario(usuario)
+    except Exception as exc:
+        logger.info(
+            "entrega_web_intencao user_id=%s superficie=%s codigo=falha_tecnica_vinculo erro=%s",
+            user_id,
+            superficie,
+            type(exc).__name__,
+        )
+        _codigo_vinculo = None
+        destino_proprio = None
+        falha_tecnica_resolucao_vinculo = True
+    try:
+        catalogo = construir_catalogo(
+            usuario=usuario,
+            superficie=superficie,
+            contexto_conversa=contexto,
+            mensagem=mensagem,
+            historico=historico,
+            whatsapp_proprio_valido=destino_proprio is not None,
+            comparison_id=comparison_id,
+            escopo_auditoria=escopo_auditoria,
+        )
+    except Exception as exc:
+        logger.info(
+            "entrega_web_intencao user_id=%s superficie=%s codigo=falha_tecnica erro=%s",
+            user_id,
+            superficie,
+            type(exc).__name__,
+        )
+        return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
+    if catalogo is None:
         return None
     try:
         pedido = decidir_enviar_para_meu_whatsapp(
-            mensagem,
+            catalogo=catalogo,
             agent=agent,
             flow_type=flow_type,
             client=client,
@@ -471,32 +545,115 @@ def avaliar_pedido_de_entrega(
     except Exception as exc:
         logger.info(
             "entrega_web_intencao user_id=%s superficie=%s codigo=falha_tecnica erro=%s",
-            getattr(usuario, "id", "-"),
+            user_id,
             superficie,
             type(exc).__name__,
         )
         return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
+    if pedido is False or pedido is None or pedido is DecisaoEntregaWhatsApp.NEGATIVO:
+        return None
+    if isinstance(pedido, AcaoWhatsAppContextual) and pedido.tipo == NOME_CONTINUAR:
+        return None
     if pedido is DecisaoEntregaWhatsApp.FALHA_TECNICA:
         logger.info(
             "entrega_web_intencao user_id=%s superficie=%s codigo=falha_tecnica",
-            getattr(usuario, "id", "-"),
+            user_id,
             superficie,
         )
         return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
-    if pedido is not DecisaoEntregaWhatsApp.POSITIVO:
+    if pedido is DecisaoEntregaWhatsApp.POSITIVO:
+        texto = ultima_resposta_assistente(historico)
+        if not texto:
+            return ResultadoEntregaWeb(codigo=CODIGO_SEM_TEXTO)
+        if falha_tecnica_resolucao_vinculo:
+            return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
+        return entregar_texto_no_whatsapp_do_usuario(
+            usuario=usuario,
+            superficie=superficie,
+            texto=texto,
+            chave_idempotencia=_chave_da_requisicao(usuario, superficie, identidade_requisicao),
+        )
+    try:
+        efeito = executar_acao_whatsapp(
+            pedido,
+            catalogo=catalogo,
+            usuario=usuario,
+            superficie=superficie,
+            contexto_conversa=contexto,
+            identidade_requisicao=identidade_requisicao,
+            comparison_id=comparison_id,
+            escopo_auditoria=escopo_auditoria,
+        )
+    except Exception as exc:
+        logger.info(
+            "entrega_web_intencao user_id=%s superficie=%s codigo=falha_tecnica erro=%s",
+            user_id,
+            superficie,
+            type(exc).__name__,
+        )
+        return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
+    if efeito.continuar:
         return None
-    texto = ultima_resposta_assistente(historico)
-    if not texto:
-        return ResultadoEntregaWeb(codigo=CODIGO_SEM_TEXTO)
-    return entregar_texto_no_whatsapp_do_usuario(
-        usuario=usuario,
-        superficie=superficie,
-        texto=texto,
-        chave_idempotencia=_chave_da_requisicao(usuario, superficie, identidade_requisicao),
-    )
+    if efeito.texto_proprio:
+        if falha_tecnica_resolucao_vinculo:
+            return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
+        if not elegibilidade_permite_proprio(destino_proprio is not None):
+            return ResultadoEntregaWeb(codigo=_codigo_vinculo or CODIGO_SEM_VINCULO)
+        return entregar_texto_no_whatsapp_do_usuario(
+            usuario=usuario,
+            superficie=superficie,
+            texto=efeito.texto_proprio,
+            chave_idempotencia=_chave_da_requisicao(usuario, superficie, identidade_requisicao),
+        )
+    terceiro = efeito.terceiro
+    if terceiro is not None and terceiro.enviar and terceiro.texto and terceiro.destinatario and terceiro.phone_number_id:
+        referencia = catalogo.rascunho_referencia or f"rascunho:{terceiro.rascunho_id}"
+        with trava_rascunho(referencia):
+            resultado = entregar_texto_no_whatsapp_do_usuario(
+                usuario=usuario,
+                superficie=superficie,
+                texto=terceiro.texto,
+                chave_idempotencia=terceiro.chave_execucao,
+                destino_autorizado=DestinoWhatsAppVinculado(
+                    identidade_id=0,
+                    destinatario=terceiro.destinatario,
+                    phone_number_id=terceiro.phone_number_id,
+                ),
+            )
+            fechado = finalizar_transporte(
+                int(terceiro.rascunho_id or 0),
+                codigo_transporte=resultado.codigo,
+                solicitacao_id=resultado.solicitacao_id,
+                incerto=_transporte_incerto(resultado.solicitacao_id),
+            )
+        return ResultadoEntregaWeb(
+            codigo=fechado.codigo,
+            solicitacao_id=resultado.solicitacao_id,
+            correlation_id=resultado.correlation_id,
+            partes=resultado.partes,
+            partes_aceitas=resultado.partes_aceitas,
+            mensagem=fechado.mensagem,
+        )
+    if terceiro is not None and terceiro.enviar and terceiro.solicitacao_id is not None:
+        return ResultadoEntregaWeb(
+            codigo=terceiro.codigo,
+            solicitacao_id=terceiro.solicitacao_id,
+            mensagem=terceiro.mensagem or MENSAGEM_FALHA,
+        )
+    if efeito.mensagem:
+        return ResultadoEntregaWeb(codigo=efeito.codigo, mensagem=efeito.mensagem)
+    return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
+
+
+def elegibilidade_permite_proprio(vinculo_valido: bool) -> bool:
+    from app.services.canal_elegibilidade_whatsapp_service import elegibilidade_proprio
+
+    return elegibilidade_proprio(vinculo_valido=vinculo_valido).elegivel
 
 
 def mensagem_da_entrega(resultado: ResultadoEntregaWeb, *, sem_anterior: bool = False) -> str:
+    if resultado.mensagem:
+        return resultado.mensagem
     if sem_anterior:
         return MENSAGEM_SEM_ANTERIOR
     if resultado.codigo == CODIGO_ENVIADO:

@@ -1137,11 +1137,30 @@ def cleide_audit_chat():
             403,
         )
 
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_resposta_compartilhavel_service import (
+        escopo_de_documentos,
+        montar_contexto,
+    )
+
+    escopo_auditoria = escopo_de_documentos(get_cleide_audit_doc_ids(session))
+    user_id = getattr(current_user, "id", None)
+    contexto_auditoria = (
+        montar_contexto(
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+            user_id=int(user_id),
+            escopo_auditoria=escopo_auditoria,
+        )
+        if isinstance(user_id, int) and not isinstance(user_id, bool)
+        else None
+    )
     entrega = responder_entrega_whatsapp_se_pedida(
         message_text,
         historico_original if isinstance(historico_original, list) else [],
         usuario=current_user,
         identidade_requisicao=request_id,
+        contexto_conversa=contexto_auditoria,
+        escopo_auditoria=escopo_auditoria,
     )
     if entrega is not None:
         return jsonify(
@@ -1315,6 +1334,8 @@ def cleide_audit_insights_chat():
         max_history=audit_cfg.chat_max_history,
         question_max_chars=audit_cfg.question_max_chars,
         fallback_message=audit_cfg.fallback_message,
+        usuario=current_user,
+        identidade_requisicao=request_id,
     )
 
     if result.get("error"):

@@ -4008,3 +4008,167 @@ class AplicacaoStatusCanal(db.Model):
         "EventoCanalSaida",
         foreign_keys=[saida_id],
     )
+
+
+class RespostaCompartilhavelCanal(db.Model):
+    """Texto emitido pelo backend e elegível para entrega no WhatsApp.
+
+    O modelo escolhe a referência opaca. O corpo enviado sai desta linha.
+    Não é thread, não é rascunho e não guarda telefone.
+    """
+
+    __tablename__ = "resposta_compartilhavel_canal"
+
+    SUPERFICIES = (
+        "julia",
+        "auditoria_frete",
+        "comparacao_tabelas",
+    )
+    REFERENCIA_MINIMA = 34
+    REFERENCIA_MAXIMA = 80
+    HASH_TAMANHO = 64
+    TEXTO_MAXIMO = 32000
+
+    _SQL_SUPERFICIE = (
+        "superficie IN ('julia', 'auditoria_frete', 'comparacao_tabelas')"
+    )
+    _SQL_REFERENCIA = "length(referencia) BETWEEN 34 AND 80"
+    _SQL_HASH = "length(content_hash) = 64"
+    _SQL_TEXTO = "length(texto) BETWEEN 1 AND 32000"
+    _SQL_CONTEXTO = "length(contexto_conversa) BETWEEN 1 AND 160"
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "referencia",
+            name="uq_resposta_compartilhavel_canal_referencia",
+        ),
+        db.CheckConstraint(_SQL_SUPERFICIE, name="ck_resposta_compartilhavel_superficie"),
+        db.CheckConstraint(_SQL_REFERENCIA, name="ck_resposta_compartilhavel_referencia"),
+        db.CheckConstraint(_SQL_HASH, name="ck_resposta_compartilhavel_hash"),
+        db.CheckConstraint(_SQL_TEXTO, name="ck_resposta_compartilhavel_texto"),
+        db.CheckConstraint(_SQL_CONTEXTO, name="ck_resposta_compartilhavel_contexto"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    referencia = db.Column(db.String(80), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    superficie = db.Column(db.String(40), nullable=False)
+    contexto_conversa = db.Column(db.String(160), nullable=False)
+    comparison_id = db.Column(db.String(80), nullable=True)
+    escopo_auditoria = db.Column(db.String(160), nullable=True)
+    content_hash = db.Column(db.String(64), nullable=False)
+    texto = db.Column(db.Text, nullable=False)
+    valida = db.Column(db.Boolean, nullable=False, default=True)
+    criada_em = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    expira_em = db.Column(db.DateTime, nullable=False)
+
+    user = db.relationship(
+        "User",
+        foreign_keys=[user_id],
+        backref=db.backref("respostas_compartilhaveis_canal", lazy="dynamic"),
+    )
+
+
+class RascunhoEntregaWhatsApp(db.Model):
+    """Pendência de entrega a terceiro. Não é envio e não é SolicitacaoEntregaCanal.
+
+    Telefone, quando já normalizado, fica só aqui. O modelo recebe alias.
+    Confirmação antiga deixa de valer quando conteúdo, nome ou telefone mudam.
+    """
+
+    __tablename__ = "rascunho_entrega_whatsapp"
+
+    ESTADO_AGUARDANDO_TELEFONE = "aguardando_telefone"
+    ESTADO_AGUARDANDO_CONFIRMACAO = "aguardando_confirmacao"
+    ESTADO_BLOQUEADO_ELEGIBILIDADE = "bloqueado_elegibilidade"
+    ESTADO_EM_EXECUCAO = "em_execucao"
+    ESTADO_CONCLUIDO = "concluido"
+    ESTADO_PARCIAL = "parcial"
+    ESTADO_FALHOU = "falhou"
+    ESTADO_RESULTADO_INCERTO = "resultado_incerto"
+    ESTADO_CANCELADO = "cancelado"
+    ESTADO_EXPIRADO = "expirado"
+    ESTADOS = (
+        ESTADO_AGUARDANDO_TELEFONE,
+        ESTADO_AGUARDANDO_CONFIRMACAO,
+        ESTADO_BLOQUEADO_ELEGIBILIDADE,
+        ESTADO_EM_EXECUCAO,
+        ESTADO_CONCLUIDO,
+        ESTADO_PARCIAL,
+        ESTADO_FALHOU,
+        ESTADO_RESULTADO_INCERTO,
+        ESTADO_CANCELADO,
+        ESTADO_EXPIRADO,
+    )
+    ESTADOS_ABERTOS = (
+        ESTADO_AGUARDANDO_TELEFONE,
+        ESTADO_AGUARDANDO_CONFIRMACAO,
+        ESTADO_BLOQUEADO_ELEGIBILIDADE,
+        ESTADO_EM_EXECUCAO,
+    )
+
+    _SQL_SUPERFICIE = (
+        "superficie IN ('julia', 'auditoria_frete', 'comparacao_tabelas')"
+    )
+    _SQL_ESTADO = "estado IN ({})".format(", ".join(f"'{valor}'" for valor in ESTADOS))
+    _SQL_REFERENCIA = "length(referencia) BETWEEN 34 AND 80"
+    _SQL_HASH = "length(content_hash) = 64"
+    _SQL_VERSAO = "versao >= 1"
+    _SQL_CONTEXTO = "length(contexto_conversa) BETWEEN 1 AND 160"
+    _SQL_TELEFONE = "telefone_e164 IS NULL OR (length(telefone_e164) BETWEEN 9 AND 16)"
+    _SQL_CONFIRMACAO = (
+        "(confirmacao_referencia IS NULL AND confirmacao_versao IS NULL)"
+        " OR (confirmacao_referencia IS NOT NULL AND confirmacao_versao IS NOT NULL"
+        " AND confirmacao_versao >= 1)"
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint("referencia", name="uq_rascunho_entrega_whatsapp_referencia"),
+        db.UniqueConstraint("chave_preparo", name="uq_rascunho_entrega_whatsapp_preparo"),
+        db.UniqueConstraint("chave_execucao", name="uq_rascunho_entrega_whatsapp_execucao"),
+        db.CheckConstraint(_SQL_SUPERFICIE, name="ck_rascunho_entrega_whatsapp_superficie"),
+        db.CheckConstraint(_SQL_ESTADO, name="ck_rascunho_entrega_whatsapp_estado"),
+        db.CheckConstraint(_SQL_REFERENCIA, name="ck_rascunho_entrega_whatsapp_referencia"),
+        db.CheckConstraint(_SQL_HASH, name="ck_rascunho_entrega_whatsapp_hash"),
+        db.CheckConstraint(_SQL_VERSAO, name="ck_rascunho_entrega_whatsapp_versao"),
+        db.CheckConstraint(_SQL_CONTEXTO, name="ck_rascunho_entrega_whatsapp_contexto"),
+        db.CheckConstraint(_SQL_TELEFONE, name="ck_rascunho_entrega_whatsapp_telefone"),
+        db.CheckConstraint(_SQL_CONFIRMACAO, name="ck_rascunho_entrega_whatsapp_confirmacao"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    referencia = db.Column(db.String(80), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    superficie = db.Column(db.String(40), nullable=False)
+    contexto_conversa = db.Column(db.String(160), nullable=False)
+    conteudo_referencia = db.Column(db.String(80), nullable=False)
+    content_hash = db.Column(db.String(64), nullable=False)
+    nome_destinatario = db.Column(db.String(80), nullable=True)
+    telefone_e164 = db.Column(db.String(16), nullable=True)
+    telefone_hash = db.Column(db.String(64), nullable=True)
+    telefone_exibicao = db.Column(db.String(32), nullable=True)
+    turno_telefone_ref = db.Column(db.String(40), nullable=True)
+    estado = db.Column(db.String(32), nullable=False)
+    versao = db.Column(db.Integer, nullable=False, default=1)
+    confirmacao_referencia = db.Column(db.String(80), nullable=True)
+    confirmacao_apresentada_em = db.Column(db.DateTime, nullable=True)
+    confirmacao_versao = db.Column(db.Integer, nullable=True)
+    chave_preparo = db.Column(db.String(64), nullable=True)
+    chave_execucao = db.Column(db.String(64), nullable=True)
+    solicitacao_entrega_id = db.Column(
+        db.Integer,
+        db.ForeignKey(
+            "solicitacao_entrega_canal.id",
+            name="fk_rascunho_entrega_whatsapp_solicitacao",
+        ),
+        nullable=True,
+    )
+    criada_em = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    atualizada_em = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    expira_em = db.Column(db.DateTime, nullable=False)
+
+    user = db.relationship(
+        "User",
+        foreign_keys=[user_id],
+        backref=db.backref("rascunhos_entrega_whatsapp", lazy="dynamic"),
+    )

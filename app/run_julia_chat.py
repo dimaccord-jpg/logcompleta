@@ -322,12 +322,39 @@ def identidade_estavel_requisicao_web(data: object, *, cabecalho: str | None = N
     return uuid4().hex
 
 
+def _lembrar_resposta_julia(usuario, texto: str, historico: list | None = None) -> None:
+    if usuario is None or not isinstance(texto, str) or not texto.strip():
+        return
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_resposta_compartilhavel_service import (
+        montar_contexto,
+        registrar_resposta_compartilhavel,
+    )
+
+    user_id = getattr(usuario, "id", None)
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        return
+    registrar_resposta_compartilhavel(
+        usuario=usuario,
+        superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+        contexto_conversa=montar_contexto(
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+            user_id=user_id,
+            historico=historico if isinstance(historico, list) else [],
+        ),
+        texto=texto,
+    )
+
+
 def responder_entrega_whatsapp_se_pedida(
     user_message: str,
     history: list,
     *,
     usuario,
     identidade_requisicao: str | None = None,
+    contexto_conversa: str | None = None,
+    comparison_id: str | None = None,
+    escopo_auditoria: str | None = None,
 ) -> dict | None:
     """None segue o chat atual. Dict é a confirmação determinística da entrega."""
     from app.models import SolicitacaoEntregaCanal
@@ -340,6 +367,17 @@ def responder_entrega_whatsapp_se_pedida(
     candidatos = _get_chat_model_candidates()
     if not client or not candidatos:
         return None
+    from app.services.canal_resposta_compartilhavel_service import montar_contexto
+
+    user_id = getattr(usuario, "id", None)
+    if contexto_conversa is None and isinstance(user_id, int) and not isinstance(user_id, bool):
+        contexto_conversa = montar_contexto(
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+            user_id=user_id,
+            historico=history if isinstance(history, list) else [],
+            comparison_id=comparison_id,
+            escopo_auditoria=escopo_auditoria,
+        )
     try:
         resultado = avaliar_pedido_de_entrega(
             usuario=usuario,
@@ -352,6 +390,9 @@ def responder_entrega_whatsapp_se_pedida(
             model=candidatos[0],
             api_key_label=_api_key_label_chat(),
             identidade_requisicao=identidade_requisicao,
+            contexto_conversa=contexto_conversa,
+            comparison_id=comparison_id,
+            escopo_auditoria=escopo_auditoria,
         )
     except CleitonAiGovernanceBlockedError:
         return {
@@ -565,6 +606,7 @@ def chat_julia_reply(
                     out["web_links"] = web_links
                 # IaConsumoEvento já commitado pela governança Cleiton.
                 _growth_complete()
+                _lembrar_resposta_julia(usuario, text, history_list)
                 return out
             last_error = ValueError("Resposta vazia do modelo")
             failed_models.append(model)
@@ -606,4 +648,5 @@ def chat_julia_reply(
         out["web_links"] = web_links
     # Degradação textual ainda entrega resposta utilizável ao usuário → completed.
     _growth_complete(task_stage="reply_degraded")
+    _lembrar_resposta_julia(usuario, reply_text, history_list)
     return out

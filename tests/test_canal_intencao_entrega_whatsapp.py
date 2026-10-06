@@ -192,7 +192,7 @@ def test_frases_naturais_negativas_nao_pedem_envio(monkeypatch, frase):
     assert len(chamadas) == 1
 
 
-def test_avaliar_falha_tecnica_nao_entrega_nem_libera_chat(monkeypatch):
+def test_avaliar_falha_tecnica_nao_entrega_nem_libera_chat(ctx, monkeypatch):
     def _falha(*_args, **_kwargs):
         return intencao.DecisaoEntregaWhatsApp.FALHA_TECNICA
 
@@ -217,7 +217,61 @@ def test_avaliar_falha_tecnica_nao_entrega_nem_libera_chat(monkeypatch):
     assert entrega.mensagem_da_entrega(resultado) == entrega.MENSAGEM_FALHA_CLASSIFICACAO
 
 
-def test_avaliar_negativo_segue_sem_entrega(monkeypatch):
+def test_falha_tecnica_resolucao_vinculo_nao_impede_continuar_conversa(ctx, monkeypatch):
+    from app.services.canal_orquestracao_whatsapp_contextual_service import (
+        NOME_CONTINUAR,
+        AcaoWhatsAppContextual,
+        CatalogoDecisaoWhatsApp,
+    )
+
+    catalogo = CatalogoDecisaoWhatsApp(
+        mensagem="oi",
+        historico=[],
+        superficie="julia",
+        whatsapp_proprio_valido=False,
+        conteudos={},
+        telefones={},
+    )
+    catalogos = []
+    decisoes = []
+
+    def _banco(*_args, **_kwargs):
+        raise RuntimeError("banco")
+
+    def _catalogo(**kwargs):
+        catalogos.append(kwargs)
+        return catalogo
+
+    def _decidir(**kwargs):
+        decisoes.append(kwargs)
+        return AcaoWhatsAppContextual(NOME_CONTINUAR, {})
+
+    monkeypatch.setattr(entrega, "resolver_whatsapp_do_usuario", _banco)
+    monkeypatch.setattr(entrega, "construir_catalogo", _catalogo)
+    monkeypatch.setattr(entrega, "decidir_enviar_para_meu_whatsapp", _decidir)
+    monkeypatch.setattr(
+        entrega,
+        "entregar_texto_no_whatsapp_do_usuario",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("entrega")),
+    )
+    resultado = entrega.avaliar_pedido_de_entrega(
+        usuario=SimpleNamespace(id=7),
+        superficie="julia",
+        mensagem="oi",
+        historico=[],
+        agent="julia",
+        flow_type="julia_chat",
+        client=object(),
+        model="gemini-2.5-flash",
+        api_key_label="teste",
+    )
+    assert len(catalogos) == 1
+    assert len(decisoes) == 1
+    assert decisoes[0]["catalogo"] is catalogo
+    assert resultado is None
+
+
+def test_avaliar_negativo_segue_sem_entrega(ctx, monkeypatch):
     def _negativo(*_args, **_kwargs):
         return intencao.DecisaoEntregaWhatsApp.NEGATIVO
 

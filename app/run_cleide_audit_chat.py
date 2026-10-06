@@ -258,12 +258,41 @@ def cache_chat_response(session_obj, request_id: str, payload: dict) -> None:
     session_obj.modified = True
 
 
+def _lembrar_resposta_auditoria(usuario, texto: str, source_doc_ids: list | None) -> None:
+    if usuario is None or not isinstance(texto, str) or not texto.strip():
+        return
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_resposta_compartilhavel_service import (
+        escopo_de_documentos,
+        montar_contexto,
+        registrar_resposta_compartilhavel,
+    )
+
+    user_id = getattr(usuario, "id", None)
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        return
+    escopo = escopo_de_documentos(source_doc_ids)
+    registrar_resposta_compartilhavel(
+        usuario=usuario,
+        superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+        contexto_conversa=montar_contexto(
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+            user_id=user_id,
+            escopo_auditoria=escopo,
+        ),
+        texto=texto,
+        escopo_auditoria=escopo,
+    )
+
+
 def responder_entrega_whatsapp_se_pedida(
     user_message: str,
     history: list,
     *,
     usuario,
     identidade_requisicao: str | None = None,
+    contexto_conversa: str | None = None,
+    escopo_auditoria: str | None = None,
 ) -> dict | None:
     """None segue a auditoria atual. Dict é a confirmação determinística."""
     from app.models import SolicitacaoEntregaCanal
@@ -292,6 +321,8 @@ def responder_entrega_whatsapp_se_pedida(
             model=candidatos[0],
             api_key_label=_api_key_label(),
             identidade_requisicao=identidade_requisicao,
+            contexto_conversa=contexto_conversa,
+            escopo_auditoria=escopo_auditoria,
         )
     except CleitonAiGovernanceBlockedError:
         return {
@@ -376,11 +407,30 @@ def chat_cleide_audit_reply(
     clean_message = clean_message[: min(message_limit, MAX_MESSAGE_CHARS)]
 
     if usuario is not None and not entrega_ja_avaliada:
+        from app.models import SolicitacaoEntregaCanal
+        from app.services.canal_resposta_compartilhavel_service import (
+            escopo_de_documentos,
+            montar_contexto,
+        )
+
+        escopo_auditoria = escopo_de_documentos(source_doc_ids)
+        user_id = getattr(usuario, "id", None)
+        contexto_auditoria = (
+            montar_contexto(
+                superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+                user_id=int(user_id),
+                escopo_auditoria=escopo_auditoria,
+            )
+            if isinstance(user_id, int) and not isinstance(user_id, bool)
+            else None
+        )
         entrega = responder_entrega_whatsapp_se_pedida(
             clean_message,
             list(history) if isinstance(history, list) else [],
             usuario=usuario,
             identidade_requisicao=identidade_requisicao,
+            contexto_conversa=contexto_auditoria,
+            escopo_auditoria=escopo_auditoria,
         )
         if entrega is not None:
             return entrega
@@ -467,6 +517,7 @@ def chat_cleide_audit_reply(
             if text:
                 # IaConsumoEvento já commitado pela governança Cleiton.
                 _growth_complete()
+                _lembrar_resposta_auditoria(usuario, text, source_doc_ids)
                 return {
                     "answer": text,
                     "flow_type": CLEIDE_AUDIT_CHAT_FLOW_TYPE,
