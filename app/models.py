@@ -3175,6 +3175,73 @@ class ConsumoInteracaoCanal(db.Model):
         return f"{ConsumoInteracaoCanal.CHAVE_PREFIXO}{int(execucao_id)}"
 
 
+class SolicitacaoEntregaCanal(db.Model):
+    """
+    Pedido explícito de um User autenticado para entregar no WhatsApp
+    texto já produzido no chat web.
+
+    Não é evento de entrada, não é execução operacional e não gera consumo.
+    Não guarda telefone, phone_number_id, access token nem o texto integral.
+    content_hash só identifica o material da solicitação.
+    """
+
+    __tablename__ = "solicitacao_entrega_canal"
+
+    PROVIDER_META_WHATSAPP = "meta_whatsapp"
+    SUPERFICIE_JULIA = "julia"
+    SUPERFICIE_AUDITORIA = "auditoria_frete"
+    SUPERFICIE_COMPARACAO = "comparacao_tabelas"
+    SUPERFICIES = (
+        SUPERFICIE_JULIA,
+        SUPERFICIE_AUDITORIA,
+        SUPERFICIE_COMPARACAO,
+    )
+    CHAVE_MAXIMA = 80
+    CORRELATION_MAXIMA = 64
+    HASH_TAMANHO = 64
+
+    _SQL_PROVIDER = "provider = 'meta_whatsapp'"
+    _SQL_SUPERFICIE = (
+        "superficie_origem IN ('julia', 'auditoria_frete', 'comparacao_tabelas')"
+    )
+    _SQL_CORRELATION = "length(correlation_id) BETWEEN 32 AND 64"
+    _SQL_CHAVE = "length(chave_idempotencia) BETWEEN 32 AND 80"
+    _SQL_HASH = "length(content_hash) = 64"
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "chave_idempotencia",
+            name="uq_solicitacao_entrega_canal_chave",
+        ),
+        db.CheckConstraint(_SQL_PROVIDER, name="ck_solicitacao_entrega_canal_provider"),
+        db.CheckConstraint(
+            _SQL_SUPERFICIE,
+            name="ck_solicitacao_entrega_canal_superficie",
+        ),
+        db.CheckConstraint(
+            _SQL_CORRELATION,
+            name="ck_solicitacao_entrega_canal_correlation",
+        ),
+        db.CheckConstraint(_SQL_CHAVE, name="ck_solicitacao_entrega_canal_chave"),
+        db.CheckConstraint(_SQL_HASH, name="ck_solicitacao_entrega_canal_hash"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    provider = db.Column(db.String(32), nullable=False)
+    superficie_origem = db.Column(db.String(40), nullable=False)
+    correlation_id = db.Column(db.String(CORRELATION_MAXIMA), nullable=False)
+    chave_idempotencia = db.Column(db.String(CHAVE_MAXIMA), nullable=False)
+    content_hash = db.Column(db.String(HASH_TAMANHO), nullable=False)
+    criada_em = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+    user = db.relationship(
+        "User",
+        foreign_keys=[user_id],
+        backref=db.backref("solicitacoes_entrega_canal", lazy="dynamic"),
+    )
+
+
 class EventoCanalSaida(db.Model):
     """
     Resultado técnico de uma saída textual para o provider.
@@ -3185,6 +3252,9 @@ class EventoCanalSaida(db.Model):
     meta_whatsapp:<evento_entrada_id>:orientacao_franquia:resposta_principal,
     sem interpretação e sem execução. A chave tem de ser a desse
     evento_entrada_id; outra chave com a mesma marca não entra.
+    A entrega web usa meta_whatsapp:web:<solicitacao_id>:parte:<n>:resposta_principal
+    e não tem evento de entrada. A linha tem exatamente uma origem:
+    evento_entrada_id ou solicitacao_entrega_id.
     Nunca há duas origens na mesma linha. A linha nasce antes do HTTP e,
     uma vez gravada, uma nova chamada não envia de novo. Não há header,
     access token, telefone, texto nem corpo bruto.
@@ -3278,6 +3348,41 @@ class EventoCanalSaida(db.Model):
         " OR (interpretacao_id IS NULL AND execucao_operacional_id IS NULL"
         f" AND chave_idempotencia = {_SQL_CHAVE_ORIENTACAO})"
     )
+    # Predicado histórico permanece em _SQL_ORIGEM e _SQL_CHAVE.
+    # A constraint viva aceita a origem web sem afrouxar o legado.
+    _SQL_PREFIXO_PARTE_WEB = (
+        "('meta_whatsapp:web:' || CAST(solicitacao_entrega_id AS TEXT) || ':parte:')"
+    )
+    # Dois substrings: um ':nome' inteiro vira bind e o predicado vira NULL.
+    _SQL_SUFIXO_RESPOSTA = (
+        "substr(chave_idempotencia, length(chave_idempotencia) - 18, 1) = ':' "
+        "AND substr(chave_idempotencia, length(chave_idempotencia) - 17, 18) "
+        "= 'resposta_principal'"
+    )
+    _SQL_ORIGEM_WEB = (
+        "(evento_entrada_id IS NULL AND solicitacao_entrega_id IS NOT NULL"
+        " AND interpretacao_id IS NULL AND execucao_operacional_id IS NULL"
+        " AND conclusao_id IS NULL"
+        f" AND substr(chave_idempotencia, 1, length({_SQL_PREFIXO_PARTE_WEB}))"
+        f" = {_SQL_PREFIXO_PARTE_WEB}"
+        f" AND {_SQL_SUFIXO_RESPOSTA})"
+    )
+    _SQL_ORIGEM_VIGENTE = (
+        "((evento_entrada_id IS NOT NULL AND solicitacao_entrega_id IS NULL AND ("
+        f"{_SQL_ORIGEM})) OR {_SQL_ORIGEM_WEB})"
+    )
+    _SQL_CHAVE_WEB = (
+        "(substr(chave_idempotencia, 1, 18) <> 'meta_whatsapp:web:'"
+        " OR (solicitacao_entrega_id IS NOT NULL"
+        f" AND substr(chave_idempotencia, 1, length({_SQL_PREFIXO_PARTE_WEB}))"
+        f" = {_SQL_PREFIXO_PARTE_WEB}"
+        f" AND {_SQL_SUFIXO_RESPOSTA}))"
+    )
+    _SQL_CHAVE_VIGENTE = f"({_SQL_CHAVE}) AND ({_SQL_CHAVE_WEB})"
+    _SQL_XOR_ORIGEM = (
+        "(evento_entrada_id IS NOT NULL AND solicitacao_entrega_id IS NULL)"
+        " OR (evento_entrada_id IS NULL AND solicitacao_entrega_id IS NOT NULL)"
+    )
     _SQL_COERENCIA = (
         "("
         "(status_envio = 'aceito_provider' AND provider_message_id IS NOT NULL "
@@ -3297,11 +3402,12 @@ class EventoCanalSaida(db.Model):
         db.UniqueConstraint("chave_idempotencia", name="uq_evento_canal_saida_chave"),
         db.CheckConstraint(_SQL_PROVIDER, name="ck_evento_canal_saida_provider"),
         db.CheckConstraint(_SQL_STATUS, name="ck_evento_canal_saida_status"),
-        db.CheckConstraint(_SQL_CHAVE, name="ck_evento_canal_saida_chave"),
+        db.CheckConstraint(_SQL_CHAVE_VIGENTE, name="ck_evento_canal_saida_chave"),
         db.CheckConstraint(_SQL_ERRO, name="ck_evento_canal_saida_erro"),
         db.CheckConstraint(_SQL_MENSAGEM, name="ck_evento_canal_saida_mensagem"),
         db.CheckConstraint(_SQL_CORRELATION, name="ck_evento_canal_saida_correlation"),
-        db.CheckConstraint(_SQL_ORIGEM, name="ck_evento_canal_saida_origem"),
+        db.CheckConstraint(_SQL_ORIGEM_VIGENTE, name="ck_evento_canal_saida_origem"),
+        db.CheckConstraint(_SQL_XOR_ORIGEM, name="ck_evento_canal_saida_xor_origem"),
         db.CheckConstraint(_SQL_COERENCIA, name="ck_evento_canal_saida_coerencia"),
     )
 
@@ -3309,7 +3415,16 @@ class EventoCanalSaida(db.Model):
     evento_entrada_id = db.Column(
         db.Integer,
         db.ForeignKey("evento_canal_recebido.id"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    solicitacao_entrega_id = db.Column(
+        db.Integer,
+        db.ForeignKey(
+            "solicitacao_entrega_canal.id",
+            name="fk_evento_canal_saida_solicitacao",
+        ),
+        nullable=True,
         index=True,
     )
     interpretacao_id = db.Column(
@@ -3353,6 +3468,11 @@ class EventoCanalSaida(db.Model):
         "EventoCanalRecebido",
         backref=db.backref("saidas_canal", lazy="dynamic"),
     )
+    solicitacao_entrega = db.relationship(
+        "SolicitacaoEntregaCanal",
+        foreign_keys=[solicitacao_entrega_id],
+        backref=db.backref("saidas_canal", lazy="dynamic"),
+    )
     interpretacao = db.relationship(
         "InterpretacaoConversacionalCanal",
         backref=db.backref("saidas_canal", lazy="dynamic"),
@@ -3377,6 +3497,12 @@ class EventoCanalSaida(db.Model):
         return (
             f"meta_whatsapp:{int(evento_entrada_id)}"
             f"{EventoCanalSaida.MARCA_ORIENTACAO_FRANQUIA}resposta_principal"
+        )
+
+    @staticmethod
+    def chave_resposta_web(solicitacao_id: int, parte: int) -> str:
+        return (
+            f"meta_whatsapp:web:{int(solicitacao_id)}:parte:{int(parte)}:resposta_principal"
         )
 
 

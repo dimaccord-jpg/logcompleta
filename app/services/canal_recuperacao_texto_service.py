@@ -341,6 +341,13 @@ def _diagnostico(
             correlation_id=saida.correlation_id,
             motivo=motivo,
         )
+    if saida.evento_entrada_id is None:
+        return _resultado(
+            CODIGO_EVENTO_AUSENTE,
+            saida_id=int(saida.id),
+            correlation_id=saida.correlation_id,
+            motivo=motivo,
+        )
     interpretacao = db.session.get(InterpretacaoConversacionalCanal, int(saida.interpretacao_id))
     evento = db.session.get(EventoCanalRecebido, int(saida.evento_entrada_id))
     ultima = _ultima(int(saida.id))

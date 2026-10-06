@@ -116,7 +116,9 @@ from app.agente_compara_chat_context_service import (
     AgenteComparaChatContextError,
     evaluate_comparison_chat_availability,
 )
-from app.run_agente_compara_comparison_chat import chat_agente_compara_comparison_reply
+from app.run_agente_compara_comparison_chat import (
+    chat_agente_compara_comparison_reply,
+)
 from app.agente_compara_insights_context import (
     ERROR_INSIGHTS_CHAT_LOCKED,
     load_audit_insights_bundle,
@@ -2020,7 +2022,7 @@ def agente_compara_comparison_chat():
     history_limit = int(
         getattr(audit_cfg, "comparison_chat_history_max_items", None) or audit_cfg.chat_max_history
     )
-    history = sanitize_chat_history(data.get("history"), max_history=history_limit)
+    historico_original = data.get("history")
     request_id = normalize_chat_request_id(data.get("request_id"))
     comparison_id = data.get("comparison_id")
     if comparison_id is not None and not isinstance(comparison_id, str):
@@ -2077,7 +2079,7 @@ def agente_compara_comparison_chat():
 
     result = chat_agente_compara_comparison_reply(
         message_text,
-        history,
+        historico_original if isinstance(historico_original, list) else [],
         session_obj=session,
         comparison_id=resolved_comparison_id,
         request_id=request_id,
@@ -2087,6 +2089,9 @@ def agente_compara_comparison_chat():
         question_max_chars=message_limit,
         fallback_message=audit_cfg.fallback_message,
         skip_availability_gate=True,
+        usuario=current_user,
+        entrega_ja_avaliada=False,
+        identidade_requisicao=request_id,
     )
 
     if result.get("error"):

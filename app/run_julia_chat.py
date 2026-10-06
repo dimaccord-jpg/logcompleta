@@ -310,6 +310,59 @@ def _extract_suggestion_metadata(user_message: str) -> tuple[str, dict]:
     return clean_message, meta
 
 
+def identidade_estavel_requisicao_web(data: object, *, cabecalho: str | None = None) -> str:
+    """Identidade da requisição web. Reusa request_id, execution_id ou o cabeçalho já enviado."""
+    if isinstance(data, dict):
+        for campo in ("request_id", "execution_id"):
+            bruto = data.get(campo)
+            if isinstance(bruto, str) and bruto.strip():
+                return bruto.strip()
+    if isinstance(cabecalho, str) and cabecalho.strip():
+        return cabecalho.strip()
+    return uuid4().hex
+
+
+def responder_entrega_whatsapp_se_pedida(
+    user_message: str,
+    history: list,
+    *,
+    usuario,
+    identidade_requisicao: str | None = None,
+) -> dict | None:
+    """None segue o chat atual. Dict é a confirmação determinística da entrega."""
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_entrega_web_whatsapp_service import (
+        avaliar_pedido_de_entrega,
+        mensagem_da_entrega,
+    )
+
+    client = _get_client()
+    candidatos = _get_chat_model_candidates()
+    if not client or not candidatos:
+        return None
+    try:
+        resultado = avaliar_pedido_de_entrega(
+            usuario=usuario,
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+            mensagem=user_message,
+            historico=history,
+            agent="julia",
+            flow_type=FLOW_TYPE_JULIA_CHAT,
+            client=client,
+            model=candidatos[0],
+            api_key_label=_api_key_label_chat(),
+            identidade_requisicao=identidade_requisicao,
+        )
+    except CleitonAiGovernanceBlockedError:
+        return {
+            "reply": USER_SAFE_PREPARATION_FAILED,
+            "suggestions": [],
+        }
+    if resultado is None:
+        return None
+    return {"reply": mensagem_da_entrega(resultado), "suggestions": []}
+
+
 def chat_julia_reply(
     user_message: str,
     history: list,
@@ -320,6 +373,9 @@ def chat_julia_reply(
     flow_type: str | None = None,
     execution_id: str | None = None,
     allow_provider_fallback: bool = True,
+    usuario=None,
+    entrega_ja_avaliada: bool = False,
+    identidade_requisicao: str | None = None,
 ) -> dict:
     """
     Envia a mensagem do usuário ao LLM com histórico limitado.
@@ -377,8 +433,18 @@ def chat_julia_reply(
             "suggestions": _build_follow_up_suggestions(""),
         }
 
-    # Respeita o limite de histórico ao montar o contexto (padrão seguro)
     history_list = list(history) if isinstance(history, list) else []
+    if usuario is not None and not entrega_ja_avaliada:
+        entrega = responder_entrega_whatsapp_se_pedida(
+            clean_user_message,
+            history_list,
+            usuario=usuario,
+            identidade_requisicao=identidade_requisicao,
+        )
+        if entrega is not None:
+            return entrega
+
+    # Respeita o limite de histórico ao montar o contexto (padrão seguro)
     history_slice = history_list[-max_history:] if max_history > 0 else []
 
     client = _get_client()

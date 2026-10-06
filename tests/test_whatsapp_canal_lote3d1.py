@@ -261,6 +261,7 @@ def test_migration_cria_saida_minima():
         "enviado_em",
         "correlation_id",
         "conclusao_id",
+        "solicitacao_entrega_id",
     }
 
 

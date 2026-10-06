@@ -179,7 +179,9 @@ def _de_linha(row: EventoCanalSaida) -> ResultadoSaidaCanal:
         codigo_erro=row.codigo_erro,
         correlation_id=row.correlation_id,
         saida_id=int(row.id),
-        evento_entrada_id=int(row.evento_entrada_id),
+        evento_entrada_id=(
+            int(row.evento_entrada_id) if row.evento_entrada_id is not None else None
+        ),
         conclusao_id=conclusao_id,
     )
 
@@ -264,6 +266,47 @@ def _marcar(
     sincronizar_tentativa_com_saida(row)
     db.session.commit()
     return db.session.get(EventoCanalSaida, saida_id)
+
+
+def inserir_saida_canal(row: EventoCanalSaida) -> EventoCanalSaida | None:
+    """Reserva a saída e a tentativa 1. None significa chave já gravada."""
+    return _inserir(row)
+
+
+def concluir_envio_reservado(
+    saida_id: int,
+    *,
+    phone_number_id: str,
+    destinatario: str,
+    texto: str,
+) -> EventoCanalSaida | None:
+    """Chama o adapter oficial e grava o resultado da reserva já confirmada.
+
+    Falha de gravação depois do HTTP não dispara outro POST.
+    """
+    http = WhatsAppMetaCloudApiAdapter().enviar_texto(
+        phone_number_id=phone_number_id,
+        destinatario=destinatario,
+        texto=texto,
+    )
+    if http.aceito:
+        status = EventoCanalSaida.STATUS_ACEITO
+        message_id = http.provider_message_id
+        codigo_erro = None
+    else:
+        status = EventoCanalSaida.STATUS_ERRO
+        message_id = None
+        codigo_erro = http.codigo_erro or EventoCanalSaida.CODIGO_RESPOSTA_INVALIDA
+    try:
+        return _marcar(
+            saida_id,
+            status_envio=status,
+            provider_message_id=message_id,
+            codigo_erro=codigo_erro,
+        )
+    except Exception:
+        db.session.rollback()
+        return db.session.get(EventoCanalSaida, saida_id)
 
 
 def _pendente_de_link(interpretacao: InterpretacaoConversacionalCanal) -> bool:
@@ -366,29 +409,12 @@ def _enviar(interpretacao_id: int) -> ResultadoSaidaCanal:
     saida_id = int(reservada.id)
     # A reserva já está confirmada. Daqui em diante, falha de gravação
     # não dispara outro POST. O texto é o que já estava persistido.
-    http = WhatsAppMetaCloudApiAdapter().enviar_texto(
+    marcada = concluir_envio_reservado(
+        saida_id,
         phone_number_id=phone_number_id,
         destinatario=destinatario,
         texto=texto,
     )
-    if http.aceito:
-        status = EventoCanalSaida.STATUS_ACEITO
-        message_id = http.provider_message_id
-        codigo_erro = None
-    else:
-        status = EventoCanalSaida.STATUS_ERRO
-        message_id = None
-        codigo_erro = http.codigo_erro or EventoCanalSaida.CODIGO_RESPOSTA_INVALIDA
-    try:
-        marcada = _marcar(
-            saida_id,
-            status_envio=status,
-            provider_message_id=message_id,
-            codigo_erro=codigo_erro,
-        )
-    except Exception:
-        db.session.rollback()
-        marcada = db.session.get(EventoCanalSaida, saida_id)
     if marcada is None:
         return _resultado(
             EventoCanalSaida.STATUS_RESERVADO,
@@ -488,29 +514,12 @@ def _enviar_execucao(execucao_id: int) -> ResultadoSaidaCanal:
             return _resultado(CODIGO_EXECUCAO_AUSENTE, evento_entrada_id=evento_id)
         return _de_linha(repetida)
     saida_id = int(reservada.id)
-    http = WhatsAppMetaCloudApiAdapter().enviar_texto(
+    marcada = concluir_envio_reservado(
+        saida_id,
         phone_number_id=phone_number_id,
         destinatario=destinatario,
         texto=texto,
     )
-    if http.aceito:
-        status = EventoCanalSaida.STATUS_ACEITO
-        message_id = http.provider_message_id
-        codigo_erro = None
-    else:
-        status = EventoCanalSaida.STATUS_ERRO
-        message_id = None
-        codigo_erro = http.codigo_erro or EventoCanalSaida.CODIGO_RESPOSTA_INVALIDA
-    try:
-        marcada = _marcar(
-            saida_id,
-            status_envio=status,
-            provider_message_id=message_id,
-            codigo_erro=codigo_erro,
-        )
-    except Exception:
-        db.session.rollback()
-        marcada = db.session.get(EventoCanalSaida, saida_id)
     if marcada is None:
         return _resultado(
             EventoCanalSaida.STATUS_RESERVADO,
@@ -564,29 +573,12 @@ def _enviar_orientacao(evento_id: int, texto: str) -> ResultadoSaidaCanal:
             return _resultado(CODIGO_EVENTO_AUSENTE, evento_entrada_id=evento_id)
         return _de_linha(repetida)
     saida_id = int(reservada.id)
-    http = WhatsAppMetaCloudApiAdapter().enviar_texto(
+    marcada = concluir_envio_reservado(
+        saida_id,
         phone_number_id=phone_number_id,
         destinatario=destinatario,
         texto=texto,
     )
-    if http.aceito:
-        status = EventoCanalSaida.STATUS_ACEITO
-        message_id = http.provider_message_id
-        codigo_erro = None
-    else:
-        status = EventoCanalSaida.STATUS_ERRO
-        message_id = None
-        codigo_erro = http.codigo_erro or EventoCanalSaida.CODIGO_RESPOSTA_INVALIDA
-    try:
-        marcada = _marcar(
-            saida_id,
-            status_envio=status,
-            provider_message_id=message_id,
-            codigo_erro=codigo_erro,
-        )
-    except Exception:
-        db.session.rollback()
-        marcada = db.session.get(EventoCanalSaida, saida_id)
     if marcada is None:
         return _resultado(
             EventoCanalSaida.STATUS_RESERVADO,

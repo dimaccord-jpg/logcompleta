@@ -1882,7 +1882,30 @@ def api_chat_julia():
         max_history = get_julia_chat_max_history()
         from app.cleiton_doc_contracts import FLOW_TYPE_JULIA_CHAT
         from app.julia_doc_context import build_julia_document_context_for_chat
-        from app.run_julia_chat import chat_julia_reply
+        from app.run_julia_chat import (
+            chat_julia_reply,
+            identidade_estavel_requisicao_web,
+            responder_entrega_whatsapp_se_pedida,
+        )
+
+        identidade_requisicao = identidade_estavel_requisicao_web(
+            data,
+            cabecalho=(
+                request.headers.get("X-Execution-ID")
+                or request.headers.get("Idempotency-Key")
+                or ""
+            ),
+        )
+        entrega = responder_entrega_whatsapp_se_pedida(
+            user_message,
+            history if isinstance(history, list) else [],
+            usuario=current_user,
+            identidade_requisicao=identidade_requisicao,
+        )
+        if entrega is not None:
+            entrega["authorization"] = authz
+            entrega["limit_reached"] = not authz.get("permitido", True)
+            return jsonify(entrega)
 
         try:
             doc_ctx = build_julia_document_context_for_chat()
@@ -1902,6 +1925,9 @@ def api_chat_julia():
             document_context_block=doc_ctx.get("context_block") or None,
             document_file_parts=doc_ctx.get("gemini_file_parts") or None,
             flow_type=doc_ctx.get("flow_type"),
+            usuario=current_user,
+            entrega_ja_avaliada=True,
+            identidade_requisicao=identidade_requisicao,
         )
         result["authorization"] = authz
         result["limit_reached"] = not authz.get("permitido", True)

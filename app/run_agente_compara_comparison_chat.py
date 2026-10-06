@@ -570,6 +570,59 @@ def _run_one_gemini_call(
     return payload
 
 
+def responder_entrega_whatsapp_se_pedida(
+    user_message: str,
+    history: list,
+    *,
+    usuario,
+    identidade_requisicao: str | None = None,
+) -> dict | None:
+    """None segue a comparação atual. Dict é a confirmação determinística."""
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_entrega_web_whatsapp_service import (
+        avaliar_pedido_de_entrega,
+        mensagem_da_entrega,
+    )
+    from app.services.cleiton_ai_data_governance import (
+        USER_SAFE_PREPARATION_FAILED,
+        CleitonAiGovernanceBlockedError,
+    )
+
+    try:
+        client = _get_client()
+        model = resolve_comparison_chat_model()
+    except ComparisonChatProviderError:
+        return None
+    try:
+        resultado = avaliar_pedido_de_entrega(
+            usuario=usuario,
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_COMPARACAO,
+            mensagem=user_message,
+            historico=history,
+            agent="agente_compara",
+            flow_type=AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
+            client=client,
+            model=model,
+            api_key_label=_api_key_label(),
+            identidade_requisicao=identidade_requisicao,
+        )
+    except CleitonAiGovernanceBlockedError:
+        return {
+            "answer": USER_SAFE_PREPARATION_FAILED,
+            "flow_type": AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
+            "deterministic": True,
+            "chat_available": True,
+        }
+    if resultado is None:
+        return None
+    return {
+        "answer": mensagem_da_entrega(resultado),
+        "flow_type": AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
+        "deterministic": True,
+        "chat_available": True,
+    }
+
+
 def chat_agente_compara_comparison_reply(
     user_message: str,
     history: list,
@@ -583,6 +636,9 @@ def chat_agente_compara_comparison_reply(
     question_max_chars: int | None = None,
     fallback_message: str | None = None,
     skip_availability_gate: bool = False,
+    usuario=None,
+    entrega_ja_avaliada: bool = False,
+    identidade_requisicao: str | None = None,
 ) -> dict:
     started = time.perf_counter()
     audit_cfg = get_agente_compara_config()
@@ -720,6 +776,16 @@ def chat_agente_compara_comparison_reply(
             "chat_available": True,
             "capability": CAPABILITY_READY,
         }
+
+    if usuario is not None and not entrega_ja_avaliada:
+        entrega = responder_entrega_whatsapp_se_pedida(
+            clean_message,
+            list(history) if isinstance(history, list) else [],
+            usuario=usuario,
+            identidade_requisicao=identidade_requisicao or request_id,
+        )
+        if entrega is not None:
+            return entrega
 
     history_slice = sanitize_chat_history(history, max_history=limits["history_max_items"])
     comparison = context.get("comparison") if isinstance(context.get("comparison"), dict) else {}

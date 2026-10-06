@@ -258,6 +258,58 @@ def cache_chat_response(session_obj, request_id: str, payload: dict) -> None:
     session_obj.modified = True
 
 
+def responder_entrega_whatsapp_se_pedida(
+    user_message: str,
+    history: list,
+    *,
+    usuario,
+    identidade_requisicao: str | None = None,
+) -> dict | None:
+    """None segue a auditoria atual. Dict é a confirmação determinística."""
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_entrega_web_whatsapp_service import (
+        avaliar_pedido_de_entrega,
+        mensagem_da_entrega,
+    )
+    from app.services.cleiton_ai_data_governance import (
+        USER_SAFE_PREPARATION_FAILED,
+        CleitonAiGovernanceBlockedError,
+    )
+
+    client = _get_client()
+    candidatos = _get_model_candidates()
+    if not client or not candidatos:
+        return None
+    try:
+        resultado = avaliar_pedido_de_entrega(
+            usuario=usuario,
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+            mensagem=user_message,
+            historico=history,
+            agent="cleide",
+            flow_type=CLEIDE_AUDIT_CHAT_FLOW_TYPE,
+            client=client,
+            model=candidatos[0],
+            api_key_label=_api_key_label(),
+            identidade_requisicao=identidade_requisicao,
+        )
+    except CleitonAiGovernanceBlockedError:
+        return {
+            "answer": USER_SAFE_PREPARATION_FAILED,
+            "flow_type": CLEIDE_AUDIT_CHAT_FLOW_TYPE,
+            "documents_used": [],
+            "deterministic": True,
+        }
+    if resultado is None:
+        return None
+    return {
+        "answer": mensagem_da_entrega(resultado),
+        "flow_type": CLEIDE_AUDIT_CHAT_FLOW_TYPE,
+        "documents_used": [],
+        "deterministic": True,
+    }
+
+
 def chat_cleide_audit_reply(
     user_message: str,
     history: list,
@@ -273,6 +325,9 @@ def chat_cleide_audit_reply(
     fallback_message: str | None = None,
     no_hallucination_instruction_enabled: bool | None = None,
     execution_id: str | None = None,
+    usuario=None,
+    entrega_ja_avaliada: bool = False,
+    identidade_requisicao: str | None = None,
 ) -> dict:
     """
     Envia mensagem ao LLM com histórico e contexto documental da Cleide Auditoria.
@@ -319,6 +374,16 @@ def chat_cleide_audit_reply(
             "message": f"Mensagem excede o limite de {message_limit} caracteres.",
         }
     clean_message = clean_message[: min(message_limit, MAX_MESSAGE_CHARS)]
+
+    if usuario is not None and not entrega_ja_avaliada:
+        entrega = responder_entrega_whatsapp_se_pedida(
+            clean_message,
+            list(history) if isinstance(history, list) else [],
+            usuario=usuario,
+            identidade_requisicao=identidade_requisicao,
+        )
+        if entrega is not None:
+            return entrega
 
     history_limit = _get_max_history(max_history=max_history)
     history_slice = sanitize_chat_history(history, max_history=history_limit)

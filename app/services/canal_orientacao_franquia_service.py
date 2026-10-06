@@ -9,6 +9,7 @@ import logging
 import os
 from dataclasses import dataclass
 
+from app.extensions import db
 from app.models import EventoCanalRecebido, EventoCanalSaida
 from app.services.canal_saida_whatsapp_service import enviar_orientacao_franquia
 from app.services.cleiton_mensageria_operacao_service import UPGRADE_PATH_DEFAULT
@@ -118,10 +119,13 @@ def interromper_se_franquia_impede(
             decisao.get("status_franquia") or "-",
             decisao.get("motivo") or "-",
         )
-        envio = enviar_orientacao_franquia(
-            evento_id,
-            montar_texto_orientacao_whatsapp(decisao),
-        )
+        # A decisão já está em memória. A leitura da franquia pode ter
+        # abortado a transação (Postgres) sem impedir o retorno. Sem este
+        # rollback, a saída não grava nem chama a Meta e o WhatsApp fica
+        # em silêncio. Não desfaz o roteamento: ele já foi confirmado.
+        texto = montar_texto_orientacao_whatsapp(decisao)
+        db.session.rollback()
+        envio = enviar_orientacao_franquia(evento_id, texto)
         return InterrupcaoFranquiaCanal(
             codigo=CODIGO_FRANQUIA_INDISPONIVEL,
             evento_id=evento_id,

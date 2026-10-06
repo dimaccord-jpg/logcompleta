@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.session import SessionTransactionState
 
 from app.extensions import db
 from app.models import (
@@ -200,6 +201,44 @@ def test_franquia_blocked_nao_chama_julia_e_orienta(ctx, app, monkeypatch):
     _sem_consumo(franquia, antes)
     assert PHONE not in corpo
     assert PERGUNTA not in corpo
+
+
+def test_transacao_abortada_na_leitura_ainda_orienta(ctx, app, monkeypatch):
+    """Leitura que falha e engole o erro não pode calar a orientação."""
+    _configurar(monkeypatch)
+    _base(monkeypatch)
+    meta = _mock_meta(monkeypatch)
+    _proibir_julia(monkeypatch)
+    import app.services.cleiton_monetizacao_service as monetizacao
+
+    def _aborta(_conta_id, **_kwargs):
+        # Postgres aborta a transação inteira quando a leitura falha e o
+        # erro é engolido. O SQLite do teste não faz isso; o estado
+        # DEACTIVE reproduz o mesmo bloqueio da saída.
+        transacao = db.session().get_transaction()
+        if transacao is not None:
+            transacao._state = SessionTransactionState.DEACTIVE
+        return {"falha_mensal_vigente": False}
+
+    monkeypatch.setattr(
+        monetizacao,
+        "resolver_falha_mensal_vigente_conta",
+        _aborta,
+    )
+    client = _cliente(app)
+    _user, _admin, franquia, _outra, _ident = _vincular()
+    _esgotar(franquia)
+    antes = Decimal(str(franquia.consumo_acumulado))
+    assert _texto(client, "wamid.G3ABORT", PERGUNTA).status_code == 200
+    assert len(meta) == 1
+    assert "AgenteFrete" in _corpo(meta[0])
+    assert f"{BASE}{UPGRADE_PATH_DEFAULT}" in _corpo(meta[0])
+    saida = EventoCanalSaida.query.one()
+    assert saida.chave_idempotencia == EventoCanalSaida.chave_orientacao_franquia(
+        saida.evento_entrada_id
+    )
+    assert saida.status_envio == EventoCanalSaida.STATUS_ACEITO
+    _sem_consumo(franquia, antes)
 
 
 def test_replay_do_evento_bloqueado_nao_repete(ctx, app, monkeypatch):

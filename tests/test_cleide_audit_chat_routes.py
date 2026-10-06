@@ -440,6 +440,10 @@ def test_governed_generate_content_used(web_client, monkeypatch):
 
 def test_does_not_call_gemini_directly(web_client, monkeypatch):
     capture = _fake_governed_generate(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.canal_entrega_web_whatsapp_service.decidir_enviar_para_meu_whatsapp",
+        lambda *_args, **_kwargs: False,
+    )
 
     class _Client:
         models = MagicMock()

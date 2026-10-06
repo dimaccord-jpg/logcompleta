@@ -142,7 +142,9 @@ def _de_linha(row: EventoCanalSaida) -> ResultadoSaidaCanal:
         codigo_erro=row.codigo_erro,
         correlation_id=row.correlation_id,
         saida_id=int(row.id),
-        evento_entrada_id=int(row.evento_entrada_id),
+        evento_entrada_id=(
+            int(row.evento_entrada_id) if row.evento_entrada_id is not None else None
+        ),
         conclusao_id=conclusao_id,
     )
 
@@ -162,7 +164,9 @@ def _recarregar(saida_id: int, codigo: str | None = None) -> ResultadoSaidaCanal
         codigo_erro=atual.codigo_erro,
         correlation_id=atual.correlation_id,
         saida_id=int(atual.id),
-        evento_entrada_id=int(atual.evento_entrada_id),
+        evento_entrada_id=(
+            int(atual.evento_entrada_id) if atual.evento_entrada_id is not None else None
+        ),
         conclusao_id=conclusao_id,
     )
 

@@ -734,7 +734,10 @@
     var history = buildHistory(messagesEl);
     setLoading(messagesEl, true);
 
-    var payload = { message: text, history: history };
+    var requestId = (window.crypto && typeof window.crypto.randomUUID === 'function')
+      ? window.crypto.randomUUID().split('-').join('')
+      : (Date.now().toString(16) + Math.random().toString(16).slice(2) + '0000000000000000').slice(0, 32);
+    var payload = { message: text, history: history, request_id: requestId };
     if (DISCOVERY_MODE && ctaForRequest) {
       payload.cta_id = ctaForRequest;
     }
