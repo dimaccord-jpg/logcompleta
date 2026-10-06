@@ -9,15 +9,21 @@ from flask import g
 
 from app.extensions import db, login_manager
 from app.infra import get_user_by_id
+import app.services.central_plugin_whatsapp_service  # noqa: F401
 from app.models import (
     ContaVinculoOrganizacional,
+    ExecucaoOperacionalCanal,
     Franquia,
+    IdentidadeCanalExterna,
     Plugin,
     PluginCapability,
     PluginConexao,
     PluginEventoCentral,
     PluginRestricaoUsuario,
+    utcnow_naive,
 )
+from app.services.canal_aquisicao_service import obter_ou_criar_identidade_externa
+from app.services.central_plugin_whatsapp_service import MENSAGEM_CANAL_INDISPONIVEL
 from app.services.central_plugin_service import (
     alterar_estado_conexao,
     criar_conexao,
@@ -897,3 +903,311 @@ def test_nao_existe_chamada_a_provider_externo():
     assert "oauth" not in template
     assert "webhook" not in template
     assert "brobot" not in template
+    canal = (_RAIZ / "app" / "services" / "central_plugin_whatsapp_service.py").read_text(encoding="utf-8").lower()
+    assert "import requests" not in canal
+    assert "import httpx" not in canal
+    assert "urlopen" not in canal
+    assert "graph.facebook" not in canal
+
+
+_NUMERO_PUBLICO = "5511999990000"
+_TELEFONE_POSTADO = "5511888880000"
+_SUJEITO_WHATSAPP = "5511900003333"
+
+
+def _plugin_whatsapp():
+    return _plugin(slug="whatsapp", nome="WhatsApp", adapter_key="whatsapp_meta")
+
+
+def _identidade_vinculada(user, sujeito: str = _SUJEITO_WHATSAPP):
+    agora = utcnow_naive()
+    identidade = IdentidadeCanalExterna(
+        provedor="whatsapp_meta",
+        sujeito_externo=sujeito,
+        estado=IdentidadeCanalExterna.ESTADO_VINCULADA,
+        user_id=user.id,
+        interacoes_uteis=0,
+        vinculada_em=agora,
+        revogada_em=None,
+        criada_em=agora,
+        atualizada_em=agora,
+    )
+    db.session.add(identidade)
+    db.session.commit()
+    return identidade
+
+
+def _ocupando(user_id: int):
+    return PluginConexao.query.filter(
+        PluginConexao.user_id == user_id,
+        PluginConexao.estado.in_(PluginConexao.ESTADOS_QUE_OCUPAM_SLOT),
+    ).all()
+
+
+def test_card_whatsapp_desconectado_mostra_conectar_sem_numero(app, monkeypatch):
+    monkeypatch.setenv("WHATSAPP_PUBLIC_NUMBER", _NUMERO_PUBLICO)
+    with app.app_context():
+        user, _conta, _franquia = _pessoa("card-whatsapp@test.com", "conta-card-whatsapp")
+        plugin = _plugin_whatsapp()
+        client = _build_client(app)
+        _login(client, user.id)
+        html = client.get("/plugins").get_data(as_text=True)
+        card = _card(html, plugin.slug)
+        assert "Conectar WhatsApp" in card
+        assert 'data-acao="conectar"' in card
+        assert _NUMERO_PUBLICO not in html
+        assert "wa.me" not in html
+        assert 'type="tel"' not in card
+
+
+def test_config_ausente_nao_cria_conexao_nem_aguardando(app, monkeypatch):
+    monkeypatch.delenv("WHATSAPP_PUBLIC_NUMBER", raising=False)
+    with app.app_context():
+        user, _conta, _franquia = _pessoa("sem-numero-whatsapp@test.com", "conta-sem-numero-whatsapp")
+        plugin = _plugin_whatsapp()
+        client = _build_client(app)
+        _login(client, user.id)
+        pagina = client.get("/plugins")
+        assert MENSAGEM_CANAL_INDISPONIVEL in pagina.get_data(as_text=True)
+        assert 'data-estado="aguardando_configuracao"' not in _card(pagina.get_data(as_text=True), plugin.slug)
+        resposta = client.post(
+            f"/plugins/{plugin.slug}/conectar",
+            data={"csrf_token": _csrf(user.id), "telefone": _TELEFONE_POSTADO},
+            follow_redirects=True,
+        )
+        assert MENSAGEM_CANAL_INDISPONIVEL in resposta.get_data(as_text=True)
+        assert PluginConexao.query.filter_by(user_id=user.id).count() == 0
+        monkeypatch.setenv("WHATSAPP_PUBLIC_NUMBER", "+5511999990000")
+        invalido = client.post(
+            f"/plugins/{plugin.slug}/conectar",
+            data={"csrf_token": _csrf(user.id)},
+            follow_redirects=True,
+        )
+        assert MENSAGEM_CANAL_INDISPONIVEL in invalido.get_data(as_text=True)
+        assert PluginConexao.query.filter_by(user_id=user.id).count() == 0
+
+
+def test_clique_conectar_reutiliza_uma_conexao_e_abre_deep_link(app, monkeypatch):
+    monkeypatch.setenv("WHATSAPP_PUBLIC_NUMBER", _NUMERO_PUBLICO)
+    with app.app_context():
+        user, _conta, _franquia = _pessoa("conectar-whatsapp@test.com", "conta-conectar-whatsapp")
+        outro, _conta_b, _franquia_b = _pessoa("outro-conectar-whatsapp@test.com", "conta-outro-conectar-whatsapp")
+        plugin = _plugin_whatsapp()
+        client = _build_client(app)
+        _login(client, user.id)
+        token = _csrf(user.id)
+        sem_csrf = client.post(f"/plugins/{plugin.slug}/conectar", data={"telefone": _TELEFONE_POSTADO})
+        assert sem_csrf.status_code in (302, 303)
+        assert "wa.me" not in (sem_csrf.headers.get("Location") or "")
+        assert PluginConexao.query.filter_by(user_id=user.id).count() == 0
+        primeiro = client.post(
+            f"/plugins/{plugin.slug}/conectar",
+            data={
+                "csrf_token": token,
+                "telefone": _TELEFONE_POSTADO,
+                "user_id": str(outro.id),
+                "destino": "https://evil.example/wa",
+            },
+            follow_redirects=False,
+        )
+        destino = primeiro.headers.get("Location") or ""
+        assert primeiro.status_code in (302, 303)
+        assert destino.startswith(f"https://wa.me/{_NUMERO_PUBLICO}?")
+        assert "text=Quero%20me%20cadastrar" in destino
+        assert _TELEFONE_POSTADO not in destino
+        assert "evil.example" not in destino
+        db.session.expire_all()
+        conexoes = _ocupando(user.id)
+        assert len(conexoes) == 1
+        assert conexoes[0].estado == PluginConexao.ESTADO_AGUARDANDO_CONFIGURACAO
+        assert conexoes[0].user_id == user.id
+        assert conexoes[0].identificador_externo is None
+        segundo = client.post(
+            f"/plugins/{plugin.slug}/conectar",
+            data={"csrf_token": token},
+            follow_redirects=False,
+        )
+        assert (segundo.headers.get("Location") or "").startswith(f"https://wa.me/{_NUMERO_PUBLICO}?")
+        db.session.expire_all()
+        assert len(_ocupando(user.id)) == 1
+        assert (
+            PluginEventoCentral.query.filter_by(
+                conexao_id=conexoes[0].id,
+                tipo_evento=PluginEventoCentral.TIPO_CONEXAO_CRIADA,
+            ).count()
+            == 1
+        )
+
+
+def test_vinculo_legado_aparece_conectado(app, monkeypatch):
+    monkeypatch.delenv("WHATSAPP_PUBLIC_NUMBER", raising=False)
+    with app.app_context():
+        user, _conta, _franquia = _pessoa("legado-whatsapp@test.com", "conta-legado-whatsapp")
+        outro, _conta_b, _franquia_b = _pessoa("legado-outro-whatsapp@test.com", "conta-legado-outro-whatsapp")
+        plugin = _plugin_whatsapp()
+        _identidade_vinculada(user)
+        client = _build_client(app)
+        _login(client, user.id)
+        html = client.get("/plugins").get_data(as_text=True)
+        assert 'data-estado="conectado"' in _card(html, plugin.slug)
+        db.session.expire_all()
+        conexao = obter_conexao_usuario(user.id, plugin.id)
+        assert conexao is not None
+        assert conexao.estado == PluginConexao.ESTADO_CONECTADO
+        de_novo = client.get("/plugins").get_data(as_text=True)
+        assert 'data-estado="conectado"' in _card(de_novo, plugin.slug)
+        _login(client, outro.id)
+        alheio = client.get("/plugins").get_data(as_text=True)
+        assert 'data-estado="conectado"' not in _card(alheio, plugin.slug)
+        assert obter_conexao_usuario(outro.id, plugin.id) is None
+
+
+def test_plugin_bloqueado_vence_o_vinculo_na_tela(app):
+    with app.app_context():
+        user, _conta, _franquia = _pessoa("bloqueado-whatsapp@test.com", "conta-bloqueado-whatsapp")
+        plugin = _plugin_whatsapp()
+        _identidade_vinculada(user, "5511900007777")
+        definir_status_plugin(plugin.id, Plugin.STATUS_BLOQUEADO)
+        client = _build_client(app)
+        _login(client, user.id)
+        html = client.get("/plugins").get_data(as_text=True)
+        assert 'data-estado="bloqueado"' in _card(html, plugin.slug)
+        assert "Conectar WhatsApp" not in _card(html, plugin.slug)
+
+
+def test_desconectar_revoga_identidade_e_proxima_mensagem_e_guest(app, monkeypatch):
+    monkeypatch.setenv("WHATSAPP_PUBLIC_NUMBER", _NUMERO_PUBLICO)
+    with app.app_context():
+        user, _conta, _franquia = _pessoa("desconectar-whatsapp@test.com", "conta-desconectar-whatsapp")
+        plugin = _plugin_whatsapp()
+        identidade = _identidade_vinculada(user)
+        client = _build_client(app)
+        _login(client, user.id)
+        client.get("/plugins")
+        db.session.expire_all()
+        assert obter_conexao_usuario(user.id, plugin.id).estado == PluginConexao.ESTADO_CONECTADO
+        resposta = client.post(
+            f"/plugins/{plugin.slug}/desconectar",
+            data={"csrf_token": _csrf(user.id)},
+            follow_redirects=True,
+        )
+        assert resposta.status_code == 200
+        db.session.expire_all()
+        gravada = db.session.get(IdentidadeCanalExterna, identidade.id)
+        assert gravada.estado == IdentidadeCanalExterna.ESTADO_REVOGADA
+        assert gravada.revogada_em is not None
+        assert gravada.user_id == user.id
+        assert obter_conexao_usuario(user.id, plugin.id) is None
+        historico = PluginConexao.query.filter_by(user_id=user.id, plugin_id=plugin.id).one()
+        assert historico.estado == PluginConexao.ESTADO_DESCONECTADO
+        assert (
+            PluginEventoCentral.query.filter_by(
+                conexao_id=historico.id,
+                tipo_evento=PluginEventoCentral.TIPO_DESCONECTADO,
+            ).count()
+            == 1
+        )
+        nova = obter_ou_criar_identidade_externa(
+            provedor="whatsapp_meta",
+            sujeito_externo=_SUJEITO_WHATSAPP,
+        )
+        assert nova.id != gravada.id
+        assert nova.estado == IdentidadeCanalExterna.ESTADO_GUEST
+        assert nova.user_id is None
+        assert ExecucaoOperacionalCanal.query.count() == 0
+
+
+def test_card_conectado_exige_exatamente_uma_identidade_valida(app, monkeypatch):
+    monkeypatch.delenv("WHATSAPP_PUBLIC_NUMBER", raising=False)
+    with app.app_context():
+        plugin = _plugin_whatsapp()
+        client = _build_client(app)
+
+        uma, _conta, _franquia = _pessoa("uma-identidade-wa@test.com", "conta-uma-identidade-wa")
+        _identidade_vinculada(uma, "5511900004101")
+        _login(client, uma.id)
+        html_uma = client.get("/plugins").get_data(as_text=True)
+        assert 'data-estado="conectado"' in _card(html_uma, plugin.slug)
+        db.session.expire_all()
+        assert obter_conexao_usuario(uma.id, plugin.id).estado == PluginConexao.ESTADO_CONECTADO
+
+        revogada, _conta_r, _franquia_r = _pessoa(
+            "revogada-identidade-wa@test.com",
+            "conta-revogada-identidade-wa",
+        )
+        identidade = _identidade_vinculada(revogada, "5511900004102")
+        _login(client, revogada.id)
+        client.get("/plugins")
+        db.session.expire_all()
+        assert obter_conexao_usuario(revogada.id, plugin.id).estado == PluginConexao.ESTADO_CONECTADO
+        gravada = db.session.get(IdentidadeCanalExterna, identidade.id)
+        gravada.estado = IdentidadeCanalExterna.ESTADO_REVOGADA
+        gravada.revogada_em = utcnow_naive()
+        db.session.commit()
+        html_revogada = client.get("/plugins").get_data(as_text=True)
+        card_revogada = _card(html_revogada, plugin.slug)
+        assert 'data-estado="conectado"' not in card_revogada
+        assert 'data-estado="aguardando_configuracao"' in card_revogada
+        db.session.expire_all()
+        assert (
+            obter_conexao_usuario(revogada.id, plugin.id).estado
+            == PluginConexao.ESTADO_AGUARDANDO_CONFIGURACAO
+        )
+
+        duplicada, _conta_d, _franquia_d = _pessoa(
+            "duas-identidades-wa@test.com",
+            "conta-duas-identidades-wa",
+        )
+        _identidade_vinculada(duplicada, "5511900004103")
+        _login(client, duplicada.id)
+        client.get("/plugins")
+        _identidade_vinculada(duplicada, "5511900004104")
+        html_dupla = client.get("/plugins").get_data(as_text=True)
+        card_dupla = _card(html_dupla, plugin.slug)
+        assert 'data-estado="conectado"' not in card_dupla
+        assert 'data-estado="requer_atencao"' in card_dupla
+        db.session.expire_all()
+        assert (
+            obter_conexao_usuario(duplicada.id, plugin.id).estado
+            == PluginConexao.ESTADO_REQUER_ATENCAO
+        )
+
+
+def test_revalidar_whatsapp_confirma_ou_volta_para_configuracao(app, monkeypatch):
+    monkeypatch.setenv("WHATSAPP_PUBLIC_NUMBER", _NUMERO_PUBLICO)
+    with app.app_context():
+        user, _conta, _franquia = _pessoa("revalidar-whatsapp@test.com", "conta-revalidar-whatsapp")
+        plugin = _plugin_whatsapp()
+        identidade = _identidade_vinculada(user, "5511900008888")
+        client = _build_client(app)
+        _login(client, user.id)
+        client.get("/plugins")
+        token = _csrf(user.id)
+        pagina = client.get("/plugins").get_data(as_text=True)
+        assert 'data-acao="revalidar"' in _card(pagina, plugin.slug)
+        mantem = client.post(
+            f"/plugins/{plugin.slug}/revalidar",
+            data={"csrf_token": token},
+            follow_redirects=True,
+        )
+        assert "foi confirmada" in mantem.get_data(as_text=True)
+        db.session.expire_all()
+        assert obter_conexao_usuario(user.id, plugin.id).estado == PluginConexao.ESTADO_CONECTADO
+        gravada = db.session.get(IdentidadeCanalExterna, identidade.id)
+        gravada.estado = IdentidadeCanalExterna.ESTADO_REVOGADA
+        gravada.revogada_em = utcnow_naive()
+        db.session.commit()
+        ausente = client.post(
+            f"/plugins/{plugin.slug}/revalidar",
+            data={"csrf_token": token},
+            follow_redirects=True,
+        )
+        assert "não foi marcada como conectada" in ausente.get_data(as_text=True)
+        db.session.expire_all()
+        conexao = obter_conexao_usuario(user.id, plugin.id)
+        assert conexao.estado == PluginConexao.ESTADO_AGUARDANDO_CONFIGURACAO
+        html = client.get("/plugins").get_data(as_text=True)
+        card = _card(html, plugin.slug)
+        assert 'data-estado="aguardando_configuracao"' in card
+        assert "Conectar WhatsApp" in card
+        assert 'data-estado="conectado"' not in card

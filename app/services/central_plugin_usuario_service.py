@@ -5,10 +5,10 @@ O usuário vê o catálogo publicado para ele e administra somente a própria
 conexão. Não amplia o teto da LogCompleta, não administra conexão de
 terceiro e a mesma Conta não compartilha a conexão.
 
-Não há provider neste lote. O registro de fluxos começa vazio. Um adapter
-futuro entra por ``registrar_fluxo_conexao`` e indica como abrir a
-configuração. A revalidação é o ponto de extensão: a implementação atual
-orienta o usuário e não altera estado.
+O registro de fluxos começa vazio. Um adapter entra por
+``registrar_fluxo_conexao``. Um preparador pode registrar o fluxo do plugin
+já cadastrado antes de montar o catálogo. A revalidação genérica orienta o
+usuário e não altera estado. O fluxo que declara o contrário pode alterar.
 
 A tela recebe só dicionários allowlist. Este módulo não lê credencial,
 cofre, concessão bruta nem payload.
@@ -120,9 +120,12 @@ _CHAVES_PLUGIN_TELA = (
     "pode_conectar",
     "pode_desconectar",
     "pode_revalidar",
+    "rotulo_conectar",
 )
 
 _FLUXOS: dict[str, "FluxoConexaoPlugin"] = {}
+_PREPARADORES: list = []
+_RECONCILIADORES: list = []
 
 
 class CentralPluginUsuarioError(Exception):
@@ -150,16 +153,29 @@ class PluginForaDoCatalogoUsuario(CentralPluginUsuarioError):
 
 
 class FluxoConexaoPlugin:
-    """Contrato do adapter futuro. Não presume OAuth, token nem número.
+    """Contrato do adapter. Não presume OAuth, token nem número.
 
     ``iniciar_configuracao`` abre a conexão no domínio, em aguardando
-    configuração. ``revalidar`` é o ponto de extensão: neste lote devolve
-    orientação e não muda estado. Um provider futuro substitui estes
-    métodos quando o fluxo real existir.
+    configuração. ``revalidar`` orienta e não muda estado, salvo quando o
+    fluxo declara ``revalidacao_pode_alterar_estado``.
     """
+
+    reutiliza_aguardando = False
+    revalidacao_pode_alterar_estado = False
+    revalidar_quando_conectado = False
+    desconecta_vinculo_real = False
 
     def __init__(self, adapter_key: str):
         self.adapter_key = adapter_key
+
+    def rotulo_conectar(self) -> str:
+        return "Conectar"
+
+    def texto_configuracao_ausente(self) -> str | None:
+        return None
+
+    def url_abertura(self) -> str | None:
+        return None
 
     def iniciar_configuracao(self, *, plugin_id: int, user_id: int) -> PluginConexao:
         return criar_conexao(
@@ -195,6 +211,28 @@ def limpar_fluxos_conexao() -> None:
     _FLUXOS.clear()
 
 
+def registrar_preparador_fluxo(preparador) -> None:
+    """Registra quem localiza o plugin já cadastrado e publica o fluxo dele."""
+    if preparador not in _PREPARADORES:
+        _PREPARADORES.append(preparador)
+
+
+def registrar_reconciliador_catalogo(reconciliador) -> None:
+    """Registra quem alinha o card deste usuário ao vínculo real, se houver."""
+    if reconciliador not in _RECONCILIADORES:
+        _RECONCILIADORES.append(reconciliador)
+
+
+def _preparar_fluxos() -> None:
+    for preparador in tuple(_PREPARADORES):
+        preparador()
+
+
+def _reconciliar_catalogo(user_id: int) -> None:
+    for reconciliador in tuple(_RECONCILIADORES):
+        reconciliador(int(user_id))
+
+
 def fluxo_registrado(adapter_key: str | None) -> bool:
     return bool(adapter_key) and adapter_key in _FLUXOS
 
@@ -218,7 +256,9 @@ def mensagem_catalogo_vazio() -> str:
 
 
 def montar_catalogo_usuario(user_id: int) -> list[dict]:
-    """Plugins visíveis e a conexão deste usuário. Não grava evento."""
+    """Plugins visíveis e a conexão deste usuário."""
+    _preparar_fluxos()
+    _reconciliar_catalogo(int(user_id))
     usuario_id = int(user_id)
     plugins = (
         Plugin.query.filter(Plugin.status.in_(_STATUS_VISIVEL))
@@ -304,6 +344,7 @@ def montar_catalogo_usuario(user_id: int) -> list[dict]:
                     "pode_conectar": pode_conectar,
                     "pode_desconectar": _pode_desconectar(plugin, slot),
                     "pode_revalidar": _pode_revalidar(plugin, slot),
+                    "rotulo_conectar": _rotulo_conectar(plugin),
                 },
                 _CHAVES_PLUGIN_TELA,
             )
@@ -312,6 +353,7 @@ def montar_catalogo_usuario(user_id: int) -> list[dict]:
 
 
 def iniciar_configuracao_usuario(*, user_id: int, slug: str) -> PluginConexao:
+    _preparar_fluxos()
     plugin = _plugin_obrigatorio_visivel(slug)
     if plugin.status != Plugin.STATUS_DISPONIVEL:
         raise AcaoPluginUsuarioRecusada(MENSAGEM_SEM_FLUXO)
@@ -320,7 +362,11 @@ def iniciar_configuracao_usuario(*, user_id: int, slug: str) -> PluginConexao:
     fluxo = _FLUXOS.get(plugin.adapter_key)
     if fluxo is None:
         raise FluxoConexaoIndisponivel(MENSAGEM_SEM_FLUXO)
-    if obter_conexao_usuario(int(user_id), plugin.id) is not None:
+    existente = obter_conexao_usuario(int(user_id), plugin.id)
+    if existente is not None and not (
+        getattr(fluxo, "reutiliza_aguardando", False)
+        and existente.estado == PluginConexao.ESTADO_AGUARDANDO_CONFIGURACAO
+    ):
         raise AcaoPluginUsuarioRecusada("Você já tem uma conexão em andamento nesta integração.")
     conexao = fluxo.iniciar_configuracao(plugin_id=plugin.id, user_id=int(user_id))
     if int(conexao.user_id) != int(user_id) or int(conexao.plugin_id) != int(plugin.id):
@@ -333,22 +379,47 @@ def iniciar_configuracao_usuario(*, user_id: int, slug: str) -> PluginConexao:
 
 
 def revalidar_conexao_usuario(*, user_id: int, slug: str) -> str:
-    """Ponto de extensão. Não altera estado enquanto não houver provider."""
+    """Ponto de extensão. O fluxo genérico não altera estado."""
+    _preparar_fluxos()
     plugin = _plugin_obrigatorio_visivel(slug)
     conexao = _conexao_propria(user_id, plugin)
-    if conexao.estado != PluginConexao.ESTADO_REQUER_ATENCAO or plugin.status != Plugin.STATUS_DISPONIVEL:
-        raise AcaoPluginUsuarioRecusada(MENSAGEM_REVALIDACAO)
     fluxo = _FLUXOS.get(plugin.adapter_key)
     if fluxo is None:
         raise FluxoConexaoIndisponivel(MENSAGEM_REVALIDACAO)
+    permite_alterar = bool(getattr(fluxo, "revalidacao_pode_alterar_estado", False))
+    if plugin.status != Plugin.STATUS_DISPONIVEL:
+        raise AcaoPluginUsuarioRecusada(MENSAGEM_REVALIDACAO)
+    if not permite_alterar and conexao.estado != PluginConexao.ESTADO_REQUER_ATENCAO:
+        raise AcaoPluginUsuarioRecusada(MENSAGEM_REVALIDACAO)
+    if permite_alterar and conexao.estado not in (
+        PluginConexao.ESTADO_CONECTADO,
+        PluginConexao.ESTADO_REQUER_ATENCAO,
+    ):
+        raise AcaoPluginUsuarioRecusada(MENSAGEM_REVALIDACAO)
     estado_antes = conexao.estado
     mensagem = fluxo.revalidar(conexao_id=conexao.id, user_id=int(user_id))
     db.session.refresh(conexao)
-    if conexao.estado != estado_antes:
+    if not permite_alterar and conexao.estado != estado_antes:
         raise AcaoPluginUsuarioRecusada(
             "A revalidação não pode alterar o estado da conexão neste momento."
         )
     return mensagem or MENSAGEM_REVALIDACAO
+
+
+def destino_configuracao_usuario(slug: str) -> str | None:
+    """URL https de abertura, só se o fluxo do servidor a produzir."""
+    _preparar_fluxos()
+    plugin = _plugin_obrigatorio_visivel(slug)
+    fluxo = _FLUXOS.get(plugin.adapter_key)
+    abrir = getattr(fluxo, "url_abertura", None)
+    if not callable(abrir):
+        return None
+    url = abrir()
+    if not isinstance(url, str) or not url.startswith("https://wa.me/"):
+        return None
+    if any(quebra in url for quebra in ("\n", "\r", " ")):
+        return None
+    return url
 
 
 def restringir_capability_usuario(*, user_id: int, slug: str, chave: str) -> None:
@@ -390,10 +461,16 @@ def remover_restricao_capability_usuario(*, user_id: int, slug: str, chave: str)
 
 
 def desconectar_conexao_usuario(*, user_id: int, slug: str) -> PluginConexao:
+    _preparar_fluxos()
     plugin = _plugin_obrigatorio_visivel(slug)
     conexao = _conexao_propria(user_id, plugin)
     if plugin.status == Plugin.STATUS_BLOQUEADO or conexao.estado == PluginConexao.ESTADO_BLOQUEADO:
         raise AcaoPluginUsuarioRecusada(MENSAGEM_BLOQUEIO)
+    fluxo = _FLUXOS.get(plugin.adapter_key)
+    if getattr(fluxo, "desconecta_vinculo_real", False) and callable(
+        getattr(fluxo, "desconectar", None)
+    ):
+        return fluxo.desconectar(user_id=int(user_id), plugin_id=plugin.id)
     return desconectar_conexao(conexao.id, usuario_originador_id=int(user_id))
 
 
@@ -467,11 +544,18 @@ def _conexao_administravel(plugin: Plugin, conexao: PluginConexao) -> bool:
 
 
 def _pode_conectar(plugin: Plugin, slot: PluginConexao | None) -> bool:
-    return (
-        slot is None
-        and plugin.status == Plugin.STATUS_DISPONIVEL
-        and bool(plugin.suporta_titularidade_pessoal)
-        and fluxo_registrado(plugin.adapter_key)
+    if (
+        plugin.status != Plugin.STATUS_DISPONIVEL
+        or not plugin.suporta_titularidade_pessoal
+        or not fluxo_registrado(plugin.adapter_key)
+    ):
+        return False
+    if slot is None:
+        return True
+    fluxo = _FLUXOS.get(plugin.adapter_key)
+    return bool(
+        getattr(fluxo, "reutiliza_aguardando", False)
+        and slot.estado == PluginConexao.ESTADO_AGUARDANDO_CONFIGURACAO
     )
 
 
@@ -484,12 +568,19 @@ def _pode_desconectar(plugin: Plugin, slot: PluginConexao | None) -> bool:
 
 
 def _pode_revalidar(plugin: Plugin, slot: PluginConexao | None) -> bool:
-    return (
-        slot is not None
-        and slot.estado == PluginConexao.ESTADO_REQUER_ATENCAO
-        and plugin.status == Plugin.STATUS_DISPONIVEL
-        and fluxo_registrado(plugin.adapter_key)
-    )
+    if (
+        slot is None
+        or plugin.status != Plugin.STATUS_DISPONIVEL
+        or not fluxo_registrado(plugin.adapter_key)
+    ):
+        return False
+    fluxo = _FLUXOS.get(plugin.adapter_key)
+    if getattr(fluxo, "revalidar_quando_conectado", False) and slot.estado in (
+        PluginConexao.ESTADO_CONECTADO,
+        PluginConexao.ESTADO_REQUER_ATENCAO,
+    ):
+        return True
+    return slot.estado == PluginConexao.ESTADO_REQUER_ATENCAO
 
 
 def _estado_visual(
@@ -526,17 +617,44 @@ def _orientacao(
     if estado == PluginConexao.ESTADO_REQUER_ATENCAO:
         return MENSAGEM_REQUER_ATENCAO
     if estado == PluginConexao.ESTADO_DESCONECTADO:
+        aviso = _aviso_configuracao_ausente(plugin)
+        if aviso:
+            return aviso
         return (
             "Não há vínculo operacional ativo. "
             "Uma nova conexão será necessária quando a configuração estiver disponível."
         )
     if tem_conexao_ativa:
         return "Sua conexão está registrada e ainda não entrou em configuração."
+    aviso = _aviso_configuracao_ausente(plugin)
+    if aviso and pode_conectar:
+        return aviso
     if pode_conectar:
         return "Você pode iniciar a configuração desta integração."
     if not plugin.suporta_titularidade_pessoal:
         return MENSAGEM_SEM_CONEXAO_INDIVIDUAL
     return MENSAGEM_SEM_FLUXO
+
+
+def _rotulo_conectar(plugin: Plugin) -> str:
+    fluxo = _FLUXOS.get(plugin.adapter_key)
+    rotulo = getattr(fluxo, "rotulo_conectar", None)
+    if callable(rotulo):
+        valor = rotulo()
+        if isinstance(valor, str) and valor.strip():
+            return valor
+    return "Conectar"
+
+
+def _aviso_configuracao_ausente(plugin: Plugin) -> str | None:
+    fluxo = _FLUXOS.get(plugin.adapter_key)
+    texto = getattr(fluxo, "texto_configuracao_ausente", None)
+    if not callable(texto):
+        return None
+    aviso = texto()
+    if not isinstance(aviso, str) or not aviso.strip():
+        return None
+    return aviso
 
 
 def _conexao_tela(conexao: PluginConexao) -> dict:

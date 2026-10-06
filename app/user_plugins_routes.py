@@ -18,6 +18,7 @@ from app.services.central_plugin_usuario_service import (
     CentralPluginUsuarioError,
     PluginForaDoCatalogoUsuario,
     desconectar_conexao_usuario,
+    destino_configuracao_usuario,
     gerar_csrf_token_plugins_usuario,
     iniciar_configuracao_usuario,
     mensagem_catalogo_vazio,
@@ -86,7 +87,19 @@ def plugins_conectar(slug: str):
     bloqueio = _barrar_mutacao()
     if bloqueio is not None:
         return bloqueio
-    return _executar(lambda: iniciar_configuracao_usuario(user_id=int(current_user.id), slug=slug), "Configuração iniciada. Ela ainda não foi concluída.")
+    destino: dict[str, str] = {}
+
+    def _acao():
+        iniciar_configuracao_usuario(user_id=int(current_user.id), slug=slug)
+        url = destino_configuracao_usuario(slug)
+        if url:
+            destino["url"] = url
+
+    return _executar(
+        _acao,
+        "Configuração iniciada. Ela ainda não foi concluída.",
+        destino=destino,
+    )
 
 
 @login_required
@@ -188,7 +201,7 @@ def _formulario_proibido() -> bool:
     return False
 
 
-def _executar(acao, mensagem_ok: str):
+def _executar(acao, mensagem_ok: str, destino: dict | None = None):
     try:
         acao()
     except AcessoConexaoUsuarioNegado as exc:
@@ -210,5 +223,8 @@ def _executar(acao, mensagem_ok: str):
         logger.exception("Falha na Central de Plugins do usuario")
         flash("Não foi possível concluir.", "danger")
         return redirect(url_for("user.plugins"))
+    url = (destino or {}).get("url")
+    if isinstance(url, str) and url.startswith("https://wa.me/"):
+        return redirect(url)
     flash(mensagem_ok, "success")
     return redirect(url_for("user.plugins"))

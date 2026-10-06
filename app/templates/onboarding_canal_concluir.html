@@ -43,6 +43,7 @@
             {% endif %}
             {% if autenticado %}
             <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="acao" value="vincular">
                 <button type="submit" class="btn btn-primary w-100 fw-bold">Conectar esta conta ao canal</button>
             </form>

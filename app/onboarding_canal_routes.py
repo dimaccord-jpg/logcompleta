@@ -4,6 +4,7 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 from flask import current_app, redirect, render_template, request, session, url_for
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask_login import current_user, login_user
 
 from app.extensions import db
@@ -33,6 +34,9 @@ from app.services.onboarding_canal_conclusao_service import (
 SESSION_HANDOFF_ID = "onboarding_canal_handoff_id"
 CAMINHO_CONTINUAR = "/onboarding/canal/continuar"
 _PREFIXO_LINK_CONCLUSAO = "/onboarding/canal/concluir/"
+_CSRF_SALT = "onboarding-canal-vinculo-csrf"
+_CSRF_MAX_AGE = 3600
+_MENSAGEM_CSRF = "Não foi possível validar a solicitação."
 
 _MENSAGENS = {
     "token_invalido": "Este link é inválido.",
@@ -141,6 +145,15 @@ def _pagina_conclusao(*, inspecionar, concluir_senha, confirmar_vinculo):
         acao = (request.form.get("acao") or "definir_senha").strip()
         if acao == "vincular":
             usuario = current_user if getattr(current_user, "is_authenticated", False) else None
+            if usuario is not None and not _csrf_vinculo_aceito(usuario):
+                estado = inspecionar()
+                return _render(
+                    estado.codigo,
+                    erro=_MENSAGEM_CSRF,
+                    formulario="vinculo",
+                    nome_mascarado=estado.nome_mascarado,
+                    email_mascarado=estado.email_mascarado,
+                )
             resultado = confirmar_vinculo(usuario)
         else:
             resultado = concluir_senha()
@@ -187,6 +200,15 @@ def onboarding_canal_continuar():
     if handoff_id is None:
         return _render("token_invalido")
     if request.method == "POST" and (request.form.get("acao") or "").strip() == "vincular":
+        if not _csrf_vinculo_aceito(current_user):
+            estado = inspecionar_handoff_conclusao(handoff_id)
+            return _render(
+                estado.codigo,
+                erro=_MENSAGEM_CSRF,
+                formulario="vinculo",
+                nome_mascarado=estado.nome_mascarado,
+                email_mascarado=estado.email_mascarado,
+            )
         resultado = confirmar_vinculo_handoff(handoff_id, current_user)
         if resultado.codigo in _SUCESSO or resultado.codigo == CODIGO_JA_REALIZADA:
             _limpar_handoff()
@@ -234,6 +256,10 @@ def _render(
     login_url = None
     if formulario == "vinculo" and not _autenticado():
         login_url = url_for("login", next=CAMINHO_CONTINUAR)
+    autenticado = bool(getattr(current_user, "is_authenticated", False))
+    csrf_token = ""
+    if autenticado and formulario == "vinculo":
+        csrf_token = _emitir_csrf_vinculo(int(current_user.id))
     return render_template(
         "onboarding_canal_concluir.html",
         codigo=codigo,
@@ -244,8 +270,30 @@ def _render(
         email_mascarado=email_mascarado,
         sucesso=sucesso,
         login_url=login_url,
-        autenticado=bool(getattr(current_user, "is_authenticated", False)),
+        autenticado=autenticado,
+        csrf_token=csrf_token,
     )
+
+
+def _csrf_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt=_CSRF_SALT)
+
+
+def _emitir_csrf_vinculo(user_id: int) -> str:
+    return _csrf_serializer().dumps(str(int(user_id)))
+
+
+def _csrf_vinculo_aceito(usuario) -> bool:
+    if not getattr(usuario, "is_authenticated", False) or getattr(usuario, "id", None) is None:
+        return False
+    token = (request.form.get("csrf_token") or "").strip()
+    if not token:
+        return False
+    try:
+        valor = _csrf_serializer().loads(token, max_age=_CSRF_MAX_AGE)
+    except (BadSignature, SignatureExpired, TypeError, ValueError):
+        return False
+    return str(valor) == str(int(usuario.id))
 
 
 def _autenticado() -> bool:

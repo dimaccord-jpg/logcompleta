@@ -289,6 +289,7 @@ from app.whatsapp_meta_webhook_routes import register_whatsapp_meta_webhook_rout
 
 register_onboarding_canal_routes(app)
 register_whatsapp_meta_webhook_routes(app)
+from app.services import central_plugin_whatsapp_service as _fluxo_whatsapp_central  # noqa: E402, F401
 
 # Inicializar Flask-Session
 session_mgr = Session(app)

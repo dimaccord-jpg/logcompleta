@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import tempfile
 import threading
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from flask import Blueprint, Flask
 from itsdangerous import URLSafeTimedSerializer
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.auth_services import perfil_cadastro_completo, register_user
 from app.db_operational_safety import run_test_schema_operation
@@ -69,8 +72,16 @@ def _url(token: str) -> str:
     return f"/onboarding/canal/concluir/{token}"
 
 
-def _ident(sujeito: str):
-    return obter_ou_criar_identidade_externa(provedor=PROVEDOR, sujeito_externo=sujeito)
+def _csrf_vinculo(html: str) -> str:
+    import re
+
+    achado = re.search(r'name="csrf_token" value="([^"]+)"', html)
+    assert achado is not None
+    return achado.group(1)
+
+
+def _ident(sujeito: str, provedor: str = PROVEDOR):
+    return obter_ou_criar_identidade_externa(provedor=provedor, sujeito_externo=sujeito)
 
 
 def _ate_senha(
@@ -736,8 +747,8 @@ def _usuario_com_senha(email: str, slug: str):
     return user
 
 
-def _emitir_vinculo(sujeito: str, email: str):
-    ident = _ident(sujeito)
+def _emitir_vinculo(sujeito: str, email: str, provedor: str = PROVEDOR):
+    ident = _ident(sujeito, provedor)
     iniciar_onboarding_canal(ident.id)
     registrar_resposta_onboarding(ident.id, campo="aceitar_convite")
     registrar_resposta_onboarding(ident.id, campo="nome", valor="Marina Canal")
@@ -817,9 +828,16 @@ def test_login_conta_existente_retorna_sem_persistir_o_token(ctx, app, monkeypat
     assert "Conectar esta conta ao canal" in html
     assert token not in html
     assert email not in html
-    confirmado = client.post(
+    sem_csrf = client.post(
         "/onboarding/canal/continuar",
         data={"acao": "vincular"},
+        follow_redirects=False,
+    )
+    assert "Não foi possível validar a solicitação." in sem_csrf.get_data(as_text=True)
+    assert db.session.get(IdentidadeCanalExterna, ident.id).user_id is None
+    confirmado = client.post(
+        "/onboarding/canal/continuar",
+        data={"acao": "vincular", "csrf_token": _csrf_vinculo(html)},
         follow_redirects=False,
     )
     corpo = confirmado.get_data(as_text=True)
@@ -859,10 +877,11 @@ def test_login_conta_errada_rejeita_vinculo_sem_persistir_o_token(ctx, app, monk
     assert entrada.status_code in (302, 303)
     assert token not in (entrada.headers.get("Location") or "")
     pagina = client.get(entrada.headers["Location"], follow_redirects=False)
-    assert "Conectar esta conta ao canal" in pagina.get_data(as_text=True)
+    html = pagina.get_data(as_text=True)
+    assert "Conectar esta conta ao canal" in html
     recusa = client.post(
         "/onboarding/canal/continuar",
-        data={"acao": "vincular"},
+        data={"acao": "vincular", "csrf_token": _csrf_vinculo(html)},
         follow_redirects=False,
     )
     html = recusa.get_data(as_text=True)
@@ -883,3 +902,310 @@ def test_login_conta_errada_rejeita_vinculo_sem_persistir_o_token(ctx, app, monk
     assert retorno.status_code == 200
     with client.session_transaction() as sess:
         assert sess.get("_user_id") == str(errado.id)
+
+
+def test_conclusao_whatsapp_sincroniza_a_central_e_nao_liga_por_email(ctx, monkeypatch):
+    _patch_limite(monkeypatch)
+    from app.models import Plugin, PluginConexao, PluginEventoCentral
+    from app.services.central_plugin_service import registrar_plugin
+    from app.services.central_plugin_usuario_service import montar_catalogo_usuario
+
+    import app.services.central_plugin_whatsapp_service  # noqa: F401
+
+    email = "sync.whatsapp@example.com"
+    user = _usuario_com_senha(email, "conta-sync-whatsapp")
+    outro = _usuario_com_senha("outro.sync.whatsapp@example.com", "conta-outro-sync-whatsapp")
+    registrar_plugin(
+        slug="whatsapp",
+        nome="WhatsApp",
+        adapter_key="whatsapp_meta",
+        suporta_titularidade_pessoal=True,
+        suporta_titularidade_corporativa=False,
+        status=Plugin.STATUS_DISPONIVEL,
+    )
+    ident, token = _emitir_vinculo("5511900004444", email, provedor="whatsapp_meta")
+    assert PluginConexao.query.filter_by(user_id=user.id).count() == 0
+    divergente = conclusao.confirmar_vinculo_conta_existente(
+        token,
+        outro,
+        secret_key=SECRET,
+    )
+    assert divergente.codigo == conclusao.CODIGO_VINCULO_DIVERGENTE
+    assert PluginConexao.query.count() == 0
+    confirmado = conclusao.confirmar_vinculo_conta_existente(
+        token,
+        user,
+        secret_key=SECRET,
+    )
+    assert confirmado.codigo == conclusao.CODIGO_VINCULO_CONFIRMADO
+    assert confirmado.user_id == user.id
+    db.session.expire_all()
+    identidade = db.session.get(IdentidadeCanalExterna, ident.id)
+    assert identidade.estado == IdentidadeCanalExterna.ESTADO_VINCULADA
+    assert identidade.user_id == user.id
+    assert identidade.vinculada_em is not None
+    assert identidade.revogada_em is None
+    conexao = PluginConexao.query.filter_by(user_id=user.id).one()
+    assert conexao.estado == PluginConexao.ESTADO_CONECTADO
+    assert PluginEventoCentral.query.filter_by(conexao_id=conexao.id).count() >= 1
+    card = next(item for item in montar_catalogo_usuario(user.id) if item["slug"] == "whatsapp")
+    assert card["estado"] == "conectado"
+    refresh = next(item for item in montar_catalogo_usuario(user.id) if item["slug"] == "whatsapp")
+    assert refresh["estado"] == "conectado"
+    alheio = next(item for item in montar_catalogo_usuario(outro.id) if item["slug"] == "whatsapp")
+    assert alheio["estado"] != "conectado"
+    assert PluginConexao.query.filter_by(user_id=outro.id).count() == 0
+
+
+def test_identidade_whatsapp_de_terceiro_nao_e_apropriada(ctx, monkeypatch):
+    _patch_limite(monkeypatch)
+    email = "dono.terceiro.wa@example.com"
+    dono = _usuario_com_senha(email, "conta-dono-terceiro-wa")
+    invasor = _usuario_com_senha("invasor.terceiro.wa@example.com", "conta-invasor-terceiro-wa")
+    ident, token = _emitir_vinculo("5511900005555", email, provedor="whatsapp_meta")
+    dono_id = dono.id
+    ident.estado = IdentidadeCanalExterna.ESTADO_VINCULADA
+    ident.user_id = dono_id
+    ident.vinculada_em = utcnow_naive()
+    ident.revogada_em = None
+    db.session.commit()
+    resultado = conclusao.confirmar_vinculo_conta_existente(
+        token,
+        invasor,
+        secret_key=SECRET,
+    )
+    assert resultado.codigo == conclusao.CODIGO_IDENTIDADE_INDISPONIVEL
+    assert resultado.persistiu is False
+    db.session.expire_all()
+    gravada = db.session.get(IdentidadeCanalExterna, ident.id)
+    assert gravada.user_id == dono.id
+    assert gravada.estado == IdentidadeCanalExterna.ESTADO_VINCULADA
+    confirmacao_do_dono = conclusao.confirmar_vinculo_conta_existente(
+        token,
+        dono,
+        secret_key=SECRET,
+    )
+    assert confirmacao_do_dono.codigo == conclusao.CODIGO_IDENTIDADE_INDISPONIVEL
+    db.session.expire_all()
+    assert db.session.get(IdentidadeCanalExterna, ident.id).user_id == dono.id
+
+
+def test_segundo_whatsapp_ativo_do_mesmo_user_nao_vincula(ctx, monkeypatch):
+    _patch_limite(monkeypatch)
+    from app.models import Plugin, PluginConexao
+    from app.services.central_plugin_service import registrar_plugin
+
+    import app.services.central_plugin_whatsapp_service  # noqa: F401
+
+    email = "dois.whatsapp@example.com"
+    user = _usuario_com_senha(email, "conta-dois-whatsapp")
+    registrar_plugin(
+        slug="whatsapp",
+        nome="WhatsApp",
+        adapter_key="whatsapp_meta",
+        suporta_titularidade_pessoal=True,
+        suporta_titularidade_corporativa=False,
+        status=Plugin.STATUS_DISPONIVEL,
+    )
+    primeiro = _ident("5511900006661", "whatsapp_meta")
+    user_id = user.id
+    agora = utcnow_naive()
+    primeiro.estado = IdentidadeCanalExterna.ESTADO_VINCULADA
+    primeiro.user_id = user_id
+    primeiro.vinculada_em = agora
+    primeiro.revogada_em = None
+    db.session.commit()
+    _identidade, token = _emitir_vinculo("5511900006662", email, provedor="whatsapp_meta")
+    resultado = conclusao.confirmar_vinculo_conta_existente(
+        token,
+        user,
+        secret_key=SECRET,
+    )
+    assert resultado.codigo == conclusao.CODIGO_VINCULO_NAO_APLICAVEL
+    db.session.expire_all()
+    segundo = IdentidadeCanalExterna.query.filter_by(sujeito_externo="5511900006662").one()
+    assert segundo.user_id is None
+    assert segundo.estado != IdentidadeCanalExterna.ESTADO_VINCULADA
+    assert db.session.get(IdentidadeCanalExterna, primeiro.id).user_id == user.id
+    assert PluginConexao.query.filter_by(user_id=user.id, estado=PluginConexao.ESTADO_CONECTADO).count() == 0
+
+
+class _UsuarioDoVinculo:
+    def __init__(self, user_id: int, email: str) -> None:
+        self.id = user_id
+        self.email = email
+
+
+@contextmanager
+def _banco_sqlite_compartilhado():
+    """Arquivo SQLite com uma conexão por thread, para o lock de escrita valer."""
+    descritor, caminho = tempfile.mkstemp(suffix=".sqlite")
+    os.close(descritor)
+    flask_app = Flask(f"wa-{os.path.basename(caminho)}")
+    flask_app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + caminho.replace("\\", "/")
+    flask_app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "poolclass": NullPool,
+        "connect_args": {"check_same_thread": False, "timeout": 30},
+    }
+    flask_app.config["TESTING"] = True
+    db.init_app(flask_app)
+    with flask_app.app_context():
+        import app.models  # noqa: F401
+
+        db.create_all()
+        try:
+            yield flask_app
+        finally:
+            db.session.remove()
+            db.drop_all()
+            db.engine.dispose()
+    os.remove(caminho)
+
+
+def _identidades_whatsapp_validas(user_id: int):
+    return (
+        IdentidadeCanalExterna.query.filter_by(
+            provedor="whatsapp_meta",
+            user_id=int(user_id),
+            estado=IdentidadeCanalExterna.ESTADO_VINCULADA,
+        )
+        .filter(
+            IdentidadeCanalExterna.vinculada_em.isnot(None),
+            IdentidadeCanalExterna.revogada_em.is_(None),
+        )
+        .all()
+    )
+
+
+def test_corrida_desconexao_e_conclusao_nao_deixa_identidade_ativa_desconectada(monkeypatch):
+    _patch_limite(monkeypatch)
+    from app.models import Plugin, PluginConexao
+    from app.services.central_plugin_service import criar_conexao, obter_conexao_usuario, registrar_plugin
+    from app.services.central_plugin_whatsapp_service import desconectar_whatsapp_do_usuario
+
+    with _banco_sqlite_compartilhado() as flask_app:
+        email = "corrida.desconexao.wa@example.com"
+        user = _usuario_com_senha(email, "conta-corrida-desconexao-wa")
+        plugin = registrar_plugin(
+            slug="whatsapp",
+            nome="WhatsApp",
+            adapter_key="whatsapp_meta",
+            suporta_titularidade_pessoal=True,
+            suporta_titularidade_corporativa=False,
+            status=Plugin.STATUS_DISPONIVEL,
+        )
+        _identidade, token = _emitir_vinculo("5511900009101", email, provedor="whatsapp_meta")
+        criar_conexao(
+            plugin_id=plugin.id,
+            user_id=user.id,
+            titularidade=PluginConexao.TITULARIDADE_PESSOAL,
+            usuario_originador_id=user.id,
+        )
+        user_id = int(user.id)
+        plugin_id = int(plugin.id)
+        referencia = _UsuarioDoVinculo(user_id, email)
+        db.session.remove()
+        barreira = threading.Barrier(2)
+        erros: list[str] = []
+        codigos: dict[str, str] = {}
+
+        def _desconectar() -> None:
+            with flask_app.app_context():
+                try:
+                    barreira.wait(timeout=5)
+                    desconectar_whatsapp_do_usuario(user_id=user_id, plugin_id=plugin_id)
+                except Exception as exc:
+                    erros.append(f"desconectar:{type(exc).__name__}:{exc}")
+                finally:
+                    db.session.remove()
+
+        def _concluir() -> None:
+            with flask_app.app_context():
+                try:
+                    barreira.wait(timeout=5)
+                    codigos["conclusao"] = conclusao.confirmar_vinculo_conta_existente(
+                        token,
+                        referencia,
+                        secret_key=SECRET,
+                    ).codigo
+                except Exception as exc:
+                    erros.append(f"conclusao:{type(exc).__name__}:{exc}")
+                finally:
+                    db.session.remove()
+
+        threads = [threading.Thread(target=_desconectar), threading.Thread(target=_concluir)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+        assert erros == []
+        assert all(not thread.is_alive() for thread in threads)
+        db.session.remove()
+        ativas = _identidades_whatsapp_validas(user_id)
+        slot = obter_conexao_usuario(user_id, plugin_id)
+        if ativas:
+            assert len(ativas) == 1
+            assert slot is not None
+            assert slot.estado == PluginConexao.ESTADO_CONECTADO
+        else:
+            assert slot is None or slot.estado != PluginConexao.ESTADO_CONECTADO
+
+
+def test_duas_conclusoes_simultaneas_deixam_um_whatsapp(monkeypatch):
+    _patch_limite(monkeypatch)
+    from app.models import Plugin, PluginConexao
+    from app.services.central_plugin_service import obter_conexao_usuario, registrar_plugin
+
+    with _banco_sqlite_compartilhado() as flask_app:
+        email = "corrida.duas.conclusoes.wa@example.com"
+        user = _usuario_com_senha(email, "conta-corrida-duas-conclusoes-wa")
+        plugin = registrar_plugin(
+            slug="whatsapp",
+            nome="WhatsApp",
+            adapter_key="whatsapp_meta",
+            suporta_titularidade_pessoal=True,
+            suporta_titularidade_corporativa=False,
+            status=Plugin.STATUS_DISPONIVEL,
+        )
+        _primeira, token_a = _emitir_vinculo("5511900009201", email, provedor="whatsapp_meta")
+        _segunda, token_b = _emitir_vinculo("5511900009202", email, provedor="whatsapp_meta")
+        user_id = int(user.id)
+        plugin_id = int(plugin.id)
+        referencia = _UsuarioDoVinculo(user_id, email)
+        db.session.remove()
+        barreira = threading.Barrier(2)
+        erros: list[str] = []
+        codigos: dict[str, str] = {}
+
+        def _concluir(chave: str, token: str) -> None:
+            with flask_app.app_context():
+                try:
+                    barreira.wait(timeout=5)
+                    codigos[chave] = conclusao.confirmar_vinculo_conta_existente(
+                        token,
+                        referencia,
+                        secret_key=SECRET,
+                    ).codigo
+                except Exception as exc:
+                    erros.append(f"{chave}:{type(exc).__name__}:{exc}")
+                finally:
+                    db.session.remove()
+
+        threads = [
+            threading.Thread(target=_concluir, args=("a", token_a)),
+            threading.Thread(target=_concluir, args=("b", token_b)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+        assert erros == []
+        assert all(not thread.is_alive() for thread in threads)
+        assert sorted(codigos.values()) == sorted(
+            [conclusao.CODIGO_VINCULO_CONFIRMADO, conclusao.CODIGO_VINCULO_NAO_APLICAVEL]
+        )
+        db.session.remove()
+        assert len(_identidades_whatsapp_validas(user_id)) == 1
+        slot = obter_conexao_usuario(user_id, plugin_id)
+        assert slot is not None
+        assert slot.estado == PluginConexao.ESTADO_CONECTADO

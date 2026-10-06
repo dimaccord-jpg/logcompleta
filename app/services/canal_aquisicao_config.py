@@ -7,6 +7,7 @@ ou billing. O domínio lê daqui para não espalhar o limite nem a validade.
 from __future__ import annotations
 
 import os
+import re
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -47,6 +48,22 @@ def url_retorno_canal_permitida() -> str | None:
     if parsed.username or parsed.password:
         return None
     if parsed.hostname.lower() not in _HOSTS_RETORNO_CANAL:
+        return None
+    return bruto
+
+
+# Deep link da Central. Dígitos E.164 sem o sinal de mais: país + número.
+_NUMERO_PUBLICO_WHATSAPP_RE = re.compile(r"^[1-9]\d{7,14}$")
+ENV_WHATSAPP_PUBLIC_NUMBER = "WHATSAPP_PUBLIC_NUMBER"
+
+
+def numero_publico_whatsapp() -> str | None:
+    """Número público do deep link. Ausente ou inválido não vira conexão.
+
+    O valor não é logado. O navegador não escolhe este destino.
+    """
+    bruto = (os.getenv(ENV_WHATSAPP_PUBLIC_NUMBER) or "").strip()
+    if not _NUMERO_PUBLICO_WHATSAPP_RE.fullmatch(bruto):
         return None
     return bruto
 

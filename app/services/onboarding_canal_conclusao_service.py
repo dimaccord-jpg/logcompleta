@@ -1269,6 +1269,7 @@ def _confirmar_vinculo_dentro(
     assinatura: _Assinatura,
     user: User | None,
 ) -> ResultadoConclusaoOnboarding:
+    _travar_usuario_do_vinculo(user)
     aberto = _abrir_row(token, assinatura)
     if isinstance(aberto, ResultadoConclusaoOnboarding):
         return aberto
@@ -1279,6 +1280,7 @@ def _confirmar_vinculo_alias_dentro(
     alias: str,
     user: User | None,
 ) -> ResultadoConclusaoOnboarding:
+    _travar_usuario_do_vinculo(user)
     aberto = _abrir_alias(alias)
     if isinstance(aberto, ResultadoConclusaoOnboarding):
         return aberto
@@ -1313,6 +1315,7 @@ def _confirmar_handoff_dentro(
     conclusao_id: int,
     user: User | None,
 ) -> ResultadoConclusaoOnboarding:
+    _travar_usuario_do_vinculo(user)
     aberto = _abrir_por_id(conclusao_id)
     if isinstance(aberto, ResultadoConclusaoOnboarding):
         return aberto
@@ -1363,12 +1366,45 @@ def _aplicar_vinculo(
     )
 
 
+def _travar_usuario_do_vinculo(user: User | None) -> None:
+    """Trava o User antes de ler a conclusão. A desconexão usa a mesma ordem."""
+    if user is None or getattr(user, "id", None) is None:
+        return
+    from app.services.central_plugin_whatsapp_service import travar_usuario_whatsapp
+
+    travar_usuario_whatsapp(int(user.id))
+
+
 def _vincular_identidade(identidade: IdentidadeCanalExterna, user: User, agora: datetime) -> None:
+    from app.services.central_plugin_whatsapp_service import (
+        sincronizar_conexao_apos_vinculo,
+        travar_usuario_whatsapp,
+        usuario_ja_tem_outro_whatsapp,
+    )
+
+    if identidade.provedor == canal.PROVEDOR_WHATSAPP_META:
+        if travar_usuario_whatsapp(int(user.id)) is None:
+            raise _Recusa(
+                _resultado(
+                    CODIGO_VINCULO_NAO_APLICAVEL,
+                    onboarding_id=None,
+                    identidade_id=int(identidade.id),
+                )
+            )
+        if usuario_ja_tem_outro_whatsapp(int(user.id), int(identidade.id)):
+            raise _Recusa(
+                _resultado(
+                    CODIGO_VINCULO_NAO_APLICAVEL,
+                    onboarding_id=None,
+                    identidade_id=int(identidade.id),
+                )
+            )
     identidade.estado = IdentidadeCanalExterna.ESTADO_VINCULADA
     identidade.user_id = int(user.id)
     identidade.vinculada_em = agora
     identidade.revogada_em = None
     identidade.atualizada_em = agora
+    sincronizar_conexao_apos_vinculo(identidade)
 
 
 def _concluir_jornada(jornada: OnboardingCanal, agora: datetime) -> None:

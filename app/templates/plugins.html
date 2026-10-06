@@ -79,7 +79,7 @@
                         {% if plugin.pode_conectar %}
                         <form method="post" action="{{ url_for('user.plugins_conectar', slug=plugin.slug) }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-primary btn-sm" data-acao="conectar">Conectar</button>
+                            <button type="submit" class="btn btn-primary btn-sm" data-acao="conectar">{{ plugin.rotulo_conectar }}</button>
                         </form>
                         {% endif %}
                         {% if plugin.pode_revalidar %}
