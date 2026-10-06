@@ -30,7 +30,10 @@ from app.services import canal_reconciliacao_status_service as reconciliacao
 from app.services import whatsapp_meta_cloud_api_adapter as adapter
 from app.services import whatsapp_meta_config as config
 from app.services.canal_aquisicao_service import PROVEDOR_WHATSAPP_META
-from app.services.canal_intencao_entrega_whatsapp_service import NOME_ENVIAR_PARA_MEU_WHATSAPP
+from app.services.canal_intencao_entrega_whatsapp_service import (
+    NOME_ENVIAR_PARA_MEU_WHATSAPP,
+    NOME_NAO_ENVIAR_PARA_MEU_WHATSAPP,
+)
 from tests.conftest import seed_conta_franquia_cliente
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -211,6 +214,10 @@ def _historico(texto=TEXTO):
 
 def _decidir(monkeypatch, valor):
     def _fixo(*_args, **_kwargs):
+        if valor is True:
+            return intencao.DecisaoEntregaWhatsApp.POSITIVO
+        if valor is False:
+            return intencao.DecisaoEntregaWhatsApp.NEGATIVO
         return valor
 
     monkeypatch.setattr(entrega, "decidir_enviar_para_meu_whatsapp", _fixo)
@@ -506,9 +513,10 @@ def test_status_provider_encontra_saida_web(ctx, monkeypatch):
 
 
 def test_intencao_usa_funcao_sem_parametro_de_destino(monkeypatch):
-    capturado = {}
+    capturado = {"chamadas": 0}
 
     def _capturar(*_args, **kwargs):
+        capturado["chamadas"] += 1
         capturado["config"] = kwargs["config"]
         capturado["contents"] = kwargs["contents"]
         return SimpleNamespace(function_calls=[], candidates=[])
@@ -523,11 +531,25 @@ def test_intencao_usa_funcao_sem_parametro_de_destino(monkeypatch):
             model="gemini-2.5-flash",
             api_key_label="teste",
         )
-        is False
+        is intencao.DecisaoEntregaWhatsApp.FALHA_TECNICA
     )
-    declaracao = capturado["config"].tools[0].function_declarations[0]
-    assert declaracao.name == NOME_ENVIAR_PARA_MEU_WHATSAPP
-    assert getattr(declaracao, "parameters", None) in (None, {})
+    assert capturado["chamadas"] == 2
+    declaracoes = capturado["config"].tools[0].function_declarations
+    assert [item.name for item in declaracoes] == [
+        NOME_ENVIAR_PARA_MEU_WHATSAPP,
+        NOME_NAO_ENVIAR_PARA_MEU_WHATSAPP,
+    ]
+    assert all(getattr(item, "parameters", None) in (None, {}) for item in declaracoes)
+    modo = capturado["config"].tool_config.function_calling_config.mode
+    assert getattr(modo, "value", modo) == "ANY"
+    assert list(capturado["config"].tool_config.function_calling_config.allowed_function_names) == [
+        NOME_ENVIAR_PARA_MEU_WHATSAPP,
+        NOME_NAO_ENVIAR_PARA_MEU_WHATSAPP,
+    ]
+    assert capturado["config"].temperature == 0
+    assert capturado["config"].max_output_tokens > 32
+    assert capturado["config"].thinking_config.thinking_budget == 0
+    assert capturado["config"].thinking_config.include_thoughts is False
     assert capturado["contents"] == "envia isso para meu whatsapp"
     assert "16505551234" not in str(capturado["config"])
 
@@ -538,13 +560,16 @@ def test_intencao_usa_funcao_sem_parametro_de_destino(monkeypatch):
         )
 
     monkeypatch.setattr(intencao, "cleiton_governed_generate_content", _chama)
-    assert intencao.decidir_enviar_para_meu_whatsapp(
-        "pode me mandar isso por lá?",
-        agent="julia",
-        flow_type="julia_chat",
-        client=object(),
-        model="gemini-2.5-flash",
-        api_key_label="teste",
+    assert (
+        intencao.decidir_enviar_para_meu_whatsapp(
+            "pode me mandar isso por lá?",
+            agent="julia",
+            flow_type="julia_chat",
+            client=object(),
+            model="gemini-2.5-flash",
+            api_key_label="teste",
+        )
+        is intencao.DecisaoEntregaWhatsApp.POSITIVO
     )
 
 
@@ -563,6 +588,7 @@ def test_julia_envia_resposta_anterior_sem_nova_analise(ctx, monkeypatch):
 
     monkeypatch.setattr(julia, "cleiton_governed_generate_content", _proibido)
     for frase in (
+        "Envie o resumo para meu WhatsApp.",
         "envia isso para meu whatsapp",
         "manda essa resposta no whatsapp",
         "pode me mandar isso por lá?",
@@ -570,7 +596,7 @@ def test_julia_envia_resposta_anterior_sem_nova_analise(ctx, monkeypatch):
     ):
         resposta = julia.chat_julia_reply(frase, _historico(), usuario=user)
         assert resposta["reply"] == entrega.MENSAGEM_ENVIADO
-    assert len(chamadas) == 4
+    assert len(chamadas) == 5
     assert all(item[1]["json"]["text"]["body"] == TEXTO for item in chamadas)
     assert all(item[1]["json"]["to"] == DESTINATARIO for item in chamadas)
 
@@ -706,7 +732,7 @@ def test_falha_meta_no_chat_nao_confirma_sucesso(ctx, monkeypatch):
 
 
 def _modelo(*, funcao=False):
-    from app.services.canal_intencao_entrega_whatsapp_service import NOME_ENVIAR_PARA_MEU_WHATSAPP
+    nome = NOME_ENVIAR_PARA_MEU_WHATSAPP if funcao else NOME_NAO_ENVIAR_PARA_MEU_WHATSAPP
 
     class _Models:
         def __init__(self):
@@ -714,13 +740,10 @@ def _modelo(*, funcao=False):
 
         def generate_content(self, **_kwargs):
             self.chamadas += 1
-            nomes = []
-            if funcao:
-                nomes.append(SimpleNamespace(name=NOME_ENVIAR_PARA_MEU_WHATSAPP, args={}))
             return SimpleNamespace(
                 text="Resposta logistica de frete.",
-                function_calls=nomes,
-                candidates=[],
+                function_calls=[SimpleNamespace(name=nome, args={})],
+                candidates=[SimpleNamespace(finish_reason="STOP")],
                 usage_metadata=SimpleNamespace(
                     prompt_token_count=200,
                     candidates_token_count=800,
@@ -1289,3 +1312,271 @@ def test_comparacao_cacheada_nao_classifica_de_novo(ctx, monkeypatch):
     assert primeira.get("answer")
     assert segunda.get("cached") is True
     assert contagem == {"decidir": 1, "gerar": 1}
+
+
+def _gates_comparacao(monkeypatch, comparacao):
+    monkeypatch.setattr(
+        comparacao,
+        "evaluate_comparison_chat_availability",
+        lambda **_kwargs: {"chat_available": True},
+    )
+    monkeypatch.setattr(
+        comparacao,
+        "build_comparison_chat_context",
+        lambda **_kwargs: {
+            "selected_scope": {"scope": "overview", "capability": "ready"},
+            "comparison": {"comparison_id": "cmp-intencao", "table_count": 2},
+            "data_quality": {},
+            "comparability": {},
+            "tables": [],
+            "limitations": [],
+        },
+    )
+
+
+def test_julia_falha_tecnica_nao_gera_resposta_logistica(ctx, monkeypatch):
+    from app import run_julia_chat as julia
+
+    _configurar(monkeypatch)
+    chamadas = _mock(monkeypatch)
+    user = _usuario("falha.classificacao.julia@example.com")
+    _vincular(user)
+    _decidir(monkeypatch, intencao.DecisaoEntregaWhatsApp.FALHA_TECNICA)
+    _cliente_falso(monkeypatch, julia)
+
+    def _proibido(*_args, **_kwargs):
+        raise AssertionError("geracao analitica")
+
+    monkeypatch.setattr(julia, "cleiton_governed_generate_content", _proibido)
+    resposta = julia.chat_julia_reply(
+        "Envie o resumo para meu WhatsApp.",
+        _historico(),
+        usuario=user,
+    )
+    assert resposta["reply"] == entrega.MENSAGEM_FALHA_CLASSIFICACAO
+    assert chamadas == []
+
+
+def test_auditoria_negativo_segue_chat(ctx, monkeypatch):
+    from app import run_cleide_audit_chat as auditoria
+
+    user = _usuario("negativo.auditoria@example.com")
+    _decidir(monkeypatch, False)
+    _cliente_falso(monkeypatch, auditoria)
+    geracoes = []
+
+    def _gerar(*_args, **_kwargs):
+        geracoes.append(True)
+        return SimpleNamespace(text="A cobrança está consistente.", usage_metadata=None)
+
+    monkeypatch.setattr(auditoria, "cleiton_governed_generate_content", _gerar)
+    resposta = auditoria.chat_cleide_audit_reply(
+        "Meu WhatsApp está conectado?",
+        [{"role": "assistant", "content": TEXTO}],
+        usuario=user,
+    )
+    assert resposta["answer"] == "A cobrança está consistente."
+    assert geracoes == [True]
+
+
+def test_auditoria_falha_tecnica_nao_gera_resposta_logistica(ctx, monkeypatch):
+    from app import run_cleide_audit_chat as auditoria
+
+    _configurar(monkeypatch)
+    chamadas = _mock(monkeypatch)
+    user = _usuario("falha.classificacao.auditoria@example.com")
+    _vincular(user)
+    _decidir(monkeypatch, intencao.DecisaoEntregaWhatsApp.FALHA_TECNICA)
+    _cliente_falso(monkeypatch, auditoria)
+
+    def _proibido(*_args, **_kwargs):
+        raise AssertionError("geracao analitica")
+
+    monkeypatch.setattr(auditoria, "cleiton_governed_generate_content", _proibido)
+    resposta = auditoria.chat_cleide_audit_reply(
+        "Envie o resumo para meu WhatsApp.",
+        [{"role": "assistant", "content": TEXTO}],
+        usuario=user,
+    )
+    assert resposta["answer"] == entrega.MENSAGEM_FALHA_CLASSIFICACAO
+    assert chamadas == []
+
+
+def test_comparacao_negativo_segue_chat(ctx, monkeypatch):
+    from app import run_agente_compara_comparison_chat as comparacao
+
+    user = _usuario("negativo.comparacao@example.com")
+    _decidir(monkeypatch, False)
+    _cliente_falso(monkeypatch, comparacao)
+    _gates_comparacao(monkeypatch, comparacao)
+    geracoes = []
+
+    def _gerar(*_args, **_kwargs):
+        geracoes.append(True)
+        return SimpleNamespace(text="A tabela Alpha cobre mais faixas.", usage_metadata=None)
+
+    monkeypatch.setattr(comparacao, "cleiton_governed_generate_content", _gerar)
+    resposta = comparacao.chat_agente_compara_comparison_reply(
+        "Explique como funciona o WhatsApp.",
+        [{"role": "model", "content": TEXTO}],
+        session_obj={},
+        usuario=user,
+    )
+    assert resposta["answer"] == "A tabela Alpha cobre mais faixas."
+    assert geracoes == [True]
+
+
+def test_comparacao_falha_tecnica_nao_gera_resposta_logistica(ctx, monkeypatch):
+    from app import run_agente_compara_comparison_chat as comparacao
+
+    _configurar(monkeypatch)
+    chamadas = _mock(monkeypatch)
+    user = _usuario("falha.classificacao.comparacao@example.com")
+    _vincular(user)
+    _decidir(monkeypatch, intencao.DecisaoEntregaWhatsApp.FALHA_TECNICA)
+    _cliente_falso(monkeypatch, comparacao)
+    _gates_comparacao(monkeypatch, comparacao)
+
+    def _proibido(*_args, **_kwargs):
+        raise AssertionError("geracao analitica")
+
+    monkeypatch.setattr(comparacao, "cleiton_governed_generate_content", _proibido)
+    resposta = comparacao.chat_agente_compara_comparison_reply(
+        "Envie o resumo para meu WhatsApp.",
+        [{"role": "model", "content": TEXTO}],
+        session_obj={},
+        usuario=user,
+    )
+    assert resposta["answer"] == entrega.MENSAGEM_FALHA_CLASSIFICACAO
+    assert chamadas == []
+
+
+def _cliente_que_registra_identidade(*, nome=None, erro=None):
+    from flask import g
+
+    vistas = []
+
+    class _Models:
+        def __init__(self):
+            self.chamadas = 0
+
+        def generate_content(self, **_kwargs):
+            self.chamadas += 1
+            vistas.append(
+                {
+                    "tipo_origem": g.identidade.get("tipo_origem"),
+                    "origem_sistema": g.identidade.get("origem_sistema"),
+                    "usuario_id": g.identidade.get("usuario_id"),
+                }
+            )
+            if erro is not None:
+                raise erro
+            return SimpleNamespace(
+                function_calls=[SimpleNamespace(name=nome, args={})],
+                candidates=[SimpleNamespace(finish_reason="STOP")],
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=20,
+                    candidates_token_count=8,
+                    total_token_count=28,
+                ),
+            )
+
+    models = _Models()
+    return SimpleNamespace(models=models), models, vistas
+
+
+def _assert_classificacao_sem_debito(user, *, eventos_internos):
+    from decimal import Decimal
+
+    from app.models import Franquia
+
+    db.session.expire_all()
+    franquia = db.session.get(Franquia, user.franquia_id)
+    do_cliente = IaConsumoEvento.query.filter_by(usuario_id=user.id).all()
+    internos = IaConsumoEvento.query.filter_by(origem_sistema=True).all()
+    assert do_cliente == []
+    assert len(internos) == eventos_internos
+    assert all(item.usuario_id is None for item in internos)
+    assert all(item.origem_sistema is True for item in internos)
+    assert franquia.consumo_acumulado == Decimal("0")
+    assert ConsumoInteracaoCanal.query.count() == 0
+
+
+def test_classificacao_positiva_nao_debita_e_restaura_identidade(app, ctx, monkeypatch):
+    from flask import g
+
+    from app.consumo_identidade import identidade_de_usuario, set_consumo_identidade
+
+    _sistema, user = _preparar_franquia("positivo.franquia.intencao@example.com")
+    cliente, _models, vistas = _cliente_que_registra_identidade(nome=NOME_ENVIAR_PARA_MEU_WHATSAPP)
+    with app.test_request_context("/api/chat_julia"):
+        set_consumo_identidade(identidade_de_usuario(user, "http_usuario"))
+        anterior = dict(g.identidade)
+        decisao = intencao.decidir_enviar_para_meu_whatsapp(
+            "Envie o resumo para meu WhatsApp.",
+            agent="julia",
+            flow_type="julia_chat",
+            client=cliente,
+            model="gemini-2.5-flash",
+            api_key_label="teste",
+        )
+        depois = dict(g.identidade)
+    assert decisao is intencao.DecisaoEntregaWhatsApp.POSITIVO
+    assert vistas[0]["tipo_origem"] == "interno_nao_faturavel"
+    assert vistas[0]["origem_sistema"] is True
+    assert vistas[0]["usuario_id"] is None
+    assert depois == anterior
+    _assert_classificacao_sem_debito(user, eventos_internos=1)
+
+
+def test_classificacao_negativa_nao_debita_e_restaura_identidade(app, ctx, monkeypatch):
+    from flask import g
+
+    from app.consumo_identidade import identidade_de_usuario, set_consumo_identidade
+
+    _sistema, user = _preparar_franquia("negativo.franquia.intencao@example.com")
+    cliente, _models, vistas = _cliente_que_registra_identidade(nome=NOME_NAO_ENVIAR_PARA_MEU_WHATSAPP)
+    with app.test_request_context("/api/chat_julia"):
+        set_consumo_identidade(identidade_de_usuario(user, "http_usuario"))
+        anterior = dict(g.identidade)
+        decisao = intencao.decidir_enviar_para_meu_whatsapp(
+            "Não envie isso ao meu WhatsApp.",
+            agent="cleide",
+            flow_type="cleide_audit_chat",
+            client=cliente,
+            model="gemini-2.5-flash",
+            api_key_label="teste",
+        )
+        depois = dict(g.identidade)
+    assert decisao is intencao.DecisaoEntregaWhatsApp.NEGATIVO
+    assert vistas[0]["tipo_origem"] == "interno_nao_faturavel"
+    assert depois == anterior
+    _assert_classificacao_sem_debito(user, eventos_internos=1)
+
+
+def test_falha_tecnica_com_retry_nao_debita_e_restaura_identidade(app, ctx, monkeypatch):
+    from flask import g
+
+    from app.consumo_identidade import identidade_de_usuario, set_consumo_identidade
+
+    _sistema, user = _preparar_franquia("falha.franquia.intencao@example.com")
+    cliente, models, vistas = _cliente_que_registra_identidade(erro=TimeoutError("timeout"))
+    with app.test_request_context("/api/chat_julia"):
+        set_consumo_identidade(identidade_de_usuario(user, "http_usuario"))
+        anterior = dict(g.identidade)
+        decisao = intencao.decidir_enviar_para_meu_whatsapp(
+            "Mande para 19 99999-9999.",
+            agent="agente_compara",
+            flow_type="agente_compara_comparison_chat",
+            client=cliente,
+            model="gemini-2.5-flash",
+            api_key_label="teste",
+        )
+        depois = dict(g.identidade)
+    assert decisao is intencao.DecisaoEntregaWhatsApp.FALHA_TECNICA
+    assert models.chamadas == 2
+    assert len(vistas) == 2
+    assert all(item["tipo_origem"] == "interno_nao_faturavel" for item in vistas)
+    assert all(item["origem_sistema"] is True for item in vistas)
+    assert depois == anterior
+    _assert_classificacao_sem_debito(user, eventos_internos=2)

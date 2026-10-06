@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services.canal_aquisicao_service import PROVEDOR_WHATSAPP_META
 from app.services.canal_intencao_entrega_whatsapp_service import (
+    DecisaoEntregaWhatsApp,
     decidir_enviar_para_meu_whatsapp,
 )
 from app.services.canal_saida_whatsapp_service import (
@@ -49,6 +50,7 @@ CODIGO_SUPERFICIE_INVALIDA = "superficie_invalida"
 CODIGO_CONFIGURACAO_AUSENTE = "configuracao_ausente"
 CODIGO_CHAVE_INVALIDA = "chave_invalida"
 CODIGO_CONFLITO = "conflito"
+CODIGO_FALHA_CLASSIFICACAO = "falha_classificacao"
 
 MENSAGEM_ENVIADO = "Enviei para o seu WhatsApp."
 MENSAGEM_SEM_VINCULO = (
@@ -56,6 +58,9 @@ MENSAGEM_SEM_VINCULO = (
 )
 MENSAGEM_SEM_ANTERIOR = "Não encontrei uma resposta anterior para enviar."
 MENSAGEM_FALHA = "Não consegui enviar para o seu WhatsApp agora. Tente novamente em instantes."
+MENSAGEM_FALHA_CLASSIFICACAO = (
+    "Não consegui processar o pedido de envio para o WhatsApp agora. Tente novamente."
+)
 
 _DIGITOS = re.compile(r"^[0-9]{1,32}$")
 _CHAVE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{31,79}$")
@@ -449,7 +454,7 @@ def avaliar_pedido_de_entrega(
     api_key_label: str,
     identidade_requisicao: str | None = None,
 ) -> ResultadoEntregaWeb | None:
-    """None quando a decisão estruturada não é envio. Não gera resposta logística."""
+    """None quando a decisão é não enviar. Falha técnica não segue para o chat."""
     if client is None or usuario is None:
         return None
     try:
@@ -470,8 +475,15 @@ def avaliar_pedido_de_entrega(
             superficie,
             type(exc).__name__,
         )
-        return None
-    if not pedido:
+        return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
+    if pedido is DecisaoEntregaWhatsApp.FALHA_TECNICA:
+        logger.info(
+            "entrega_web_intencao user_id=%s superficie=%s codigo=falha_tecnica",
+            getattr(usuario, "id", "-"),
+            superficie,
+        )
+        return ResultadoEntregaWeb(codigo=CODIGO_FALHA_CLASSIFICACAO)
+    if pedido is not DecisaoEntregaWhatsApp.POSITIVO:
         return None
     texto = ultima_resposta_assistente(historico)
     if not texto:
@@ -493,4 +505,6 @@ def mensagem_da_entrega(resultado: ResultadoEntregaWeb, *, sem_anterior: bool = 
         return MENSAGEM_SEM_VINCULO
     if resultado.codigo == CODIGO_SEM_TEXTO:
         return MENSAGEM_SEM_ANTERIOR
+    if resultado.codigo == CODIGO_FALHA_CLASSIFICACAO:
+        return MENSAGEM_FALHA_CLASSIFICACAO
     return MENSAGEM_FALHA

@@ -96,6 +96,10 @@ def _persist_conversion_on_sqlite(app):
 
 def _mock_julia_chat(monkeypatch):
     monkeypatch.setattr(
+        "app.services.canal_entrega_web_whatsapp_service.decidir_enviar_para_meu_whatsapp",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
         "app.run_julia_chat.chat_julia_reply",
         lambda *a, **k: {"reply": "ok-julia", "suggestions": []},
     )
