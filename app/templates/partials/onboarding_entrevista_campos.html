@@ -1,0 +1,76 @@
+<div data-onboarding-entrevista>
+    <div class="mb-3">
+        <label class="form-label small fw-bold">Cargo</label>
+        <select name="job_role" class="form-select" data-onboarding-job-role required>
+            <option value="" selected disabled>Selecione seu cargo</option>
+            {% for key, label in onboarding_cargos %}
+            <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% for pergunta in onboarding_perguntas %}
+    <div class="mb-3"
+         hidden
+         data-onboarding-question="{{ pergunta.key }}"
+         data-job-roles="{{ pergunta.job_roles | join(',') }}"
+         data-depends-question="{{ pergunta.depende_de.pergunta if pergunta.depende_de else '' }}"
+         data-depends-answer="{{ pergunta.depende_de.resposta if pergunta.depende_de else '' }}">
+        <label class="form-label small fw-bold">{{ pergunta.texto }}</label>
+        <select name="{{ onboarding_campo_prefix }}{{ pergunta.key }}" class="form-select" disabled>
+            <option value="" selected>Selecione</option>
+            {% for opcao in pergunta.opcoes %}
+            <option value="{{ opcao.key }}">{{ opcao.label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endfor %}
+</div>
+<script>
+(function () {
+    function sync(root) {
+        var roleSelect = root.querySelector("[data-onboarding-job-role]");
+        if (!roleSelect) return;
+        var role = roleSelect.value || "";
+        var blocks = root.querySelectorAll("[data-onboarding-question]");
+        for (var i = 0; i < blocks.length; i++) {
+            var block = blocks[i];
+            var roles = (block.getAttribute("data-job-roles") || "").split(",");
+            var depQuestion = block.getAttribute("data-depends-question") || "";
+            var depAnswer = block.getAttribute("data-depends-answer") || "";
+            var roleOk = roles.indexOf(role) !== -1;
+            var depOk = !depQuestion;
+            if (depQuestion) {
+                var parent = root.querySelector('[data-onboarding-question="' + depQuestion + '"] select');
+                depOk = !!(parent && !parent.disabled && parent.value === depAnswer);
+            }
+            var show = roleOk && depOk;
+            block.hidden = !show;
+            var select = block.querySelector("select");
+            if (!select) continue;
+            if (!show) {
+                select.value = "";
+                select.disabled = true;
+                select.required = false;
+            } else {
+                select.disabled = false;
+                select.required = true;
+            }
+        }
+    }
+
+    var roots = document.querySelectorAll("[data-onboarding-entrevista]");
+    for (var r = 0; r < roots.length; r++) {
+        (function (root) {
+            var roleSelect = root.querySelector("[data-onboarding-job-role]");
+            if (!roleSelect) return;
+            var onChange = function () { sync(root); };
+            roleSelect.addEventListener("change", onChange);
+            var selects = root.querySelectorAll("[data-onboarding-question] select");
+            for (var s = 0; s < selects.length; s++) {
+                selects[s].addEventListener("change", onChange);
+            }
+            sync(root);
+        })(roots[r]);
+    }
+})();
+</script>

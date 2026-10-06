@@ -134,6 +134,10 @@ def _authorized(monkeypatch, web, *, authz=None):
         "app.cleide_audit_routes.avaliar_autorizacao_operacao_por_franquia",
         lambda _u: authz_payload,
     )
+    monkeypatch.setattr(
+        "app.services.canal_entrega_web_whatsapp_service.decidir_enviar_para_meu_whatsapp",
+        lambda *_args, **_kwargs: False,
+    )
 
 
 def _audit_chat(client, payload: dict):

@@ -95,6 +95,18 @@ def converter_ms_para_creditos(ms: int, cfg: CleitonCostConfig) -> tuple[Decimal
     return c, None
 
 
+def converter_interacoes_whatsapp_para_creditos(
+    quantidade: int, cfg: CleitonCostConfig
+) -> tuple[Decimal | None, str | None]:
+    """N interações úteis compradas por 1 crédito, na mesma conta das outras unidades."""
+    rate = cfg.interacoes_whatsapp_por_credito
+    if rate is None or rate <= 0:
+        return None, "interacoes_whatsapp_por_credito ausente ou inválido na CleitonCostConfig"
+    n = max(0, int(quantidade))
+    c = _quantize_credit(Decimal(n) / Decimal(str(rate)))
+    return c, None
+
+
 def deve_abater_franquia_do_cliente(
     *,
     franquia_id: int | None,
@@ -328,6 +340,13 @@ def aplicar_motor_apos_processing_event(evento_id: int) -> ResultadoGovernancaOp
             erro_config=None,
         )
     return _persistir_abatimento(ev.franquia_id, creditos)
+
+
+def lancar_creditos_convertidos(
+    franquia_id: int | None, creditos: Decimal
+) -> ResultadoGovernancaOperacional:
+    """Aplica créditos já convertidos pela régua e recalcula o status da franquia."""
+    return _persistir_abatimento(franquia_id, creditos)
 
 
 def _persistir_abatimento(franquia_id: int | None, creditos: Decimal) -> ResultadoGovernancaOperacional:

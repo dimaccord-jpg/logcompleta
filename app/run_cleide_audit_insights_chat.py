@@ -391,6 +391,7 @@ def _run_gemini_analytical_reply(
     request_id: str | None,
     batch_scope: str,
     processing_message: str,
+    usuario=None,
 ) -> dict:
     package = build_analytical_package(bundle, visual_focus=focus)
     compact = build_compact_context_for_gemini(bundle, intent, visual_focus=focus)
@@ -415,6 +416,7 @@ def _run_gemini_analytical_reply(
             result_payload,
             batch_scope=batch_scope,
         )
+        _lembrar_resposta_insights(usuario, batch_scope, result_payload.get("answer") or "")
         return result_payload
 
     prompt = build_insights_user_prompt(
@@ -449,6 +451,7 @@ def _run_gemini_analytical_reply(
                     result_payload,
                     batch_scope=batch_scope,
                 )
+                _lembrar_resposta_insights(usuario, batch_scope, text)
                 return result_payload
             last_error = ValueError("Resposta vazia do modelo")
         except Exception as exc:
@@ -474,7 +477,101 @@ def _run_gemini_analytical_reply(
         result_payload,
         batch_scope=batch_scope,
     )
+    _lembrar_resposta_insights(usuario, batch_scope, result_payload.get("answer") or "")
     return result_payload
+
+
+def _lembrar_resposta_insights(usuario, batch_scope: str, texto: str) -> None:
+    if usuario is None or not isinstance(texto, str) or not texto.strip():
+        return
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_resposta_compartilhavel_service import (
+        escopo_insights,
+        montar_contexto,
+        registrar_resposta_compartilhavel,
+    )
+
+    user_id = getattr(usuario, "id", None)
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        return
+    escopo = escopo_insights(batch_scope)
+    registrar_resposta_compartilhavel(
+        usuario=usuario,
+        superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+        contexto_conversa=montar_contexto(
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+            user_id=user_id,
+            escopo_auditoria=escopo,
+        ),
+        texto=texto,
+        escopo_auditoria=escopo,
+    )
+
+
+def _entrega_insights_se_pedida(
+    user_message: str,
+    history: list,
+    *,
+    usuario,
+    batch_scope: str,
+    identidade_requisicao: str | None,
+) -> dict | None:
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_entrega_web_whatsapp_service import (
+        avaliar_pedido_de_entrega,
+        mensagem_da_entrega,
+    )
+    from app.services.canal_resposta_compartilhavel_service import (
+        escopo_insights,
+        montar_contexto,
+    )
+    from app.services.cleiton_ai_data_governance import (
+        USER_SAFE_PREPARATION_FAILED,
+        CleitonAiGovernanceBlockedError,
+    )
+
+    client = _get_client()
+    candidatos = _get_model_candidates()
+    if not client or not candidatos or usuario is None:
+        return None
+    user_id = getattr(usuario, "id", None)
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        return None
+    escopo = escopo_insights(batch_scope)
+    try:
+        resultado = avaliar_pedido_de_entrega(
+            usuario=usuario,
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+            mensagem=user_message,
+            historico=history,
+            agent="cleide",
+            flow_type=CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE,
+            client=client,
+            model=candidatos[0],
+            api_key_label=_api_key_label(),
+            identidade_requisicao=identidade_requisicao,
+            contexto_conversa=montar_contexto(
+                superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+                user_id=user_id,
+                escopo_auditoria=escopo,
+            ),
+            escopo_auditoria=escopo,
+        )
+    except CleitonAiGovernanceBlockedError:
+        return {
+            "answer": USER_SAFE_PREPARATION_FAILED,
+            "flow_type": CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE,
+            "deterministic": True,
+            "entrega_whatsapp": True,
+        }
+    if resultado is None:
+        return None
+    return {
+        "answer": mensagem_da_entrega(resultado),
+        "flow_type": CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE,
+        "deterministic": True,
+        "entrega_whatsapp": True,
+    }
 
 
 def chat_cleide_audit_insights_reply(
@@ -487,6 +584,8 @@ def chat_cleide_audit_insights_reply(
     max_history: int | None = None,
     question_max_chars: int | None = None,
     fallback_message: str | None = None,
+    usuario=None,
+    identidade_requisicao: str | None = None,
 ) -> dict:
     audit_cfg = get_cleide_audit_config()
     message_limit = (
@@ -540,6 +639,16 @@ def chat_cleide_audit_insights_reply(
             "cached": True,
         }
 
+    entrega = _entrega_insights_se_pedida(
+        clean_message,
+        list(history) if isinstance(history, list) else [],
+        usuario=usuario,
+        batch_scope=batch_scope,
+        identidade_requisicao=identidade_requisicao or request_id,
+    )
+    if entrega is not None:
+        return entrega
+
     focus = _normalize_visual_focus(visual_focus)
     conversation_focus = get_conversation_focus(session_obj, batch_scope)
     if conversation_focus is None:
@@ -576,6 +685,7 @@ def chat_cleide_audit_insights_reply(
                 result_payload,
                 batch_scope=batch_scope,
             )
+            _lembrar_resposta_insights(usuario, batch_scope, answer)
             return result_payload
 
     deterministic_answer, context_rows, fully_deterministic = try_deterministic_response(
@@ -607,6 +717,7 @@ def chat_cleide_audit_insights_reply(
             result_payload,
             batch_scope=batch_scope,
         )
+        _lembrar_resposta_insights(usuario, batch_scope, result_payload.get("answer") or "")
         return result_payload
 
     if intent in GEMINI_ANALYTICAL_INTENTS:
@@ -620,14 +731,17 @@ def chat_cleide_audit_insights_reply(
             request_id=request_id,
             batch_scope=batch_scope,
             processing_message=processing_message,
+            usuario=usuario,
         )
 
-    return {
+    resposta_final = {
         "answer": finalize_insights_answer(deterministic_answer or format_ambiguity_safe(bundle)),
         "flow_type": CLEIDE_AUDIT_INSIGHTS_CHAT_FLOW_TYPE,
         "deterministic": True,
         "intent": intent,
     }
+    _lembrar_resposta_insights(usuario, batch_scope, resposta_final["answer"])
+    return resposta_final
 
 
 def format_ambiguity_safe(bundle: dict) -> str:

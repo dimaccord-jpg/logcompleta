@@ -78,6 +78,7 @@ from app.run_cleide_audit_temp_table import trigger_temp_table_extraction_for_se
 from app.run_cleide_audit_chat import (
     cache_chat_response,
     chat_cleide_audit_reply,
+    responder_entrega_whatsapp_se_pedida,
     get_cached_chat_response,
     normalize_chat_request_id,
     sanitize_chat_history,
@@ -1082,8 +1083,9 @@ def cleide_audit_chat():
             400,
         )
 
+    historico_original = data.get("history")
     history = sanitize_chat_history(
-        data.get("history"),
+        historico_original,
         max_history=audit_cfg.chat_max_history,
     )
     request_id = normalize_chat_request_id(data.get("request_id"))
@@ -1135,6 +1137,40 @@ def cleide_audit_chat():
             403,
         )
 
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_resposta_compartilhavel_service import (
+        escopo_de_documentos,
+        montar_contexto,
+    )
+
+    escopo_auditoria = escopo_de_documentos(get_cleide_audit_doc_ids(session))
+    user_id = getattr(current_user, "id", None)
+    contexto_auditoria = (
+        montar_contexto(
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_AUDITORIA,
+            user_id=int(user_id),
+            escopo_auditoria=escopo_auditoria,
+        )
+        if isinstance(user_id, int) and not isinstance(user_id, bool)
+        else None
+    )
+    entrega = responder_entrega_whatsapp_se_pedida(
+        message_text,
+        historico_original if isinstance(historico_original, list) else [],
+        usuario=current_user,
+        identidade_requisicao=request_id,
+        contexto_conversa=contexto_auditoria,
+        escopo_auditoria=escopo_auditoria,
+    )
+    if entrega is not None:
+        return jsonify(
+            _chat_success_payload(
+                entrega,
+                show_documents_used=audit_cfg.show_documents_used,
+                cached=False,
+            )
+        )
+
     result = chat_cleide_audit_reply(
         message_text,
         history,
@@ -1149,6 +1185,8 @@ def cleide_audit_chat():
         fallback_message=audit_cfg.fallback_message,
         no_hallucination_instruction_enabled=audit_cfg.no_hallucination_instruction_enabled,
         execution_id=request_id,
+        usuario=current_user,
+        entrega_ja_avaliada=True,
     )
 
     if result.get("error"):
@@ -1296,6 +1334,8 @@ def cleide_audit_insights_chat():
         max_history=audit_cfg.chat_max_history,
         question_max_chars=audit_cfg.question_max_chars,
         fallback_message=audit_cfg.fallback_message,
+        usuario=current_user,
+        identidade_requisicao=request_id,
     )
 
     if result.get("error"):

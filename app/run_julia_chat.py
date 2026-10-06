@@ -35,6 +35,9 @@ DOCUMENTAL_DEADLINE_REPLY = (
 GENERIC_REPLY_FALLBACK = (
     "Desculpe, não consegui processar sua mensagem no momento. Tente de novo em instantes."
 )
+PROVIDER_UNAVAILABLE_REPLY = (
+    "Assistente temporariamente indisponível. Verifique a configuração do serviço."
+)
 
 
 def _try_record_julia_chat_growth_task(
@@ -307,6 +310,100 @@ def _extract_suggestion_metadata(user_message: str) -> tuple[str, dict]:
     return clean_message, meta
 
 
+def identidade_estavel_requisicao_web(data: object, *, cabecalho: str | None = None) -> str:
+    """Identidade da requisição web. Reusa request_id, execution_id ou o cabeçalho já enviado."""
+    if isinstance(data, dict):
+        for campo in ("request_id", "execution_id"):
+            bruto = data.get(campo)
+            if isinstance(bruto, str) and bruto.strip():
+                return bruto.strip()
+    if isinstance(cabecalho, str) and cabecalho.strip():
+        return cabecalho.strip()
+    return uuid4().hex
+
+
+def _lembrar_resposta_julia(usuario, texto: str, historico: list | None = None) -> None:
+    if usuario is None or not isinstance(texto, str) or not texto.strip():
+        return
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_resposta_compartilhavel_service import (
+        montar_contexto,
+        registrar_resposta_compartilhavel,
+    )
+
+    user_id = getattr(usuario, "id", None)
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        return
+    registrar_resposta_compartilhavel(
+        usuario=usuario,
+        superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+        contexto_conversa=montar_contexto(
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+            user_id=user_id,
+            historico=historico if isinstance(historico, list) else [],
+        ),
+        texto=texto,
+    )
+
+
+def responder_entrega_whatsapp_se_pedida(
+    user_message: str,
+    history: list,
+    *,
+    usuario,
+    identidade_requisicao: str | None = None,
+    contexto_conversa: str | None = None,
+    comparison_id: str | None = None,
+    escopo_auditoria: str | None = None,
+) -> dict | None:
+    """None segue o chat atual. Dict é a confirmação determinística da entrega."""
+    from app.models import SolicitacaoEntregaCanal
+    from app.services.canal_entrega_web_whatsapp_service import (
+        avaliar_pedido_de_entrega,
+        mensagem_da_entrega,
+    )
+
+    client = _get_client()
+    candidatos = _get_chat_model_candidates()
+    if not client or not candidatos:
+        return None
+    from app.services.canal_resposta_compartilhavel_service import montar_contexto
+
+    user_id = getattr(usuario, "id", None)
+    if contexto_conversa is None and isinstance(user_id, int) and not isinstance(user_id, bool):
+        contexto_conversa = montar_contexto(
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+            user_id=user_id,
+            historico=history if isinstance(history, list) else [],
+            comparison_id=comparison_id,
+            escopo_auditoria=escopo_auditoria,
+        )
+    try:
+        resultado = avaliar_pedido_de_entrega(
+            usuario=usuario,
+            superficie=SolicitacaoEntregaCanal.SUPERFICIE_JULIA,
+            mensagem=user_message,
+            historico=history,
+            agent="julia",
+            flow_type=FLOW_TYPE_JULIA_CHAT,
+            client=client,
+            model=candidatos[0],
+            api_key_label=_api_key_label_chat(),
+            identidade_requisicao=identidade_requisicao,
+            contexto_conversa=contexto_conversa,
+            comparison_id=comparison_id,
+            escopo_auditoria=escopo_auditoria,
+        )
+    except CleitonAiGovernanceBlockedError:
+        return {
+            "reply": USER_SAFE_PREPARATION_FAILED,
+            "suggestions": [],
+        }
+    if resultado is None:
+        return None
+    return {"reply": mensagem_da_entrega(resultado), "suggestions": []}
+
+
 def chat_julia_reply(
     user_message: str,
     history: list,
@@ -316,6 +413,10 @@ def chat_julia_reply(
     document_file_parts: list | None = None,
     flow_type: str | None = None,
     execution_id: str | None = None,
+    allow_provider_fallback: bool = True,
+    usuario=None,
+    entrega_ja_avaliada: bool = False,
+    identidade_requisicao: str | None = None,
 ) -> dict:
     """
     Envia a mensagem do usuário ao LLM com histórico limitado.
@@ -325,6 +426,7 @@ def chat_julia_reply(
     document_file_parts: partes de arquivo Gemini autorizadas pelo Cleiton (PDF real).
     flow_type: trilho de governança; padrão julia_chat ou julia_chat_documental quando há contexto.
     execution_id: identidade efêmera da execução Growth (opcional; UUID gerado se ausente).
+    allow_provider_fallback: False executa só o primeiro candidato, depois de governança.
     Retorna {"reply": str} em sucesso ou {"reply": str, "error": str} em fallback.
     """
     from app.funnel_event_service import (
@@ -372,15 +474,25 @@ def chat_julia_reply(
             "suggestions": _build_follow_up_suggestions(""),
         }
 
-    # Respeita o limite de histórico ao montar o contexto (padrão seguro)
     history_list = list(history) if isinstance(history, list) else []
+    if usuario is not None and not entrega_ja_avaliada:
+        entrega = responder_entrega_whatsapp_se_pedida(
+            clean_user_message,
+            history_list,
+            usuario=usuario,
+            identidade_requisicao=identidade_requisicao,
+        )
+        if entrega is not None:
+            return entrega
+
+    # Respeita o limite de histórico ao montar o contexto (padrão seguro)
     history_slice = history_list[-max_history:] if max_history > 0 else []
 
     client = _get_client()
     if not client:
         logger.warning("Chat Júlia: nenhuma chave Gemini configurada (GEMINI_API_KEY ou GEMINI_API_KEY_1).")
         _growth_fail("julia_chat_provider_unavailable", task_stage="provider_check")
-        return {"reply": "Assistente temporariamente indisponível. Verifique a configuração do serviço."}
+        return {"reply": PROVIDER_UNAVAILABLE_REPLY}
 
     alias_session = CleitonAiAliasSession()
     try:
@@ -446,6 +558,8 @@ def chat_julia_reply(
     last_error = None
     failed_models: list[str] = []
     model_candidates = _get_chat_model_candidates()
+    if not allow_provider_fallback:
+        model_candidates = model_candidates[:1]
     documental_pdf = _is_documental_pdf_context(resolved_flow_type, document_file_parts)
 
     # Autorizações/validações ok: início real da geração de resposta.
@@ -492,6 +606,7 @@ def chat_julia_reply(
                     out["web_links"] = web_links
                 # IaConsumoEvento já commitado pela governança Cleiton.
                 _growth_complete()
+                _lembrar_resposta_julia(usuario, text, history_list)
                 return out
             last_error = ValueError("Resposta vazia do modelo")
             failed_models.append(model)
@@ -533,4 +648,5 @@ def chat_julia_reply(
         out["web_links"] = web_links
     # Degradação textual ainda entrega resposta utilizável ao usuário → completed.
     _growth_complete(task_stage="reply_degraded")
+    _lembrar_resposta_julia(usuario, reply_text, history_list)
     return out

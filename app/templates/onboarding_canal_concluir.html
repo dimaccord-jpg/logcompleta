@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<meta name="robots" content="noindex, nofollow">
+{% endblock %}
+
+{% block content %}
+<div class="container d-flex align-items-center justify-content-center" style="min-height: 90vh;">
+    <div class="card shadow-lg" style="max-width: 480px; width: 100%;">
+        <div class="card-body p-4 p-md-5">
+            {% if sucesso %}
+            <h4 class="fw-bold mb-3 text-center">Cadastro concluído</h4>
+            <p class="small text-muted mb-4 text-center">{{ mensagem }}</p>
+            <a class="btn btn-primary w-100 fw-bold" href="{{ url_for('onboarding_canal_retorno') }}">Voltar para o WhatsApp</a>
+            {% elif formulario == "senha" %}
+            <h4 class="fw-bold mb-3 text-center">Criar sua senha</h4>
+            <p class="small text-muted mb-4 text-center">
+                {% if nome_mascarado %}{{ nome_mascarado }}{% endif %}
+                {% if email_mascarado %} · {{ email_mascarado }}{% endif %}
+            </p>
+            {% if alerta %}
+            <div class="alert alert-danger small">{{ mensagem }}</div>
+            {% endif %}
+            <form method="POST">
+                <input type="hidden" name="acao" value="definir_senha">
+                <div class="mb-3">
+                    <label class="form-label small fw-bold" for="password">Senha</label>
+                    <input id="password" type="password" name="password" class="form-control" minlength="8" autocomplete="new-password" placeholder="Mínimo 8 caracteres" required>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label small fw-bold" for="confirm_password">Confirme a senha</label>
+                    <input id="confirm_password" type="password" name="confirm_password" class="form-control" minlength="8" autocomplete="new-password" placeholder="Repita a senha" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 fw-bold">Concluir cadastro</button>
+            </form>
+            {% elif formulario == "vinculo" %}
+            <h4 class="fw-bold mb-3 text-center">Conectar esta conta ao canal?</h4>
+            <p class="small text-muted mb-4 text-center">
+                {% if email_mascarado %}{{ email_mascarado }}{% endif %}
+            </p>
+            {% if alerta %}
+            <div class="alert alert-danger small">{{ mensagem }}</div>
+            {% endif %}
+            {% if autenticado %}
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="acao" value="vincular">
+                <button type="submit" class="btn btn-primary w-100 fw-bold">Conectar esta conta ao canal</button>
+            </form>
+            {% elif login_url %}
+            <a class="btn btn-primary w-100 fw-bold" href="{{ login_url }}">Entrar para conectar</a>
+            {% endif %}
+            {% else %}
+            <h4 class="fw-bold mb-3 text-center">Cadastro pelo canal</h4>
+            <p class="small text-muted mb-4 text-center">{{ mensagem }}</p>
+            {% if codigo in ("conclusao_ja_realizada", "link_ja_utilizado", "conta_criada", "vinculo_confirmado") %}
+            <a class="btn btn-primary w-100 fw-bold" href="{{ url_for('onboarding_canal_retorno') }}">Voltar para o WhatsApp</a>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

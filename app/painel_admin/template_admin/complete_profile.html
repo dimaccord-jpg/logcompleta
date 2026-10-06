@@ -14,19 +14,7 @@
 
             <form method="POST" action="{{ url_for('complete_profile') }}">
                 
-                <!-- Cargo -->
-                <div class="mb-3">
-                    <label class="form-label small fw-bold">Cargo</label>
-                    <select name="job_role" class="form-select" required>
-                        <option value="" selected disabled>Selecione seu cargo</option>
-                        <option value="analista">Analista</option>
-                        <option value="coordenador">Coordenador</option>
-                        <option value="gerente">Gerente</option>
-                        <option value="diretor">Diretor</option>
-                        <option value="proprietario">Proprietário / Sócio</option>
-                        <option value="outro">Outro</option>
-                    </select>
-                </div>
+                {% include "partials/onboarding_entrevista_campos.html" %}
 
                 <!-- Objetivo de Uso -->
                 <div class="mb-3">

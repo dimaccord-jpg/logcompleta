@@ -19,6 +19,13 @@ from app.run_julia_chat import chat_julia_reply
 from tests.cleiton_doc_fixtures import make_txt, patch_cleiton_doc_cfg, patch_cleiton_doc_store
 
 
+def _sem_pedido_whatsapp(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.canal_entrega_web_whatsapp_service.decidir_enviar_para_meu_whatsapp",
+        lambda *_args, **_kwargs: False,
+    )
+
+
 def _load_web_module():
     os.environ.setdefault("APP_ENV", "dev")
     os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
@@ -204,6 +211,7 @@ def test_open_questions_remain_possible(monkeypatch):
 
 
 def test_api_chat_julia_without_documents_unchanged(app, ctx, monkeypatch, tmp_path):
+    _sem_pedido_whatsapp(monkeypatch)
     with app.app_context():
         patch_cleiton_doc_store(tmp_path, monkeypatch)
         patch_cleiton_doc_cfg(monkeypatch)
@@ -232,6 +240,7 @@ def test_api_chat_julia_without_documents_unchanged(app, ctx, monkeypatch, tmp_p
 
 
 def test_api_chat_julia_with_session_documents(app, ctx, monkeypatch, tmp_path):
+    _sem_pedido_whatsapp(monkeypatch)
     with app.app_context():
         patch_cleiton_doc_store(tmp_path, monkeypatch)
         patch_cleiton_doc_cfg(monkeypatch)
@@ -307,6 +316,7 @@ def test_pdf_placeholder_does_not_pretend_content(session_app, monkeypatch):
 
 
 def test_api_chat_julia_degrades_when_document_context_fails(app, ctx, monkeypatch, tmp_path):
+    _sem_pedido_whatsapp(monkeypatch)
     with app.app_context():
         patch_cleiton_doc_store(tmp_path, monkeypatch)
         patch_cleiton_doc_cfg(monkeypatch)
@@ -341,6 +351,7 @@ def test_api_chat_julia_degrades_when_document_context_fails(app, ctx, monkeypat
 
 def test_api_chat_julia_documental_flow_type_via_governed_generate(app, ctx, monkeypatch, tmp_path):
     """Teste mais forte: /api/chat_julia com documento ativo passa flow_type documental ao Cleiton."""
+    _sem_pedido_whatsapp(monkeypatch)
     import io
 
     import app.run_julia_chat as julia_chat

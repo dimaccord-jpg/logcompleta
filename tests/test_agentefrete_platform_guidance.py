@@ -36,6 +36,10 @@ def _load_web_module():
 
 def _auth_client(monkeypatch, authz=None):
     web = _load_web_module()
+    monkeypatch.setattr(
+        "app.services.canal_entrega_web_whatsapp_service.decidir_enviar_para_meu_whatsapp",
+        lambda *_args, **_kwargs: False,
+    )
     monkeypatch.setattr(web, "current_user", SimpleNamespace(is_authenticated=True))
     monkeypatch.setattr(web, "get_julia_chat_max_history", lambda: 10)
     monkeypatch.setattr(
@@ -47,6 +51,10 @@ def _auth_client(monkeypatch, authz=None):
 
 
 def _mock_julia_reply(monkeypatch, payload=None, calls=None):
+    monkeypatch.setattr(
+        "app.services.canal_entrega_web_whatsapp_service.decidir_enviar_para_meu_whatsapp",
+        lambda *_args, **_kwargs: False,
+    )
     response = dict(payload or ORIGINAL_REPLY)
 
     def _fake(*_a, **_k):

@@ -199,6 +199,25 @@
                 </div>
             </div>
         </div>
+
+        <a href="{{ url_for('user.plugins') }}" class="text-decoration-none text-reset d-block h-100 profile-payment-link">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex align-items-center mb-3">
+                        <div class="profile-card-icon bg-info bg-opacity-10 text-info rounded-circle d-inline-flex align-items-center justify-content-center me-3">
+                            <i class="bi bi-plug-fill"></i>
+                        </div>
+                        <div>
+                            <h5 class="card-title mb-0">Plugins</h5>
+                            <small class="profile-card-kicker">Integrações da sua conta</small>
+                        </div>
+                    </div>
+                    <p class="card-text profile-card-copy mb-0">
+                        Veja as integrações disponíveis e administre somente a sua conexão.
+                    </p>
+                </div>
+            </div>
+        </a>
     </div>
 
     {% if eh_contratante_multiuser|default(false) %}
