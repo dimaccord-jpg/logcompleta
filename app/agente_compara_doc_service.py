@@ -3512,6 +3512,15 @@ def _parse_range_from_label(label) -> tuple[float | None, float | None] | None:
         or " ate " in f" {normalized} "
     ):
         return (numbers[0], numbers[1])
+    # "0-10 kg" perde o hífen em _normalize_coverage_header ("0 10 kg").
+    # Reconhece hífen, en dash e em dash só com dois limites e unidade de peso.
+    if (
+        has_weight_unit
+        and len(numbers) == 2
+        and numbers[0] <= numbers[1]
+        and re.search(r"\d\s*[-–—]\s*\d", str(label))
+    ):
+        return (numbers[0], numbers[1])
     if len(numbers) == 1 and has_weight_unit:
         return (0.0, numbers[0])
     return None

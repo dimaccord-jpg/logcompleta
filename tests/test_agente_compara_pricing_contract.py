@@ -12,7 +12,9 @@ from app.agente_compara_calculation_service import (
 from app.agente_compara_doc_service import (
     AUDIT_STATUS_UNSUPPORTED_PRICING,
     _build_freight_pricing_index_legacy,
+    _compile_pricing_contract,
     _find_pricing_rule_match,
+    _parse_range_from_label,
     _serialize_pricing_rule_for_fingerprint,
     build_freight_pricing_index,
     build_pricing_contract,
@@ -23,6 +25,7 @@ from app.agente_compara_temp_table_validation_service import (
     CODE_CONFLICTING_LOOKUP_KEY,
     CODE_INVALID_TARIFF,
     CODE_MISSING_LOOKUP_KEY,
+    CODE_NO_EXECUTABLE_PRICING_RULE,
     CODE_READING_ALERT,
     CODE_UNRESOLVED_PRICING_TYPE,
     contract_preserves_origin_distinction,
@@ -752,6 +755,101 @@ def test_explicit_route_origin_fields_qualify_lookup_keys():
         _mg_cap_coverage(),
     )
     assert calculated["results"][0]["calculated_freight"] == 10.0
+
+
+def test_parse_range_from_label_accepts_hyphenated_weight_headers():
+    assert _parse_range_from_label("0-10 kg") == (0.0, 10.0)
+    assert _parse_range_from_label("11-30 kg") == (11.0, 30.0)
+    assert _parse_range_from_label("31-50 kg") == (31.0, 50.0)
+    assert _parse_range_from_label("501-1000 kg") == (501.0, 1000.0)
+    assert _parse_range_from_label("51–100 kg") == (51.0, 100.0)
+    assert _parse_range_from_label("101—200 kg") == (101.0, 200.0)
+    assert _parse_range_from_label("0 a 10 kg") == (0.0, 10.0)
+    assert _parse_range_from_label("Até 10 kg") == (0.0, 10.0)
+
+
+def test_parse_range_from_label_ignores_hyphen_without_weight_context():
+    assert _parse_range_from_label("0-10") is None
+    assert _parse_range_from_label("11-30") is None
+    assert _parse_range_from_label("11-30 dias") is None
+    assert _parse_range_from_label("0–10") is None
+    assert _parse_range_from_label("80000-82999") is None
+    assert _parse_range_from_label("Rota 1-2") is None
+    assert _parse_range_from_label("30-10 kg") is None
+
+
+def _comp_03a_hyphen_weight_table() -> dict:
+    columns = [
+        "Destino",
+        "Prazo",
+        "0-10 kg",
+        "11-30 kg",
+        "31-50 kg",
+        "51-100 kg",
+        "101-200 kg",
+        "201-500 kg",
+        "501-1000 kg",
+    ]
+    return {
+        "freight_tables": [
+            {
+                "table_title": "COMP-03A",
+                "columns": columns,
+                "rows": [
+                    {
+                        "Destino": "Curitiba/PR",
+                        "Prazo": "5",
+                        "0-10 kg": "32",
+                        "11-30 kg": "44",
+                        "31-50 kg": "58",
+                        "51-100 kg": "82",
+                        "101-200 kg": "125",
+                        "201-500 kg": "245",
+                        "501-1000 kg": "410",
+                    }
+                ],
+            }
+        ],
+        "freight_routes": [],
+    }
+
+
+def test_comp_03a_hyphen_matrix_compiles_executable_fixed_range():
+    table = _comp_03a_hyphen_weight_table()
+    contract, _findings = _compile_pricing_contract(table)
+    rules = [rule for rule in contract["rules"] if rule.get("pricing_type") == "fixed_range"]
+    assert len(rules) == 1
+    rule = rules[0]
+    assert rule["region"] == "Curitiba/PR"
+    assert [
+        (bracket["min_kg"], bracket["max_kg"], bracket["value"]) for bracket in rule["brackets"]
+    ] == [
+        (0.0, 10.0, 32.0),
+        (10.0, 30.0, 44.0),
+        (30.0, 50.0, 58.0),
+        (50.0, 100.0, 82.0),
+        (100.0, 200.0, 125.0),
+        (200.0, 500.0, 245.0),
+        (500.0, 1000.0, 410.0),
+    ]
+    validation = validate_pricing_contract_for_confirmation(table, contract)
+    assert CODE_NO_EXECUTABLE_PRICING_RULE not in {
+        issue["code"] for issue in validation["blocking_issues"]
+    }
+    assert validation["can_confirm"] is True, validation["blocking_issues"]
+    expected = {
+        10: 32.0,
+        10.5: 44.0,
+        11: 44.0,
+        30: 44.0,
+        30.5: 58.0,
+        750: 410.0,
+    }
+    for weight, amount in expected.items():
+        calculated = calculate_weight_freight(weight, rule)
+        assert calculated is not None
+        assert calculated["calculation_basis"] == "fixed_range"
+        assert calculated["expected_freight"] == amount
 
 
 def test_active_route_without_destination_blocks_confirmation():
