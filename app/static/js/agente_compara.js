@@ -11478,6 +11478,16 @@ function renderDocumentItem(doc) {
     tr.appendChild(td);
   }
 
+  function resolveLiveAccessorialFee(item) {
+    var fees = currentTempTable && Array.isArray(currentTempTable.accessorial_fees)
+      ? currentTempTable.accessorial_fees
+      : null;
+    if (!fees || !item || typeof item !== 'object') return null;
+    var index = fees.indexOf(item);
+    if (index < 0) return null;
+    return { fees: fees, index: index, fee: fees[index] };
+  }
+
   function renderEditableAccessorialFeesSection(container, list) {
     hydrateAccessorialFeesForEditing(currentTempTable.accessorial_fees || []);
     var section = document.createElement('div');
@@ -11516,42 +11526,49 @@ function renderDocumentItem(doc) {
     table.appendChild(thead);
 
     var tbody = document.createElement('tbody');
-    (currentTempTable.accessorial_fees || []).forEach(function (item, feeIndex) {
+    (currentTempTable.accessorial_fees || []).forEach(function (item) {
       if (!item || typeof item !== 'object' || isPrimaryFreightAccessorialFee(item)) return;
+      var rendered = resolveLiveAccessorialFee(item);
+      if (!rendered) return;
+      var originalIndex = rendered.index;
       var tr = document.createElement('tr');
-      tr.setAttribute('data-accessorial-fee-index', String(feeIndex));
-      var validationError = getAccessorialFeeValidationError(feeIndex);
-      if (accessorialFeeHasValidationError(feeIndex)) tr.className = 'accessorial-row--invalid';
+      tr.setAttribute('data-accessorial-fee-index', String(originalIndex));
+      var validationError = getAccessorialFeeValidationError(originalIndex);
+      if (accessorialFeeHasValidationError(originalIndex)) tr.className = 'accessorial-row--invalid';
       else if (accessorialFeeIsExtractionHypothesis(item)) tr.className = 'accessorial-row--pending';
       appendAccessorialFieldCell(tr, item.name, function (newValue) {
-        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].name = newValue;
+        var live = resolveLiveAccessorialFee(item);
+        if (live) live.fee.name = newValue;
       }, 'Ex.: Pedágio geral');
       appendAccessorialFieldCell(tr, item.value, function (newValue) {
-        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].value = newValue;
+        var live = resolveLiveAccessorialFee(item);
+        if (live) live.fee.value = newValue;
         refreshTempTableValidationErrorsAfterAccessorialEdit();
       }, 'Ex.: conforme tabela', {
         field: 'value',
-        validationError: getAccessorialFeeValidationError(feeIndex, 'value')
+        validationError: getAccessorialFeeValidationError(originalIndex, 'value')
       });
       appendAccessorialFieldCell(tr, item.unit, function (newValue) {
-        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].unit = newValue;
+        var live = resolveLiveAccessorialFee(item);
+        if (live) live.fee.unit = newValue;
         refreshTempTableValidationErrorsAfterAccessorialEdit();
       }, 'R$, %, texto', {
         field: 'unit',
-        validationError: getAccessorialFeeValidationError(feeIndex, 'unit')
+        validationError: getAccessorialFeeValidationError(originalIndex, 'unit')
       });
       if (item.edit_mode === 'minimum_link') {
         appendMinimumLinkCell(
           tr,
           item,
           currentTempTable.accessorial_fees || [],
-          feeIndex,
-          getAccessorialFeeValidationError(feeIndex, 'calculation_base_id')
+          originalIndex,
+          getAccessorialFeeValidationError(originalIndex, 'calculation_base_id')
         );
       } else {
         appendCalculationBaseSelectCell(tr, item, function (baseId) {
-          var fee = currentTempTable.accessorial_fees[feeIndex];
-          if (!fee) return;
+          var live = resolveLiveAccessorialFee(item);
+          if (!live) return;
+          var fee = live.fee;
           var base = getCalculationBaseById(baseId);
           if (base) {
             applyCalculationBaseToAccessorialFee(fee, base);
@@ -11566,21 +11583,24 @@ function renderDocumentItem(doc) {
           }
           refreshTempTableValidationErrorsAfterAccessorialEdit();
           renderTempTableModalContent(currentTempTable);
-        }, getAccessorialFeeValidationError(feeIndex, 'calculation_base_id'));
+        }, getAccessorialFeeValidationError(originalIndex, 'calculation_base_id'));
       }
       appendAccessorialFieldCell(tr, item.notes, function (newValue) {
-        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].notes = newValue;
+        var live = resolveLiveAccessorialFee(item);
+        if (live) live.fee.notes = newValue;
         refreshTempTableValidationErrorsAfterAccessorialEdit();
       }, 'Observações', {
         field: 'notes',
-        validationError: getAccessorialFeeValidationError(feeIndex, 'notes')
+        validationError: getAccessorialFeeValidationError(originalIndex, 'notes')
       });
       appendAccessorialFieldCell(tr, item.scope, function (newValue) {
-        if (currentTempTable.accessorial_fees[feeIndex]) currentTempTable.accessorial_fees[feeIndex].scope = newValue;
+        var live = resolveLiveAccessorialFee(item);
+        if (live) live.fee.scope = newValue;
       }, 'general');
       appendRowDeleteCell(tr, function () {
-        if (!Array.isArray(currentTempTable.accessorial_fees)) return;
-        currentTempTable.accessorial_fees.splice(feeIndex, 1);
+        var live = resolveLiveAccessorialFee(item);
+        if (!live) return;
+        live.fees.splice(live.index, 1);
         refreshTempTableValidationErrorsAfterAccessorialEdit();
         renderTempTableModalContent(currentTempTable);
       });
