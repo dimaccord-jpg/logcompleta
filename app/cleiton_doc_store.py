@@ -1,8 +1,9 @@
 """
 Store temporário em disco para metadados documentais do Cleiton.
 
-Persiste apenas JSON técnico fora do banco. Sem conteúdo bruto de documento
-e sem taxonomia de negócio.
+Persiste JSON técnico fora do banco. O arquivo original do AgenteCompara,
+quando houver, fica em ``originals/<doc_id>.bin`` e segue o mesmo ciclo do
+documento (``expires_at``). Sem taxonomia de negócio.
 """
 from __future__ import annotations
 
@@ -16,7 +17,11 @@ from uuid import uuid4
 from app.cleiton_doc_contracts import (
     CLEANUP_META_FILENAME,
     ERROR_DOC_ID_INVALID,
+    ERROR_DOC_NOT_FOUND,
+    ERROR_DOC_REMOVE_FAILED,
     ERROR_STORE_PATH,
+    ERROR_STORE_READ,
+    ERROR_STORE_WRITE,
     FIELD_CREATED_AT,
     FIELD_DOC_ID,
     FIELD_EXPIRES_AT,
@@ -103,9 +108,38 @@ def _build_safe_path(directory: str, filename: str) -> Path:
     return candidate
 
 
+ORIGINALS_DIR_NAME = "originals"
+FIELD_ORIGINAL_REF = "original_ref"
+
+
+class DocumentOriginalUnavailable(Exception):
+    """Leitura interna recusada. A mensagem carrega só o código, sem path nem bytes."""
+
+    def __init__(self, error_code: str):
+        self.error_code = error_code
+        super().__init__(error_code)
+
+
 def _doc_json_path(doc_id: str) -> Path:
     safe_id = _sanitize_doc_id(doc_id)
     return _build_safe_path(get_cleiton_doc_tmp_dir(), f"{safe_id}.json")
+
+
+def _originals_dir(*, create: bool = False) -> Path:
+    path = Path(get_cleiton_doc_tmp_dir()) / ORIGINALS_DIR_NAME
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _original_relative_ref(doc_id: str) -> str:
+    safe_id = _sanitize_doc_id(doc_id)
+    return f"{ORIGINALS_DIR_NAME}/{safe_id}.bin"
+
+
+def _original_bin_path(doc_id: str, *, create_dir: bool = False) -> Path:
+    safe_id = _sanitize_doc_id(doc_id)
+    return _build_safe_path(str(_originals_dir(create=create_dir)), f"{safe_id}.bin")
 
 
 def _safe_remove_file(path: Path, *, retries: int = 2, retry_delay_s: float = 0.02) -> bool:
@@ -121,6 +155,36 @@ def _safe_remove_file(path: Path, *, retries: int = 2, retry_delay_s: float = 0.
         except Exception:
             return False
     return False
+
+
+def _write_bytes_atomic(
+    path: Path,
+    payload: bytes,
+    *,
+    retries: int = 3,
+    retry_delay_s: float = 0.03,
+) -> None:
+    last_error: Exception | None = None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for attempt in range(max(0, int(retries)) + 1):
+        temp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+        try:
+            with open(temp_path, "wb") as f:
+                f.write(payload)
+            os.replace(str(temp_path), str(path))
+            return
+        except PermissionError as exc:
+            last_error = exc
+            _safe_remove_file(temp_path)
+            if attempt >= retries:
+                break
+            time.sleep(max(0.0, float(retry_delay_s)))
+        except Exception as exc:
+            last_error = exc
+            _safe_remove_file(temp_path)
+            break
+    if last_error is not None:
+        raise last_error
 
 
 def _write_json_atomic(
@@ -175,6 +239,84 @@ def save_document_record(record: dict) -> None:
     record[FIELD_DOC_ID] = doc_id
     path = _doc_json_path(doc_id)
     _write_json_atomic(path, record)
+
+
+def save_document_original(doc_id: str, file_bytes: bytes) -> str:
+    """Grava ``originals/<doc_id>.bin`` e devolve só a referência relativa.
+
+    O TTL é o ``expires_at`` do documento. Esta função não cria nem renova prazo.
+    O nome físico sai somente do ``doc_id`` validado.
+    """
+    if isinstance(file_bytes, bytearray):
+        payload = bytes(file_bytes)
+    elif isinstance(file_bytes, bytes):
+        payload = file_bytes
+    else:
+        raise ValueError(ERROR_STORE_WRITE)
+    ref = _original_relative_ref(doc_id)
+    path = _original_bin_path(doc_id, create_dir=True)
+    try:
+        _write_bytes_atomic(path, payload)
+    except ValueError:
+        _safe_remove_file(path)
+        raise
+    except Exception:
+        _safe_remove_file(path)
+        raise ValueError(ERROR_STORE_WRITE) from None
+    return ref
+
+
+def discard_document_original(doc_id: str) -> bool:
+    """Remove o binário do original. Ausência do arquivo é sucesso."""
+    try:
+        path = _original_bin_path(doc_id)
+    except ValueError:
+        return False
+    return _safe_remove_file(path)
+
+
+def load_document_original_bytes(
+    doc_id: str,
+    *,
+    ttl_hours: int,
+    expected_source_agent: str | None = None,
+    expected_session_key: str | None = None,
+) -> bytes:
+    """Recupera o original para uso interno.
+
+    Exige documento vigente (TTL do próprio registro) e a referência relativa
+    canônica. Reutiliza o escopo operacional do store e, se informado, o
+    ownership de domínio já existente. Não devolve path.
+    """
+    try:
+        expected_ref = _original_relative_ref(doc_id)
+    except ValueError as exc:
+        code = str(exc.args[0]) if exc.args else ERROR_DOC_ID_INVALID
+        raise DocumentOriginalUnavailable(code) from None
+
+    record = load_authorized_document_record(doc_id, ttl_hours=ttl_hours)
+    if record is None:
+        raise DocumentOriginalUnavailable(ERROR_DOC_NOT_FOUND)
+    if expected_source_agent is not None or expected_session_key is not None:
+        if not document_record_matches_domain_scope(
+            record,
+            expected_source_agent=expected_source_agent or "",
+            expected_session_key=expected_session_key or "",
+        ):
+            raise DocumentOriginalUnavailable(ERROR_DOC_NOT_FOUND)
+    if record.get(FIELD_ORIGINAL_REF) != expected_ref:
+        raise DocumentOriginalUnavailable(ERROR_STORE_READ)
+    try:
+        path = _original_bin_path(doc_id)
+    except ValueError as exc:
+        code = str(exc.args[0]) if exc.args else ERROR_DOC_ID_INVALID
+        raise DocumentOriginalUnavailable(code) from None
+    if not path.is_file():
+        raise DocumentOriginalUnavailable(ERROR_STORE_READ)
+    try:
+        return path.read_bytes()
+    except Exception:
+        raise DocumentOriginalUnavailable(ERROR_STORE_READ) from None
 
 
 def document_record_matches_domain_scope(
@@ -261,6 +403,17 @@ def remove_document_record(doc_id: str) -> dict:
             cleanup_gemini_file_for_record(record)
         except Exception:
             pass
+    try:
+        original_removed = discard_document_original(doc_id)
+    except Exception:
+        original_removed = False
+    if not original_removed:
+        return {
+            "ok": False,
+            "doc_id": doc_id,
+            "removed": False,
+            "error_code": ERROR_DOC_REMOVE_FAILED,
+        }
     removed = _safe_remove_file(path)
     return {
         "ok": True,

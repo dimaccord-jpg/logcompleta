@@ -950,3 +950,215 @@ def test_upload_commit_failure_rolls_back_and_omits_pixel_authorization(web_clie
     with app.app_context():
         db.session.remove()
         assert FunnelEvent.query.count() == before
+
+
+def _silence_post_upload_extraction(monkeypatch):
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+
+
+def _stored_document(tmp_path, doc_id: str) -> dict:
+    import json
+
+    return json.loads((tmp_path / f"{doc_id}.json").read_text(encoding="utf-8"))
+
+
+def test_upload_saves_original_bound_only_to_doc_id(web_client, tmp_path, monkeypatch, caplog):
+    import json
+    import logging
+
+    from app.cleiton_doc_store import load_document_original_bytes
+
+    _silence_post_upload_extraction(monkeypatch)
+    user_filename = "planilha_secreta_usuario.csv"
+    content = make_csv([["origem", "valor"], ["SP", "10"]])
+
+    with caplog.at_level(logging.DEBUG):
+        resp = _upload(web_client, user_filename, content, "text/csv", slot="1")
+        status = web_client.get("/api/agente-compara/documents/status?slot=1")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    doc_id = body["document"]["doc_id"]
+    ref = f"originals/{doc_id}.bin"
+    bin_path = tmp_path / "originals" / f"{doc_id}.bin"
+
+    assert bin_path.is_file()
+    assert bin_path.name == f"{doc_id}.bin"
+    assert load_document_original_bytes(doc_id, ttl_hours=48) == content
+    assert list((tmp_path / "originals").glob("*.bin")) == [bin_path]
+
+    stored = _stored_document(tmp_path, doc_id)
+    assert stored["original_ref"] == ref
+    assert user_filename not in stored["original_ref"]
+    assert "planilha_secreta_usuario" not in stored["original_ref"]
+    assert str(tmp_path) not in stored["original_ref"]
+    assert ":\\" not in stored["original_ref"]
+    assert stored["context_ref"] == f"text:{doc_id}"
+    assert "originals/" not in stored["context_ref"]
+    assert "original_ref" not in (stored.get("prepared_context") or "")
+    assert "originals/" not in (stored.get("prepared_context") or "")
+    assert str(tmp_path) not in (stored.get("prepared_context") or "")
+
+    public_blob = json.dumps({"upload": body, "status": status.get_json()}, default=str)
+    assert "original_ref" not in public_blob
+    assert "originals/" not in public_blob
+    assert str(tmp_path) not in public_blob
+    assert ref not in caplog.text
+    assert str(bin_path) not in caplog.text
+    assert content not in caplog.text.encode("utf-8", "replace")
+
+    with web_client.session_transaction() as sess:
+        session_blob = json.dumps(dict(sess), default=str)
+    assert "original_ref" not in session_blob
+    assert "originals/" not in session_blob
+    assert str(tmp_path) not in session_blob
+
+
+def test_original_ref_does_not_reach_chat_context(web_client, tmp_path, monkeypatch, caplog):
+    import json
+    import logging
+
+    from app.agente_compara_chat_context_service import build_comparison_chat_context
+    from app.agente_compara_doc_context import build_agente_compara_document_context_for_chat
+    from app.agente_compara_doc_service import get_cleiton_doc_config
+    from app.cleiton_doc_store import load_document_record
+
+    _silence_post_upload_extraction(monkeypatch)
+    monkeypatch.setattr(
+        "app.agente_compara_doc_context.get_agente_compara_config",
+        lambda: _default_ac_cfg(),
+    )
+    monkeypatch.setattr(
+        "app.agente_compara_doc_context.get_cleiton_doc_config",
+        get_cleiton_doc_config,
+    )
+    content = make_csv([["origem", "valor"], ["RJ", "20"]])
+    resp = _upload(web_client, "tabela.csv", content, "text/csv", slot="1")
+    assert resp.status_code == 200
+    doc_id = resp.get_json()["document"]["doc_id"]
+    ref = f"originals/{doc_id}.bin"
+    before = load_document_record(doc_id, ttl_hours=48)
+    expires_at = before["expires_at"]
+
+    with web_client.session_transaction() as sess:
+        snapshot = dict(sess)
+
+    with caplog.at_level(logging.DEBUG):
+        with web_client.application.app_context():
+            document_context = build_agente_compara_document_context_for_chat(snapshot)
+            comparison_context = build_comparison_chat_context(
+                comparison_id=snapshot.get("agente_compara_comparison_state", {}).get("comparison_id")
+                if isinstance(snapshot.get("agente_compara_comparison_state"), dict)
+                else None,
+                question="Resuma a comparação.",
+                session_obj=snapshot,
+            )
+
+    rendered = json.dumps(
+        {"document": document_context, "comparison": comparison_context},
+        default=str,
+        ensure_ascii=False,
+    )
+    assert ref not in rendered
+    assert "original_ref" not in rendered
+    assert "originals/" not in rendered
+    assert str(tmp_path) not in rendered
+    assert ".bin" not in rendered
+    assert ref not in caplog.text
+    assert str(tmp_path / "originals" / f"{doc_id}.bin") not in caplog.text
+
+    after = load_document_record(doc_id, ttl_hours=48)
+    assert after["expires_at"] == expires_at
+    assert (tmp_path / "originals" / f"{doc_id}.bin").read_bytes() == content
+
+
+def test_partial_register_failure_does_not_leave_orphan_original(web_client, tmp_path, monkeypatch):
+    _silence_post_upload_extraction(monkeypatch)
+    seen = {}
+
+    def _boom(record):
+        doc_id = record["doc_id"]
+        bin_path = tmp_path / "originals" / f"{doc_id}.bin"
+        seen["doc_id"] = doc_id
+        seen["bin_existed"] = bin_path.is_file()
+        seen["ref"] = record.get("original_ref")
+        raise RuntimeError("falha ao concluir registro")
+
+    monkeypatch.setattr("app.agente_compara_doc_service.save_document_record", _boom)
+    resp = _upload(web_client, "planilha_secreta_usuario.csv", make_csv([["a"], ["1"]]), slot="1")
+
+    assert resp.status_code == 500
+    assert seen["bin_existed"] is True
+    assert seen["ref"] == f"originals/{seen['doc_id']}.bin"
+    assert "planilha_secreta_usuario" not in seen["ref"]
+    assert not (tmp_path / f"{seen['doc_id']}.json").exists()
+    assert not (tmp_path / "originals" / f"{seen['doc_id']}.bin").exists()
+    leftovers = list(tmp_path.rglob("*.bin")) + list(tmp_path.rglob("*.tmp"))
+    assert leftovers == []
+
+
+def test_delete_removes_original_with_document(web_client, tmp_path, monkeypatch):
+    _silence_post_upload_extraction(monkeypatch)
+    resp = _upload(web_client, "dados.csv", make_csv([["a"], ["1"]]), slot="1")
+    assert resp.status_code == 200
+    doc_id = resp.get_json()["document"]["doc_id"]
+    assert (tmp_path / "originals" / f"{doc_id}.bin").is_file()
+
+    deleted = web_client.delete(f"/api/agente-compara/documents/{doc_id}?slot=1")
+    assert deleted.status_code == 200
+    assert deleted.get_json()["ok"] is True
+    assert "originals/" not in deleted.get_data(as_text=True)
+    assert not (tmp_path / f"{doc_id}.json").exists()
+    assert not (tmp_path / "originals" / f"{doc_id}.bin").exists()
+
+
+def test_replacement_keeps_original_until_document_record_is_removed(web_client, tmp_path, monkeypatch):
+    from app.agente_compara_doc_service import reset_comparison_for_session
+    from app.cleiton_doc_store import load_document_record, remove_document_record
+
+    _silence_post_upload_extraction(monkeypatch)
+    first_bytes = make_csv([["a"], ["1"]])
+    second_bytes = make_csv([["a"], ["2"]])
+    first = _upload(web_client, "primeira.csv", first_bytes, slot="1")
+    assert first.status_code == 200
+    first_id = first.get_json()["document"]["doc_id"]
+
+    second = _upload(web_client, "segunda.csv", second_bytes, slot="1")
+    assert second.status_code == 200
+    second_id = second.get_json()["document"]["doc_id"]
+
+    replaced = load_document_record(first_id, ttl_hours=48)
+    assert replaced["status"] == "replaced"
+    assert (tmp_path / "originals" / f"{first_id}.bin").read_bytes() == first_bytes
+    assert (tmp_path / "originals" / f"{second_id}.bin").read_bytes() == second_bytes
+    assert sorted(path.name for path in (tmp_path / "originals").glob("*.bin")) == sorted(
+        [f"{first_id}.bin", f"{second_id}.bin"]
+    )
+    for path in tmp_path.rglob("*.json"):
+        if path.name in {f"{first_id}.json", f"{second_id}.json"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "original_ref" not in text
+        assert "originals/" not in text
+
+    with web_client.session_transaction() as sess:
+        snapshot = dict(sess)
+    with web_client.application.test_request_context("/"):
+        from flask import session
+
+        session.update(snapshot)
+        reset_comparison_for_session()
+
+    assert not (tmp_path / f"{second_id}.json").exists()
+    assert not (tmp_path / "originals" / f"{second_id}.bin").exists()
+    assert (tmp_path / f"{first_id}.json").exists()
+    assert (tmp_path / "originals" / f"{first_id}.bin").read_bytes() == first_bytes
+
+    result = remove_document_record(first_id)
+    assert result["ok"] is True
+    assert result["removed"] is True
+    assert not (tmp_path / f"{first_id}.json").exists()
+    assert not (tmp_path / "originals" / f"{first_id}.bin").exists()

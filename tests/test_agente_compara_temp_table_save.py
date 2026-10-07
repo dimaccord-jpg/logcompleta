@@ -1120,3 +1120,48 @@ def test_route_matrix_agent_compare_matches_cleide_normalization(web_client):
 def test_route_matrix_literal_uf_column_extracts_tax_destinations(web_client):
     saved = _apply_payload(web_client, _sample_route_matrix_payload_with_positional_rows())
     assert extract_tax_destination_ufs_from_temp_table(saved) == ["DF", "ES"]
+
+
+def test_confirmation_persists_pricing_contract(web_client):
+    from app.agente_compara_doc_service import pricing_source_fingerprint
+
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload(accessorial_fees=[]))
+    assert "pricing_contract" not in saved
+    resp = _post_temp_table_save(web_client, _save_payload_for_record(saved))
+    assert resp.status_code == 200
+    record = load_temp_table_record(saved["temp_table_id"], ttl_hours=24)
+    contract = record.get("pricing_contract")
+    assert contract["schema_version"] == 1
+    assert contract["source_fingerprint"] == pricing_source_fingerprint(record)
+    assert contract["rules"]
+    assert {rule["pricing_type"] for rule in contract["rules"]} == {"fixed_range"}
+    assert any(rule.get("route_toll") for rule in contract["rules"])
+
+
+def test_confirmation_blocks_invalid_pricing_without_persisting_contract(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload(accessorial_fees=[]))
+    payload = _save_payload_for_record(saved)
+    payload["edit_target"]["freight_tables"] = [
+        {
+            "table_title": "Tarifa inválida",
+            "columns": ["Região", "Até 30 kg"],
+            "rows": [{"Região": "Sul", "Até 30 kg": "-5,00"}],
+        }
+    ]
+    resp = _post_temp_table_save(web_client, payload)
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["error"] == "TEMP_TABLE_HAS_BLOCKING_ISSUES"
+    assert body["validation"]["can_confirm"] is False
+    assert body["message"]
+    record = load_temp_table_record(saved["temp_table_id"], ttl_hours=24)
+    assert "pricing_contract" not in record
+
+
+def test_draft_save_does_not_generate_pricing_contract(web_client):
+    saved = _apply_payload(web_client, _sample_hengst_freight_tables_payload(accessorial_fees=[]))
+    payload = _save_payload_for_record(saved, review_action="save_draft")
+    resp = _post_temp_table_save(web_client, payload)
+    assert resp.status_code == 200
+    record = load_temp_table_record(saved["temp_table_id"], ttl_hours=24)
+    assert "pricing_contract" not in record

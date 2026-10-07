@@ -390,6 +390,37 @@ def test_new_upload_after_reset_creates_new_comparison_id(web_client, monkeypatc
         assert state.get("primary_temp_table_id") is None
 
 
+def test_reset_removes_uploaded_original_with_document(web_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.agente_compara_api_routes.trigger_temp_table_extraction_for_session",
+        lambda **_k: None,
+    )
+    content = make_csv([["origem", "valor"], ["SP", "15"]])
+    uploaded = web_client.post(
+        "/api/agente-compara/documents/upload",
+        data={
+            "file": (io.BytesIO(content), "tabela.csv", "text/csv"),
+            "carrier_name": "Intercargo",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    body = uploaded.get_json()
+    doc_id = body["document"]["doc_id"]
+    comparison_id = body["comparison"]["comparison_id"]
+    assert (tmp_path / "originals" / f"{doc_id}.bin").read_bytes() == content
+
+    reset = web_client.post(
+        "/api/agente-compara/comparison/reset",
+        json={"comparison_id": comparison_id},
+    )
+    assert reset.status_code == 200
+    assert reset.get_json()["ok"] is True
+    assert "originals/" not in reset.get_data(as_text=True)
+    assert not (tmp_path / f"{doc_id}.json").exists()
+    assert not (tmp_path / "originals" / f"{doc_id}.bin").exists()
+
+
 def test_reset_rejects_foreign_comparison_id(web_client):
     boot = _bootstrap_ready_comparison(web_client, table_count=2)
     resp = web_client.post(

@@ -117,6 +117,32 @@ _DEFAULT_LIMITS = {
     "max_ranked_items": 8,
 }
 
+# Diagnóstico operacional enviado ao chat. Não replica o objeto interno.
+_DIAGNOSTIC_STAGE_MAX = 80
+_DIAGNOSTIC_REASON_MAX = 120
+_DIAGNOSTIC_MESSAGE_MAX = 240
+_DIAGNOSTIC_CONTEXT_VALUE_MAX = 80
+_DIAGNOSTIC_KEY_MAX = 80
+_DIAGNOSTIC_KEYS_MAX = 8
+_DIAGNOSTIC_CONTEXT_KEYS = (
+    "destination_uf",
+    "destination_city",
+    "coverage_classification",
+    "freight_region",
+)
+_DIAGNOSTIC_UNSAFE_RE = re.compile(
+    r"(traceback|stack\s*trace|file\s+\"|line\s+\d+|object at 0x|"
+    r"(?<![\w])[a-z]:[/\\]|\\\\|/tmp\b|\.json\b|\btt_|result_storage_key|request_fingerprint|"
+    r"(?:^|[\s\"'=(])/(?:[\w.+-]+/)+[\w.+-]+|"
+    r"\bstorage_key\b|\btemp_table_id\b|"
+    r"payload\s+bruto|payload\s+serializado)",
+    re.IGNORECASE,
+)
+_DIAGNOSTIC_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+
 _UF_TOKEN_RE = re.compile(r"\b([A-Za-z]{2})\b")
 _DOC_TOKEN_RE = re.compile(r"\b(\d{4,}|\d+[A-Za-z0-9\-_/]{2,})\b")
 
@@ -577,6 +603,113 @@ def _extract_document_hint(question: str, ui_context: dict) -> str | None:
     return None
 
 
+def _safe_diagnostic_text(value: Any, *, max_chars: int) -> str | None:
+    """Texto operacional curto. Descarta objeto, path, stack e id interno."""
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    if not text or text[0] in "{[<":
+        return None
+    if _DIAGNOSTIC_UNSAFE_RE.search(text):
+        return None
+    text = _DIAGNOSTIC_UUID_RE.sub("", text)
+    text = " ".join(text.split())
+    if not text:
+        return None
+    if len(text) > max_chars:
+        return f"{text[: max_chars - 1].rstrip()}…"
+    return text
+
+
+def _diagnostic_stage(diagnostic: dict) -> str | None:
+    return _safe_diagnostic_text(
+        diagnostic.get("failure_stage") or diagnostic.get("stage") or diagnostic.get("component"),
+        max_chars=_DIAGNOSTIC_STAGE_MAX,
+    )
+
+
+def _diagnostic_reason(diagnostic: dict, *, stage: str | None) -> str | None:
+    for candidate in (
+        diagnostic.get("diagnostic_group_code"),
+        diagnostic.get("cause"),
+        diagnostic.get("code"),
+        diagnostic.get("reason"),
+    ):
+        text = _safe_diagnostic_text(candidate, max_chars=_DIAGNOSTIC_REASON_MAX)
+        if not text or (stage and text == stage):
+            continue
+        return text
+    return None
+
+
+def _diagnostic_context(diagnostic: dict) -> dict[str, str]:
+    sources: list[dict] = []
+    evidence = diagnostic.get("evidence")
+    if isinstance(evidence, dict):
+        sources.append(evidence)
+    search_context = diagnostic.get("search_context")
+    if isinstance(search_context, dict):
+        sources.append(search_context)
+    found: dict[str, str] = {}
+    for source in sources:
+        for key in _DIAGNOSTIC_CONTEXT_KEYS:
+            if key in found:
+                continue
+            text = _safe_diagnostic_text(source.get(key), max_chars=_DIAGNOSTIC_CONTEXT_VALUE_MAX)
+            if text:
+                found[key] = text
+    return {key: found[key] for key in _DIAGNOSTIC_CONTEXT_KEYS if key in found}
+
+
+def _diagnostic_attempted_keys(diagnostic: dict) -> list[str]:
+    evidence = diagnostic.get("evidence")
+    raw = None
+    if isinstance(evidence, dict) and isinstance(evidence.get("attempted_keys"), list):
+        raw = evidence.get("attempted_keys")
+    elif isinstance(diagnostic.get("attempted_keys"), list):
+        raw = diagnostic.get("attempted_keys")
+    if not isinstance(raw, list):
+        return []
+    keys: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        text = _safe_diagnostic_text(item, max_chars=_DIAGNOSTIC_KEY_MAX)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        keys.append(text)
+        if len(keys) >= _DIAGNOSTIC_KEYS_MAX:
+            break
+    return keys
+
+
+def _compact_chat_diagnostic(diagnostic: Any) -> dict[str, Any] | None:
+    """Versão segura do diagnóstico já produzido pela memória de cálculo.
+
+    Preserva etapa, causa, critérios de busca, chaves tentadas e a mensagem
+    operacional. Não encaminha o objeto interno, stack, path nem payload.
+    """
+    if not isinstance(diagnostic, dict) or not diagnostic:
+        return None
+    stage = _diagnostic_stage(diagnostic)
+    reason = _diagnostic_reason(diagnostic, stage=stage)
+    message = _safe_diagnostic_text(diagnostic.get("message"), max_chars=_DIAGNOSTIC_MESSAGE_MAX)
+    context = _diagnostic_context(diagnostic)
+    attempted_keys = _diagnostic_attempted_keys(diagnostic)
+    compact: dict[str, Any] = {}
+    if stage:
+        compact["stage"] = stage
+    if reason:
+        compact["reason"] = reason
+    if message:
+        compact["message"] = message
+    if context:
+        compact["context"] = context
+    if attempted_keys:
+        compact["attempted_keys"] = attempted_keys
+    return compact or None
+
+
 def _compact_cell(cell: dict | None, *, include_memory: bool = False) -> dict | None:
     if not isinstance(cell, dict):
         return None
@@ -619,7 +752,7 @@ def _compact_memory(memory: dict) -> dict:
                     "observation": item.get("observation") or item.get("note"),
                 }
             )
-    return {
+    compact = {
         "schema_version": memory.get("schema_version"),
         "status": memory.get("status"),
         "calculated_freight": _compact_number(memory.get("calculated_freight") or memory.get("total")),
@@ -633,6 +766,10 @@ def _compact_memory(memory: dict) -> dict:
         "slot_number": memory.get("slot_number"),
         "carrier_name": memory.get("carrier_name"),
     }
+    diagnostic = _compact_chat_diagnostic(memory.get("diagnostic"))
+    if diagnostic:
+        compact["diagnostic"] = diagnostic
+    return compact
 
 
 def _compact_row(row: dict, *, include_memory: bool = False) -> dict:

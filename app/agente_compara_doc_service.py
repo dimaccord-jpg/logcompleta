@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import csv
 import copy
+import hashlib
 import io
 import json
 import logging
+import math
 import re
 import time
 import unicodedata
@@ -84,11 +86,14 @@ from app.cleiton_doc_escopo import (
     stamp_operational_cache_payload,
 )
 from app.cleiton_doc_store import (
+    FIELD_ORIGINAL_REF,
+    discard_document_original,
     document_record_matches_domain_scope,
     get_cleiton_doc_tmp_dir,
     load_document_record,
     peek_document_record,
     remove_document_record,
+    save_document_original,
     save_document_record,
 )
 from app.services.cleiton_doc_config_service import get_cleiton_doc_config
@@ -270,6 +275,7 @@ ERROR_TEMP_TABLE_ID_MISMATCH = "agente_compara_temp_table_id_mismatch"
 ERROR_TEMP_TABLE_EXPIRED = "agente_compara_temp_table_expired"
 ERROR_TEMP_TABLE_INVALID_PAYLOAD = "agente_compara_temp_table_invalid_payload"
 ERROR_TEMP_TABLE_INVALID_ACCESSORIAL_FEES = "invalid_accessorial_fees"
+ERROR_TEMP_TABLE_INVALID_PRICING_CONTRACT = "invalid_pricing_contract"
 ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE = "agente_compara_temp_table_payload_too_large"
 ERROR_TEMP_TABLE_SCOPE_MISMATCH = "agente_compara_temp_table_scope_mismatch"
 ERROR_TAX_CONFIG_PENDING = "agente_compara_tax_config_pending"
@@ -389,6 +395,11 @@ TAX_CALCULATION_VERSION = "agente_compara_tax_v2"
 TAX_CALCULATION_MODE_INSIDE = "inside"
 TAX_CALCULATION_MODE_OUTSIDE = "outside"
 PRICING_RULE_PARSER_VERSION = "agente_compara_pricing_matrix_v2"
+PRICING_CONTRACT_SCHEMA_VERSION = 1
+_PRICING_CONTRACT_TYPES = frozenset(
+    {"fixed_range", "direct_weight_rate", "range_plus_excess_per_kg"}
+)
+_PRICING_CONTRACT_RANGE_TYPES = frozenset({"fixed_range", "range_plus_excess_per_kg"})
 _WEIGHT_KG_HEADER_RE = re.compile(r"\bkg\b|\bkgs\b|\bpeso\b")
 ISS_SOURCE_NAME = "Cadastro municipal/manual"
 ISS_SOURCE_TYPE = "manual"
@@ -1498,6 +1509,7 @@ def _register_document_record(
     table_id: str | None = None,
     slot_number: int | None = None,
     retry_metadata: dict | None = None,
+    file_bytes: bytes | None = None,
 ) -> dict:
     _require_session()
     cfg = get_cleiton_doc_config()
@@ -1552,8 +1564,17 @@ def _register_document_record(
         for key, value in retry_metadata.items():
             if value is not None:
                 record[key] = value
-    stamp_document_operational_scope(record)
-    save_document_record(record)
+    original_written = False
+    try:
+        if file_bytes is not None:
+            record[FIELD_ORIGINAL_REF] = save_document_original(doc_id, file_bytes)
+            original_written = True
+        stamp_document_operational_scope(record)
+        save_document_record(record)
+    except Exception:
+        if original_written:
+            discard_document_original(doc_id)
+        raise
     append_agente_compara_doc_id(session, doc_id, table_id=table_id)
     _sync_legacy_doc_ids_mirror(session)
     _mark_session_modified()
@@ -1705,6 +1726,7 @@ def prepare_and_register_document(
         table_id=resolved_table_id,
         slot_number=resolved_slot,
         retry_metadata=retry_metadata or None,
+        file_bytes=file_bytes,
     )
     if retry_metadata:
         persisted_document = load_document_record(
@@ -4583,6 +4605,97 @@ def _pricing_rule_keys_for_freight_route(route: dict, region: str) -> list[str]:
     return list(dict.fromkeys(keys))
 
 
+_ORIGIN_LOOKUP_PREFIX = "ORIGIN:"
+
+
+def _is_origin_city_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    return normalized in {
+        "cidade origem",
+        "cidade de origem",
+        "municipio origem",
+        "municipio de origem",
+        "origem cidade",
+    }
+
+
+def _is_origin_uf_column(column_name) -> bool:
+    normalized = _normalize_coverage_header(column_name)
+    return normalized in {
+        "uf origem",
+        "uf de origem",
+        "estado origem",
+        "estado de origem",
+        "origem uf",
+    }
+
+
+def _matrix_origin_columns(table: dict) -> tuple[str | None, str | None]:
+    columns = _table_columns(table)
+    city_col = next((col for col in columns if _is_origin_city_column(col)), None)
+    uf_col = next((col for col in columns if _is_origin_uf_column(col)), None)
+    if city_col is None and uf_col is not None:
+        city_col = next(
+            (col for col in columns if _normalize_coverage_header(col) == "origem"),
+            None,
+        )
+    if city_col is None or uf_col is None:
+        return None, None
+    return city_col, uf_col
+
+
+def _origin_selector_value(origin_city, origin_uf) -> tuple[str, str] | None:
+    uf = _normalize_destination_uf(origin_uf)
+    city = _normalize_audit_lookup_text(origin_city)
+    if not uf or uf not in _BR_UFS or not city:
+        return None
+    if len(city) == 2 and city in _BR_UFS:
+        return None
+    return uf, city
+
+
+def _format_origin_qualified_lookup_key(origin_uf: str, origin_city: str, destination_key: str) -> str | None:
+    if not isinstance(destination_key, str) or not destination_key.strip():
+        return None
+    if not origin_uf or not origin_city:
+        return None
+    return f"{_ORIGIN_LOOKUP_PREFIX}{origin_uf}|{origin_city}=>{destination_key}"
+
+
+def _is_origin_qualified_lookup_key(key: str) -> bool:
+    if not isinstance(key, str) or not key.startswith(_ORIGIN_LOOKUP_PREFIX):
+        return False
+    return "=>" in key[len(_ORIGIN_LOOKUP_PREFIX) :]
+
+
+def _origin_qualified_keys(keys: list[str], selector: tuple[str, str]) -> list[str]:
+    origin_uf, origin_city = selector
+    qualified: list[str] = []
+    for key in keys:
+        formatted = _format_origin_qualified_lookup_key(origin_uf, origin_city, key)
+        if formatted and formatted not in qualified:
+            qualified.append(formatted)
+    return qualified
+
+
+def _explicit_freight_route_origin_selector(route: dict) -> tuple[str, str] | None:
+    """Seletor de origem em rota só com campos dedicados.
+
+    ``freight_routes.origin`` continua rótulo ou região legado.
+    """
+    if not isinstance(route, dict):
+        return None
+    if "origin_city" not in route or "origin_uf" not in route:
+        return None
+    return _origin_selector_value(route.get("origin_city"), route.get("origin_uf"))
+
+
+def _track_matrix_origin(origin_by_rule, rule: dict, selector: tuple[str, str] | None) -> None:
+    if origin_by_rule is None or selector is None or not isinstance(rule, dict):
+        return
+    origin_by_rule[id(rule)] = selector
+
+
 def _build_rule_from_row_range_table(table: dict) -> dict | None:
     rows = table.get("rows") if isinstance(table.get("rows"), list) else []
     columns = table.get("columns") if isinstance(table.get("columns"), list) else []
@@ -4645,11 +4758,12 @@ def _build_rule_from_row_range_table(table: dict) -> dict | None:
     return rule
 
 
-def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
+def _build_rules_from_matrix_table(table: dict, origin_by_rule: dict | None = None) -> list[tuple[str, dict]]:
     rows = table.get("rows") if isinstance(table.get("rows"), list) else []
     columns = table.get("columns") if isinstance(table.get("columns"), list) else []
     if not rows or not columns:
         return []
+    origin_city_col, origin_uf_col = _matrix_origin_columns(table)
 
     selected_dimension_col = _sanitize_cell_string(table.get("_selected_pricing_dimension_column"))
     region_col = selected_dimension_col if selected_dimension_col in columns else None
@@ -4675,6 +4789,9 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
             continue
         region = _sanitize_cell_string(row.get(region_col)) if region_col else context_region
         destination_uf = _sanitize_cell_string(row.get(uf_col)) if uf_col else None
+        origin_selector = None
+        if origin_city_col and origin_uf_col:
+            origin_selector = _origin_selector_value(row.get(origin_city_col), row.get(origin_uf_col))
         if not region:
             continue
         if direct_ton_col:
@@ -4694,6 +4811,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                     "route_toll": route_toll,
                     "normalization_notes": [],
                 }
+                _track_matrix_origin(origin_by_rule, rule, origin_selector)
                 rules.extend(
                     (key, rule)
                     for key in _pricing_rule_keys_for_row(
@@ -4720,6 +4838,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                     "route_toll": route_toll,
                     "normalization_notes": [],
                 }
+                _track_matrix_origin(origin_by_rule, rule, origin_selector)
                 rules.extend(
                     (key, rule)
                     for key in _pricing_rule_keys_for_row(
@@ -4758,6 +4877,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                 "unit": "kg",
                 "normalization_notes": [],
             }
+            _track_matrix_origin(origin_by_rule, rule, origin_selector)
             rules.extend(
                 (key, rule)
                 for key in _pricing_rule_keys_for_row(
@@ -4772,6 +4892,7 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                 table.get("table_title"),
                 "Linha de destino sem modelo de peso/faixa reconhecido.",
             )
+            _track_matrix_origin(origin_by_rule, rule, origin_selector)
             rules.extend(
                 (key, rule)
                 for key in _pricing_rule_keys_for_row(
@@ -4781,6 +4902,56 @@ def _build_rules_from_matrix_table(table: dict) -> list[tuple[str, dict]]:
                 )
             )
     return rules
+
+
+def _matrix_contract_rule_groups(table: dict) -> list[dict]:
+    """Agrupa regras da matriz e qualifica a chave quando a origem distingue a tarifa."""
+    origin_by_rule: dict[int, tuple[str, str]] = {}
+    matrix_rules = _build_rules_from_matrix_table(table, origin_by_rule=origin_by_rule)
+    grouped: dict[int, dict] = {}
+    order: list[int] = []
+    for key, engine_rule in matrix_rules:
+        if not isinstance(engine_rule, dict):
+            continue
+        if engine_rule.get("pricing_type") not in _PRICING_CONTRACT_TYPES:
+            continue
+        identity = id(engine_rule)
+        if identity not in grouped:
+            grouped[identity] = {
+                "rule": engine_rule,
+                "keys": [],
+                "origin": origin_by_rule.get(identity),
+            }
+            order.append(identity)
+        if isinstance(key, str) and key and key not in grouped[identity]["keys"]:
+            grouped[identity]["keys"].append(key)
+    signature_origins: dict[tuple[str, ...], set[tuple[str, str]]] = {}
+    for identity in order:
+        group = grouped[identity]
+        selector = group.get("origin")
+        if selector and group["keys"]:
+            signature_origins.setdefault(tuple(group["keys"]), set()).add(selector)
+    prepared: list[dict] = []
+    for identity in order:
+        group = grouped[identity]
+        keys = list(group["keys"])
+        signature = tuple(group["keys"])
+        selector = group.get("origin")
+        missing_origin = False
+        if len(signature_origins.get(signature) or ()) >= 2:
+            if not selector:
+                missing_origin = True
+                keys = []
+            else:
+                keys = _origin_qualified_keys(keys, selector)
+        prepared.append(
+            {
+                "rule": group["rule"],
+                "keys": keys,
+                "missing_origin": missing_origin,
+            }
+        )
+    return prepared
 
 
 def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
@@ -4843,7 +5014,1014 @@ def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
     return (region, _make_unsupported_rule(region, "freight_routes", "Rota sem faixa de peso calculável."))
 
 
-def build_freight_pricing_index(temp_table) -> dict:
+def _freight_route_lookup_signature(route: dict) -> tuple[str, ...] | None:
+    if not isinstance(route, dict):
+        return None
+    built = _build_rule_from_freight_route(route)
+    if built is None:
+        return None
+    region, engine_rule = built
+    if not isinstance(engine_rule, dict) or engine_rule.get("pricing_type") not in _PRICING_CONTRACT_TYPES:
+        return None
+    keys = [key for key in _pricing_rule_keys_for_freight_route(route, region) if isinstance(key, str) and key]
+    if not keys:
+        return None
+    return tuple(keys)
+
+
+def _freight_route_origin_distinguished_signatures(routes) -> set[tuple[str, ...]]:
+    if not isinstance(routes, list):
+        return set()
+    grouped: dict[tuple[str, ...], set[tuple[str, str]]] = {}
+    for route in routes:
+        if not isinstance(route, dict):
+            continue
+        selector = _explicit_freight_route_origin_selector(route)
+        if selector is None:
+            continue
+        signature = _freight_route_lookup_signature(route)
+        if signature is None:
+            continue
+        grouped.setdefault(signature, set()).add(selector)
+    return {signature for signature, selectors in grouped.items() if len(selectors) >= 2}
+
+
+def _matrix_table_distinguishes_by_origin(table: dict) -> bool:
+    if not isinstance(table, dict):
+        return False
+    for group in _matrix_contract_rule_groups(table):
+        if any(_is_origin_qualified_lookup_key(key) for key in group.get("keys") or []):
+            return True
+    return False
+
+
+def _temp_table_distinguishes_tariffs_by_origin(temp_table) -> bool:
+    if not isinstance(temp_table, dict):
+        return False
+    tables = temp_table.get("freight_tables") or []
+    routes = temp_table.get("freight_routes") or []
+    origin_tables = [
+        table
+        for table in tables
+        if isinstance(table, dict) and all(_matrix_origin_columns(table))
+    ]
+    origin_routes = [
+        route
+        for route in routes
+        if isinstance(route, dict) and "origin_city" in route and "origin_uf" in route
+    ]
+    if not origin_tables and not origin_routes:
+        return False
+    for table in origin_tables:
+        if _matrix_table_distinguishes_by_origin(table):
+            return True
+    return bool(_freight_route_origin_distinguished_signatures(origin_routes))
+
+
+def _contract_preserves_origin_distinction(contract) -> bool:
+    from app.agente_compara_temp_table_validation_service import (
+        contract_preserves_origin_distinction,
+    )
+
+    return contract_preserves_origin_distinction(contract)
+
+
+def _stored_contract_missing_origin_distinction(temp_table, contract) -> bool:
+    if not isinstance(temp_table, dict) or not isinstance(contract, dict):
+        return False
+    if contract.get("schema_version") != PRICING_CONTRACT_SCHEMA_VERSION:
+        return False
+    if contract.get("source_fingerprint") != pricing_source_fingerprint(temp_table):
+        return False
+    if not _temp_table_distinguishes_tariffs_by_origin(temp_table):
+        return False
+    return not _contract_preserves_origin_distinction(contract)
+
+
+def _cell_is_blank(value) -> bool:
+    if value is None:
+        return True
+    return not _sanitize_cell_string(value)
+
+
+def _is_finite_number(value) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
+
+
+def _executable_tariff_amount(value) -> float | None:
+    parsed = _parse_brazilian_money(value)
+    if parsed is None or not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _table_columns(table: dict) -> list:
+    columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+    return columns
+
+
+def _table_rows(table: dict) -> list:
+    rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+    return rows
+
+
+def _table_is_pricing_shaped(table: dict) -> bool:
+    for column in _table_columns(table):
+        if _parse_range_from_label(column) is not None:
+            return True
+        if _is_excess_column(column) or _is_direct_kg_column(column) or _is_direct_ton_column(column):
+            return True
+        if _is_value_column(column):
+            return True
+        if "peso" in _normalize_coverage_header(column):
+            return True
+    return False
+
+
+def _table_block_has_no_executable_tariff(table: dict) -> bool:
+    """Bloco auxiliar sem tarifa executável e sem estrutura de cobrança.
+
+    Nome de coluna como Valor não basta para exigir regra no gate.
+    """
+    columns = _table_columns(table)
+    for column in columns:
+        if _parse_range_from_label(column) is not None:
+            return False
+        if _is_excess_column(column) or _is_direct_kg_column(column) or _is_direct_ton_column(column):
+            return False
+        if "peso" in _normalize_coverage_header(column):
+            return False
+    value_columns = [column for column in columns if _is_value_column(column)]
+    for row in _table_rows(table):
+        if not isinstance(row, dict):
+            continue
+        for column in value_columns:
+            if _executable_tariff_amount(row.get(column)) is not None:
+                return False
+    return True
+
+
+def _route_has_tariff_signal(route: dict) -> bool:
+    if not isinstance(route, dict):
+        return False
+    for limit in (10, 20, 30, 50, 70, 100):
+        if not _cell_is_blank(route.get(f"weight_{limit}")) or not _cell_is_blank(route.get(f"weight_{limit}kg")):
+            return True
+    if not _cell_is_blank(route.get("freight_weight_kg") or route.get("frete_peso_kg")):
+        return True
+    return False
+
+
+def _route_has_executable_tariff(route: dict) -> bool:
+    if not isinstance(route, dict):
+        return False
+    for limit in (10, 20, 30, 50, 70, 100):
+        raw = route.get(f"weight_{limit}")
+        if raw is None:
+            raw = route.get(f"weight_{limit}kg")
+        if _executable_tariff_amount(raw) is not None:
+            return True
+    if _executable_tariff_amount(route.get("freight_weight_kg") or route.get("frete_peso_kg")) is not None:
+        return True
+    return False
+
+
+def _snapshot_has_pricing_source(temp_table: dict) -> bool:
+    for table in temp_table.get("freight_tables") or []:
+        if isinstance(table, dict) and _table_is_pricing_shaped(table):
+            return True
+    for route in temp_table.get("freight_routes") or []:
+        if _route_has_tariff_signal(route):
+            return True
+    return False
+
+
+def pricing_source_fingerprint(temp_table) -> str:
+    """Fingerprint do conteúdo tarifário. Não usa edit_version."""
+    tables: list = []
+    routes: list = []
+    selected: list = []
+    if isinstance(temp_table, dict):
+        raw_tables = temp_table.get("freight_tables")
+        raw_routes = temp_table.get("freight_routes")
+        tables = list(raw_tables) if isinstance(raw_tables, list) else []
+        routes = list(raw_routes) if isinstance(raw_routes, list) else []
+        for table in tables:
+            if isinstance(table, dict):
+                selected.append(table.get("_selected_pricing_dimension_column"))
+            else:
+                selected.append(None)
+    payload = {
+        "freight_tables": tables,
+        "freight_routes": routes,
+        "_selected_pricing_dimension_column": selected,
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _pricing_contract_rules_signature(rules) -> str:
+    try:
+        return json.dumps(rules if isinstance(rules, list) else [], sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return ""
+
+
+def _add_pricing_finding(findings: list[dict], seen: set, **payload) -> None:
+    marker = (payload.get("kind"), payload.get("source_ref"), payload.get("field"))
+    if marker in seen:
+        return
+    seen.add(marker)
+    findings.append(payload)
+
+
+def _contract_rule_from_engine(engine_rule: dict, lookup_keys: list[str], source_refs: list[str]) -> dict:
+    region = engine_rule.get("region")
+    source_title = _sanitize_cell_string(engine_rule.get("source_table_title"))
+    rule = {
+        "pricing_type": engine_rule.get("pricing_type"),
+        "region": region,
+        "unit": engine_rule.get("unit"),
+        "brackets": copy.deepcopy(engine_rule.get("brackets") or []),
+        "excess": copy.deepcopy(engine_rule.get("excess")) if isinstance(engine_rule.get("excess"), dict) else None,
+        "lookup_keys": list(lookup_keys),
+    }
+    for field in ("value_per_kg", "value_per_ton", "freight_value", "route_toll"):
+        if field in engine_rule and engine_rule.get(field) is not None:
+            rule[field] = copy.deepcopy(engine_rule.get(field))
+    if region:
+        rule["label"] = region
+    if source_title:
+        rule["source_table_title"] = source_title
+    if source_refs:
+        rule["source_refs"] = list(source_refs)
+    return rule
+
+
+def _range_brackets_conflict(brackets: list) -> bool:
+    if not isinstance(brackets, list) or not brackets:
+        return False
+    seen_max: set[float] = set()
+    previous_max = None
+    for bracket in brackets:
+        if not isinstance(bracket, dict):
+            return True
+        if not _is_finite_number(bracket.get("min_kg")) or not _is_finite_number(bracket.get("max_kg")):
+            return True
+        if not _is_finite_number(bracket.get("value")) or float(bracket.get("value")) < 0:
+            return True
+        min_kg = float(bracket.get("min_kg"))
+        max_kg = float(bracket.get("max_kg"))
+        if min_kg < 0 or max_kg < 0 or max_kg < min_kg:
+            return True
+        if max_kg in seen_max:
+            return True
+        seen_max.add(max_kg)
+        if previous_max is not None and min_kg < previous_max:
+            return True
+        previous_max = max_kg
+    return False
+
+
+def _row_range_columns(table: dict) -> tuple[str | None, str | None]:
+    columns = _table_columns(table)
+    range_col = next(
+        (
+            col
+            for col in columns
+            if _parse_range_from_label(col) is None and "peso" in _normalize_coverage_header(col)
+        ),
+        None,
+    )
+    value_col = next((col for col in columns if _is_value_column(col)), None)
+    if not range_col or not value_col:
+        return None, None
+    return range_col, value_col
+
+
+def _selected_region_column(table: dict) -> str | None:
+    columns = _table_columns(table)
+    selected = _sanitize_cell_string(table.get("_selected_pricing_dimension_column"))
+    if selected and selected in columns:
+        return selected
+    return next((col for col in columns if _is_region_column(col)), None)
+
+
+def _inspect_pricing_table_cells(table: dict, table_index: int, findings: list[dict], seen: set) -> None:
+    columns = _table_columns(table)
+    rows = _table_rows(table)
+    source_ref = f"freight_tables[{table_index}]"
+    range_col, value_col = _row_range_columns(table)
+    if range_col and value_col:
+        for row_index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            row_ref = f"{source_ref}.rows[{row_index}]"
+            parsed_range = _parse_range_from_label(row.get(range_col))
+            if (
+                parsed_range
+                and parsed_range[0] is not None
+                and parsed_range[1] is not None
+                and float(parsed_range[0]) > float(parsed_range[1])
+            ):
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="invalid_range",
+                    source_ref=row_ref,
+                    index=row_index,
+                    field=range_col,
+                    label=range_col,
+                )
+            raw_value = row.get(value_col)
+            if parsed_range and not _cell_is_blank(raw_value) and _executable_tariff_amount(raw_value) is None:
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="invalid_tariff",
+                    source_ref=row_ref,
+                    index=row_index,
+                    field=value_col,
+                    label=value_col,
+                )
+            excess_col = next((col for col in columns if _is_excess_column(col)), None)
+            if excess_col and not _cell_is_blank(row.get(excess_col)) and _executable_tariff_amount(row.get(excess_col)) is None:
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="invalid_excess",
+                    source_ref=row_ref,
+                    index=row_index,
+                    field=excess_col,
+                    label=excess_col,
+                )
+    else:
+        region_col = _selected_region_column(table)
+        direct_kg_col = next((col for col in columns if _is_direct_kg_column(col)), None)
+        direct_ton_col = next((col for col in columns if _is_direct_ton_column(col)), None)
+        excess_col = next((col for col in columns if _is_excess_column(col)), None)
+        range_cols = [col for col in columns if _parse_range_from_label(col) is not None and not _is_excess_column(col)]
+        for row_index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            row_ref = f"{source_ref}.rows[{row_index}]"
+            region = _sanitize_cell_string(row.get(region_col)) if region_col else _region_from_table_context(table)
+            parsed_any = False
+            for column in range_cols:
+                parsed_header = _parse_range_from_label(column)
+                if (
+                    parsed_header
+                    and parsed_header[0] is not None
+                    and parsed_header[1] is not None
+                    and float(parsed_header[0]) > float(parsed_header[1])
+                ):
+                    _add_pricing_finding(
+                        findings,
+                        seen,
+                        kind="invalid_range",
+                        source_ref=row_ref,
+                        index=row_index,
+                        field=column,
+                        label=column,
+                    )
+                raw = row.get(column)
+                if _cell_is_blank(raw):
+                    continue
+                if _executable_tariff_amount(raw) is None:
+                    _add_pricing_finding(
+                        findings,
+                        seen,
+                        kind="invalid_tariff",
+                        source_ref=row_ref,
+                        index=row_index,
+                        field=column,
+                        label=region or column,
+                    )
+                else:
+                    parsed_any = True
+            for column, kind in (
+                (direct_kg_col, "invalid_tariff"),
+                (direct_ton_col, "invalid_tariff"),
+                (excess_col, "invalid_excess"),
+            ):
+                if not column:
+                    continue
+                raw = row.get(column)
+                if _cell_is_blank(raw):
+                    continue
+                if _executable_tariff_amount(raw) is None:
+                    _add_pricing_finding(
+                        findings,
+                        seen,
+                        kind=kind,
+                        source_ref=row_ref,
+                        index=row_index,
+                        field=column,
+                        label=region or column,
+                    )
+                else:
+                    parsed_any = True
+            if parsed_any and not region:
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="missing_lookup_key",
+                    source_ref=row_ref,
+                    index=row_index,
+                    field=region_col or "region",
+                    label="Linha tarifária",
+                )
+            if (
+                region
+                and excess_col
+                and not _cell_is_blank(row.get(excess_col))
+                and _executable_tariff_amount(row.get(excess_col)) is not None
+                and not any(_executable_tariff_amount(row.get(col)) is not None for col in range_cols)
+                and not (direct_kg_col and _executable_tariff_amount(row.get(direct_kg_col)) is not None)
+                and not (direct_ton_col and _executable_tariff_amount(row.get(direct_ton_col)) is not None)
+            ):
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="invalid_excess",
+                    source_ref=row_ref,
+                    index=row_index,
+                    field=excess_col,
+                    label=region,
+                )
+    for column in columns:
+        if _is_freight_value_percent_column(column):
+            for row_index, row in enumerate(rows):
+                if not isinstance(row, dict) or _cell_is_blank(row.get(column)):
+                    continue
+                if _parse_freight_value_rate(row.get(column)) is None:
+                    _add_pricing_finding(
+                        findings,
+                        seen,
+                        kind="freight_value_not_executable",
+                        source_ref=f"{source_ref}.rows[{row_index}]",
+                        index=row_index,
+                        field=column,
+                        label=column,
+                    )
+        if _is_toll_column(column):
+            for row_index, row in enumerate(rows):
+                if not isinstance(row, dict) or _cell_is_blank(row.get(column)):
+                    continue
+                if _executable_tariff_amount(row.get(column)) is None:
+                    _add_pricing_finding(
+                        findings,
+                        seen,
+                        kind="route_toll_not_executable",
+                        source_ref=f"{source_ref}.rows[{row_index}]",
+                        index=row_index,
+                        field=column,
+                        label=column,
+                    )
+
+
+def _matrix_row_covered(rules: list[dict], region: str) -> bool:
+    for rule in rules:
+        if rule.get("region") == region:
+            return True
+        if region in (rule.get("lookup_keys") or []):
+            return True
+    return False
+
+
+def _append_contract_rule(
+    rules: list[dict],
+    owned: dict[str, int],
+    findings: list[dict],
+    seen: set,
+    engine_rule: dict,
+    lookup_keys: list[str],
+    source_refs: list[str],
+) -> None:
+    pricing_type = engine_rule.get("pricing_type")
+    source_ref = source_refs[0] if source_refs else ""
+    label = engine_rule.get("region") or source_ref
+    if pricing_type not in _PRICING_CONTRACT_TYPES:
+        _add_pricing_finding(
+            findings,
+            seen,
+            kind="unresolved_pricing_type",
+            source_ref=source_ref,
+            index=len(rules),
+            field="pricing_type",
+            label=label,
+        )
+        return
+    keys: list[str] = []
+    for key in lookup_keys:
+        if isinstance(key, str) and key.strip() and key not in keys:
+            keys.append(key)
+    if not keys:
+        _add_pricing_finding(
+            findings,
+            seen,
+            kind="missing_lookup_key",
+            source_ref=source_ref,
+            index=len(rules),
+            field="lookup_keys",
+            label=label,
+        )
+        return
+    unit = str(engine_rule.get("unit") or "").strip().lower()
+    if pricing_type == "direct_weight_rate":
+        if unit not in {"kg", "ton"}:
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="missing_unit",
+                source_ref=source_ref,
+                index=len(rules),
+                field="unit",
+                label=label,
+            )
+        amount_field = "value_per_ton" if unit == "ton" else "value_per_kg"
+        amount = engine_rule.get(amount_field)
+        if not _is_finite_number(amount) or float(amount) < 0:
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="invalid_tariff",
+                source_ref=source_ref,
+                index=len(rules),
+                field=amount_field,
+                label=label,
+            )
+    elif pricing_type in _PRICING_CONTRACT_RANGE_TYPES:
+        if unit != "kg":
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="missing_unit",
+                source_ref=source_ref,
+                index=len(rules),
+                field="unit",
+                label=label,
+            )
+        brackets = engine_rule.get("brackets") if isinstance(engine_rule.get("brackets"), list) else []
+        if not brackets or _range_brackets_conflict(brackets):
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="invalid_range",
+                source_ref=source_ref,
+                index=len(rules),
+                field="brackets",
+                label=label,
+            )
+        if pricing_type == "range_plus_excess_per_kg":
+            excess = engine_rule.get("excess") if isinstance(engine_rule.get("excess"), dict) else {}
+            rate = excess.get("rate_per_kg")
+            last = None
+            if brackets:
+                last = max(brackets, key=lambda item: float(item.get("max_kg") or 0))
+            if (
+                not _is_finite_number(rate)
+                or float(rate) < 0
+                or not isinstance(last, dict)
+                or not _is_finite_number(last.get("max_kg"))
+                or not _is_finite_number(last.get("value"))
+            ):
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="invalid_excess",
+                    source_ref=source_ref,
+                    index=len(rules),
+                    field="excess",
+                    label=label,
+                )
+    freight_value = engine_rule.get("freight_value")
+    if isinstance(freight_value, dict) and (
+        not _is_finite_number(freight_value.get("rate")) or float(freight_value.get("rate")) < 0
+    ):
+        _add_pricing_finding(
+            findings,
+            seen,
+            kind="freight_value_not_executable",
+            source_ref=source_ref,
+            index=len(rules),
+            field="freight_value",
+            label=label,
+        )
+    route_toll = engine_rule.get("route_toll")
+    if isinstance(route_toll, dict) and (
+        not _is_finite_number(route_toll.get("rate_per_fraction"))
+        or float(route_toll.get("rate_per_fraction")) < 0
+        or not _is_finite_number(route_toll.get("fraction_size_kg"))
+        or float(route_toll.get("fraction_size_kg")) <= 0
+    ):
+        _add_pricing_finding(
+            findings,
+            seen,
+            kind="route_toll_not_executable",
+            source_ref=source_ref,
+            index=len(rules),
+            field="route_toll",
+            label=label,
+        )
+    contract_rule = _contract_rule_from_engine(engine_rule, keys, source_refs)
+    rule_index = len(rules)
+    for key in keys:
+        previous = owned.get(key)
+        if previous is not None and previous != rule_index:
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="conflicting_lookup_key",
+                source_ref=key,
+                index=rule_index,
+                field="lookup_keys",
+                label=key,
+            )
+        else:
+            owned[key] = rule_index
+    rules.append(contract_rule)
+
+
+def _matrix_source_refs(table: dict, table_index: int, region: str) -> list[str]:
+    refs = [f"freight_tables[{table_index}]"]
+    region_col = _selected_region_column(table)
+    matches = []
+    for row_index, row in enumerate(_table_rows(table)):
+        if not isinstance(row, dict):
+            continue
+        row_region = _sanitize_cell_string(row.get(region_col)) if region_col else _region_from_table_context(table)
+        if row_region == region:
+            matches.append(row_index)
+    if len(matches) == 1:
+        refs.append(f"freight_tables[{table_index}].rows[{matches[0]}]")
+    return refs
+
+
+def _is_uf_qualified_lookup_key(key: str) -> bool:
+    if not isinstance(key, str) or "|" not in key:
+        return False
+    uf, rest = key.split("|", 1)
+    if not rest:
+        return False
+    normalized_uf = _normalize_destination_uf(uf)
+    return bool(normalized_uf and normalized_uf in _BR_UFS)
+
+
+def _rules_are_uf_distinguished(rules: list[dict], indexes: list[int]) -> bool:
+    qualified_sets: list[set[str]] = []
+    for index in indexes:
+        keys = rules[index].get("lookup_keys") or []
+        qualified = {key for key in keys if isinstance(key, str) and _is_uf_qualified_lookup_key(key)}
+        if not qualified:
+            return False
+        qualified_sets.append(qualified)
+    for left_index, left in enumerate(qualified_sets):
+        for right in qualified_sets[left_index + 1 :]:
+            if left & right:
+                return False
+    return True
+
+
+def _drop_shared_aliases_distinguished_by_uf(rules: list[dict], findings: list[dict]) -> None:
+    """Alias textual comum não é conflito quando cada regra tem UF própria.
+
+    Preserva chaves UF|REGIAO (ex.: SP|INTERIOR e RJ|INTERIOR).
+    """
+    alias_indexes: dict[str, list[int]] = {}
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            continue
+        keys = [key for key in (rule.get("lookup_keys") or []) if isinstance(key, str) and key]
+        qualified = {key for key in keys if _is_uf_qualified_lookup_key(key)}
+        if not qualified:
+            continue
+        for key in keys:
+            if key in qualified:
+                continue
+            alias_indexes.setdefault(key, []).append(index)
+    dropped: set[str] = set()
+    for alias, indexes in alias_indexes.items():
+        unique_indexes = list(dict.fromkeys(indexes))
+        if len(unique_indexes) < 2:
+            continue
+        if not _rules_are_uf_distinguished(rules, unique_indexes):
+            continue
+        dropped.add(alias)
+        for rule_index in unique_indexes:
+            rule = rules[rule_index]
+            rule["lookup_keys"] = [key for key in (rule.get("lookup_keys") or []) if key != alias]
+    if not dropped:
+        return
+    findings[:] = [
+        finding
+        for finding in findings
+        if not (
+            isinstance(finding, dict)
+            and finding.get("kind") == "conflicting_lookup_key"
+            and (finding.get("source_ref") in dropped or finding.get("label") in dropped)
+        )
+    ]
+
+
+def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
+    findings: list[dict] = []
+    seen: set = set()
+    rules: list[dict] = []
+    owned: dict[str, int] = {}
+    tables = temp_table.get("freight_tables") if isinstance(temp_table, dict) else []
+    routes = temp_table.get("freight_routes") if isinstance(temp_table, dict) else []
+    if not isinstance(tables, list):
+        tables = []
+    if not isinstance(routes, list):
+        routes = []
+
+    for table_index, table in enumerate(tables):
+        if not isinstance(table, dict) or not _table_is_pricing_shaped(table):
+            continue
+        if _table_block_has_no_executable_tariff(table):
+            continue
+        _inspect_pricing_table_cells(table, table_index, findings, seen)
+        source_ref = f"freight_tables[{table_index}]"
+        row_rule = _build_rule_from_row_range_table(table)
+        if row_rule is not None:
+            if row_rule.get("pricing_type") in _PRICING_CONTRACT_TYPES:
+                _append_contract_rule(
+                    rules,
+                    owned,
+                    findings,
+                    seen,
+                    row_rule,
+                    [row_rule.get("region")],
+                    [source_ref],
+                )
+            elif row_rule.get("pricing_type") == AUDIT_STATUS_UNSUPPORTED_PRICING:
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="unresolved_pricing_type",
+                    source_ref=source_ref,
+                    index=table_index,
+                    field="pricing_type",
+                    label=row_rule.get("region") or table.get("table_title"),
+                )
+            continue
+        matrix_rules = _build_rules_from_matrix_table(table)
+        for group in _matrix_contract_rule_groups(table):
+            engine_rule = group["rule"]
+            if group.get("missing_origin"):
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="missing_lookup_key",
+                    source_ref=source_ref,
+                    index=table_index,
+                    field="origin_city",
+                    label=engine_rule.get("region") or source_ref,
+                )
+                continue
+            _append_contract_rule(
+                rules,
+                owned,
+                findings,
+                seen,
+                engine_rule,
+                group["keys"],
+                _matrix_source_refs(table, table_index, engine_rule.get("region")),
+            )
+        region_col = _selected_region_column(table)
+        columns = _table_columns(table)
+        range_cols = [col for col in columns if _parse_range_from_label(col) is not None and not _is_excess_column(col)]
+        direct_kg_col = next((col for col in columns if _is_direct_kg_column(col)), None)
+        direct_ton_col = next((col for col in columns if _is_direct_ton_column(col)), None)
+        for row_index, row in enumerate(_table_rows(table)):
+            if not isinstance(row, dict):
+                continue
+            region = _sanitize_cell_string(row.get(region_col)) if region_col else _region_from_table_context(table)
+            if not region:
+                continue
+            parsed = False
+            for column in range_cols:
+                if _executable_tariff_amount(row.get(column)) is not None:
+                    parsed = True
+                    break
+            if not parsed and direct_kg_col and _executable_tariff_amount(row.get(direct_kg_col)) is not None:
+                parsed = True
+            if not parsed and direct_ton_col and _executable_tariff_amount(row.get(direct_ton_col)) is not None:
+                parsed = True
+            if parsed and not _matrix_row_covered(rules, region):
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="lost_tariff_row",
+                    source_ref=f"{source_ref}.rows[{row_index}]",
+                    index=row_index,
+                    field=region_col or "region",
+                    label=region,
+                )
+        if not matrix_rules and row_rule is None:
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="unresolved_pricing_type",
+                source_ref=source_ref,
+                index=table_index,
+                field="pricing_type",
+                label=table.get("table_title") or source_ref,
+            )
+
+    distinguished_route_signatures = _freight_route_origin_distinguished_signatures(routes)
+    for route_index, route in enumerate(routes):
+        if not isinstance(route, dict):
+            continue
+        source_ref = f"freight_routes[{route_index}]"
+        for limit in (10, 20, 30, 50, 70, 100):
+            raw = route.get(f"weight_{limit}")
+            if raw is None:
+                raw = route.get(f"weight_{limit}kg")
+            if not _cell_is_blank(raw) and _executable_tariff_amount(raw) is None:
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="invalid_tariff",
+                    source_ref=source_ref,
+                    index=route_index,
+                    field=f"weight_{limit}",
+                    label=_freight_route_region_label(route),
+                )
+        raw_excess = route.get("freight_weight_kg")
+        if raw_excess is None:
+            raw_excess = route.get("frete_peso_kg")
+        if not _cell_is_blank(raw_excess) and _executable_tariff_amount(raw_excess) is None:
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="invalid_excess",
+                source_ref=source_ref,
+                index=route_index,
+                field="freight_weight_kg",
+                label=_freight_route_region_label(route),
+            )
+        raw_toll = route.get("pedagio")
+        if raw_toll is None:
+            raw_toll = route.get("pedagio_valor")
+        if not _cell_is_blank(raw_toll) and _executable_tariff_amount(raw_toll) is None:
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="route_toll_not_executable",
+                source_ref=source_ref,
+                index=route_index,
+                field="pedagio",
+                label=_freight_route_region_label(route),
+            )
+        built = _build_rule_from_freight_route(route)
+        if built is None:
+            if _route_has_executable_tariff(route):
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="missing_lookup_key",
+                    source_ref=source_ref,
+                    index=route_index,
+                    field="destination",
+                    label="Tarifa ativa sem destino/região",
+                )
+            continue
+        region, engine_rule = built
+        if engine_rule.get("pricing_type") not in _PRICING_CONTRACT_TYPES:
+            if _route_has_tariff_signal(route):
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="lost_tariff_row",
+                    source_ref=source_ref,
+                    index=route_index,
+                    field="freight_routes",
+                    label=region,
+                )
+            continue
+        base_keys = [
+            key
+            for key in _pricing_rule_keys_for_freight_route(route, region)
+            if isinstance(key, str) and key
+        ]
+        signature = tuple(base_keys)
+        selector = _explicit_freight_route_origin_selector(route)
+        if signature in distinguished_route_signatures:
+            if selector is None:
+                _add_pricing_finding(
+                    findings,
+                    seen,
+                    kind="missing_lookup_key",
+                    source_ref=source_ref,
+                    index=route_index,
+                    field="origin_city",
+                    label=region,
+                )
+                continue
+            lookup_keys = _origin_qualified_keys(base_keys, selector)
+        else:
+            lookup_keys = base_keys
+        _append_contract_rule(
+            rules,
+            owned,
+            findings,
+            seen,
+            engine_rule,
+            lookup_keys,
+            [source_ref],
+        )
+
+    _drop_shared_aliases_distinguished_by_uf(rules, findings)
+
+    if not rules and (_snapshot_has_pricing_source(temp_table) if isinstance(temp_table, dict) else False):
+        _add_pricing_finding(
+            findings,
+            seen,
+            kind="no_executable_rule",
+            source_ref="pricing_contract",
+            index=0,
+            field="rules",
+            label="Tabela tarifária",
+        )
+    elif not rules and isinstance(temp_table, dict) and (
+        (isinstance(temp_table.get("freight_tables"), list) and temp_table.get("freight_tables"))
+        or (isinstance(temp_table.get("freight_routes"), list) and temp_table.get("freight_routes"))
+    ):
+        _add_pricing_finding(
+            findings,
+            seen,
+            kind="no_executable_rule",
+            source_ref="pricing_contract",
+            index=0,
+            field="rules",
+            label="Tabela tarifária",
+        )
+
+    contract = {
+        "schema_version": PRICING_CONTRACT_SCHEMA_VERSION,
+        "source_fingerprint": pricing_source_fingerprint(temp_table if isinstance(temp_table, dict) else {}),
+        "rules": rules,
+    }
+    return contract, findings
+
+
+def build_pricing_contract(temp_table) -> dict:
+    """Contrato tarifário canônico v1 a partir do snapshot já revisado."""
+    contract, _findings = _compile_pricing_contract(temp_table)
+    return contract
+
+
+def pricing_contract_confirmation_findings(temp_table) -> list[dict]:
+    _contract, findings = _compile_pricing_contract(temp_table)
+    return findings
+
+
+def _pricing_contract_is_usable(temp_table: dict, contract) -> bool:
+    if not isinstance(contract, dict):
+        return False
+    if contract.get("schema_version") != PRICING_CONTRACT_SCHEMA_VERSION:
+        return False
+    if contract.get("source_fingerprint") != pricing_source_fingerprint(temp_table):
+        return False
+    if _stored_contract_missing_origin_distinction(temp_table, contract):
+        return False
+    from app.agente_compara_temp_table_validation_service import (
+        pricing_contract_structure_is_usable,
+    )
+
+    try:
+        return pricing_contract_structure_is_usable(contract)
+    except Exception:
+        return False
+
+
+def _index_from_pricing_contract(contract: dict) -> dict:
+    rules = [rule for rule in (contract.get("rules") or []) if isinstance(rule, dict)]
+    restricted_destinations: set[str] = set()
+    for rule in rules:
+        for key in rule.get("lookup_keys") or []:
+            if not _is_origin_qualified_lookup_key(key):
+                continue
+            destination = key.split("=>", 1)[1]
+            if destination:
+                restricted_destinations.add(destination)
+    index: dict[str, dict] = {}
+    for rule in rules:
+        engine_rule = copy.deepcopy(rule)
+        for key in rule.get("lookup_keys") or []:
+            if not isinstance(key, str) or not key:
+                continue
+            if key in restricted_destinations and not _is_origin_qualified_lookup_key(key):
+                continue
+            index[key] = engine_rule
+    return index
+
+
+def _build_freight_pricing_index_legacy(temp_table) -> dict:
     if not isinstance(temp_table, dict):
         return {}
     index: dict[str, dict] = {}
@@ -4878,6 +6056,17 @@ def build_freight_pricing_index(temp_table) -> dict:
                 _register_pricing_rule(index, key, rule)
 
     return index
+
+
+def build_freight_pricing_index(temp_table) -> dict:
+    if not isinstance(temp_table, dict):
+        return {}
+    contract = temp_table.get("pricing_contract")
+    if _pricing_contract_is_usable(temp_table, contract):
+        return _index_from_pricing_contract(contract)
+    if _stored_contract_missing_origin_distinction(temp_table, contract):
+        return {}
+    return _build_freight_pricing_index_legacy(temp_table)
 
 
 def calculate_weight_freight(weight_kg, pricing_rule) -> dict | None:
@@ -5578,6 +6767,8 @@ def _pricing_rule_lookup_candidates(
     freight_region: str | None,
     destination_uf: str | None = None,
     destination_city: str | None = None,
+    origin_uf: str | None = None,
+    origin_city: str | None = None,
 ) -> list[tuple[str, str]]:
     candidates: list[tuple[str, str]] = []
     if freight_region:
@@ -5601,7 +6792,17 @@ def _pricing_rule_lookup_candidates(
             continue
         seen.add(lookup_key)
         ordered.append((lookup_kind, lookup_key))
-    return ordered
+    selector = _origin_selector_value(origin_city, origin_uf)
+    if selector is None:
+        return ordered
+    prefixed: list[tuple[str, str]] = []
+    for lookup_kind, lookup_key in ordered:
+        qualified = _format_origin_qualified_lookup_key(selector[0], selector[1], lookup_key)
+        if not qualified or qualified in seen:
+            continue
+        seen.add(qualified)
+        prefixed.append((lookup_kind, qualified))
+    return prefixed + ordered
 
 
 def _find_pricing_rule_match(
@@ -5609,12 +6810,16 @@ def _find_pricing_rule_match(
     freight_region: str | None,
     destination_uf: str | None = None,
     destination_city: str | None = None,
+    origin_uf: str | None = None,
+    origin_city: str | None = None,
 ) -> tuple[dict, str, str] | None:
     fallback_unsupported: tuple[dict, str, str] | None = None
     for lookup_kind, lookup_key in _pricing_rule_lookup_candidates(
         freight_region,
         destination_uf,
         destination_city,
+        origin_uf=origin_uf,
+        origin_city=origin_city,
     ):
         resolved = _resolve_pricing_index_entry(pricing_index, lookup_key)
         if resolved is None:
@@ -5635,8 +6840,17 @@ def _find_pricing_rule(
     freight_region: str | None,
     destination_uf: str | None = None,
     destination_city: str | None = None,
+    origin_uf: str | None = None,
+    origin_city: str | None = None,
 ) -> dict | None:
-    match = _find_pricing_rule_match(pricing_index, freight_region, destination_uf, destination_city)
+    match = _find_pricing_rule_match(
+        pricing_index,
+        freight_region,
+        destination_uf,
+        destination_city,
+        origin_uf=origin_uf,
+        origin_city=origin_city,
+    )
     return match[0] if match else None
 
 
@@ -5655,6 +6869,17 @@ def _resolve_region_without_coverage(row: dict, pricing_index: dict) -> tuple[st
         elif city and uf and normalized_region in {f"{uf} {city}", f"{city} {uf}", f"{uf}|{city}"}:
             candidates.append(region)
     unique = sorted(set(candidates))
+    qualified = _coverage_lookup_key(row.get("destination_uf"), row.get("destination_city"))
+    if qualified and unique:
+        qualified_hits = [key for key in unique if key == qualified]
+        if len(qualified_hits) == 1:
+            chosen = qualified_hits[0]
+            chosen_rule = pricing_index.get(chosen)
+            others = [key for key in unique if key != chosen]
+            if chosen_rule is not None and all(pricing_index.get(key) is chosen_rule for key in others):
+                return chosen, None
+            if others:
+                return None, AUDIT_STATUS_MISSING_COVERAGE
     if len(unique) == 1:
         return unique[0], None
     return None, AUDIT_STATUS_MISSING_COVERAGE
@@ -5823,6 +7048,8 @@ def _calculate_expected_freight_row(
             freight_region,
             row.get("destination_uf"),
             row.get("destination_city"),
+            origin_uf=row.get("origin_uf"),
+            origin_city=row.get("origin_city"),
         )
     ]
     rule_match = _find_pricing_rule_match(
@@ -5830,6 +7057,8 @@ def _calculate_expected_freight_row(
         freight_region,
         row.get("destination_uf"),
         row.get("destination_city"),
+        origin_uf=row.get("origin_uf"),
+        origin_city=row.get("origin_city"),
     )
     if rule_match is None:
         uf = _normalize_destination_uf(row.get("destination_uf"))
@@ -6948,7 +8177,7 @@ def _validate_freight_table_item_for_save(item) -> dict:
             ERROR_TEMP_TABLE_INVALID_PAYLOAD,
             "Tabela principal não pode ficar sem colunas.",
         )
-    return {
+    normalized = {
         "table_title": _sanitize_cell_string(item.get("table_title")),
         "table_type": _sanitize_cell_string(item.get("table_type")),
         "context": _sanitize_freight_table_context(item.get("context")),
@@ -6958,6 +8187,10 @@ def _validate_freight_table_item_for_save(item) -> dict:
         "evidence_ref": _sanitize_cell_string(item.get("evidence_ref")),
         "confidence": _sanitize_cell_string(item.get("confidence")),
     }
+    selected_dimension = _sanitize_cell_string(item.get("_selected_pricing_dimension_column"))
+    if selected_dimension and selected_dimension in columns:
+        normalized["_selected_pricing_dimension_column"] = selected_dimension
+    return normalized
 
 
 def _validate_freight_tables_for_save(raw_tables) -> list[dict]:
@@ -10218,6 +11451,34 @@ def save_temp_table_edit(
     )
     if validated["review_action"] == TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE:
         _validate_accessorial_fees_ready_to_advance(advance_fees)
+
+    if will_confirm_on_prepare:
+        from app.agente_compara_temp_table_validation_service import (
+            validate_pricing_contract_for_confirmation,
+            validation_errors_for_api,
+        )
+
+        pricing_contract = build_pricing_contract(updated)
+        pricing_validation = validate_pricing_contract_for_confirmation(updated, pricing_contract)
+        if not pricing_validation.get("can_confirm"):
+            logger.info(
+                "temp_table_confirmation_blocked blocking_count=%s reason_codes=%s",
+                pricing_validation.get("blocking_count"),
+                sorted(
+                    {
+                        str(issue.get("code") or "")
+                        for issue in (pricing_validation.get("blocking_issues") or [])
+                        if isinstance(issue, dict) and issue.get("code")
+                    }
+                ),
+            )
+            raise AgenteComparaTempTableError(
+                ERROR_TEMP_TABLE_INVALID_PRICING_CONTRACT,
+                "A tabela tarifária não pode ser confirmada. Revise as regras de frete antes de avançar.",
+                errors=validation_errors_for_api(pricing_validation),
+                validation=pricing_validation,
+            )
+        updated["pricing_contract"] = pricing_contract
 
     if validated["has_tax_config_key"]:
         new_tax_fingerprint = _tax_config_fingerprint(updated.get("tax_config"))

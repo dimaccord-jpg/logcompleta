@@ -25,6 +25,49 @@ CODE_UNSUPPORTED_OPERATION = "UNSUPPORTED_OPERATION"
 CODE_INVALID_RULE = "INVALID_RULE"
 CODE_READING_ALERT = "READING_ALERT"
 CODE_UNCERTAIN_FIELD = "UNCERTAIN_FIELD"
+CODE_NO_EXECUTABLE_PRICING_RULE = "NO_EXECUTABLE_PRICING_RULE"
+CODE_UNRESOLVED_PRICING_TYPE = "UNRESOLVED_PRICING_TYPE"
+CODE_MISSING_PRICING_UNIT = "MISSING_PRICING_UNIT"
+CODE_INVALID_TARIFF = "INVALID_TARIFF"
+CODE_INVALID_RANGE = "INVALID_RANGE"
+CODE_INVALID_EXCESS = "INVALID_EXCESS"
+CODE_MISSING_LOOKUP_KEY = "MISSING_LOOKUP_KEY"
+CODE_CONFLICTING_LOOKUP_KEY = "CONFLICTING_LOOKUP_KEY"
+CODE_LOST_TARIFF_ROW = "LOST_TARIFF_ROW"
+CODE_FREIGHT_VALUE_NOT_EXECUTABLE = "FREIGHT_VALUE_NOT_EXECUTABLE"
+CODE_ROUTE_TOLL_NOT_EXECUTABLE = "ROUTE_TOLL_NOT_EXECUTABLE"
+CODE_CONTRACT_SNAPSHOT_MISMATCH = "CONTRACT_SNAPSHOT_MISMATCH"
+
+_PRICING_FINDING_CODES = {
+    "no_executable_rule": CODE_NO_EXECUTABLE_PRICING_RULE,
+    "unresolved_pricing_type": CODE_UNRESOLVED_PRICING_TYPE,
+    "missing_unit": CODE_MISSING_PRICING_UNIT,
+    "invalid_tariff": CODE_INVALID_TARIFF,
+    "invalid_range": CODE_INVALID_RANGE,
+    "invalid_excess": CODE_INVALID_EXCESS,
+    "missing_lookup_key": CODE_MISSING_LOOKUP_KEY,
+    "conflicting_lookup_key": CODE_CONFLICTING_LOOKUP_KEY,
+    "lost_tariff_row": CODE_LOST_TARIFF_ROW,
+    "freight_value_not_executable": CODE_FREIGHT_VALUE_NOT_EXECUTABLE,
+    "route_toll_not_executable": CODE_ROUTE_TOLL_NOT_EXECUTABLE,
+    "contract_snapshot_mismatch": CODE_CONTRACT_SNAPSHOT_MISMATCH,
+}
+_PRICING_FINDING_MESSAGES = {
+    "no_executable_rule": "A tabela não tem nenhuma regra de frete executável.",
+    "unresolved_pricing_type": "Não foi possível resolver o modelo de preço de uma linha tarifária.",
+    "missing_unit": "A unidade da tarifa é obrigatória.",
+    "invalid_tariff": "Há uma tarifa inválida, negativa ou não numérica.",
+    "invalid_range": "Há uma faixa de peso inválida, vazia ou conflitante.",
+    "invalid_excess": "O excedente por kg está sem valor ou sem faixa final válida.",
+    "missing_lookup_key": "Há tarifa ativa sem chave, destino ou região suficiente para execução.",
+    "conflicting_lookup_key": "Há duas regras conflitantes para o mesmo destino.",
+    "lost_tariff_row": "Uma linha tarifária ativa não gerou regra executável.",
+    "freight_value_not_executable": "Frete valor está marcado, mas sem parâmetros executáveis.",
+    "route_toll_not_executable": "Pedágio está marcado, mas sem parâmetros executáveis.",
+    "contract_snapshot_mismatch": "O contrato tarifário não corresponde à tabela confirmada.",
+}
+_SUPPORTED_CONTRACT_TYPES = frozenset({"fixed_range", "direct_weight_rate", "range_plus_excess_per_kg"})
+_RANGE_CONTRACT_TYPES = frozenset({"fixed_range", "range_plus_excess_per_kg"})
 
 _REASON_TO_CODE = {
     "missing_calculation_base": CODE_UNMAPPED_CALCULATION_BASE,
@@ -301,10 +344,358 @@ def _empty_validation_result() -> dict:
     }
 
 
-def validate_temp_table_for_confirmation(temp_table) -> dict:
+def _pricing_issue(finding: dict) -> dict:
+    kind = str(finding.get("kind") or "invalid_tariff")
+    source_ref = str(finding.get("source_ref") or kind)
+    try:
+        index = int(finding.get("index") or 0)
+    except (TypeError, ValueError):
+        index = 0
+    return _json_safe_scalar(
+        {
+            "code": _PRICING_FINDING_CODES.get(kind, CODE_INVALID_TARIFF),
+            "section": "pricing_contract",
+            "item_id": f"pricing:{source_ref}",
+            "index": index,
+            "field": str(finding.get("field") or "pricing_contract"),
+            "label": str(finding.get("label") or "Tabela tarifária"),
+            "reason_code": kind,
+            "severity": "blocking",
+            "message": _PRICING_FINDING_MESSAGES.get(kind, _PRICING_FINDING_MESSAGES["invalid_tariff"]),
+        }
+    )
+
+
+def _finite_non_negative(value) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    number = float(value)
+    return math.isfinite(number) and number >= 0
+
+
+def _contract_brackets_conflict(brackets) -> bool:
+    if not isinstance(brackets, list) or not brackets:
+        return True
+    seen_max: set[float] = set()
+    previous_max = None
+    for bracket in brackets:
+        if not isinstance(bracket, dict):
+            return True
+        if not _finite_non_negative(bracket.get("min_kg")) or not _finite_non_negative(bracket.get("max_kg")):
+            return True
+        if not _finite_non_negative(bracket.get("value")):
+            return True
+        min_kg = float(bracket["min_kg"])
+        max_kg = float(bracket["max_kg"])
+        if max_kg < min_kg or max_kg in seen_max:
+            return True
+        if previous_max is not None and min_kg < previous_max:
+            return True
+        seen_max.add(max_kg)
+        previous_max = max_kg
+    return False
+
+
+def pricing_contract_structure_findings(contract) -> list[dict]:
+    """Defeitos estruturais do contrato, sem recompilar a tabela."""
+    findings: list[dict] = []
+    rules = contract.get("rules") if isinstance(contract, dict) else None
+    if not isinstance(rules, list) or not rules:
+        findings.append(
+            {
+                "kind": "no_executable_rule",
+                "source_ref": "pricing_contract",
+                "index": 0,
+                "field": "rules",
+                "label": "Tabela tarifária",
+            }
+        )
+        return findings
+    owned: dict[str, int] = {}
+    for index, rule in enumerate(rules):
+        source_ref = f"rules[{index}]"
+        label = f"Regra {index + 1}"
+        if isinstance(rule, dict):
+            refs = rule.get("source_refs")
+            if isinstance(refs, list) and refs:
+                source_ref = str(refs[0])
+            if rule.get("region"):
+                label = str(rule.get("region"))
+        if not isinstance(rule, dict):
+            findings.append(
+                {
+                    "kind": "unresolved_pricing_type",
+                    "source_ref": source_ref,
+                    "index": index,
+                    "field": "pricing_type",
+                    "label": label,
+                }
+            )
+            continue
+        pricing_type = rule.get("pricing_type")
+        if pricing_type not in _SUPPORTED_CONTRACT_TYPES:
+            findings.append(
+                {
+                    "kind": "unresolved_pricing_type",
+                    "source_ref": source_ref,
+                    "index": index,
+                    "field": "pricing_type",
+                    "label": label,
+                }
+            )
+            continue
+        raw_lookup_keys = rule.get("lookup_keys")
+        if raw_lookup_keys is None:
+            raw_lookup_keys = []
+        elif not isinstance(raw_lookup_keys, list):
+            findings.append(
+                {
+                    "kind": "missing_lookup_key",
+                    "source_ref": source_ref,
+                    "index": index,
+                    "field": "lookup_keys",
+                    "label": label,
+                }
+            )
+            continue
+        keys = [key for key in raw_lookup_keys if isinstance(key, str) and key.strip()]
+        if not keys:
+            findings.append(
+                {
+                    "kind": "missing_lookup_key",
+                    "source_ref": source_ref,
+                    "index": index,
+                    "field": "lookup_keys",
+                    "label": label,
+                }
+            )
+        for key in keys:
+            if key in owned and owned[key] != index:
+                findings.append(
+                    {
+                        "kind": "conflicting_lookup_key",
+                        "source_ref": key,
+                        "index": index,
+                        "field": "lookup_keys",
+                        "label": key,
+                    }
+                )
+            else:
+                owned[key] = index
+        unit = str(rule.get("unit") or "").strip().lower()
+        if pricing_type == "direct_weight_rate":
+            if unit not in {"kg", "ton"}:
+                findings.append(
+                    {
+                        "kind": "missing_unit",
+                        "source_ref": source_ref,
+                        "index": index,
+                        "field": "unit",
+                        "label": label,
+                    }
+                )
+            amount_field = "value_per_ton" if unit == "ton" else "value_per_kg"
+            if not _finite_non_negative(rule.get(amount_field)):
+                findings.append(
+                    {
+                        "kind": "invalid_tariff",
+                        "source_ref": source_ref,
+                        "index": index,
+                        "field": amount_field,
+                        "label": label,
+                    }
+                )
+        elif pricing_type in _RANGE_CONTRACT_TYPES:
+            if unit != "kg":
+                findings.append(
+                    {
+                        "kind": "missing_unit",
+                        "source_ref": source_ref,
+                        "index": index,
+                        "field": "unit",
+                        "label": label,
+                    }
+                )
+            brackets = rule.get("brackets") if isinstance(rule.get("brackets"), list) else []
+            if _contract_brackets_conflict(brackets):
+                findings.append(
+                    {
+                        "kind": "invalid_range",
+                        "source_ref": source_ref,
+                        "index": index,
+                        "field": "brackets",
+                        "label": label,
+                    }
+                )
+            if pricing_type == "range_plus_excess_per_kg":
+                excess = rule.get("excess") if isinstance(rule.get("excess"), dict) else {}
+                rate = excess.get("rate_per_kg")
+                last = None
+                if brackets:
+                    last = max(brackets, key=lambda item: float(item.get("max_kg") or 0) if _finite_non_negative(item.get("max_kg")) else -1)
+                if (
+                    not _finite_non_negative(rate)
+                    or not isinstance(last, dict)
+                    or not _finite_non_negative(last.get("max_kg"))
+                    or not _finite_non_negative(last.get("value"))
+                ):
+                    findings.append(
+                        {
+                            "kind": "invalid_excess",
+                            "source_ref": source_ref,
+                            "index": index,
+                            "field": "excess",
+                            "label": label,
+                        }
+                    )
+        freight_value = rule.get("freight_value")
+        if freight_value is not None and (
+            not isinstance(freight_value, dict) or not _finite_non_negative(freight_value.get("rate"))
+        ):
+            findings.append(
+                {
+                    "kind": "freight_value_not_executable",
+                    "source_ref": source_ref,
+                    "index": index,
+                    "field": "freight_value",
+                    "label": label,
+                }
+            )
+        route_toll = rule.get("route_toll")
+        if route_toll is not None and (
+            not isinstance(route_toll, dict)
+            or not _finite_non_negative(route_toll.get("rate_per_fraction"))
+            or not _finite_non_negative(route_toll.get("fraction_size_kg"))
+            or float(route_toll.get("fraction_size_kg") or 0) <= 0
+        ):
+            findings.append(
+                {
+                    "kind": "route_toll_not_executable",
+                    "source_ref": source_ref,
+                    "index": index,
+                    "field": "route_toll",
+                    "label": label,
+                }
+            )
+    return findings
+
+
+def contract_preserves_origin_distinction(contract) -> bool:
+    """True quando alguma lookup_key executável traz seletor de origem."""
+    if not isinstance(contract, dict):
+        return False
+    for rule in contract.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        keys = rule.get("lookup_keys")
+        if not isinstance(keys, list):
+            continue
+        for key in keys:
+            if not isinstance(key, str) or not key.startswith("ORIGIN:"):
+                continue
+            if "=>" in key[len("ORIGIN:") :]:
+                return True
+    return False
+
+
+def pricing_contract_structure_is_usable(contract) -> bool:
+    try:
+        if not isinstance(contract, dict) or contract.get("schema_version") != 1:
+            return False
+        return not pricing_contract_structure_findings(contract)
+    except Exception:
+        return False
+
+
+def validate_pricing_contract_for_confirmation(temp_table, contract=None) -> dict:
+    """Gate de executabilidade do contrato gerado na confirmação.
+
+    Warnings documentais não entram aqui. Não altera o snapshot.
+    """
+    from app.agente_compara_doc_service import (
+        _compile_pricing_contract,
+        _pricing_contract_rules_signature,
+        pricing_source_fingerprint,
+    )
+
+    compiled, findings = _compile_pricing_contract(temp_table if isinstance(temp_table, dict) else {})
+    target = compiled if not isinstance(contract, dict) else contract
+    raw_findings = list(findings)
+    if int(target.get("schema_version") or 0) != 1 or target.get("source_fingerprint") != pricing_source_fingerprint(
+        temp_table if isinstance(temp_table, dict) else {}
+    ):
+        raw_findings.append(
+            {
+                "kind": "contract_snapshot_mismatch",
+                "source_ref": "pricing_contract",
+                "index": 0,
+                "field": "source_fingerprint",
+                "label": "Tabela tarifária",
+            }
+        )
+    if _pricing_contract_rules_signature(target.get("rules")) != _pricing_contract_rules_signature(compiled.get("rules")):
+        raw_findings.append(
+            {
+                "kind": "contract_snapshot_mismatch",
+                "source_ref": "pricing_contract.rules",
+                "index": 0,
+                "field": "rules",
+                "label": "Tabela tarifária",
+            }
+        )
+    try:
+        raw_findings.extend(pricing_contract_structure_findings(target))
+    except Exception:
+        raw_findings.append(
+            {
+                "kind": "no_executable_rule",
+                "source_ref": "pricing_contract",
+                "index": 0,
+                "field": "rules",
+                "label": "Tabela tarifária",
+            }
+        )
+    blocking_issues = _dedupe_pricing_issues([_pricing_issue(finding) for finding in raw_findings])
+    blocking_issues.sort(
+        key=lambda item: (
+            str(item.get("section") or ""),
+            int(item.get("index") or 0),
+            str(item.get("code") or ""),
+            str(item.get("item_id") or ""),
+        )
+    )
+    return _json_safe_scalar(
+        {
+            "schema_version": VALIDATION_SCHEMA_VERSION,
+            "can_confirm": len(blocking_issues) == 0,
+            "blocking_count": len(blocking_issues),
+            "warning_count": 0,
+            "blocking_issues": blocking_issues,
+            "warnings": [],
+        }
+    )
+
+
+def _dedupe_pricing_issues(issues: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[tuple] = set()
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        marker = (issue.get("code"), issue.get("item_id"), issue.get("field"))
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(issue)
+    return deduped
+
+
+def validate_temp_table_for_confirmation(temp_table, *, enforce_pricing_contract: bool = False) -> dict:
     """Valida snapshot de temp table para confirmação/avançar.
 
     Retorno JSON-safe, determinístico, sem mutação do input.
+    O contrato tarifário só entra no gate quando enforce_pricing_contract=True,
+    isto é, na confirmação da tabela revisada.
     """
     if not isinstance(temp_table, dict):
         return _empty_validation_result()
@@ -320,6 +711,9 @@ def validate_temp_table_for_confirmation(temp_table) -> dict:
     fees_for_validation = [copy.deepcopy(fee) if isinstance(fee, dict) else fee for fee in fees]
     blocking_issues = _collect_accessorial_blocking_issues(fees_for_validation)
     warnings = _warning_entries(snapshot)
+    if enforce_pricing_contract:
+        pricing_validation = validate_pricing_contract_for_confirmation(temp_table)
+        blocking_issues.extend(pricing_validation.get("blocking_issues") or [])
 
     # Ordem determinística: seção, índice, código, item_id.
     blocking_issues.sort(
