@@ -502,27 +502,15 @@ def run_agente_compara_temp_table_extraction(
             text = (getattr(response, "text", None) or "").strip()
             payload = _parse_extraction_response(text)
             if payload is None:
-                record = apply_temp_table_extraction_from_model_payload(
-                    _failed_extraction_payload(reading_alerts=READING_ALERT_PARSER_NO_JSON),
-                    source_doc_ids=normalized,
-                    comparison_id=comparison_id,
-                    table_id=table_id,
-                    slot_number=slot_number,
+                fallback_following = model_index + 1 < len(model_candidates)
+                logger.warning(
+                    "Agente Compara temp_table extraction parser_no_json: "
+                    "model=%s model_index=%s motivo=parser_no_json fallback_following=%s",
+                    model,
+                    model_index,
+                    fallback_following,
                 )
-                _register_nonbillable_processing_event(
-                    record,
-                    source_doc_ids=normalized,
-                    comparison_id=comparison_id,
-                    slot_number=slot_number,
-                )
-                _cache_extraction_result(
-                    sess,
-                    normalized,
-                    record,
-                    comparison_id=comparison_id,
-                    table_id=table_id,
-                )
-                return record
+                continue
             if franquia_scope is not None:
                 payload["franquia_scope"] = franquia_scope
             if user_scope is not None:
