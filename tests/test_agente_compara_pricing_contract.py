@@ -15,6 +15,7 @@ from app.agente_compara_doc_service import (
     _compile_pricing_contract,
     _find_pricing_rule_match,
     _is_excess_column,
+    _is_region_column,
     _parse_range_from_label,
     _serialize_pricing_rule_for_fingerprint,
     build_freight_pricing_index,
@@ -592,6 +593,51 @@ def test_zone_and_group_keep_existing_freight_region_keys():
     assert zone_result["results"][0]["evidence"]["pricing_lookup_key"] == "P1"
     assert group_result["results"][0]["calculated_freight"] == 18.0
     assert group_result["results"][0]["evidence"]["pricing_lookup_key"] == "MG-CAP"
+
+
+def test_zone_column_is_recognized_without_explicit_dimension_selection():
+    assert _is_region_column("Zona") is True
+    assert _is_region_column("Grupo") is False
+
+
+def test_zone_rows_without_selected_dimension_keep_distinct_lookup_keys():
+    table = {
+        "freight_tables": [
+            {
+                "table_title": "Tabela de Precos por Zona - Sul",
+                "columns": ["Zona", "Até 10 kg"],
+                "rows": [
+                    {"Zona": "S1", "Até 10 kg": "10,00"},
+                    {"Zona": "S2", "Até 10 kg": "20,00"},
+                ],
+            }
+        ],
+        "freight_routes": [],
+    }
+    contract = build_pricing_contract(table)
+    assert len(contract["rules"]) == 2
+    assert [rule["lookup_keys"] for rule in contract["rules"]] == [["S1"], ["S2"]]
+    assert "Tabela de Precos por Zona - Sul" not in {
+        key for rule in contract["rules"] for key in rule["lookup_keys"]
+    }
+    validation = validate_pricing_contract_for_confirmation(table)
+    assert validation["can_confirm"] is True, validation["blocking_issues"]
+    assert CODE_CONFLICTING_LOOKUP_KEY not in {issue["code"] for issue in validation["blocking_issues"]}
+
+    s1 = _calculate(
+        table,
+        [_row(destination_city="Porto Alegre", destination_uf="RS", weight=5, invoice_value=None)],
+        _coverage_rows(("RS", "Porto Alegre", "S1")),
+    )
+    s2 = _calculate(
+        table,
+        [_row(destination_city="Florianopolis", destination_uf="SC", weight=5, invoice_value=None)],
+        _coverage_rows(("SC", "Florianopolis", "S2")),
+    )
+    assert s1["results"][0]["calculated_freight"] == 10.0
+    assert s1["results"][0]["evidence"]["pricing_lookup_key"] == "S1"
+    assert s2["results"][0]["calculated_freight"] == 20.0
+    assert s2["results"][0]["evidence"]["pricing_lookup_key"] == "S2"
 
 
 def test_same_executable_origin_key_stays_blocked():

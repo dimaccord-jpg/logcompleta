@@ -3563,6 +3563,7 @@ def _is_region_column(column_name) -> bool:
         "praca",
         "rota",
         "itinerario",
+        "zona",
         "destino",
         "destino frete",
         "cidade",
