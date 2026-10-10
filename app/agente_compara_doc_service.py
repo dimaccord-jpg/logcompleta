@@ -3608,7 +3608,18 @@ def _is_value_column(column_name) -> bool:
     return normalized in {"frete", "valor", "valor frete", "frete peso", "tarifa"}
 
 
+# ">" só é excedente com unidade de peso. _normalize_coverage_header descarta o
+# símbolo, então ">500 kg" viraria "500 kg" e uma faixa fechada até 500 kg.
+_GREATER_THAN_WEIGHT_HEADER_RE = re.compile(
+    r">\s*\d+(?:[,.]\d+)?\s*(?:kgs?|peso)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_excess_column(column_name) -> bool:
+    raw = "" if column_name is None else str(column_name)
+    if _GREATER_THAN_WEIGHT_HEADER_RE.search(raw):
+        return True
     normalized = _normalize_coverage_header(column_name)
     if not normalized:
         return False

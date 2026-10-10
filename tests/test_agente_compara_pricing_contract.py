@@ -14,6 +14,7 @@ from app.agente_compara_doc_service import (
     _build_freight_pricing_index_legacy,
     _compile_pricing_contract,
     _find_pricing_rule_match,
+    _is_excess_column,
     _parse_range_from_label,
     _serialize_pricing_rule_for_fingerprint,
     build_freight_pricing_index,
@@ -23,6 +24,7 @@ from app.agente_compara_doc_service import (
 )
 from app.agente_compara_temp_table_validation_service import (
     CODE_CONFLICTING_LOOKUP_KEY,
+    CODE_INVALID_RANGE,
     CODE_INVALID_TARIFF,
     CODE_MISSING_LOOKUP_KEY,
     CODE_NO_EXECUTABLE_PRICING_RULE,
@@ -776,6 +778,86 @@ def test_parse_range_from_label_ignores_hyphen_without_weight_context():
     assert _parse_range_from_label("80000-82999") is None
     assert _parse_range_from_label("Rota 1-2") is None
     assert _parse_range_from_label("30-10 kg") is None
+
+
+def test_parse_range_from_label_does_not_treat_greater_than_weight_as_closed_range():
+    assert _parse_range_from_label(">500 kg") is None
+    assert _parse_range_from_label("> 500 kg") is None
+    assert _parse_range_from_label("acima de 500 kg") is None
+    assert _parse_range_from_label(">500") is None
+    assert _parse_range_from_label("> 10 dias") is None
+
+
+def test_greater_than_weight_header_is_excess_column():
+    assert _is_excess_column(">500 kg") is True
+    assert _is_excess_column("> 500 kg") is True
+    assert _is_excess_column("acima de 500 kg") is True
+    assert _is_excess_column(">500") is False
+    assert _is_excess_column("> 500") is False
+    assert _is_excess_column(">500 dias") is False
+    assert _is_excess_column("Rota > 2") is False
+
+
+def test_greater_than_weight_matrix_compiles_range_plus_excess():
+    excess_header = ">500 kg"
+    table = {
+        "freight_tables": [
+            {
+                "table_title": "Homolog excedente maior-que",
+                "columns": [
+                    "Destino",
+                    "Prazo",
+                    "0-10 kg",
+                    "11-30 kg",
+                    "31-50 kg",
+                    "51-100 kg",
+                    "101-200 kg",
+                    "201-500 kg",
+                    excess_header,
+                ],
+                "rows": [
+                    {
+                        "Destino": "Curitiba/PR",
+                        "Prazo": "5",
+                        "0-10 kg": "31",
+                        "11-30 kg": "45",
+                        "31-50 kg": "60",
+                        "51-100 kg": "87",
+                        "101-200 kg": "132",
+                        "201-500 kg": "276",
+                        excess_header: "0,54",
+                    }
+                ],
+            }
+        ],
+        "freight_routes": [],
+    }
+    contract, findings = _compile_pricing_contract(table)
+    assert not any(item.get("kind") == "invalid_range" for item in findings)
+    rules = [rule for rule in contract["rules"] if rule.get("pricing_type") == "range_plus_excess_per_kg"]
+    assert len(rules) == 1
+    rule = rules[0]
+    assert rule["region"] == "Curitiba/PR"
+    assert [
+        (bracket["min_kg"], bracket["max_kg"], bracket["value"]) for bracket in rule["brackets"]
+    ] == [
+        (0.0, 10.0, 31.0),
+        (10.0, 30.0, 45.0),
+        (30.0, 50.0, 60.0),
+        (50.0, 100.0, 87.0),
+        (100.0, 200.0, 132.0),
+        (200.0, 500.0, 276.0),
+    ]
+    assert rule["brackets"][-1]["max_kg"] == 500.0
+    assert all(bracket.get("label") != excess_header for bracket in rule["brackets"])
+    assert rule["excess"]["rate_per_kg"] == 0.54
+    validation = validate_pricing_contract_for_confirmation(table, contract)
+    assert CODE_INVALID_RANGE not in {issue["code"] for issue in validation["blocking_issues"]}
+    assert validation["can_confirm"] is True, validation["blocking_issues"]
+    calculated = calculate_weight_freight(600, rule)
+    assert calculated is not None
+    assert calculated["calculation_basis"] == "range_plus_excess_per_kg"
+    assert calculated["expected_freight"] == 330.00
 
 
 _COMP03_WEIGHT_COLUMNS = [
