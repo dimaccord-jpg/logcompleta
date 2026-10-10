@@ -778,40 +778,83 @@ def test_parse_range_from_label_ignores_hyphen_without_weight_context():
     assert _parse_range_from_label("30-10 kg") is None
 
 
-def _comp_03a_hyphen_weight_table() -> dict:
-    columns = [
-        "Destino",
-        "Prazo",
-        "0-10 kg",
-        "11-30 kg",
-        "31-50 kg",
-        "51-100 kg",
-        "101-200 kg",
-        "201-500 kg",
-        "501-1000 kg",
-    ]
+_COMP03_WEIGHT_COLUMNS = [
+    "Destino",
+    "Prazo",
+    "0-10 kg",
+    "11-30 kg",
+    "31-50 kg",
+    "51-100 kg",
+    "101-200 kg",
+    "201-500 kg",
+    "501-1000 kg",
+]
+
+
+def _rota_simples_city_uf_table(
+    *,
+    title: str,
+    first_bracket: str,
+    region: str = "Curitiba/PR",
+) -> dict:
+    row = {
+        "Destino": region,
+        "Prazo": "5",
+        "0-10 kg": first_bracket,
+        "11-30 kg": "44",
+        "31-50 kg": "58",
+        "51-100 kg": "82",
+        "101-200 kg": "125",
+        "201-500 kg": "245",
+        "501-1000 kg": "410",
+    }
     return {
         "freight_tables": [
             {
-                "table_title": "COMP-03A",
-                "columns": columns,
-                "rows": [
-                    {
-                        "Destino": "Curitiba/PR",
-                        "Prazo": "5",
-                        "0-10 kg": "32",
-                        "11-30 kg": "44",
-                        "31-50 kg": "58",
-                        "51-100 kg": "82",
-                        "101-200 kg": "125",
-                        "201-500 kg": "245",
-                        "501-1000 kg": "410",
-                    }
-                ],
+                "table_title": title,
+                "columns": list(_COMP03_WEIGHT_COLUMNS),
+                "rows": [row],
             }
         ],
         "freight_routes": [],
     }
+
+
+def _comp_03a_hyphen_weight_table() -> dict:
+    return _rota_simples_city_uf_table(title="COMP-03A", first_bracket="32")
+
+
+def _assert_comp03_weight_brackets(rule: dict, *, first_amount: float) -> None:
+    expected = {
+        5: first_amount,
+        10: first_amount,
+        10.5: 44.0,
+        11: 44.0,
+        30: 44.0,
+        30.5: 58.0,
+        750: 410.0,
+        1000: 410.0,
+    }
+    for weight, amount in expected.items():
+        calculated = calculate_weight_freight(weight, rule)
+        assert calculated is not None, weight
+        assert calculated["calculation_basis"] == "fixed_range"
+        assert calculated["expected_freight"] == amount
+
+
+def _curitiba_pricing_match(table: dict):
+    index = build_freight_pricing_index(_with_contract(table))
+    assert "PR|CURITIBA" in index
+    match = _find_pricing_rule_match(
+        index,
+        freight_region="CURITIBA",
+        destination_uf="PR",
+        destination_city="Curitiba",
+    )
+    assert match is not None
+    rule, _kind, key = match
+    assert key == "PR|CURITIBA"
+    return rule, index
 
 
 def test_comp_03a_hyphen_matrix_compiles_executable_fixed_range():
@@ -821,6 +864,7 @@ def test_comp_03a_hyphen_matrix_compiles_executable_fixed_range():
     assert len(rules) == 1
     rule = rules[0]
     assert rule["region"] == "Curitiba/PR"
+    assert rule["lookup_keys"] == ["Curitiba/PR", "CURITIBA PR", "PR|CURITIBA"]
     assert [
         (bracket["min_kg"], bracket["max_kg"], bracket["value"]) for bracket in rule["brackets"]
     ] == [
@@ -866,3 +910,185 @@ def test_active_route_without_destination_blocks_confirmation():
     assert validation["can_confirm"] is False
     assert CODE_MISSING_LOOKUP_KEY in {issue["code"] for issue in validation["blocking_issues"]}
     assert any(issue.get("field") == "destination" for issue in validation["blocking_issues"])
+
+
+@pytest.mark.parametrize(
+    "region",
+    [
+        "Curitiba/PR",
+        "Curitiba / PR",
+        "Curitiba - PR",
+        "Curitiba \u2013 PR",
+        "Curitiba \u2014 PR",
+        "PR/Curitiba",
+    ],
+)
+def test_comp03_explicit_city_uf_formats_keep_alias_and_add_canonical_key(region):
+    table = _rota_simples_city_uf_table(title="COMP-03", first_bracket="32", region=region)
+    keys = build_pricing_contract(table)["rules"][0]["lookup_keys"]
+    assert keys[0] == region
+    assert "PR|CURITIBA" in keys
+    assert "CURITIBA" not in keys
+
+
+def test_comp03_rota_simples_a_and_b_resolve_curitiba_by_canonical_key():
+    rota_a = _rota_simples_city_uf_table(title="Rota Simples A", first_bracket="32")
+    rota_b = _rota_simples_city_uf_table(title="Rota Simples B", first_bracket="34")
+
+    for table, first_amount in ((rota_a, 32.0), (rota_b, 34.0)):
+        contract = build_pricing_contract(table)
+        assert contract["rules"][0]["lookup_keys"] == [
+            "Curitiba/PR",
+            "CURITIBA PR",
+            "PR|CURITIBA",
+        ]
+        validation = validate_pricing_contract_for_confirmation(table, contract)
+        assert validation["can_confirm"] is True, validation["blocking_issues"]
+        rule, index = _curitiba_pricing_match(table)
+        assert index["PR|CURITIBA"]["region"] == "Curitiba/PR"
+        assert calculate_weight_freight(5, rule)["expected_freight"] == first_amount
+        _assert_comp03_weight_brackets(rule, first_amount=first_amount)
+
+
+def test_comp03_confirmed_contract_without_canonical_key_still_indexes_it():
+    table = _rota_simples_city_uf_table(title="Rota Simples A", first_bracket="32")
+    contract = build_pricing_contract(table)
+    contract["rules"][0]["lookup_keys"] = ["Curitiba/PR", "CURITIBA PR"]
+    table["pricing_contract"] = contract
+    index = build_freight_pricing_index(table)
+    assert "PR|CURITIBA" in index
+    assert index["Curitiba/PR"] is index["PR|CURITIBA"]
+    match = _find_pricing_rule_match(
+        index,
+        freight_region="CURITIBA",
+        destination_uf="PR",
+        destination_city="Curitiba",
+    )
+    assert match is not None
+    rule, _kind, key = match
+    assert key == "PR|CURITIBA"
+    assert calculate_weight_freight(5, rule)["expected_freight"] == 32.0
+
+
+def test_comp03_homonymous_cities_do_not_share_city_only_alias():
+    table = _rota_simples_city_uf_table(title="Homônimos", first_bracket="32")
+    table["freight_tables"][0]["rows"].append(
+        {
+            "Destino": "Curitiba/SC",
+            "Prazo": "5",
+            "0-10 kg": "99",
+            "11-30 kg": "44",
+            "31-50 kg": "58",
+            "51-100 kg": "82",
+            "101-200 kg": "125",
+            "201-500 kg": "245",
+            "501-1000 kg": "410",
+        }
+    )
+    validation = validate_pricing_contract_for_confirmation(table)
+    assert validation["can_confirm"] is True, validation["blocking_issues"]
+    contract = build_pricing_contract(table)
+    pr_rule = next(rule for rule in contract["rules"] if "PR|CURITIBA" in rule["lookup_keys"])
+    sc_rule = next(rule for rule in contract["rules"] if "SC|CURITIBA" in rule["lookup_keys"])
+    assert "CURITIBA" not in pr_rule["lookup_keys"]
+    assert "CURITIBA" not in sc_rule["lookup_keys"]
+    assert set(pr_rule["lookup_keys"]).isdisjoint(sc_rule["lookup_keys"])
+    index = build_freight_pricing_index(_with_contract(table))
+    pr_match = _find_pricing_rule_match(index, "CURITIBA", "PR", "Curitiba")
+    sc_match = _find_pricing_rule_match(index, "CURITIBA", "SC", "Curitiba")
+    assert pr_match is not None and sc_match is not None
+    assert pr_match[2] == "PR|CURITIBA"
+    assert sc_match[2] == "SC|CURITIBA"
+    assert calculate_weight_freight(5, pr_match[0])["expected_freight"] == 32.0
+    assert calculate_weight_freight(5, sc_match[0])["expected_freight"] == 99.0
+    assert pr_match[0] is not sc_match[0]
+
+
+def test_city_without_explicit_uf_does_not_invent_canonical_key():
+    plain = {
+        "freight_tables": [
+            {
+                "columns": ["Destino", "0-10 kg"],
+                "rows": [{"Destino": "Curitiba", "0-10 kg": "32"}],
+            }
+        ],
+        "freight_routes": [],
+    }
+    spaced = {
+        "freight_tables": [
+            {
+                "columns": ["Destino", "0-10 kg"],
+                "rows": [{"Destino": "Curitiba PR", "0-10 kg": "32"}],
+            }
+        ],
+        "freight_routes": [],
+    }
+    invalid_uf = {
+        "freight_tables": [
+            {
+                "columns": ["Destino", "0-10 kg"],
+                "rows": [{"Destino": "Curitiba/XX", "0-10 kg": "32"}],
+            }
+        ],
+        "freight_routes": [],
+    }
+    assert build_pricing_contract(plain)["rules"][0]["lookup_keys"] == ["Curitiba", "CURITIBA"]
+    assert build_pricing_contract(spaced)["rules"][0]["lookup_keys"] == ["Curitiba PR", "CURITIBA PR"]
+    invalid_keys = build_pricing_contract(invalid_uf)["rules"][0]["lookup_keys"]
+    assert "Curitiba/XX" in invalid_keys
+    assert not any("|" in key for key in invalid_keys)
+
+
+def test_comp03_origin_qualified_city_uf_does_not_publish_bare_canonical_key():
+    table = {
+        "freight_tables": [
+            {
+                "columns": ["Cidade origem", "UF origem", "Destino", "0-10 kg"],
+                "rows": [
+                    {
+                        "Cidade origem": "Campinas",
+                        "UF origem": "SP",
+                        "Destino": "Curitiba/PR",
+                        "0-10 kg": "32",
+                    },
+                    {
+                        "Cidade origem": "Guarulhos",
+                        "UF origem": "SP",
+                        "Destino": "Curitiba/PR",
+                        "0-10 kg": "34",
+                    },
+                ],
+            }
+        ],
+        "freight_routes": [],
+    }
+    keys = [key for rule in build_pricing_contract(table)["rules"] for key in rule["lookup_keys"]]
+    assert keys
+    assert all(key.startswith("ORIGIN:") for key in keys)
+    assert "PR|CURITIBA" not in keys
+    assert any(key.endswith("=>PR|CURITIBA") for key in keys)
+    index = build_freight_pricing_index(_with_contract(table))
+    assert "PR|CURITIBA" not in index
+    assert _find_pricing_rule_match(index, "CURITIBA", "PR", "Curitiba") is None
+    match = _find_pricing_rule_match(
+        index,
+        "CURITIBA",
+        "PR",
+        "Curitiba",
+        origin_uf="SP",
+        origin_city="Campinas",
+    )
+    assert match is not None
+    assert match[2].startswith("ORIGIN:SP|CAMPINAS=>")
+    assert calculate_weight_freight(5, match[0])["expected_freight"] == 32.0
+
+
+def test_freight_route_city_slash_uf_adds_canonical_key_without_city_only_alias():
+    table = {
+        "freight_tables": [],
+        "freight_routes": [{"destination": "Curitiba/PR", "weight_10": "32,00"}],
+    }
+    keys = build_pricing_contract(table)["rules"][0]["lookup_keys"]
+    assert "Curitiba/PR" in keys
+    assert "PR|CURITIBA" in keys
+    assert "CURITIBA" not in keys

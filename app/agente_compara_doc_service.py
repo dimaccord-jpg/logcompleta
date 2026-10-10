@@ -4463,19 +4463,26 @@ def _pricing_rule_keys_for_row(
 ) -> list[str]:
     keys = [region]
     normalized_region = _normalize_audit_lookup_text(region)
-    if include_normalized_region and normalized_region:
+    canonical = _explicit_city_uf_canonical_lookup_key(region)
+    city_only = canonical.split("|", 1)[1] if canonical else None
+    if include_normalized_region and normalized_region and normalized_region != city_only:
         keys.append(normalized_region)
     uf = _normalize_destination_uf(destination_uf)
     if uf and normalized_region:
         keys.append(f"{uf}|{normalized_region}")
+    if canonical:
+        keys.append(canonical)
     return list(dict.fromkeys(keys))
+
+
+_EXPLICIT_CITY_UF_SEPARATORS = ("/", " - ", " – ", " — ")
 
 
 def _region_uf_from_composite_route_destination(destination: str) -> tuple[str, str] | None:
     cleaned = _sanitize_cell_string(destination)
     if not cleaned:
         return None
-    for separator in (" - ", " – ", " — "):
+    for separator in _EXPLICIT_CITY_UF_SEPARATORS:
         parts = [part.strip() for part in cleaned.split(separator) if part.strip()]
         if len(parts) != 2:
             continue
@@ -4487,6 +4494,25 @@ def _region_uf_from_composite_route_destination(destination: str) -> tuple[str, 
         if right_uf and right_uf in _BR_UFS and not left_uf:
             return left, right_uf
     return None
+
+
+def _explicit_city_uf_canonical_lookup_key(label: str) -> str | None:
+    """Chave UF|CIDADE quando o rótulo traz os dois de forma explícita.
+
+    Não infere UF ausente e não devolve alias somente com a cidade.
+    """
+    if not isinstance(label, str) or not label.strip():
+        return None
+    parsed = _region_uf_from_composite_route_destination(label)
+    if parsed is None:
+        return None
+    city_label, uf = parsed
+    city = _normalize_audit_lookup_text(city_label)
+    if not uf or uf not in _BR_UFS or not city:
+        return None
+    if len(city) == 2 and city in _BR_UFS:
+        return None
+    return f"{uf}|{city}"
 
 
 _FREIGHT_ROUTE_REGION_NOTE_HEADERS = frozenset(
@@ -4601,12 +4627,9 @@ def _freight_route_region_label(route: dict) -> str | None:
 
 def _pricing_rule_keys_for_freight_route(route: dict, region: str) -> list[str]:
     keys = [region]
-    parsed = _region_uf_from_composite_route_destination(region)
-    if parsed:
-        region_label, uf = parsed
-        normalized_region = _normalize_audit_lookup_text(region_label)
-        if uf and normalized_region:
-            keys.append(f"{uf}|{normalized_region}")
+    canonical = _explicit_city_uf_canonical_lookup_key(region)
+    if canonical:
+        keys.append(canonical)
     region_uf = _resolve_freight_route_region_uf_table(route)
     if region_uf:
         region_label, uf = region_uf
@@ -6008,6 +6031,29 @@ def _pricing_contract_is_usable(temp_table: dict, contract) -> bool:
         return False
 
 
+def _extra_explicit_city_uf_lookup_keys(rule: dict, original_keys: list[str]) -> list[str]:
+    """Completa UF|CIDADE em contrato já confirmado, sem mexer na origem.
+
+    Contratos anteriores a este hotfix guardam Curitiba/PR e CURITIBA PR,
+    mas não a chave que o lookup da cobertura procura.
+    """
+    if original_keys and all(_is_origin_qualified_lookup_key(key) for key in original_keys):
+        return []
+    sources: list[str] = []
+    for field in ("region", "label"):
+        value = rule.get(field)
+        if isinstance(value, str) and value.strip():
+            sources.append(value)
+    sources.extend(key for key in original_keys if not _is_origin_qualified_lookup_key(key))
+    extra: list[str] = []
+    for source in sources:
+        canonical = _explicit_city_uf_canonical_lookup_key(source)
+        if not canonical or canonical in original_keys or canonical in extra:
+            continue
+        extra.append(canonical)
+    return extra
+
+
 def _index_from_pricing_contract(contract: dict) -> dict:
     rules = [rule for rule in (contract.get("rules") or []) if isinstance(rule, dict)]
     restricted_destinations: set[str] = set()
@@ -6021,8 +6067,13 @@ def _index_from_pricing_contract(contract: dict) -> dict:
     index: dict[str, dict] = {}
     for rule in rules:
         engine_rule = copy.deepcopy(rule)
-        for key in rule.get("lookup_keys") or []:
-            if not isinstance(key, str) or not key:
+        original_keys = [key for key in (rule.get("lookup_keys") or []) if isinstance(key, str) and key]
+        for key in original_keys:
+            if key in restricted_destinations and not _is_origin_qualified_lookup_key(key):
+                continue
+            index[key] = engine_rule
+        for key in _extra_explicit_city_uf_lookup_keys(rule, original_keys):
+            if key in index:
                 continue
             if key in restricted_destinations and not _is_origin_qualified_lookup_key(key):
                 continue
