@@ -24,6 +24,7 @@ REAL_PROMPT_VERSION = "sq-prompt-v1"
 REAL_MAX_OUTPUT_TOKENS = 512
 REAL_THINKING_BUDGET = 0
 REAL_CANDIDATE_COUNT = 1
+REAL_RESPONSE_SCHEMA_TRANSPORT = "response_json_schema"
 REAL_MAX_RESPONSE_BYTES = 8_192
 CONSTRAINT_ALLOWLIST = frozenset({"country", "state"})
 SYSTEM_INSTRUCTION = (
@@ -141,6 +142,7 @@ def real_config_material() -> dict:
         "thinking_budget": REAL_THINKING_BUDGET,
         "candidate_count": REAL_CANDIDATE_COUNT,
         "response_mime_type": "application/json",
+        "response_schema_transport": REAL_RESPONSE_SCHEMA_TRANSPORT,
         "tools": [],
         "automatic_function_calling_disabled": True,
     }

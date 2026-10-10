@@ -39,7 +39,7 @@ from app.services.semantic_question_execution.keys import (
     ai_execution_fingerprint,
     future_financial_attempt_key,
 )
-from app.services.semantic_question_execution.schema import decision_response_schema
+from app.services.semantic_question_execution.schema import decision_response_json_schema
 from app.services.semantic_question_execution.service import (
     claim_execution,
     close_claimed_execution,
@@ -103,19 +103,18 @@ def with_real_execution_config(spec: dict[str, Any], *, model: str | None = None
 
 
 def build_generation_config():
-    """Config explícita: tools vazios, AFC desligado, thinking mínimo, schema do contrato."""
+    """Config explícita: tools vazios, AFC desligado, thinking mínimo, JSON Schema do contrato."""
     try:
         from google.genai import types
 
         thinking = types.ThinkingConfig(thinking_budget=0)
         afc = types.AutomaticFunctionCallingConfig(disable=True)
-        schema = decision_response_schema()
         return types.GenerateContentConfig(
             temperature=0,
             candidate_count=1,
             max_output_tokens=REAL_MAX_OUTPUT_TOKENS,
             response_mime_type="application/json",
-            response_schema=schema,
+            response_json_schema=decision_response_json_schema(),
             tools=[],
             automatic_function_calling=afc,
             thinking_config=thinking,

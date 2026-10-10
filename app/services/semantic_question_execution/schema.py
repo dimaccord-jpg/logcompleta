@@ -1,70 +1,65 @@
-"""Schema estruturado da decisão semântica. O validador local continua obrigatório."""
+"""JSON Schema puro da decisão semântica. O validador local continua obrigatório."""
 from __future__ import annotations
+
+from typing import Any
 
 from app.services.semantic_question_execution.constants import (
     CONFIDENCE_VALUES,
     DECISION_STATUSES,
     OUTPUT_SCHEMA_VERSION,
     RATIONALE_CODES,
-    SemanticExecutionError,
+)
+
+_DECISION_FIELDS = (
+    "schema_version",
+    "question_id",
+    "status",
+    "selected_candidate_id",
+    "evidence_refs",
+    "rationale_code",
+    "confidence",
 )
 
 
-def decision_response_schema():
-    """Schema do SDK. Falha fechada se a versão instalada não materializar o contrato."""
-    try:
-        from google.genai import types
-    except Exception as exc:
-        raise SemanticExecutionError("response_schema_unavailable") from exc
-    try:
-        decision = types.Schema(
-            type="OBJECT",
-            additional_properties=False,
-            required=[
-                "schema_version",
-                "question_id",
-                "status",
-                "selected_candidate_id",
-                "evidence_refs",
-                "rationale_code",
-                "confidence",
-            ],
-            property_ordering=[
-                "schema_version",
-                "question_id",
-                "status",
-                "selected_candidate_id",
-                "evidence_refs",
-                "rationale_code",
-                "confidence",
-            ],
-            properties={
-                "schema_version": types.Schema(type="STRING", enum=[OUTPUT_SCHEMA_VERSION]),
-                "question_id": types.Schema(type="STRING"),
-                "status": types.Schema(type="STRING", enum=list(DECISION_STATUSES)),
-                "selected_candidate_id": types.Schema(type="STRING", nullable=True),
-                "evidence_refs": types.Schema(
-                    type="ARRAY",
-                    items=types.Schema(type="STRING"),
-                ),
-                "rationale_code": types.Schema(type="STRING", enum=list(RATIONALE_CODES)),
-                "confidence": types.Schema(type="STRING", enum=list(CONFIDENCE_VALUES)),
+def decision_response_json_schema() -> dict[str, Any]:
+    """Contrato em JSON Schema, com chaves aceitas em responseJsonSchema.
+
+    O caminho response_schema do SDK projeta additional_properties,
+    property_ordering e min_items/max_items em snake_case. A API rejeita isso.
+    """
+    decision = {
+        "type": "object",
+        "additionalProperties": False,
+        "propertyOrdering": list(_DECISION_FIELDS),
+        "required": list(_DECISION_FIELDS),
+        "properties": {
+            "schema_version": {"type": "string", "enum": [OUTPUT_SCHEMA_VERSION]},
+            "question_id": {"type": "string"},
+            "status": {"type": "string", "enum": list(DECISION_STATUSES)},
+            "selected_candidate_id": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
             },
-        )
-        return types.Schema(
-            type="OBJECT",
-            additional_properties=False,
-            required=["decisions"],
-            properties={
-                "decisions": types.Schema(
-                    type="ARRAY",
-                    min_items=1,
-                    max_items=1,
-                    items=decision,
-                )
+            "evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"},
             },
-        )
-    except SemanticExecutionError:
-        raise
-    except Exception as exc:
-        raise SemanticExecutionError("response_schema_unsupported") from exc
+            "rationale_code": {"type": "string", "enum": list(RATIONALE_CODES)},
+            "confidence": {"type": "string", "enum": list(CONFIDENCE_VALUES)},
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["decisions"],
+        "properties": {
+            "decisions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "items": decision,
+            }
+        },
+    }

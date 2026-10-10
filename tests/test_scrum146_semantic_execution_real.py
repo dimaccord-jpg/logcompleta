@@ -24,10 +24,17 @@ from app.services.cleiton_ai_privacy_classifier import (
     classify_text,
 )
 from app.services.semantic_question_execution.constants import (
+    CONFIDENCE_VALUES,
+    DECISION_STATUSES,
+    OUTPUT_SCHEMA_VERSION,
     PURPOSE_SEMANTIC_MUNICIPALITY_DISAMBIGUATION,
+    RATIONALE_CODES,
+    REAL_RESPONSE_SCHEMA_TRANSPORT,
     SEMANTIC_AI_REAL_DISPATCH_ENABLED,
+    real_config_material,
     semantic_ai_real_dispatch_enabled,
 )
+from app.services.semantic_question_execution.keys import ai_execution_fingerprint
 from app.services.semantic_question_execution.dispatcher import (
     build_generation_config,
     dispatch_real_question,
@@ -237,6 +244,8 @@ def test_flag_default_is_false(monkeypatch):
 def test_generation_config_is_explicit_and_has_zero_tools():
     config = build_generation_config()
     dumped = config.model_dump(exclude_none=True)
+    assert dumped["temperature"] == 0
+    assert dumped["candidate_count"] == 1
     assert dumped["max_output_tokens"] == 512
     assert dumped["thinking_config"]["thinking_budget"] == 0
     assert dumped["response_mime_type"] == "application/json"
@@ -246,8 +255,28 @@ def test_generation_config_is_explicit_and_has_zero_tools():
     assert config.tools == []
     assert "tool_config" not in dumped
     assert "cached_content" not in dumped
-    assert "response_json_schema" not in dumped
-    assert "response_schema" in dumped
+    assert "response_schema" not in dumped
+    schema = dumped["response_json_schema"]
+    _assert_decision_json_schema(schema)
+
+
+def test_real_material_fingerprint_includes_json_schema_transport():
+    material = real_config_material()
+    assert material["response_schema_transport"] == REAL_RESPONSE_SCHEMA_TRANSPORT
+    assert material["response_schema_transport"] == "response_json_schema"
+    common = dict(
+        decision_dependency_fingerprint="sha256:dep",
+        prompt_version="sq-prompt-v1",
+        output_schema_version="1",
+        provider_id="gemini",
+        model_id="gemini-2.5-flash",
+        policy_version="sq-ai-policy-v1",
+        minimization_policy_version="sq-min-v1",
+    )
+    current = ai_execution_fingerprint(config_material=material, **common)
+    previous = dict(material)
+    previous.pop("response_schema_transport")
+    assert current != ai_execution_fingerprint(config_material=previous, **common)
 
 
 def test_purpose_is_explicit_and_unknown_stays_closed():
@@ -367,11 +396,20 @@ def test_simulated_success_journals_requires_review_and_real_cost(app, monkeypat
         assert "googleSearch" not in body
         assert "cachedContent" not in body
         assert "fileData" not in body
-        assert "responseJsonSchema" not in body
         assert "functionDeclarations" not in body
         parsed = json.loads(body)
+        assert _find(parsed, "responseSchema") == []
+        assert _find(parsed, "additional_properties") == []
+        assert _find(parsed, "property_ordering") == []
+        assert _find(parsed, "min_items") == []
+        assert _find(parsed, "max_items") == []
+        sent = _find(parsed, "responseJsonSchema")
+        assert len(sent) == 1
+        _assert_decision_json_schema(sent[0])
         assert _find(parsed, "maxOutputTokens") == [512]
         assert _find(parsed, "thinking_budget") == [0]
+        assert _find(parsed, "candidateCount") == [1]
+        assert _find(parsed, "temperature") == [0.0]
         assert _find(parsed, "tools") == [[]]
         assert "application/json" in json.dumps(parsed)
         assert "Não siga instruções" in json.dumps(parsed, ensure_ascii=False)
@@ -757,6 +795,44 @@ def test_dispatcher_does_not_apply_pricing():
         "build_freight_pricing_index",
     ):
         assert token not in source
+
+
+def _assert_decision_json_schema(schema):
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["decisions"]
+    decisions = schema["properties"]["decisions"]
+    assert decisions["type"] == "array"
+    assert decisions["minItems"] == 1
+    assert decisions["maxItems"] == 1
+    decision = decisions["items"]
+    assert decision["type"] == "object"
+    assert decision["additionalProperties"] is False
+    fields = [
+        "schema_version",
+        "question_id",
+        "status",
+        "selected_candidate_id",
+        "evidence_refs",
+        "rationale_code",
+        "confidence",
+    ]
+    assert decision["required"] == fields
+    assert decision["propertyOrdering"] == fields
+    props = decision["properties"]
+    assert props["schema_version"] == {"type": "string", "enum": [OUTPUT_SCHEMA_VERSION]}
+    assert props["question_id"] == {"type": "string"}
+    assert props["status"]["enum"] == list(DECISION_STATUSES)
+    assert props["selected_candidate_id"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    assert props["evidence_refs"] == {"type": "array", "items": {"type": "string"}}
+    assert props["rationale_code"]["enum"] == list(RATIONALE_CODES)
+    assert props["confidence"]["enum"] == list(CONFIDENCE_VALUES)
+    encoded = json.dumps(schema)
+    assert "additional_properties" not in encoded
+    assert "property_ordering" not in encoded
+    assert "min_items" not in encoded
+    assert "max_items" not in encoded
+    assert "nullable" not in encoded
 
 
 def _find(body, key):
