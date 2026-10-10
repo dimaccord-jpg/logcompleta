@@ -47,13 +47,13 @@ def _to_decimal(x: Any) -> Decimal:
     return Decimal(str(x))
 
 
-def _saldo(limite: Any, consumo: Decimal) -> Decimal | None:
+def _saldo(limite: Any, consumo: Decimal, reserva: Decimal | None = None) -> Decimal | None:
     if limite is None:
         return None
     d = _to_decimal(limite)
     if d <= 0:
         return None
-    return d - consumo
+    return d - consumo - _to_decimal(reserva)
 
 
 def ler_franquia_operacional_cleiton(
@@ -81,8 +81,9 @@ def ler_franquia_operacional_cleiton(
     pend = tuple(dict.fromkeys((*plano.pendencias, *pend_ciclo)))
 
     consumo = _to_decimal(fr.consumo_acumulado)
+    reserva = _to_decimal(getattr(fr, "reserva_pendente", None))
     lim = fr.limite_total
-    saldo = _saldo(lim, consumo)
+    saldo = _saldo(lim, consumo, reserva)
 
     st, motivo = classificar_estado_operacional_franquia(fr, plano)
 

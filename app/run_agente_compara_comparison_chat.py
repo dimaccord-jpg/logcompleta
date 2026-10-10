@@ -13,6 +13,7 @@ import os
 import re
 import time
 from typing import Any
+from uuid import uuid4
 
 from app.agente_compara_chat_context_service import (
     CAPABILITY_LOCKED,
@@ -41,7 +42,13 @@ from app.run_agente_compara_insights_chat import (
     finalize_insights_answer,
     sanitize_agente_compara_sender_signature,
 )
-from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
+from app.services.cleiton_billable_ai_call import (
+    BillableAiAdmissionBlocked,
+    BillableAiCallError,
+    cleiton_governed_generate_content,
+    gemini_http_options,
+    usuario_operacional_da_chamada,
+)
 from app.services.agente_compara_config_service import get_agente_compara_config
 from app.cleiton_doc_escopo import (
     operational_cache_payload_is_current,
@@ -243,7 +250,6 @@ def _get_client():
         raise ComparisonChatProviderNotConfigured()
     try:
         from google import genai
-        from google.genai import types as genai_types
 
         timeout_ms = 30_000
         raw = (os.getenv("GEMINI_HTTP_TIMEOUT_MS") or "").strip()
@@ -252,7 +258,7 @@ def _get_client():
                 timeout_ms = max(1_000, int(raw))
             except ValueError:
                 pass
-        return genai.Client(api_key=key, http_options=genai_types.HttpOptions(timeout=timeout_ms))
+        return genai.Client(api_key=key, http_options=gemini_http_options(timeout_ms=timeout_ms))
     except ComparisonChatProviderError:
         raise
     except Exception as exc:
@@ -528,6 +534,7 @@ def _run_one_gemini_call(
     basis: dict,
     warnings: list[str],
     decision_request: bool,
+    usuario=None,
 ) -> dict:
     client = _get_client()
     model = resolve_comparison_chat_model()
@@ -539,7 +546,20 @@ def _run_one_gemini_call(
             agent="agente_compara",
             flow_type=AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
             api_key_label=_api_key_label(),
+            usuario=usuario_operacional_da_chamada(usuario),
+            attempt_key=f"{AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE}:{model}:{uuid4().hex}",
         )
+    except BillableAiCallError as exc:
+        if not exc.terminal:
+            raise
+        raise ComparisonChatProviderError(
+            ERROR_PROVIDER_REQUEST_FAILED,
+            exc.mensagem_usuario or MSG_PROVIDER_REQUEST_FAILED,
+            retryable=False,
+            http_status=403 if isinstance(exc, BillableAiAdmissionBlocked) else 503,
+            stage="billable_ai_gate",
+            cause=exc,
+        ) from exc
     except ComparisonChatProviderError:
         raise
     except Exception as exc:
@@ -927,6 +947,7 @@ def chat_agente_compara_comparison_reply(
             basis=basis,
             warnings=warnings,
             decision_request=decision_request,
+            usuario=usuario,
         )
     except ComparisonChatProviderError as exc:
         payload = _provider_error_payload(exc, scope=scope, basis=basis, warnings=warnings)

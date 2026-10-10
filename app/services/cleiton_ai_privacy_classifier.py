@@ -50,6 +50,7 @@ SUPPORTED_PURPOSES = (
     "redacao_editorial",
     "geracao_imagem",
     "busca_web",
+    "semantic_municipality_disambiguation",
 )
 
 # Análise logística: entidades operacionais (transportadora, rota, peso, taxas) são necessárias.

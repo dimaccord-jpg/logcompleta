@@ -13,11 +13,15 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
+from sqlalchemy import bindparam, select, text, update
+from sqlalchemy.exc import IntegrityError
+
 from app.consumo_identidade import TIPO_ORIGEM_HTTP_ANONIMO
 from app.extensions import db
 from app.models import (
     CleitonCostConfig,
     Franquia,
+    IaConsumoAbatimento,
     IaConsumoEvento,
     ProcessingEvent,
     utcnow_naive,
@@ -136,6 +140,8 @@ def ensure_franquia_operacional_inicializada(franquia: Franquia) -> None:
     """Defaults seguros para linhas legadas ou linhas parcialmente preenchidas."""
     if franquia.consumo_acumulado is None:
         franquia.consumo_acumulado = Decimal("0")
+    if getattr(franquia, "reserva_pendente", None) is None:
+        franquia.reserva_pendente = Decimal("0")
 
 
 def _limite_efetivo_bloqueio(limite: Any) -> Decimal | None:
@@ -204,17 +210,28 @@ def aplicar_status_apos_mudanca_estrutural(franquia_id: int) -> None:
         db.session.commit()
 
 
+def _tokens_observados_evento_ia(ev: IaConsumoEvento) -> int:
+    tot = ev.total_tokens
+    if tot is not None and int(tot) > 0:
+        return int(tot)
+    inp = int(ev.input_tokens or 0)
+    out = int(ev.output_tokens or 0)
+    if inp > 0 or out > 0:
+        return inp + out
+    return 0
+
+
 def creditos_totais_de_evento_ia(ev: IaConsumoEvento, cfg: CleitonCostConfig) -> tuple[Decimal | None, str | None]:
+    tokens = _tokens_observados_evento_ia(ev)
+    if ev.status == "failure":
+        if tokens <= 0:
+            return Decimal("0"), None
+        return converter_tokens_para_creditos(tokens, cfg)
     if ev.status not in IA_OK:
         return Decimal("0"), None
-    tot = ev.total_tokens
-    if tot is not None and tot > 0:
-        return converter_tokens_para_creditos(int(tot), cfg)
-    inp = ev.input_tokens or 0
-    out = ev.output_tokens or 0
-    if inp <= 0 and out <= 0:
+    if tokens <= 0:
         return Decimal("0"), None
-    return converter_tokens_para_creditos(int(inp + out), cfg)
+    return converter_tokens_para_creditos(tokens, cfg)
 
 
 def creditos_totais_de_evento_processing(ev: ProcessingEvent, cfg: CleitonCostConfig) -> tuple[Decimal | None, str | None]:
@@ -236,7 +253,129 @@ def creditos_totais_de_evento_processing(ev: ProcessingEvent, cfg: CleitonCostCo
     return _quantize_credit(total), None
 
 
-def aplicar_motor_apos_ia_consumo_evento(evento_id: int) -> ResultadoGovernancaOperacional:
+def saldo_disponivel_chamada_ia(franquia: Franquia) -> Decimal | None:
+    """Limite menos consumo liquidado menos reservas pendentes. None = sem teto."""
+    limite = _limite_efetivo_bloqueio(franquia.limite_total)
+    if limite is None:
+        return None
+    consumo = _to_decimal(franquia.consumo_acumulado)
+    reserva = _to_decimal(getattr(franquia, "reserva_pendente", None))
+    return _quantize_credit(limite - consumo - reserva)
+
+
+@dataclass(frozen=True)
+class DecisaoAdmissaoChamadaIa:
+    """Pode uma nova chamada física de IA ser admitida? Decisão do gerenciador de franquia."""
+
+    admitida: bool
+    classe: str
+    motivo: str
+    debita_cliente: bool
+
+
+CLASSE_ADMISSAO_ACTIVE = "active"
+CLASSE_ADMISSAO_DEGRADED = "degraded"
+CLASSE_ADMISSAO_BLOCKED = "blocked"
+CLASSE_ADMISSAO_EXPIRED = "expired"
+CLASSE_ADMISSAO_INTERNAL = "internal"
+CLASSE_ADMISSAO_UNLIMITED = "unlimited"
+
+
+def decidir_admissao_chamada_ia(
+    franquia: Franquia,
+    plano: PlanoResolvidoCleiton,
+    *,
+    creditos_necessarios: Decimal,
+    origem_sistema: bool,
+    agora: datetime | None = None,
+) -> DecisaoAdmissaoChamadaIa:
+    """
+    Admissão de chamada externa de IA.
+
+    Degraded com saldo insuficiente não abre chamada nova.
+    Origem de sistema não debita cliente. Ilimitado não exige saldo.
+    """
+    if origem_sistema:
+        return DecisaoAdmissaoChamadaIa(
+            admitida=True,
+            classe=CLASSE_ADMISSAO_INTERNAL,
+            motivo="origem_sistema",
+            debita_cliente=False,
+        )
+    status, motivo_status = classificar_estado_operacional_franquia(franquia, plano, agora)
+    if status == Franquia.STATUS_BLOCKED:
+        return DecisaoAdmissaoChamadaIa(
+            admitida=False,
+            classe=CLASSE_ADMISSAO_BLOCKED,
+            motivo=motivo_status or "franquia_bloqueada",
+            debita_cliente=True,
+        )
+    if status == Franquia.STATUS_EXPIRED:
+        return DecisaoAdmissaoChamadaIa(
+            admitida=False,
+            classe=CLASSE_ADMISSAO_EXPIRED,
+            motivo=motivo_status or "vigencia_expirada",
+            debita_cliente=True,
+        )
+    saldo = saldo_disponivel_chamada_ia(franquia)
+    if saldo is None:
+        return DecisaoAdmissaoChamadaIa(
+            admitida=True,
+            classe=CLASSE_ADMISSAO_UNLIMITED,
+            motivo="sem_teto_comercial",
+            debita_cliente=True,
+        )
+    necessario = _quantize_credit(_to_decimal(creditos_necessarios))
+    if status == Franquia.STATUS_DEGRADED and saldo < necessario:
+        return DecisaoAdmissaoChamadaIa(
+            admitida=False,
+            classe=CLASSE_ADMISSAO_DEGRADED,
+            motivo="degraded_saldo_insuficiente",
+            debita_cliente=True,
+        )
+    if saldo < necessario:
+        classe = CLASSE_ADMISSAO_DEGRADED if status == Franquia.STATUS_DEGRADED else CLASSE_ADMISSAO_ACTIVE
+        return DecisaoAdmissaoChamadaIa(
+            admitida=False,
+            classe=classe,
+            motivo="saldo_insuficiente",
+            debita_cliente=True,
+        )
+    if status == Franquia.STATUS_DEGRADED:
+        return DecisaoAdmissaoChamadaIa(
+            admitida=True,
+            classe=CLASSE_ADMISSAO_DEGRADED,
+            motivo="degraded_com_saldo",
+            debita_cliente=True,
+        )
+    return DecisaoAdmissaoChamadaIa(
+        admitida=True,
+        classe=CLASSE_ADMISSAO_ACTIVE,
+        motivo="operacional_ok",
+        debita_cliente=True,
+    )
+
+
+def aplicar_motor_apos_ia_consumo_evento(
+    evento_id: int,
+    *,
+    commit: bool = True,
+) -> ResultadoGovernancaOperacional:
+    existente = (
+        db.session.query(IaConsumoAbatimento)
+        .filter(IaConsumoAbatimento.ia_consumo_evento_id == int(evento_id))
+        .one_or_none()
+    )
+    if existente is not None:
+        return ResultadoGovernancaOperacional(
+            abateu_franquia=False,
+            creditos=_to_decimal(existente.creditos),
+            motivo_nao_abateu="ja_apropriado",
+            franquia_id=existente.franquia_id,
+            status_anterior=None,
+            status_novo=None,
+            erro_config=None,
+        )
     ev = db.session.get(IaConsumoEvento, evento_id)
     if ev is None:
         return ResultadoGovernancaOperacional(
@@ -244,6 +383,16 @@ def aplicar_motor_apos_ia_consumo_evento(evento_id: int) -> ResultadoGovernancaO
             creditos=None,
             motivo_nao_abateu="evento_ia_inexistente",
             franquia_id=None,
+            status_anterior=None,
+            status_novo=None,
+            erro_config=None,
+        )
+    if (ev.regime_abatimento or "") != IaConsumoEvento.REGIME_NOVO:
+        return ResultadoGovernancaOperacional(
+            abateu_franquia=False,
+            creditos=None,
+            motivo_nao_abateu="evento_historico_ja_integrado",
+            franquia_id=ev.franquia_id,
             status_anterior=None,
             status_novo=None,
             erro_config=None,
@@ -286,7 +435,12 @@ def aplicar_motor_apos_ia_consumo_evento(evento_id: int) -> ResultadoGovernancaO
             status_novo=None,
             erro_config=None,
         )
-    return _persistir_abatimento(ev.franquia_id, creditos)
+    return _persistir_abatimento(
+        ev.franquia_id,
+        creditos,
+        evento_ia_id=int(evento_id),
+        commit=commit,
+    )
 
 
 def aplicar_motor_apos_processing_event(evento_id: int) -> ResultadoGovernancaOperacional:
@@ -349,7 +503,57 @@ def lancar_creditos_convertidos(
     return _persistir_abatimento(franquia_id, creditos)
 
 
-def _persistir_abatimento(franquia_id: int | None, creditos: Decimal) -> ResultadoGovernancaOperacional:
+def stmt_lock_franquia():
+    """SELECT da franquia com lock de linha. PostgreSQL emite FOR UPDATE."""
+    return select(Franquia).where(Franquia.id == bindparam("franquia_id")).with_for_update()
+
+
+def stmt_incremento_consumo():
+    """UPDATE atômico. O valor lido e o valor gravado são o mesmo comando."""
+    return (
+        update(Franquia)
+        .where(Franquia.id == bindparam("franquia_id"))
+        .values(consumo_acumulado=Franquia.consumo_acumulado + bindparam("creditos"))
+    )
+
+
+def _iniciar_transacao_exclusiva() -> None:
+    db.session.commit()
+    bind = db.session.get_bind()
+    if bind is not None and bind.dialect.name == "sqlite":
+        db.session.execute(text("BEGIN IMMEDIATE"))
+
+
+def _integrity_e_unicidade_abatimento(exc: IntegrityError) -> bool:
+    orig = getattr(exc, "orig", None)
+    diag = getattr(orig, "diag", None)
+    if diag is not None:
+        nome = (getattr(diag, "constraint_name", None) or "").lower()
+        if nome:
+            return nome == "uq_ia_consumo_abatimento_evento" or "ia_consumo_evento_id" in nome
+    texto = " ".join(str(parte).lower() for parte in (orig, exc) if parte is not None)
+    return "unique" in texto and "ia_consumo_evento_id" in texto
+
+
+def _resultado_ja_apropriado(marca: IaConsumoAbatimento) -> ResultadoGovernancaOperacional:
+    return ResultadoGovernancaOperacional(
+        abateu_franquia=False,
+        creditos=_to_decimal(marca.creditos),
+        motivo_nao_abateu="ja_apropriado",
+        franquia_id=marca.franquia_id,
+        status_anterior=None,
+        status_novo=None,
+        erro_config=None,
+    )
+
+
+def _persistir_abatimento(
+    franquia_id: int | None,
+    creditos: Decimal,
+    *,
+    evento_ia_id: int | None = None,
+    commit: bool = True,
+) -> ResultadoGovernancaOperacional:
     if franquia_id is None:
         return ResultadoGovernancaOperacional(
             abateu_franquia=False,
@@ -360,8 +564,16 @@ def _persistir_abatimento(franquia_id: int | None, creditos: Decimal) -> Resulta
             status_novo=None,
             erro_config=None,
         )
-    fr = db.session.get(Franquia, int(franquia_id))
+    creditos = _quantize_credit(_to_decimal(creditos))
+    if commit:
+        _iniciar_transacao_exclusiva()
+    fr = db.session.execute(
+        stmt_lock_franquia().execution_options(populate_existing=True),
+        {"franquia_id": int(franquia_id)},
+    ).scalar_one_or_none()
     if fr is None:
+        if commit:
+            db.session.rollback()
         return ResultadoGovernancaOperacional(
             abateu_franquia=False,
             creditos=creditos,
@@ -371,26 +583,57 @@ def _persistir_abatimento(franquia_id: int | None, creditos: Decimal) -> Resulta
             status_novo=None,
             erro_config=None,
         )
-    ensure_franquia_operacional_inicializada(fr)
-    garantir_ciclo_operacional_franquia(fr.id)
-    fr = db.session.get(Franquia, int(franquia_id))
-    if fr is None:
-        return ResultadoGovernancaOperacional(
-            abateu_franquia=False,
-            creditos=creditos,
-            motivo_nao_abateu="franquia_nao_encontrada_pos_ciclo",
-            franquia_id=int(franquia_id),
-            status_anterior=None,
-            status_novo=None,
-            erro_config=None,
+    if evento_ia_id is not None:
+        marca = (
+            db.session.query(IaConsumoAbatimento)
+            .filter(IaConsumoAbatimento.ia_consumo_evento_id == int(evento_ia_id))
+            .one_or_none()
         )
+        if marca is not None:
+            if commit:
+                db.session.commit()
+            return _resultado_ja_apropriado(marca)
+    ensure_franquia_operacional_inicializada(fr)
+    garantir_ciclo_operacional_franquia(fr.id, commit=False)
+    db.session.flush()
     st_antes = fr.status
-    fr.consumo_acumulado = _quantize_credit(_to_decimal(fr.consumo_acumulado) + creditos)
+    db.session.execute(
+        stmt_incremento_consumo(),
+        {"franquia_id": int(fr.id), "creditos": creditos},
+    )
+    db.session.expire(fr, ["consumo_acumulado"])
+    db.session.refresh(fr, attribute_names=["consumo_acumulado"])
     plano = resolver_plano_operacional_para_franquia(fr.id)
     st_depois = classificar_estado_operacional_franquia(fr, plano)[0]
     fr.status = st_depois
     db.session.add(fr)
-    db.session.commit()
+    if evento_ia_id is not None:
+        db.session.add(
+            IaConsumoAbatimento(
+                ia_consumo_evento_id=int(evento_ia_id),
+                franquia_id=fr.id,
+                creditos=creditos,
+                created_at=utcnow_naive(),
+            )
+        )
+    try:
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+    except IntegrityError as exc:
+        db.session.rollback()
+        if evento_ia_id is not None and _integrity_e_unicidade_abatimento(exc):
+            return ResultadoGovernancaOperacional(
+                abateu_franquia=False,
+                creditos=creditos,
+                motivo_nao_abateu="ja_apropriado",
+                franquia_id=int(franquia_id),
+                status_anterior=st_antes,
+                status_novo=None,
+                erro_config=None,
+            )
+        raise
     return ResultadoGovernancaOperacional(
         abateu_franquia=True,
         creditos=creditos,

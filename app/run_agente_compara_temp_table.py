@@ -11,6 +11,7 @@ import logging
 import os
 import re
 from typing import Any
+from uuid import uuid4
 
 from flask import has_request_context, session
 
@@ -37,7 +38,12 @@ from app.agente_compara_prompt import (
     build_agente_compara_temp_table_fallback_prompt,
     build_agente_compara_temp_table_technical_prompt,
 )
-from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
+from app.services.cleiton_billable_ai_call import (
+    BillableAiCallError,
+    cleiton_governed_generate_content,
+    gemini_http_options,
+    usuario_operacional_da_chamada,
+)
 from app.services.agente_compara_config_service import get_active_calculation_bases_for_runtime
 from app.cleiton_doc_escopo import (
     operational_cache_payload_is_current,
@@ -158,10 +164,9 @@ def _get_client():
         return None
     try:
         from google import genai
-        from google.genai import types as genai_types
 
         timeout_ms = get_extraction_timeout_ms()
-        return genai.Client(api_key=key, http_options=genai_types.HttpOptions(timeout=timeout_ms))
+        return genai.Client(api_key=key, http_options=gemini_http_options(timeout_ms=timeout_ms))
     except Exception as exc:
         logger.error("Falha ao inicializar cliente Gemini para extração temp_table: %s", exc)
         return None
@@ -491,6 +496,8 @@ def run_agente_compara_temp_table_extraction(
                 agent="agente_compara",
                 flow_type=AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
                 api_key_label=_api_key_label(),
+                usuario=usuario_operacional_da_chamada(),
+                attempt_key=f"{AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE}:{model}:{uuid4().hex}",
             )
             text = (getattr(response, "text", None) or "").strip()
             payload = _parse_extraction_response(text)
@@ -541,6 +548,11 @@ def run_agente_compara_temp_table_extraction(
                 table_id=table_id,
             )
             return record
+        except BillableAiCallError as exc:
+            if not exc.terminal:
+                raise
+            last_error = exc
+            break
         except Exception as exc:
             last_error = exc
             if _is_provider_timeout(exc):

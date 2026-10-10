@@ -82,6 +82,8 @@ class Franquia(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow_naive, nullable=False)
     limite_total = db.Column(db.Numeric(18, 6), nullable=True)
     consumo_acumulado = db.Column(db.Numeric(18, 6), nullable=False, default=0)
+    # Créditos reservados para chamadas de IA ainda não liquidadas. Não é consumo.
+    reserva_pendente = db.Column(db.Numeric(18, 6), nullable=False, default=0)
     inicio_ciclo = db.Column(db.DateTime, nullable=True)
     fim_ciclo = db.Column(db.DateTime, nullable=True)
     bloqueio_manual = db.Column(db.Boolean, nullable=False, default=False)
@@ -780,6 +782,69 @@ class IaConsumoEvento(db.Model):
     usuario_id = db.Column(db.Integer, nullable=True, index=True)
     tipo_origem = db.Column(db.String(80), nullable=True, index=True)
     origem_sistema = db.Column(db.Boolean, nullable=True, index=True)
+    # novo: elegível ao abatimento idempotente deste lote.
+    # legado/NULL: já pertence ao consumo anterior e não pode ser debitado de novo.
+    REGIME_NOVO = "novo"
+    REGIME_LEGADO = "legado"
+    regime_abatimento = db.Column(db.String(20), nullable=True, index=True, default=REGIME_NOVO)
+
+
+class IaConsumoAbatimento(db.Model):
+    """Marca única do motor: um IaConsumoEvento abate a franquia no máximo uma vez."""
+
+    __tablename__ = "ia_consumo_abatimento"
+    __table_args__ = (
+        db.UniqueConstraint("ia_consumo_evento_id", name="uq_ia_consumo_abatimento_evento"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    ia_consumo_evento_id = db.Column(db.Integer, nullable=False, index=True)
+    franquia_id = db.Column(db.Integer, nullable=True, index=True)
+    creditos = db.Column(db.Numeric(18, 6), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class IaChamadaTentativa(db.Model):
+    """
+    Tentativa física de chamada externa de IA.
+    Não guarda prompt nem conteúdo. A reserva pendente não é consumo liquidado.
+    """
+
+    __tablename__ = "ia_chamada_tentativa"
+
+    STATUS_RESERVED = "reserved"
+    STATUS_CALLING = "calling"
+    STATUS_SETTLED = "settled"
+    STATUS_BLOCKED = "blocked"
+    STATUS_GOVERNANCE_BLOCKED = "governance_blocked"
+    STATUS_PROVIDER_FAILED = "provider_failed"
+    STATUS_UNCERTAIN = "uncertain"
+    STATUS_RELEASED = "released"
+
+    id = db.Column(db.Integer, primary_key=True)
+    attempt_key = db.Column(db.String(160), nullable=False, unique=True, index=True)
+    conta_id = db.Column(db.Integer, nullable=True, index=True)
+    franquia_id = db.Column(db.Integer, nullable=True, index=True)
+    usuario_id = db.Column(db.Integer, nullable=True, index=True)
+    origem_sistema = db.Column(
+        db.Boolean, nullable=False, default=False, server_default=db.false(), index=True
+    )
+    agent = db.Column(db.String(80), nullable=False, index=True)
+    flow_type = db.Column(db.String(80), nullable=False, index=True)
+    operation = db.Column(db.String(40), nullable=False)
+    provider = db.Column(db.String(40), nullable=False)
+    model = db.Column(db.String(255), nullable=False, default="")
+    ciclo_inicio = db.Column(db.DateTime, nullable=True)
+    ciclo_fim = db.Column(db.DateTime, nullable=True)
+    reserved_credits = db.Column(db.Numeric(18, 6), nullable=False, default=0)
+    actual_credits = db.Column(db.Numeric(18, 6), nullable=True)
+    status = db.Column(db.String(40), nullable=False, index=True)
+    ia_consumo_evento_id = db.Column(db.Integer, nullable=True, unique=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive, index=True)
+    settled_at = db.Column(db.DateTime, nullable=True)
+    failure_reason = db.Column(db.String(200), nullable=True)
+    reserva_ativa = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    debita_cliente = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
 
 
 class IaBillingCostSnapshot(db.Model):
@@ -4172,3 +4237,172 @@ class RascunhoEntregaWhatsApp(db.Model):
         foreign_keys=[user_id],
         backref=db.backref("rascunhos_entrega_whatsapp", lazy="dynamic"),
     )
+
+
+_SEMANTIC_EXECUTION_STATUSES = (
+    "prepared",
+    "claimed",
+    "dispatch_ready",
+    "execution_started",
+    "response_observed",
+    "validated",
+    "proposal_recorded",
+    "requires_review",
+    "accepted",
+    "rejected",
+    "blocked",
+    "failed",
+    "uncertain",
+    "stale",
+)
+
+
+class SemanticQuestionExecution(db.Model):
+    """Execução semântica durável. Não é tentativa financeira nem cálculo de frete.
+
+    No máximo uma linha por pergunta, snapshot, fingerprint de execução e generation.
+    O claim vive nesta linha. A chamada externa continua desligada.
+    """
+
+    __tablename__ = "semantic_question_execution"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "tenant_scope",
+            "semantic_question_key",
+            "decision_dependency_fingerprint",
+            "ai_execution_fingerprint",
+            "generation",
+            name="uq_sqe_identity",
+        ),
+        db.UniqueConstraint("question_attempt_key", name="uq_sqe_attempt_key"),
+        db.CheckConstraint("generation >= 1", name="ck_sqe_generation"),
+        db.CheckConstraint("fencing_version >= 0", name="ck_sqe_fencing"),
+        db.CheckConstraint(
+            "status IN (" + ", ".join(repr(item) for item in _SEMANTIC_EXECUTION_STATUSES) + ")",
+            name="ck_sqe_status",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_scope = db.Column(db.String(160), nullable=False, index=True)
+    semantic_question_key = db.Column(db.String(160), nullable=False)
+    decision_dependency_fingerprint = db.Column(db.String(80), nullable=False)
+    ai_execution_fingerprint = db.Column(db.String(80), nullable=False)
+    generation = db.Column(db.Integer, nullable=False)
+    question_attempt_key = db.Column(db.String(160), nullable=False)
+    status = db.Column(db.String(40), nullable=False, index=True)
+    claim_token = db.Column(db.String(64), nullable=True)
+    fencing_version = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    claimed_at = db.Column(db.DateTime, nullable=True)
+    claim_expires_at = db.Column(db.DateTime, nullable=True)
+    job_ref = db.Column(db.String(160), nullable=False, index=True)
+    question_type = db.Column(db.String(80), nullable=False)
+    question_id = db.Column(db.String(80), nullable=False)
+    manifest_digest = db.Column(db.String(80), nullable=True)
+    manifest_payload = db.Column(db.Text, nullable=True)
+    evidence_manifest = db.Column(db.Text, nullable=True)
+    snapshot_payload = db.Column(db.Text, nullable=True)
+    batch_request_key = db.Column(db.String(160), nullable=True)
+    financial_attempt_key = db.Column(db.String(160), nullable=True)
+    execution_started_at = db.Column(db.DateTime, nullable=True)
+    response_observed_at = db.Column(db.DateTime, nullable=True)
+    response_payload = db.Column(db.Text, nullable=True)
+    validation_status = db.Column(db.String(40), nullable=True)
+    validation_findings = db.Column(db.Text, nullable=True)
+    proposal_ref = db.Column(db.String(80), nullable=True)
+    proposal_payload = db.Column(db.Text, nullable=True)
+    proposal_applicable = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    stale_reason = db.Column(db.String(120), nullable=True)
+    budget_state = db.Column(db.String(20), nullable=False, default="none", server_default="none")
+    reserved_credit_amount = db.Column(db.Numeric(18, 6), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class SemanticQuestionJournal(db.Model):
+    """Journal append-only da execução semântica. Recuperação lê daqui, sem provider."""
+
+    __tablename__ = "semantic_question_journal"
+
+    id = db.Column(db.Integer, primary_key=True)
+    execution_id = db.Column(
+        db.Integer,
+        db.ForeignKey("semantic_question_execution.id", name="fk_sqj_execution"),
+        nullable=False,
+        index=True,
+    )
+    checkpoint = db.Column(db.String(40), nullable=False, index=True)
+    manifest_digest = db.Column(db.String(80), nullable=True)
+    response_digest = db.Column(db.String(80), nullable=True)
+    payload = db.Column(db.Text, nullable=True)
+    claim_token = db.Column(db.String(64), nullable=True)
+    fencing_version = db.Column(db.Integer, nullable=False)
+    applicable = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    stale_reason = db.Column(db.String(120), nullable=True)
+    dependency_fingerprint = db.Column(db.String(80), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class SemanticHumanReview(db.Model):
+    """Revisão humana durável. Autoridade da decisão; o cache em memória é só atalho."""
+
+    __tablename__ = "semantic_human_review"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "tenant_scope",
+            "semantic_question_key",
+            "decision_dependency_fingerprint",
+            "material_fingerprint",
+            "review_revision",
+            name="uq_shr_revision",
+        ),
+        db.CheckConstraint(
+            "review_state IN ('accepted', 'rejected', 'reopened')",
+            name="ck_shr_review_state",
+        ),
+        db.CheckConstraint("review_revision >= 1", name="ck_shr_revision"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_scope = db.Column(db.String(160), nullable=False, index=True)
+    semantic_question_key = db.Column(db.String(160), nullable=False)
+    decision_dependency_fingerprint = db.Column(db.String(80), nullable=False)
+    material_fingerprint = db.Column(db.String(80), nullable=False)
+    selected_candidate_ref = db.Column(db.String(160), nullable=True)
+    review_state = db.Column(db.String(20), nullable=False, index=True)
+    reviewer_ref = db.Column(db.String(160), nullable=False)
+    review_revision = db.Column(db.Integer, nullable=False)
+    evidence_refs = db.Column(db.Text, nullable=True)
+    proposal_ref = db.Column(db.String(80), nullable=True)
+    provenance = db.Column(db.Text, nullable=True)
+    execution_id = db.Column(db.Integer, nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class SemanticAiJobBudget(db.Model):
+    """Teto local de IA semântica por tenant e job. Não é franquia nem reserva financeira."""
+
+    __tablename__ = "semantic_ai_job_budget"
+    __table_args__ = (
+        db.UniqueConstraint("tenant_scope", "job_ref", name="uq_sajb_tenant_job"),
+        db.CheckConstraint("reserved_requests >= 0", name="ck_sajb_reserved_requests"),
+        db.CheckConstraint("completed_requests >= 0", name="ck_sajb_completed_requests"),
+        db.CheckConstraint("reserved_credits >= 0", name="ck_sajb_reserved_credits"),
+        db.CheckConstraint("settled_credits >= 0", name="ck_sajb_settled_credits"),
+        db.CheckConstraint("uncertain_credits >= 0", name="ck_sajb_uncertain_credits"),
+        db.CheckConstraint("version >= 0", name="ck_sajb_version"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_scope = db.Column(db.String(160), nullable=False)
+    job_ref = db.Column(db.String(160), nullable=False)
+    max_requests = db.Column(db.Integer, nullable=True)
+    max_billable_credits = db.Column(db.Numeric(18, 6), nullable=True)
+    reserved_requests = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    completed_requests = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    reserved_credits = db.Column(db.Numeric(18, 6), nullable=False, default=0, server_default="0")
+    settled_credits = db.Column(db.Numeric(18, 6), nullable=False, default=0, server_default="0")
+    uncertain_credits = db.Column(db.Numeric(18, 6), nullable=False, default=0, server_default="0")
+    version = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)

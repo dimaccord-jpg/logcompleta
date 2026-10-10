@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from typing import Any
+from uuid import uuid4
 
 from flask import has_app_context
 
@@ -48,7 +49,12 @@ from app.run_agente_compara_chat import (
     SERVICE_UNAVAILABLE_MESSAGE,
     sanitize_chat_history,
 )
-from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
+from app.services.cleiton_billable_ai_call import (
+    BillableAiCallError,
+    cleiton_governed_generate_content,
+    gemini_http_options,
+    usuario_operacional_da_chamada,
+)
 from app.services.agente_compara_config_service import get_agente_compara_config
 from app.services.external_ai_masking import mask_structured_for_external_ai
 from app.cleiton_doc_escopo import (
@@ -222,7 +228,6 @@ def _get_client():
         return None
     try:
         from google import genai
-        from google.genai import types as genai_types
 
         timeout_ms = 30_000
         raw = (os.getenv("GEMINI_HTTP_TIMEOUT_MS") or "").strip()
@@ -231,7 +236,7 @@ def _get_client():
                 timeout_ms = max(1_000, int(raw))
             except ValueError:
                 pass
-        return genai.Client(api_key=key, http_options=genai_types.HttpOptions(timeout=timeout_ms))
+        return genai.Client(api_key=key, http_options=gemini_http_options(timeout_ms=timeout_ms))
     except Exception as exc:
         logger.error("Falha ao inicializar cliente Gemini para Agente Compara Insights: %s", exc)
         return None
@@ -433,6 +438,8 @@ def _run_gemini_analytical_reply(
                 agent="agente_compara",
                 flow_type=AGENTE_COMPARA_INSIGHTS_CHAT_FLOW_TYPE,
                 api_key_label=_api_key_label(),
+                usuario=usuario_operacional_da_chamada(),
+                attempt_key=f"{AGENTE_COMPARA_INSIGHTS_CHAT_FLOW_TYPE}:{model}:{uuid4().hex}",
             )
             text = (getattr(response, "text", None) or "").strip()
             if text:
@@ -451,6 +458,11 @@ def _run_gemini_analytical_reply(
                 )
                 return result_payload
             last_error = ValueError("Resposta vazia do modelo")
+        except BillableAiCallError as exc:
+            if not exc.terminal:
+                raise
+            last_error = exc
+            break
         except Exception as exc:
             last_error = exc
             logger.warning(

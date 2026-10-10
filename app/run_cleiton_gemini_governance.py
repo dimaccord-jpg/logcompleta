@@ -5,6 +5,7 @@ Intercepta generate_content / generate_images, persiste evento de consumo e devo
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from flask import has_app_context
@@ -111,6 +112,27 @@ def _extract_usage_from_response(response: Any) -> tuple[int | None, int | None,
     return inp_i, out_i, tot_i
 
 
+PERSIST_OK = "persisted"
+PERSIST_FAILED = "persist_failed"
+PERSIST_SKIPPED = "skipped_no_context"
+
+
+@dataclass
+class GovernedGenerateObservation:
+    """Metadado operacional da chamada. Não inclui prompt nem conteúdo."""
+
+    response: Any | None
+    evento_id: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    persist_status: str
+    status: str
+    error_summary: str | None
+    provider_called: bool
+    provider_exception: BaseException | None = None
+
+
 def _persist_event(
     *,
     operation: str,
@@ -123,12 +145,14 @@ def _persist_event(
     output_tokens: int | None,
     total_tokens: int | None,
     error_summary: str | None = None,
-) -> None:
+    identidade: dict[str, Any] | None = None,
+    apply_motor: bool = True,
+) -> tuple[int | None, str]:
     if not has_app_context():
         logger.debug("Governança Gemini: sem app context; evento não persistido (%s %s).", operation, flow_type)
-        return
+        return None, PERSIST_SKIPPED
     try:
-        ident = resolve_identidade_para_persistencia()
+        ident = identidade or resolve_identidade_para_persistencia()
         row = IaConsumoEvento(
             occurred_at=utcnow_naive(),
             provider=PROVIDER_GEMINI,
@@ -147,31 +171,36 @@ def _persist_event(
             usuario_id=ident.get("usuario_id"),
             tipo_origem=(ident.get("tipo_origem") or "")[:80] or None,
             origem_sistema=ident.get("origem_sistema"),
+            regime_abatimento=IaConsumoEvento.REGIME_NOVO,
         )
         db.session.add(row)
         db.session.commit()
-        try:
-            from app.services.cleiton_franquia_operacional_service import (
-                aplicar_motor_apos_ia_consumo_evento,
-            )
-
-            aplicar_motor_apos_ia_consumo_evento(row.id)
-        except Exception as ex:
-            logger.warning(
-                "Governança Gemini: motor operacional Cleiton após evento IA falhou (id=%s): %s",
-                getattr(row, "id", None),
-                ex,
-            )
+        evento_id = int(row.id)
+        if apply_motor:
             try:
-                db.session.rollback()
-            except Exception:
-                pass
+                from app.services.cleiton_franquia_operacional_service import (
+                    aplicar_motor_apos_ia_consumo_evento,
+                )
+
+                aplicar_motor_apos_ia_consumo_evento(evento_id)
+            except Exception as ex:
+                logger.warning(
+                    "Governança Gemini: motor operacional Cleiton após evento IA falhou (id=%s): %s",
+                    evento_id,
+                    ex,
+                )
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+        return evento_id, PERSIST_OK
     except Exception as e:
         logger.warning("Governança Gemini: falha ao persistir evento (%s): %s", flow_type, e)
         try:
             db.session.rollback()
         except Exception:
             pass
+        return None, PERSIST_FAILED
 
 
 def register_internal_ia_event(
@@ -215,6 +244,7 @@ def register_internal_ia_event(
             usuario_id=ident.get("usuario_id"),
             tipo_origem=(ident.get("tipo_origem") or "")[:80] or None,
             origem_sistema=ident.get("origem_sistema"),
+            regime_abatimento=IaConsumoEvento.REGIME_NOVO,
         )
         db.session.add(row)
         db.session.commit()
@@ -257,7 +287,21 @@ def _authorize_outbound_payload(
     return governed.safe_content
 
 
-def cleiton_governed_generate_content(
+def _usage_from_provider_exception(exc: BaseException) -> tuple[int | None, int | None, int | None]:
+    for source in (
+        exc,
+        getattr(exc, "response", None),
+        getattr(exc, "result", None),
+    ):
+        if source is None:
+            continue
+        inp, out, tot = _extract_usage_from_response(source)
+        if inp is not None or out is not None or tot is not None:
+            return inp, out, tot
+    return None, None, None
+
+
+def cleiton_governed_generate_content_observed(
     client: Any,
     *,
     model: str,
@@ -267,9 +311,12 @@ def cleiton_governed_generate_content(
     flow_type: str,
     api_key_label: str,
     purpose: str | None = None,
-) -> Any:
+    identidade: dict[str, Any] | None = None,
+    apply_motor: bool = False,
+) -> GovernedGenerateObservation:
     """
-    Governa o payload localmente, executa generate_content e registra evento de consumo.
+    Mesma governança de cleiton_governed_generate_content, com o resultado da persistência.
+    Não devolve conteúdo sensível além da resposta do provider.
     """
     resolved_purpose = purpose or purpose_from_flow_type(flow_type, agent)
     alias_session = CleitonAiAliasSession()
@@ -312,53 +359,112 @@ def cleiton_governed_generate_content(
             contents=authorized_contents,
             config=authorized_config,
         )
-        inp, out, tot = _extract_usage_from_response(response)
-        logger.info(
-            "Governanca Gemini: generate_content response model=%s flow_type=%s usage_metadata_present=%s input_tokens=%s output_tokens=%s total_tokens=%s",
-            model,
-            flow_type,
-            getattr(response, "usage_metadata", None) is not None,
-            inp,
-            out,
-            tot,
-        )
-        if inp is None and out is None and tot is None:
-            status = STATUS_SUCCESS_NO_METRICS
-        else:
-            status = STATUS_SUCCESS
-        _persist_event(
-            operation=OP_GENERATE_CONTENT,
-            model=model,
-            agent=agent,
-            flow_type=flow_type,
-            api_key_label=api_key_label,
-            status=status,
-            input_tokens=inp,
-            output_tokens=out,
-            total_tokens=tot,
-            error_summary=None,
-        )
-        return response
-    except Exception as e:
+    except CleitonAiGovernanceBlockedError:
+        raise
+    except Exception as exc:
+        inp, out, tot = _usage_from_provider_exception(exc)
         logger.warning(
             "Governanca Gemini: generate_content provider failure model=%s flow_type=%s %s",
             model,
             flow_type,
-            _safe_error_summary(e, stage="generate_content"),
+            _safe_error_summary(exc, stage="generate_content"),
         )
-        _persist_event(
+        evento_id, persist_status = _persist_event(
             operation=OP_GENERATE_CONTENT,
             model=model,
             agent=agent,
             flow_type=flow_type,
             api_key_label=api_key_label,
             status=STATUS_FAILURE,
-            input_tokens=None,
-            output_tokens=None,
-            total_tokens=None,
-            error_summary=_safe_error_summary(e, stage="generate_content"),
+            input_tokens=inp,
+            output_tokens=out,
+            total_tokens=tot,
+            error_summary=_safe_error_summary(exc, stage="generate_content"),
+            identidade=identidade,
+            apply_motor=apply_motor,
         )
-        raise
+        return GovernedGenerateObservation(
+            response=None,
+            evento_id=evento_id,
+            input_tokens=inp,
+            output_tokens=out,
+            total_tokens=tot,
+            persist_status=persist_status,
+            status=STATUS_FAILURE,
+            error_summary=_safe_error_summary(exc, stage="generate_content"),
+            provider_called=True,
+            provider_exception=exc,
+        )
+    inp, out, tot = _extract_usage_from_response(response)
+    logger.info(
+        "Governanca Gemini: generate_content response model=%s flow_type=%s usage_metadata_present=%s input_tokens=%s output_tokens=%s total_tokens=%s",
+        model,
+        flow_type,
+        getattr(response, "usage_metadata", None) is not None,
+        inp,
+        out,
+        tot,
+    )
+    if inp is None and out is None and tot is None:
+        status = STATUS_SUCCESS_NO_METRICS
+    else:
+        status = STATUS_SUCCESS
+    evento_id, persist_status = _persist_event(
+        operation=OP_GENERATE_CONTENT,
+        model=model,
+        agent=agent,
+        flow_type=flow_type,
+        api_key_label=api_key_label,
+        status=status,
+        input_tokens=inp,
+        output_tokens=out,
+        total_tokens=tot,
+        error_summary=None,
+        identidade=identidade,
+        apply_motor=apply_motor,
+    )
+    return GovernedGenerateObservation(
+        response=response,
+        evento_id=evento_id,
+        input_tokens=inp,
+        output_tokens=out,
+        total_tokens=tot,
+        persist_status=persist_status,
+        status=status,
+        error_summary=None,
+        provider_called=True,
+        provider_exception=None,
+    )
+
+
+def cleiton_governed_generate_content(
+    client: Any,
+    *,
+    model: str,
+    contents: Any,
+    config: Any = None,
+    agent: str,
+    flow_type: str,
+    api_key_label: str,
+    purpose: str | None = None,
+) -> Any:
+    """
+    Governa o payload localmente, executa generate_content e registra evento de consumo.
+    """
+    observation = cleiton_governed_generate_content_observed(
+        client,
+        model=model,
+        contents=contents,
+        config=config,
+        agent=agent,
+        flow_type=flow_type,
+        api_key_label=api_key_label,
+        purpose=purpose,
+        apply_motor=True,
+    )
+    if observation.provider_exception is not None:
+        raise observation.provider_exception
+    return observation.response
 
 
 def cleiton_governed_generate_images(

@@ -19,7 +19,12 @@ from app.cleiton_doc_escopo import (
     operational_cache_payload_is_current,
     stamp_operational_cache_payload,
 )
-from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
+from app.services.cleiton_billable_ai_call import (
+    BillableAiCallError,
+    cleiton_governed_generate_content,
+    gemini_http_options,
+    usuario_operacional_da_chamada,
+)
 from app.services.agente_compara_config_service import get_agente_compara_config
 
 logger = logging.getLogger(__name__)
@@ -98,7 +103,6 @@ def _get_client():
         return None
     try:
         from google import genai
-        from google.genai import types as genai_types
 
         timeout_ms = 30_000
         raw = (os.getenv("GEMINI_HTTP_TIMEOUT_MS") or "").strip()
@@ -107,7 +111,7 @@ def _get_client():
                 timeout_ms = max(1_000, int(raw))
             except ValueError:
                 pass
-        return genai.Client(api_key=key, http_options=genai_types.HttpOptions(timeout=timeout_ms))
+        return genai.Client(api_key=key, http_options=gemini_http_options(timeout_ms=timeout_ms))
     except Exception as exc:
         logger.error("Falha ao inicializar cliente Gemini para Agente Compara: %s", exc)
         return None
@@ -396,10 +400,11 @@ def chat_agente_compara_reply(
                 agent="agente_compara",
                 flow_type=AGENTE_COMPARA_CHAT_FLOW_TYPE,
                 api_key_label=_api_key_label(),
+                usuario=usuario_operacional_da_chamada(),
+                attempt_key=f"{AGENTE_COMPARA_CHAT_FLOW_TYPE}:{model}:{uuid4().hex}",
             )
             text = (getattr(response, "text", None) or "").strip()
             if text:
-                # IaConsumoEvento já commitado pela governança Cleiton.
                 _growth_complete()
                 return {
                     "answer": text,
@@ -407,6 +412,11 @@ def chat_agente_compara_reply(
                     "documents_used": documents_used,
                 }
             last_error = ValueError("Resposta vazia do modelo")
+        except BillableAiCallError as exc:
+            if not exc.terminal:
+                raise
+            last_error = exc
+            break
         except Exception as exc:
             last_error = exc
             logger.warning(
@@ -419,10 +429,13 @@ def chat_agente_compara_reply(
     if last_error:
         logger.exception("Agente Compara chat falhou após fallbacks: %s", last_error)
     _growth_fail("agente_compara_chat_processing_failed", task_stage="llm_generation")
+    mensagem = processing_message
+    if getattr(last_error, "mensagem_usuario", None):
+        mensagem = last_error.mensagem_usuario
     return {
         "answer": "",
         "flow_type": AGENTE_COMPARA_CHAT_FLOW_TYPE,
         "documents_used": documents_used,
         "error": "processing_failed",
-        "message": processing_message,
+        "message": mensagem,
     }

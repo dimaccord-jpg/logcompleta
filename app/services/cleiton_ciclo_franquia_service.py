@@ -56,7 +56,11 @@ def _add_um_mes_mesmo_dia(dt: datetime) -> datetime:
     return dt.replace(year=y2, month=m2, day=d2)
 
 
-def garantir_ciclo_operacional_franquia(franquia_id: int) -> ResultadoCicloCleiton:
+def garantir_ciclo_operacional_franquia(
+    franquia_id: int,
+    *,
+    commit: bool = True,
+) -> ResultadoCicloCleiton:
     """
     Se a franquia ainda não tiver ciclo definido, inicializa `inicio_ciclo` / `fim_ciclo`
     conforme o plano resolvido. Persiste alterações.
@@ -110,7 +114,8 @@ def garantir_ciclo_operacional_franquia(franquia_id: int) -> ResultadoCicloCleit
         fr.inicio_ciclo = inicio
         fr.fim_ciclo = fim
         db.session.add(fr)
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return ResultadoCicloCleiton(
             inicio_ciclo=fr.inicio_ciclo,
             fim_ciclo=fr.fim_ciclo,
@@ -122,7 +127,8 @@ def garantir_ciclo_operacional_franquia(franquia_id: int) -> ResultadoCicloCleit
         fr.inicio_ciclo = inicio
         fr.fim_ciclo = None
         db.session.add(fr)
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return ResultadoCicloCleiton(
             inicio_ciclo=fr.inicio_ciclo,
             fim_ciclo=None,

@@ -41,6 +41,7 @@ PURPOSE_INSIGHTS_AUDITORIA = "insights_auditoria"
 PURPOSE_REDACAO = "redacao_editorial"
 PURPOSE_IMAGEM = "geracao_imagem"
 PURPOSE_BUSCA_WEB = "busca_web"
+PURPOSE_SEMANTIC_MUNICIPALITY_DISAMBIGUATION = "semantic_municipality_disambiguation"
 
 USER_SAFE_PREPARATION_FAILED = (
     "Não foi possível preparar este conteúdo com segurança para análise por IA. "
@@ -107,6 +108,8 @@ _CONFIG_PASSTHROUGH_KEYS = frozenset(
         "personGeneration",
         "thinking_config",
         "thinkingConfig",
+        "automatic_function_calling",
+        "automaticFunctionCalling",
         "speech_config",
         "speechConfig",
         "audio_timestamp",
@@ -186,6 +189,8 @@ def get_ai_data_protection_status() -> dict[str, Any]:
 def purpose_from_flow_type(flow_type: str | None, agent: str | None = None) -> str:
     ft = (flow_type or "").strip().lower()
     ag = (agent or "").strip().lower()
+    if ft == PURPOSE_SEMANTIC_MUNICIPALITY_DISAMBIGUATION:
+        return PURPOSE_SEMANTIC_MUNICIPALITY_DISAMBIGUATION
     if "discovery" in ft or "onboarding" in ft:
         return PURPOSE_DISCOVERY
     if "imagem" in ft or "imagen" in ft:
@@ -599,6 +604,45 @@ def _govern_generate_contents(
     return acc
 
 
+def _extra_body_informado(http_opts: Any) -> Any:
+    """None quando extra_body não foi informado. Não inspeciona o conteúdo."""
+    if http_opts is None:
+        return None
+    if isinstance(http_opts, dict):
+        if "extra_body" in http_opts:
+            return http_opts.get("extra_body")
+        if "extraBody" in http_opts:
+            return http_opts.get("extraBody")
+        return None
+    definidos = getattr(http_opts, "model_fields_set", None)
+    if isinstance(definidos, (set, frozenset)):
+        if "extra_body" in definidos:
+            return getattr(http_opts, "extra_body", None)
+        if "extraBody" in definidos:
+            return getattr(http_opts, "extraBody", None)
+        return None
+    if hasattr(http_opts, "extra_body"):
+        return getattr(http_opts, "extra_body")
+    if hasattr(http_opts, "extraBody"):
+        return getattr(http_opts, "extraBody")
+    return None
+
+
+def http_options_extra_body_nao_vazio(http_opts: Any) -> bool:
+    """extra_body ausente, None ou {} não altera o request. Qualquer outro valor altera."""
+    valor = _extra_body_informado(http_opts)
+    if valor is None:
+        return False
+    return not (isinstance(valor, dict) and len(valor) == 0)
+
+
+def _bloquear_extra_body(acc: GovernanceResult) -> None:
+    acc.decision = DECISION_BLOCK
+    acc.safe_content = None
+    if "teto_request_mutavel" not in acc.reason_codes:
+        acc.reason_codes.append("teto_request_mutavel")
+
+
 def _is_technical_scalar(value: Any) -> bool:
     return isinstance(value, (int, float, bool)) or value is None
 
@@ -613,12 +657,23 @@ def _govern_config_node(
 ) -> Any:
     if _is_technical_scalar(node):
         return node
+    if parent_key in ("http_options", "httpOptions"):
+        if http_options_extra_body_nao_vazio(node):
+            _bloquear_extra_body(acc)
+            return None
+        return node
     if parent_key in _CONFIG_PASSTHROUGH_KEYS:
         return node
     if isinstance(node, dict):
         out: dict[Any, Any] = {}
         for key, value in node.items():
             key_s = key if isinstance(key, str) else ""
+            if key_s in ("http_options", "httpOptions"):
+                if http_options_extra_body_nao_vazio(value):
+                    _bloquear_extra_body(acc)
+                    return out
+                out[key] = value
+                continue
             if key_s in _CONFIG_PASSTHROUGH_KEYS:
                 out[key] = value
                 continue
@@ -686,6 +741,12 @@ def _govern_structured_config(
         cloned = copy.copy(config)
     except Exception:
         return _invalid_block("config_copy_failed")
+    http_opts = getattr(cloned, "http_options", None)
+    if http_opts is None:
+        http_opts = getattr(cloned, "httpOptions", None)
+    if http_options_extra_body_nao_vazio(http_opts):
+        _bloquear_extra_body(acc)
+        return acc
     mutated = False
     for attr in _CONFIG_TEXT_ATTRS:
         if not hasattr(cloned, attr):

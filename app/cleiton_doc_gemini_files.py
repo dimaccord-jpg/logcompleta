@@ -3,6 +3,10 @@ Adapter governado para PDF via Gemini Files API (Fase PDF real).
 
 Upload/remoção de arquivos no Gemini e montagem de partes para generate_content.
 Sem OCR, parser pesado de PDF ou exposição de binário em logs.
+
+SCRUM-146 lote 2 não fatura files.upload, files.get, polling nem files.delete.
+Essas operações permanecem observáveis e sem crédito. A limpeza/delete continua
+permitida mesmo com a franquia bloqueada. Não há billing fictício neste caminho.
 """
 from __future__ import annotations
 

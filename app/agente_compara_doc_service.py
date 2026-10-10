@@ -11500,6 +11500,17 @@ def save_temp_table_edit(
 
     updated["updated_at"] = now
     updated["expires_at"] = preserved_expires_at
+    from app.services.semantic_freight_contract.persistence import (
+        preserve_semantic_freight_contract,
+    )
+    from app.services.semantic_resolution.persistence import (
+        preserve_semantic_resolution_preview,
+        preserve_semantic_resolution_queue,
+    )
+
+    preserve_semantic_freight_contract(stored=record, updated=updated, payload=payload_obj)
+    preserve_semantic_resolution_preview(stored=record, updated=updated, payload=payload_obj)
+    preserve_semantic_resolution_queue(stored=record, updated=updated, payload=payload_obj)
 
     saved = save_temp_table_record(updated, table_id=resolved_table_id)
     comparison_public = None
