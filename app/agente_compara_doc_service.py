@@ -5003,19 +5003,15 @@ def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
     if not region:
         return None
     brackets = []
-    for limit in (10, 20, 30, 50, 70, 100):
-        value = _parse_brazilian_money(
-            route.get(f"weight_{limit}") or route.get(f"weight_{limit}kg")
+    for limit, value in sorted(_freight_route_weight_amounts(route).items()):
+        brackets.append(
+            {
+                "min_kg": 0.0,
+                "max_kg": float(limit),
+                "value": value,
+                "label": f"Até {limit} kg",
+            }
         )
-        if value is not None:
-            brackets.append(
-                {
-                    "min_kg": 0.0,
-                    "max_kg": float(limit),
-                    "value": value,
-                    "label": f"Até {limit} kg",
-                }
-            )
     brackets = _normalize_brackets(brackets)
     excess_rate = _parse_brazilian_money(route.get("freight_weight_kg") or route.get("frete_peso_kg"))
     route_toll_rate = _parse_brazilian_money(route.get("pedagio") or route.get("pedagio_valor"))
@@ -5207,11 +5203,58 @@ def _table_block_has_no_executable_tariff(table: dict) -> bool:
     return True
 
 
+_FREIGHT_ROUTE_WEIGHT_KEY_RE = re.compile(r"^weight_(\d+)(?:kg)?$", re.IGNORECASE)
+_EXPLICIT_ZONE_REFERENCE_RE = re.compile(
+    r"\brota\s+basead[oa]\s+n[ao]\s+zona\s*:?\s*[\"'\u201c\u2018]?([A-Za-z0-9][A-Za-z0-9./_-]*)",
+    re.IGNORECASE,
+)
+_FREIGHT_ROUTE_NON_TARIFF_KEYS = frozenset(
+    {
+        "origin",
+        "destination",
+        "freight_type",
+        "type",
+        "notes",
+        "observations",
+        "observacoes",
+        "evidence_ref",
+        "confidence",
+        "column_labels",
+        "origin_city",
+        "origin_uf",
+        "region",
+        "route",
+        "freight_region",
+        "source_ref",
+        "label",
+    }
+)
+
+
+def _freight_route_weight_key_limit(key) -> int | None:
+    if not isinstance(key, str):
+        return None
+    match = _FREIGHT_ROUTE_WEIGHT_KEY_RE.fullmatch(key.strip())
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _iter_freight_route_weight_fields(route: dict):
+    if not isinstance(route, dict):
+        return
+    for key, raw in route.items():
+        limit = _freight_route_weight_key_limit(key)
+        if limit is None:
+            continue
+        yield key.strip(), limit, raw
+
+
 def _route_has_tariff_signal(route: dict) -> bool:
     if not isinstance(route, dict):
         return False
-    for limit in (10, 20, 30, 50, 70, 100):
-        if not _cell_is_blank(route.get(f"weight_{limit}")) or not _cell_is_blank(route.get(f"weight_{limit}kg")):
+    for _key, _limit, raw in _iter_freight_route_weight_fields(route):
+        if not _cell_is_blank(raw):
             return True
     if not _cell_is_blank(route.get("freight_weight_kg") or route.get("frete_peso_kg")):
         return True
@@ -5221,15 +5264,248 @@ def _route_has_tariff_signal(route: dict) -> bool:
 def _route_has_executable_tariff(route: dict) -> bool:
     if not isinstance(route, dict):
         return False
-    for limit in (10, 20, 30, 50, 70, 100):
-        raw = route.get(f"weight_{limit}")
-        if raw is None:
-            raw = route.get(f"weight_{limit}kg")
-        if _executable_tariff_amount(raw) is not None:
-            return True
+    if _freight_route_weight_amounts(route):
+        return True
     if _executable_tariff_amount(route.get("freight_weight_kg") or route.get("frete_peso_kg")) is not None:
         return True
     return False
+
+
+def _freight_route_weight_amounts(route: dict) -> dict[int, float]:
+    """Tarifas executáveis de todas as faixas weight_<n> e weight_<n>kg da rota."""
+    staged: dict[int, tuple[int, float]] = {}
+    if not isinstance(route, dict):
+        return {}
+    for key, _limit, raw in _iter_freight_route_weight_fields(route):
+        amount = _executable_tariff_amount(raw)
+        if amount is None:
+            continue
+        priority = 0 if key.lower().endswith("kg") else 1
+        current = staged.get(_limit)
+        if current is None or priority > current[0]:
+            staged[_limit] = (priority, amount)
+    return {limit: amount for limit, (_priority, amount) in staged.items()}
+
+
+def _same_tariff_amount(left, right) -> bool:
+    if not _is_finite_number(left) or not _is_finite_number(right):
+        return False
+    return round(float(left), 2) == round(float(right), 2)
+
+
+def _freight_route_has_autonomous_tariff_component(route: dict) -> bool:
+    """Excedente, pedágio ou outro valor executável fora das faixas de peso."""
+    if not isinstance(route, dict):
+        return False
+    for key, raw in route.items():
+        if not isinstance(key, str):
+            continue
+        normalized_key = key.strip().lower()
+        if not normalized_key or normalized_key in _FREIGHT_ROUTE_NON_TARIFF_KEYS:
+            continue
+        if _freight_route_weight_key_limit(normalized_key) is not None:
+            continue
+        if isinstance(raw, (dict, list, tuple)):
+            continue
+        if _executable_tariff_amount(raw) is not None:
+            return True
+    return False
+
+
+def _freight_route_is_weight_100_only(route: dict) -> bool:
+    """Rota cuja única tarifa de faixa executável é 100 kg, sem componente autônomo."""
+    if set(_freight_route_weight_amounts(route)) != {100}:
+        return False
+    return not _freight_route_has_autonomous_tariff_component(route)
+
+
+def _fold_freight_route_note(value) -> str:
+    cleaned = _sanitize_cell_string(value)
+    if not cleaned:
+        return ""
+    text = unicodedata.normalize("NFKD", cleaned)
+    return "".join(ch for ch in text if not unicodedata.combining(ch))
+
+
+def _freight_route_explicit_zone_references(route: dict) -> list[str]:
+    """Zonas citadas de forma explícita, como 'Rota baseada na Zona P1'."""
+    if not isinstance(route, dict):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for field in ("notes", "observations", "observacoes"):
+        folded = _fold_freight_route_note(route.get(field))
+        if not folded:
+            continue
+        for match in _EXPLICIT_ZONE_REFERENCE_RE.finditer(folded):
+            label = match.group(1).strip()
+            key = _normalize_audit_lookup_text(label)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            found.append(label)
+    return found
+
+
+def _rule_comes_from_freight_table(rule: dict) -> bool:
+    refs = rule.get("source_refs")
+    if not isinstance(refs, list):
+        return False
+    return any(isinstance(ref, str) and ref.startswith("freight_tables[") for ref in refs)
+
+
+def _rule_bracket_at_100(rule: dict) -> dict | None:
+    brackets = rule.get("brackets") if isinstance(rule.get("brackets"), list) else []
+    for bracket in brackets:
+        if not isinstance(bracket, dict) or not _is_finite_number(bracket.get("max_kg")):
+            continue
+        if abs(float(bracket.get("max_kg")) - 100.0) <= 1e-6:
+            return bracket
+    return None
+
+
+def _rule_is_complete_freight_table(rule: dict) -> bool:
+    """Tabela de frete mais rica que um eco isolado da faixa de 100 kg."""
+    if not isinstance(rule, dict) or rule.get("pricing_type") not in _PRICING_CONTRACT_RANGE_TYPES:
+        return False
+    if not _rule_comes_from_freight_table(rule):
+        return False
+    if _rule_bracket_at_100(rule) is None:
+        return False
+    brackets = rule.get("brackets") if isinstance(rule.get("brackets"), list) else []
+    has_other_bracket = any(
+        isinstance(bracket, dict)
+        and _is_finite_number(bracket.get("max_kg"))
+        and abs(float(bracket.get("max_kg")) - 100.0) > 1e-6
+        for bracket in brackets
+    )
+    excess = rule.get("excess") if isinstance(rule.get("excess"), dict) else None
+    has_excess = bool(excess and _is_finite_number(excess.get("rate_per_kg")))
+    return has_other_bracket or has_excess
+
+
+def _rule_weight_100_value_matches(rule: dict, amount: float) -> bool:
+    bracket = _rule_bracket_at_100(rule)
+    if bracket is None:
+        return False
+    return _same_tariff_amount(bracket.get("value"), amount)
+
+
+def _rule_matches_explicit_zone(rule: dict, reference: str) -> bool:
+    target = _normalize_audit_lookup_text(reference)
+    if not target:
+        return False
+    accepted = {target, f"ZONA {target}"}
+    candidates = [rule.get("region"), rule.get("label")]
+    keys = rule.get("lookup_keys")
+    if isinstance(keys, list):
+        candidates.extend(keys)
+    return any(_normalize_audit_lookup_text(candidate) in accepted for candidate in candidates)
+
+
+def _complete_table_rule_matches_weight_100(rule: dict, amount: float) -> bool:
+    """Tabela completa cuja faixa de 100 kg repete o valor da rota."""
+    return _rule_is_complete_freight_table(rule) and _rule_weight_100_value_matches(rule, amount)
+
+
+def _add_ambiguous_complete_table_finding(
+    route: dict,
+    findings: list[dict],
+    seen: set,
+    *,
+    source_ref: str,
+    route_index: int,
+) -> None:
+    _add_pricing_finding(
+        findings,
+        seen,
+        kind="ambiguous_complete_table_match",
+        source_ref=source_ref or "freight_routes",
+        index=route_index,
+        field="weight_100",
+        label=_freight_route_region_label(route) or source_ref or "Rota",
+    )
+
+
+def _partial_weight_100_route_yields_to_complete_table(
+    route: dict,
+    rules: list[dict],
+    owned: dict[str, int],
+    findings: list[dict],
+    seen: set,
+    lookup_keys: list[str],
+    *,
+    source_ref: str = "",
+    route_index: int = 0,
+) -> bool:
+    """Encaminha a rota só quando existe exatamente uma tabela completa segura.
+
+    Zero ou várias correspondências devolvem False para o fluxo normal publicar
+    a freight_route. Ambiguidade é registrada e não descarta a rota.
+    Referência explícita de zona restringe a candidata; o valor de 100 kg só confirma.
+    """
+    if not _freight_route_is_weight_100_only(route):
+        return False
+    amount = _freight_route_weight_amounts(route).get(100)
+    if amount is None:
+        return False
+    references = _freight_route_explicit_zone_references(route)
+    if len(references) > 1:
+        _add_ambiguous_complete_table_finding(
+            route,
+            findings,
+            seen,
+            source_ref=source_ref,
+            route_index=route_index,
+        )
+        return False
+    if references:
+        reference = references[0]
+        matches = [
+            index
+            for index, rule in enumerate(rules)
+            if _rule_is_complete_freight_table(rule)
+            and _rule_matches_explicit_zone(rule, reference)
+            and _rule_weight_100_value_matches(rule, amount)
+        ]
+    else:
+        matches = [
+            index
+            for index, rule in enumerate(rules)
+            if _complete_table_rule_matches_weight_100(rule, amount)
+        ]
+    if len(matches) != 1:
+        if len(matches) > 1:
+            _add_ambiguous_complete_table_finding(
+                route,
+                findings,
+                seen,
+                source_ref=source_ref,
+                route_index=route_index,
+            )
+        return False
+    rule_index = matches[0]
+    rule = rules[rule_index]
+    keys = [key for key in (rule.get("lookup_keys") or []) if isinstance(key, str) and key]
+    for key in lookup_keys:
+        if not isinstance(key, str) or not key.strip() or key in keys:
+            continue
+        previous = owned.get(key)
+        if previous is not None and previous != rule_index:
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="conflicting_lookup_key",
+                source_ref=key,
+                index=rule_index,
+                field="lookup_keys",
+                label=key,
+            )
+            continue
+        keys.append(key)
+        owned[key] = rule_index
+    rule["lookup_keys"] = keys
+    return True
 
 
 def _snapshot_has_pricing_source(temp_table: dict) -> bool:
@@ -5881,10 +6157,7 @@ def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
         if not isinstance(route, dict):
             continue
         source_ref = f"freight_routes[{route_index}]"
-        for limit in (10, 20, 30, 50, 70, 100):
-            raw = route.get(f"weight_{limit}")
-            if raw is None:
-                raw = route.get(f"weight_{limit}kg")
+        for _key, limit, raw in _iter_freight_route_weight_fields(route):
             if not _cell_is_blank(raw) and _executable_tariff_amount(raw) is None:
                 _add_pricing_finding(
                     findings,
@@ -5969,6 +6242,17 @@ def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
             lookup_keys = _origin_qualified_keys(base_keys, selector)
         else:
             lookup_keys = base_keys
+        if _partial_weight_100_route_yields_to_complete_table(
+            route,
+            rules,
+            owned,
+            findings,
+            seen,
+            lookup_keys,
+            source_ref=source_ref,
+            route_index=route_index,
+        ):
+            continue
         _append_contract_rule(
             rules,
             owned,
