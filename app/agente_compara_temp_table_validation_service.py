@@ -37,6 +37,7 @@ CODE_LOST_TARIFF_ROW = "LOST_TARIFF_ROW"
 CODE_FREIGHT_VALUE_NOT_EXECUTABLE = "FREIGHT_VALUE_NOT_EXECUTABLE"
 CODE_ROUTE_TOLL_NOT_EXECUTABLE = "ROUTE_TOLL_NOT_EXECUTABLE"
 CODE_CONTRACT_SNAPSHOT_MISMATCH = "CONTRACT_SNAPSHOT_MISMATCH"
+CODE_AMBIGUOUS_COMPLETE_TABLE_MATCH = "AMBIGUOUS_COMPLETE_TABLE_MATCH"
 
 _PRICING_FINDING_CODES = {
     "no_executable_rule": CODE_NO_EXECUTABLE_PRICING_RULE,
@@ -51,6 +52,7 @@ _PRICING_FINDING_CODES = {
     "freight_value_not_executable": CODE_FREIGHT_VALUE_NOT_EXECUTABLE,
     "route_toll_not_executable": CODE_ROUTE_TOLL_NOT_EXECUTABLE,
     "contract_snapshot_mismatch": CODE_CONTRACT_SNAPSHOT_MISMATCH,
+    "ambiguous_complete_table_match": CODE_AMBIGUOUS_COMPLETE_TABLE_MATCH,
 }
 _PRICING_FINDING_MESSAGES = {
     "no_executable_rule": "A tabela não tem nenhuma regra de frete executável.",
@@ -65,6 +67,9 @@ _PRICING_FINDING_MESSAGES = {
     "freight_value_not_executable": "Frete valor está marcado, mas sem parâmetros executáveis.",
     "route_toll_not_executable": "Pedágio está marcado, mas sem parâmetros executáveis.",
     "contract_snapshot_mismatch": "O contrato tarifário não corresponde à tabela confirmada.",
+    "ambiguous_complete_table_match": (
+        "A rota de até 100 kg corresponde a mais de uma tabela completa e não foi vinculada."
+    ),
 }
 _SUPPORTED_CONTRACT_TYPES = frozenset({"fixed_range", "direct_weight_rate", "range_plus_excess_per_kg"})
 _RANGE_CONTRACT_TYPES = frozenset({"fixed_range", "range_plus_excess_per_kg"})
