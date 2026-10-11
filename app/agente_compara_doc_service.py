@@ -5889,6 +5889,125 @@ def _matrix_row_covered(rules: list[dict], region: str) -> bool:
     return False
 
 
+def _normalized_executable_amount(value, places: int = 2):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return round(number, places)
+
+
+def _executable_tariff_signature(rule: dict) -> tuple:
+    """Conteúdo econômico executável, sem rótulo, evidência ou ordem de chave."""
+    if not isinstance(rule, dict):
+        return ()
+    brackets = []
+    for bracket in rule.get("brackets") or []:
+        if not isinstance(bracket, dict):
+            continue
+        brackets.append(
+            (
+                _normalized_executable_amount(bracket.get("min_kg"), 4),
+                _normalized_executable_amount(bracket.get("max_kg"), 4),
+                _normalized_executable_amount(bracket.get("value"), 2),
+            )
+        )
+    brackets.sort(
+        key=lambda item: (
+            item[0] is None,
+            item[0] if item[0] is not None else 0.0,
+            item[1] is None,
+            item[1] if item[1] is not None else 0.0,
+            item[2] is None,
+            item[2] if item[2] is not None else 0.0,
+        )
+    )
+    excess = rule.get("excess") if isinstance(rule.get("excess"), dict) else None
+    freight_value = rule.get("freight_value") if isinstance(rule.get("freight_value"), dict) else None
+    freight_rate = _normalized_executable_amount(freight_value.get("rate")) if freight_value else None
+    freight_signature = None
+    if freight_rate is not None:
+        freight_signature = (freight_rate, freight_value.get("calculation_base"))
+    route_toll = rule.get("route_toll") if isinstance(rule.get("route_toll"), dict) else None
+    toll_rate = _normalized_executable_amount(route_toll.get("rate_per_fraction")) if route_toll else None
+    toll_signature = None
+    if toll_rate is not None:
+        toll_signature = (
+            toll_rate,
+            _normalized_executable_amount(route_toll.get("fraction_size_kg"), 4),
+        )
+    return (
+        rule.get("pricing_type"),
+        str(rule.get("unit") or "").strip().lower(),
+        tuple(brackets),
+        _normalized_executable_amount(excess.get("rate_per_kg")) if excess else None,
+        _normalized_executable_amount(rule.get("value_per_kg")),
+        _normalized_executable_amount(rule.get("value_per_ton")),
+        freight_signature,
+        toll_signature,
+    )
+
+
+def _unique_lookup_keys(lookup_keys) -> list[str]:
+    keys: list[str] = []
+    for key in lookup_keys or []:
+        if isinstance(key, str) and key.strip() and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _absorb_equivalent_freight_route(
+    rules: list[dict],
+    owned: dict[str, int],
+    engine_rule: dict,
+    lookup_keys: list[str],
+    source_refs: list[str],
+) -> bool:
+    """Incorpora rota redundante na regra existente quando a tarifa executável é a mesma.
+
+    Só age se todas as chaves já publicadas apontam para uma única regra.
+    Tarifa diferente, ou duas regras disputando a rota, seguem o conflito bloqueante.
+    """
+    keys = _unique_lookup_keys(lookup_keys)
+    if not keys or not isinstance(engine_rule, dict):
+        return False
+    incoming = set(keys)
+    owner_indexes: list[int] = []
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            continue
+        existing_keys = rule.get("lookup_keys") or []
+        if any(isinstance(key, str) and key in incoming for key in existing_keys):
+            owner_indexes.append(index)
+    if len(owner_indexes) != 1:
+        return False
+    rule_index = owner_indexes[0]
+    existing = rules[rule_index]
+    if _executable_tariff_signature(existing) != _executable_tariff_signature(engine_rule):
+        return False
+    merged_keys = _unique_lookup_keys(existing.get("lookup_keys"))
+    additions: list[str] = []
+    for key in keys:
+        if key in merged_keys:
+            continue
+        previous = owned.get(key)
+        if previous is not None and previous != rule_index:
+            return False
+        additions.append(key)
+    for key in additions:
+        merged_keys.append(key)
+        owned[key] = rule_index
+    existing["lookup_keys"] = merged_keys
+    refs = [ref for ref in (existing.get("source_refs") or []) if isinstance(ref, str) and ref]
+    for ref in source_refs or []:
+        if isinstance(ref, str) and ref and ref not in refs:
+            refs.append(ref)
+    if refs:
+        existing["source_refs"] = refs
+    return True
+
+
 def _append_contract_rule(
     rules: list[dict],
     owned: dict[str, int],
@@ -6329,6 +6448,14 @@ def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
             lookup_keys,
             source_ref=source_ref,
             route_index=route_index,
+        ):
+            continue
+        if _absorb_equivalent_freight_route(
+            rules,
+            owned,
+            engine_rule,
+            lookup_keys,
+            [source_ref],
         ):
             continue
         _append_contract_rule(
