@@ -839,6 +839,13 @@ def build_calculation_fingerprint_payload(
                 "edit_version": int(record.get("edit_version") or 0),
                 "updated_at": record.get("updated_at"),
                 "human_review_status": record.get("human_review_status"),
+                "coverage_digest": _sha256_hex(
+                    _canonical_json(
+                        record.get("coverage_table")
+                        if isinstance(record.get("coverage_table"), (dict, list))
+                        else {}
+                    )
+                ),
             }
         )
     rows_digest = _sha256_hex(_canonical_json(normalized_rows))
@@ -1440,7 +1447,7 @@ def execute_comparison_calculation(
                     normalized_rows=rows,
                     table_records=table_records,
                     tax_config=tax_config,
-                    coverage_table=coverage,
+                    coverage_table=None,
                     schema_version=MULTI_TABLE_CALCULATION_SCHEMA_VERSION,
                     execution_id=exec_id,
                     ttl_hours=effective_ttl,

@@ -2213,7 +2213,7 @@
     }
     if (step === 'COVERAGE') {
       titleEl.textContent = 'Cidades atendidas';
-      subtitleEl.textContent = 'Configure uma única relação de cidades atendidas para o cenário comparativo.';
+      subtitleEl.textContent = 'Envie a planilha de cidades atendidas de cada transportadora. A etapa seguinte abre quando todas estiverem resolvidas.';
       return;
     }
     if (step === 'CALCULATION_FILE') {
@@ -2254,6 +2254,19 @@
     } else if (step === 'COVERAGE') {
       coverageStepActive = true;
       tempTableModalActiveTab = 'coverage';
+      var coverageTargetId = ensureCoverageTargetTableId();
+      var coverageTarget = coverageComparisonTables().find(function (table) {
+        return table && table.table_id === coverageTargetId;
+      });
+      var showingTarget = !!(
+        coverageTarget
+        && currentTempTable
+        && currentTempTable.temp_table_id
+        && currentTempTable.temp_table_id === coverageTarget.temp_table_id
+      );
+      if (coverageTargetId && !showingTarget) {
+        loadCoverageTargetRecord(coverageTargetId);
+      }
     } else if (step === 'CALCULATION_FILE') {
       auditFileStepActive = true;
       tempTableModalActiveTab = 'audit';
@@ -2699,6 +2712,7 @@
   var coveragePromptAnswered = false;
   var coveragePromptAccepted = false;
   var coverageUploadInFlight = false;
+  var coverageTargetTableId = null;
   var activeCoverageUploadPrefix = 'agenteComparaCoverage';
   var coverageSaveInFlight = false;
   var auditFileStepActive = false;
@@ -3055,6 +3069,7 @@
     coverageStepActive = false;
     coveragePromptAnswered = false;
     coveragePromptAccepted = false;
+    coverageTargetTableId = null;
     tempTableModalActiveTab = 'freight';
   }
 
@@ -6075,7 +6090,7 @@
 
     var support = document.createElement('p');
     support.className = 'agente-compara-coverage-prompt-support';
-    support.textContent = 'Use essa etapa quando a tabela de frete trabalhar com regiões, praças, rotas ou itinerários.';
+    support.textContent = 'Cada transportadora tem a própria abrangência. Selecione a tabela antes de enviar o arquivo.';
     card.appendChild(support);
 
     var actions = document.createElement('div');
@@ -6109,6 +6124,135 @@
     chatHistory = trimChatHistory(chatHistory);
   }
 
+  function coverageComparisonTables() {
+    var desired = Number(comparisonState.desiredTableCount || 2);
+    return (comparisonState.tables || []).filter(function (table) {
+      if (!table || !table.confirmed || !table.table_id) return false;
+      var slot = Number(table.slot_number || 0);
+      return slot >= 1 && slot <= desired;
+    });
+  }
+
+  function ensureCoverageTargetTableId() {
+    var tables = coverageComparisonTables();
+    var current = tables.find(function (table) { return table.table_id === coverageTargetTableId; });
+    if (current) return coverageTargetTableId;
+    var pending = tables.find(function (table) { return table.coverage_ready !== true; });
+    coverageTargetTableId = (pending || tables[0] || {}).table_id || null;
+    return coverageTargetTableId;
+  }
+
+  function coverageStatusLabel(table) {
+    if (!table) return 'abrangência pendente';
+    if (table.coverage_status === 'configured' || (table.coverage_ready === true && Number(table.coverage_rows_count || 0) > 0)) {
+      return 'abrangência configurada';
+    }
+    if (table.coverage_status === 'waived') return 'abrangência não necessária';
+    return 'abrangência pendente';
+  }
+
+  function appendCoverageTargetList(container) {
+    var tables = coverageComparisonTables();
+    if (!container || tables.length < 2) return;
+    var targetId = ensureCoverageTargetTableId();
+    var list = document.createElement('div');
+    list.className = 'agente-compara-coverage-target-list';
+    tables.forEach(function (table) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'agente-compara-coverage-target';
+      button.setAttribute('data-coverage-table-id', table.table_id);
+      if (table.table_id === targetId) button.classList.add('is-selected');
+      var name = document.createElement('span');
+      name.className = 'agente-compara-coverage-target-name';
+      name.textContent = table.carrier_name || ('Tabela ' + (table.slot_number || ''));
+      var status = document.createElement('span');
+      status.className = 'agente-compara-coverage-target-status';
+      status.textContent = coverageStatusLabel(table);
+      if (table.coverage_ready === true) status.classList.add('is-ready');
+      else status.classList.add('is-pending');
+      button.appendChild(name);
+      button.appendChild(status);
+      button.addEventListener('click', function () {
+        coverageTargetTableId = table.table_id;
+        syncCoverageTargetButtons();
+        loadCoverageTargetRecord(table.table_id);
+      });
+      list.appendChild(button);
+    });
+    container.appendChild(list);
+  }
+
+  function syncCoverageTargetButtons() {
+    var tables = coverageComparisonTables();
+    var targetId = coverageTargetTableId;
+    document.querySelectorAll('.agente-compara-coverage-target').forEach(function (button) {
+      var id = button.getAttribute('data-coverage-table-id');
+      var table = tables.find(function (item) { return item && item.table_id === id; });
+      button.classList.toggle('is-selected', id === targetId);
+      var status = button.querySelector('.agente-compara-coverage-target-status');
+      if (status && table) {
+        status.textContent = coverageStatusLabel(table);
+        status.classList.toggle('is-ready', table.coverage_ready === true);
+        status.classList.toggle('is-pending', table.coverage_ready !== true);
+      }
+    });
+  }
+
+  function coverageTableIdentityQuery(table) {
+    var params = [];
+    if (comparisonState.comparisonId) {
+      params.push('comparison_id=' + encodeURIComponent(comparisonState.comparisonId));
+    }
+    if (table && table.table_id) params.push('table_id=' + encodeURIComponent(table.table_id));
+    if (table && table.slot_number) params.push('slot=' + encodeURIComponent(String(table.slot_number)));
+    return params.length ? ('?' + params.join('&')) : '';
+  }
+
+  function loadCoverageTargetRecord(tableId) {
+    var table = coverageComparisonTables().find(function (item) {
+      return item && item.table_id === tableId;
+    });
+    if (!table || !comparisonState.comparisonId) {
+      if (isTempTableModalOpen()) {
+        renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
+      }
+      return Promise.resolve(null);
+    }
+    var generation = comparisonRequestGeneration;
+    return fetch(API_STATUS + coverageTableIdentityQuery(table), {
+      method: 'GET',
+      credentials: 'same-origin'
+    })
+      .then(function (r) {
+        return r.json().then(function (data) { return { status: r.status, data: data }; });
+      })
+      .then(function (res) {
+        if (generation !== comparisonRequestGeneration) return null;
+        if (coverageTargetTableId !== tableId) return null;
+        if (!res.data || res.data.ok !== true) return null;
+        if (res.data.comparison) syncComparisonStateFromPayload(res.data.comparison);
+        coverageTargetTableId = tableId;
+        if ((comparisonState.currentStep || '') === 'COVERAGE') {
+          coverageStepActive = true;
+          tempTableModalActiveTab = 'coverage';
+        }
+        if (res.data.temp_table && res.data.temp_table.temp_table_id) {
+          setCurrentTempTable(res.data.temp_table, { refreshAuditBi: false });
+        }
+        syncCoverageTargetButtons();
+        if (isTempTableModalOpen()) {
+          renderTempTableModalContent(currentTempTable);
+          updateTempTableModalFooter();
+        }
+        return res.data;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
   function renderCoverageUploadCard(container, prefix) {
     if (!container) return;
     var idPrefix = prefix || 'agenteComparaCoverage';
@@ -6116,6 +6260,7 @@
     activeCoverageUploadPrefix = idPrefix;
     var card = document.createElement('div');
     card.className = 'agente-compara-coverage-upload-card';
+    appendCoverageTargetList(card);
 
     var header = document.createElement('div');
     header.className = 'agente-compara-coverage-upload-header';
@@ -6134,7 +6279,7 @@
 
     var description = document.createElement('p');
     description.className = 'agente-compara-coverage-upload-description';
-    description.textContent = 'Envie uma planilha com UF, cidade e região de frete.';
+    description.textContent = 'Envie uma planilha com UF, cidade e região de frete para a transportadora selecionada.';
     card.appendChild(description);
 
     var actions = document.createElement('div');
@@ -6281,11 +6426,22 @@
 
   function uploadCoverageFile(file) {
     if (!file || coverageUploadInFlight) return;
+    var targetTableId = ensureCoverageTargetTableId();
+    if (comparisonState.comparisonId && !targetTableId && coverageComparisonTables().length) {
+      setCoverageUploadStatus('Selecione a transportadora que receberá o arquivo de cidades atendidas.', 'error');
+      return;
+    }
     coverageUploadInFlight = true;
     setCoverageUploadStatus('Enviando arquivo...', 'loading');
 
     var formData = new FormData();
     formData.append('file', file);
+    if (comparisonState.comparisonId) {
+      formData.append('comparison_id', comparisonState.comparisonId);
+    }
+    if (targetTableId) {
+      formData.append('table_id', targetTableId);
+    }
 
     fetch(API_COVERAGE_UPLOAD, {
       method: 'POST',
@@ -6322,18 +6478,23 @@
             coveragePromptAnswered = true;
             coveragePromptAccepted = true;
             tempTableModalActiveTab = 'coverage';
-            setCoverageUploadStatus('Arquivo carregado. Revise a aba Cidades atendidas.', 'success');
-            if (isTempTableModalOpen()) {
-              renderTempTableModalContent(currentTempTable);
-              updateTempTableModalFooter();
+            ensureCoverageTargetTableId();
+            setCoverageUploadStatus('Abrangência salva. As demais transportadoras pendentes continuam nesta etapa.', 'success');
+            syncCoverageTargetButtons();
+            if (!isTempTableModalOpen()) {
+              appendOperationalMessage('Relação de cidades atendidas carregada.');
+              openTempTableModal();
             }
+            loadCoverageTargetRecord(ensureCoverageTargetTableId());
           }
-          if (!isTempTableModalOpen()) {
-            appendOperationalMessage('Relação de cidades atendidas carregada.');
-            fetchDocuments();
-            openTempTableModal();
-          } else {
-            fetchDocuments();
+          if ((comparisonState.currentStep || '') === 'CALCULATION_FILE') {
+            if (!isTempTableModalOpen()) {
+              appendOperationalMessage('Relação de cidades atendidas carregada.');
+              fetchDocuments();
+              openTempTableModal();
+            } else {
+              fetchDocuments();
+            }
           }
         } else {
           setCoverageUploadStatus('Nenhuma cidade foi identificada no arquivo. Verifique o formato e tente novamente.', 'error');
@@ -6355,6 +6516,8 @@
     var coverage = currentTempTable.coverage_table || { rows: [] };
     return {
       temp_table_id: currentTempTable.temp_table_id,
+      comparison_id: comparisonState.comparisonId,
+      table_id: ensureCoverageTargetTableId() || comparisonState.activeTableId,
       edit_target: {
         coverage_table: {
           rows: deepCloneValue(coverage.rows || [])
@@ -7356,6 +7519,8 @@
       credentials: 'same-origin',
       body: JSON.stringify({
         temp_table_id: expectedTempTableId,
+        comparison_id: comparisonState.comparisonId,
+        table_id: ensureCoverageTargetTableId() || expectedTableId,
         review_action: 'skip_coverage_and_advance'
       })
     })
@@ -14995,7 +15160,7 @@ function renderDocumentItem(doc) {
 
     var support = document.createElement('p');
     support.className = 'agente-compara-coverage-prompt-support';
-    support.textContent = 'Use essa etapa quando a tabela de frete trabalhar com regiões, praças, rotas ou itinerários.';
+    support.textContent = 'Cada transportadora tem a própria abrangência. Selecione a tabela antes de enviar o arquivo.';
     card.appendChild(support);
 
     var actions = document.createElement('div');
@@ -15143,6 +15308,7 @@ function renderDocumentItem(doc) {
 
   function renderCoverageTabContent(container, tempTable) {
     appendSectionTitle(container, 'Cidades atendidas');
+    appendCoverageTargetList(container);
     var section = document.createElement('div');
     section.className = 'agente-compara-temp-table-modal-section agente-compara-temp-table-modal-coverage-section';
 

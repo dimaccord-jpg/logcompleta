@@ -531,6 +531,12 @@ def build_multi_table_calculation_context(
             table_id=table_id,
             temp_table_id=temp_table_id,
         )
+        record_coverage = None
+        if isinstance(record, dict) and isinstance(record.get("coverage_table"), (dict, list)):
+            record_coverage = record.get("coverage_table")
+        # Coverage da própria tabela prevalece. O argumento compartilhado só
+        # preenche tabela sem coverage_table (compatibilidade de chamadas legadas).
+        unit_coverage = record_coverage if record_coverage is not None else coverage_table
         try:
             unit_ctx = build_single_table_calculation_context(
                 comparison_id=comparison_id,
@@ -542,7 +548,7 @@ def build_multi_table_calculation_context(
                 table_record=record,
                 normalized_rows=list(copy.deepcopy(row) for row in rows_snapshot),
                 tax_config=resolved_tax,
-                coverage_table=coverage_table,
+                coverage_table=unit_coverage,
                 schema_version=1,
                 execution_id=resolved_execution_id,
                 ttl_hours=ttl_hours,

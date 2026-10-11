@@ -30,6 +30,7 @@ from app.agente_compara_comparison_state import (
     AgenteComparaComparisonError,
     ERROR_CARRIER_NAME_REQUIRED,
     ERROR_CARRIER_NAME_INVALID,
+    ERROR_COVERAGE_CONFIGURATION_PENDING,
     add_third_table,
     advance_to_taxes,
     ensure_comparison,
@@ -441,6 +442,8 @@ def _http_status_for_error(error_code: str) -> int:
 def _http_status_for_temp_table_error(error_code: str) -> int:
     if error_code == ERROR_TEMP_TABLE_PAYLOAD_TOO_LARGE:
         return 413
+    if error_code == ERROR_COVERAGE_CONFIGURATION_PENDING:
+        return 409
     if error_code == ERROR_TEMP_TABLE_ID_MISMATCH:
         return 409
     if error_code == ERROR_TEMP_TABLE_SCOPE_MISMATCH:
@@ -451,6 +454,8 @@ def _http_status_for_temp_table_error(error_code: str) -> int:
 
 
 def _http_status_for_coverage_error(error_code: str) -> int:
+    if error_code == ERROR_COVERAGE_CONFIGURATION_PENDING:
+        return 409
     if error_code == ERROR_COVERAGE_PAYLOAD_TOO_LARGE:
         return 413
     if error_code == ERROR_COVERAGE_SCOPE_MISMATCH:
@@ -1328,6 +1333,8 @@ def agente_compara_coverage_upload():
     display_name = (upload.filename or "coverage").strip()
     file_bytes = upload.read() or b""
     extension = Path(display_name).suffix.lower() or None
+    table_id = (request.form.get("table_id") or "").strip() or None
+    comparison_id = (request.form.get("comparison_id") or "").strip() or None
 
     user_scope = getattr(current_user, "id", None)
     franquia_scope = getattr(current_user, "franquia_id", None)
@@ -1338,6 +1345,8 @@ def agente_compara_coverage_upload():
             extension=extension,
             user_scope=user_scope,
             franquia_scope=franquia_scope,
+            table_id=table_id,
+            comparison_id=comparison_id,
         )
     except AgenteComparaCoverageError as exc:
         return (

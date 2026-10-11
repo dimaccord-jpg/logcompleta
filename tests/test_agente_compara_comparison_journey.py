@@ -307,17 +307,49 @@ def test_skip_coverage_advances_to_calculation_file(web_client):
     assert resp.get_json()["comparison"]["current_step"] == STEP_CALCULATION_FILE
 
 
-def test_coverage_upload_advances_to_calculation_file(web_client):
-    primary = _set_comparison_at_step(web_client, STEP_COVERAGE)
-    resp = web_client.post(
+def _move_boot_to_coverage(web_client, boot: dict) -> dict:
+    with web_client.session_transaction() as sess:
+        state = get_comparison_state(sess)
+        state["current_step"] = STEP_COVERAGE
+        sess[AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY] = state
+    return boot
+
+
+def _post_coverage(web_client, content: bytes, *, table_id: str, comparison_id: str, filename: str = "cidades.csv"):
+    return web_client.post(
         "/api/agente-compara/coverage/upload",
-        data={"file": (io.BytesIO(_sample_coverage_csv()), "cidades.csv", "text/csv")},
+        data={
+            "file": (io.BytesIO(content), filename, "text/csv"),
+            "table_id": table_id,
+            "comparison_id": comparison_id,
+        },
         content_type="multipart/form-data",
     )
-    assert resp.status_code == 200, resp.get_json()
-    body = resp.get_json()
-    assert body["ok"] is True
-    assert body["temp_table"]["comparison"]["current_step"] == STEP_CALCULATION_FILE
+
+
+def test_coverage_upload_stays_until_every_required_table_is_resolved(web_client):
+    from app.agente_compara_doc_service import FIELD_TABLE_ID
+
+    boot = _move_boot_to_coverage(web_client, _bootstrap_taxes_comparison_for_journey(web_client))
+    table_1 = boot["records"][1][FIELD_TABLE_ID]
+    table_2 = boot["records"][2][FIELD_TABLE_ID]
+    first = _post_coverage(
+        web_client,
+        _sample_coverage_csv(),
+        table_id=table_1,
+        comparison_id=boot["comparison_id"],
+    )
+    assert first.status_code == 200, first.get_json()
+    assert first.get_json()["temp_table"]["comparison"]["current_step"] == STEP_COVERAGE
+    second = _post_coverage(
+        web_client,
+        _sample_coverage_csv(),
+        table_id=table_2,
+        comparison_id=boot["comparison_id"],
+        filename="cidades-b.csv",
+    )
+    assert second.status_code == 200, second.get_json()
+    assert second.get_json()["temp_table"]["comparison"]["current_step"] == STEP_CALCULATION_FILE
 
 
 def test_audit_upload_reaches_configuration_ready_without_run(web_client, monkeypatch):
@@ -403,11 +435,17 @@ def test_e2e_two_tables_to_configuration_ready(web_client, monkeypatch):
     )
     assert advance.get_json()["comparison"]["current_step"] == STEP_COVERAGE
 
-    coverage = web_client.post(
-        "/api/agente-compara/coverage/upload",
-        data={"file": (io.BytesIO(_sample_coverage_csv()), "cidades.csv", "text/csv")},
-        content_type="multipart/form-data",
-    )
+    from app.agente_compara_doc_service import FIELD_TABLE_ID
+
+    for slot, filename in ((1, "cidades-a.csv"), (2, "cidades-b.csv")):
+        coverage = _post_coverage(
+            web_client,
+            _sample_coverage_csv(),
+            table_id=boot["records"][slot][FIELD_TABLE_ID],
+            comparison_id=boot["comparison_id"],
+            filename=filename,
+        )
+        assert coverage.status_code == 200, coverage.get_json()
     assert coverage.get_json()["temp_table"]["comparison"]["current_step"] == STEP_CALCULATION_FILE
 
     audit = web_client.post(

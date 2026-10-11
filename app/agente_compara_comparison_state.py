@@ -76,6 +76,7 @@ ERROR_CARRIER_NAME_REQUIRED = "agente_compara_carrier_name_required"
 ERROR_CARRIER_NAME_INVALID = "agente_compara_carrier_name_invalid"
 ERROR_TAX_SELECTED_TABLES_REQUIRED = "agente_compara_tax_selected_tables_required"
 ERROR_TAX_SELECTED_TABLE_INVALID = "agente_compara_tax_selected_table_invalid"
+ERROR_COVERAGE_CONFIGURATION_PENDING = "agente_compara_coverage_configuration_pending"
 
 CARRIER_NAME_MAX_LENGTH = 120
 
@@ -152,7 +153,7 @@ def _normalize_table_entry(raw: dict) -> dict | None:
     else:
         error = None
     status = (raw.get("status") or TABLE_STATUS_EMPTY).strip() or TABLE_STATUS_EMPTY
-    return {
+    entry = {
         "table_id": table_id,
         "slot_number": slot_number,
         "status": status,
@@ -162,6 +163,9 @@ def _normalize_table_entry(raw: dict) -> dict | None:
         "confirmed": bool(raw.get("confirmed")),
         "error": error,
     }
+    if raw.get("coverage_disposition") == "waived":
+        entry["coverage_disposition"] = "waived"
+    return entry
 
 
 def _normalize_comparison_state(raw: dict | None) -> dict | None:
@@ -614,6 +618,9 @@ def advance_to_calculation_file(state: dict, *, session_obj=None) -> dict:
             ERROR_COMPARISON_STEP_INVALID,
             "Arquivo operacional só fica disponível após a etapa de cidades atendidas.",
         )
+    from app.agente_compara_coverage_ownership import assert_required_coverage_resolved
+
+    assert_required_coverage_resolved(state)
     state["current_step"] = STEP_CALCULATION_FILE
     return persist_comparison_state(state, session_obj=session_obj)
 
@@ -689,6 +696,7 @@ def invalidate_table_preparation(state: dict, table_id: str, *, session_obj=None
     entry["carrier_name"] = None
     entry["confirmed"] = False
     entry["error"] = None
+    entry.pop("coverage_disposition", None)
     slot = int(entry.get("slot_number") or 0)
     if slot == 3 and state.get("desired_table_count") == 3 and not entry.get("confirmed"):
         # mantém slot 3 vazio se ainda em preparação
@@ -941,6 +949,28 @@ def public_table_summary(entry: dict) -> dict:
     }
 
 
+def _attach_coverage_ownership(slot_summaries: list[dict], state: dict) -> None:
+    try:
+        from app.agente_compara_coverage_ownership import coverage_situations_for_state
+    except Exception:
+        logger.exception("Situação de coverage indisponível no resumo da comparação.")
+        return
+    try:
+        situations = coverage_situations_for_state(state)
+    except Exception:
+        logger.exception("Falha ao avaliar coverage por tabela.")
+        return
+    by_id = {item.get("table_id"): item for item in situations}
+    for summary in slot_summaries:
+        item = by_id.get(summary.get("table_id"))
+        if not item:
+            continue
+        summary["coverage_status"] = item.get("coverage_status")
+        summary["coverage_rows_count"] = item.get("coverage_rows_count")
+        summary["coverage_ready"] = item.get("coverage_ready")
+        summary["coverage_required"] = item.get("coverage_required")
+
+
 def public_comparison_summary(
     state: dict,
     *,
@@ -956,6 +986,8 @@ def public_comparison_summary(
         key=lambda item: int(item.get("slot_number") or 0),
     ):
         slot_summaries.append(public_table_summary(entry))
+    if state.get("current_step") == STEP_COVERAGE:
+        _attach_coverage_ownership(slot_summaries, state)
     payload = {
         "comparison_id": state.get("comparison_id"),
         "status": state.get("status"),
@@ -968,7 +1000,23 @@ def public_comparison_summary(
     if include_active_detail:
         active = get_active_table(state)
         if active is not None:
-            payload["active_table"] = public_table_summary(active)
+            enriched = next(
+                (item for item in slot_summaries if item.get("table_id") == active.get("table_id")),
+                None,
+            )
+            payload["active_table"] = enriched or public_table_summary(active)
+    if state.get("current_step") == STEP_COVERAGE:
+        payload["coverage_tables"] = [
+            {
+                "table_id": item.get("table_id"),
+                "carrier_name": item.get("carrier_name"),
+                "coverage_status": item.get("coverage_status"),
+                "coverage_rows_count": item.get("coverage_rows_count"),
+                "coverage_ready": item.get("coverage_ready"),
+            }
+            for item in slot_summaries
+            if "coverage_status" in item
+        ]
     if state.get("current_step") == STEP_TAXES:
         tax_config_public = public_tax_config_summary(get_comparison_tax_config(state))
         if tax_config_public is not None:

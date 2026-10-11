@@ -146,6 +146,7 @@ from app.agente_compara_comparison_state import (
     TAX_FISCAL_STATUS_NO_TAXES,
     ERROR_TAX_SELECTED_TABLES_REQUIRED,
     ERROR_TAX_SELECTED_TABLE_INVALID,
+    ERROR_COVERAGE_CONFIGURATION_PENDING,
     document_belongs_to_table,
     clear_comparison_state,
     ensure_comparison,
@@ -300,6 +301,7 @@ ICMS_7_PERCENT_ORIGIN_UFS = UF_SOUTH | UF_SOUTHEAST
 ICMS_7_PERCENT_DESTINATION_UFS = UF_NORTH | UF_NORTHEAST | UF_CENTER_WEST | {"ES"}
 
 ERROR_COVERAGE_NO_TEMP_TABLE = "agente_compara_coverage_no_temp_table"
+ERROR_COVERAGE_TABLE_REQUIRED = "agente_compara_coverage_table_required"
 ERROR_COVERAGE_INVALID_FORMAT = "agente_compara_coverage_invalid_format"
 ERROR_COVERAGE_EMPTY_FILE = "agente_compara_coverage_empty_file"
 ERROR_COVERAGE_PAYLOAD_TOO_LARGE = "agente_compara_coverage_payload_too_large"
@@ -2241,6 +2243,7 @@ def set_temp_table_id(
     *,
     table_id: str | None = None,
     comparison_id: str | None = None,
+    promote_primary: bool = True,
 ) -> None:
     ref = (temp_table_id or "").strip()
     state = get_comparison_state(session_obj)
@@ -2252,9 +2255,15 @@ def set_temp_table_id(
                 if entry.get("status") in {TABLE_STATUS_EMPTY, TABLE_STATUS_LOCKED}:
                     entry["status"] = TABLE_STATUS_PROCESSING
             persist_comparison_state(state, session_obj=session_obj)
-        if ref and state.get("current_step") in {STEP_TAXES, STEP_COVERAGE, STEP_CALCULATION_FILE, STEP_ANALYSIS, STEP_TABLES_READY}:
+        if (
+            promote_primary
+            and ref
+            and state.get("current_step") in {STEP_TAXES, STEP_COVERAGE, STEP_CALCULATION_FILE, STEP_ANALYSIS, STEP_TABLES_READY}
+        ):
             state["primary_temp_table_id"] = ref
             persist_comparison_state(state, session_obj=session_obj)
+    if not promote_primary:
+        return
     if ref:
         session_obj[AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY] = ref
     else:
@@ -2900,6 +2909,69 @@ def _validate_coverage_table_for_save(raw_coverage) -> dict | None:
     return {"rows": normalized_rows}
 
 
+def _advance_coverage_step_if_ready(cmp_state: dict | None) -> dict | None:
+    """Avança para o arquivo operacional só quando toda tabela obrigatória está resolvida."""
+    if not isinstance(cmp_state, dict) or cmp_state.get("current_step") != STEP_COVERAGE:
+        return cmp_state
+    if not is_comparison_common_params_step(cmp_state):
+        return cmp_state
+    try:
+        return advance_to_calculation_file(cmp_state)
+    except AgenteComparaComparisonError as exc:
+        if exc.error_code == ERROR_COVERAGE_CONFIGURATION_PENDING:
+            return cmp_state
+        raise
+
+
+def _resolve_coverage_upload_temp_table_id(
+    *,
+    table_id: str | None,
+    comparison_id: str | None,
+) -> tuple[str, str | None]:
+    """Resolve a temp_table dona da coverage.
+
+    No multitabela em COVERAGE, table_id é obrigatório. Sem comparação ativa,
+    permanece o temp_table da sessão legada.
+    """
+    state = get_comparison_state(session)
+    requested_table_id = (table_id or "").strip() or None
+    requested_comparison_id = (comparison_id or "").strip() or None
+    if isinstance(state, dict):
+        state_comparison_id = (state.get("comparison_id") or "").strip()
+        if requested_comparison_id and state_comparison_id and requested_comparison_id != state_comparison_id:
+            raise AgenteComparaCoverageError(
+                ERROR_COVERAGE_SCOPE_MISMATCH,
+                "comparison_id não pertence à comparação ativa.",
+            )
+        multitabela = state.get("current_step") == STEP_COVERAGE or bool(requested_table_id)
+        if multitabela and state.get("current_step") == STEP_COVERAGE and not requested_table_id:
+            raise AgenteComparaCoverageError(
+                ERROR_COVERAGE_TABLE_REQUIRED,
+                "Informe a tabela para a qual o arquivo de cidades atendidas será enviado.",
+            )
+        if requested_table_id:
+            entry = get_table_by_id(state, requested_table_id)
+            if entry is None:
+                raise AgenteComparaCoverageError(
+                    ERROR_COVERAGE_NO_TEMP_TABLE,
+                    "Tabela não encontrada nesta comparação.",
+                )
+            temp_id = (entry.get("temp_table_id") or "").strip()
+            if not temp_id:
+                raise AgenteComparaCoverageError(
+                    ERROR_COVERAGE_NO_TEMP_TABLE,
+                    "Tabela temporária indisponível para a transportadora selecionada.",
+                )
+            return temp_id, entry.get("table_id")
+    active_id = get_temp_table_id(session)
+    if not active_id:
+        raise AgenteComparaCoverageError(
+            ERROR_COVERAGE_NO_TEMP_TABLE,
+            "Nenhuma tabela temporária ativa nesta sessão.",
+        )
+    return active_id, None
+
+
 def upload_coverage_table_from_file(
     *,
     display_name: str,
@@ -2907,11 +2979,14 @@ def upload_coverage_table_from_file(
     extension: str | None,
     user_scope=None,
     franquia_scope=None,
+    table_id: str | None = None,
+    comparison_id: str | None = None,
 ) -> dict:
     """
-    Upload complementar determinístico de coverage_table no tt_*.json ativo.
+    Upload complementar determinístico de coverage_table da tabela informada.
 
     Não registra documento principal, não chama Gemini e não dispara extração de frete.
+    Não copia coverage para as demais tabelas.
     """
     started_at = time.perf_counter()
     emitted_processing_event = [False]
@@ -2964,12 +3039,10 @@ def upload_coverage_table_from_file(
             ERROR_COMPARISON_STEP_INVALID,
             "Upload de cidades atendidas só é permitido na etapa COVERAGE.",
         )
-    active_id = get_temp_table_id(session)
-    if not active_id:
-        raise AgenteComparaCoverageError(
-            ERROR_COVERAGE_NO_TEMP_TABLE,
-            "Nenhuma tabela temporária ativa nesta sessão.",
-        )
+    active_id, resolved_table_id = _resolve_coverage_upload_temp_table_id(
+        table_id=table_id,
+        comparison_id=comparison_id,
+    )
 
     cfg = get_cleiton_doc_config()
     record = load_temp_table_record(active_id, ttl_hours=cfg.upload_ttl_hours)
@@ -3015,10 +3088,15 @@ def upload_coverage_table_from_file(
     updated["updated_at"] = now
     updated["expires_at"] = preserved_expires_at
 
-    saved = save_temp_table_record(updated)
+    saved = save_temp_table_record(
+        updated,
+        table_id=resolved_table_id,
+        promote_primary=False,
+    )
+    cmp_state = get_comparison_state(session) or cmp_state
     if is_comparison_common_params_step(cmp_state) and cmp_state.get("current_step") == STEP_COVERAGE:
         try:
-            cmp_state = advance_to_calculation_file(cmp_state)
+            cmp_state = _advance_coverage_step_if_ready(cmp_state)
         except AgenteComparaComparisonError as exc:
             raise AgenteComparaCoverageError(
                 exc.error_code,
@@ -11559,6 +11637,9 @@ def save_temp_table_edit(
                 ERROR_COMPARISON_STEP_INVALID,
                 "Nenhuma comparação ativa para avançar a etapa.",
             )
+        from app.agente_compara_coverage_ownership import waive_tables_that_do_not_require_coverage
+
+        cmp_state = waive_tables_that_do_not_require_coverage(cmp_state)
         try:
             cmp_state = advance_to_calculation_file(cmp_state)
         except AgenteComparaComparisonError as exc:
@@ -11620,6 +11701,8 @@ def save_temp_table_edit(
                 "temp_table_id não corresponde ao table_id informado.",
             )
         active_id = entry_temp_id
+    elif validated["has_coverage_table_key"] and resolved_table_id:
+        active_id = get_temp_table_id(session, table_id=resolved_table_id)
     elif cmp_state is not None and is_comparison_common_params_step(cmp_state):
         active_id = get_temp_table_id(session)
     else:
@@ -11859,7 +11942,11 @@ def save_temp_table_edit(
     preserve_semantic_resolution_preview(stored=record, updated=updated, payload=payload_obj)
     preserve_semantic_resolution_queue(stored=record, updated=updated, payload=payload_obj)
 
-    saved = save_temp_table_record(updated, table_id=resolved_table_id)
+    saved = save_temp_table_record(
+        updated,
+        table_id=resolved_table_id,
+        promote_primary=not validated["has_coverage_table_key"],
+    )
     comparison_public = None
     if will_confirm_on_prepare and cmp_state is not None and resolved_table_id:
         cmp_state = confirm_table_and_advance(cmp_state, resolved_table_id)
@@ -11870,14 +11957,15 @@ def save_temp_table_edit(
         and cmp_state.get("current_step") == STEP_COVERAGE
         and validated["review_action"] == TEMP_TABLE_REVIEW_ACTION_SAVE_AND_ADVANCE
     ):
+        cmp_state = get_comparison_state(session) or cmp_state
         try:
-            cmp_state = advance_to_calculation_file(cmp_state)
-            comparison_public = public_comparison_summary(cmp_state)
+            cmp_state = _advance_coverage_step_if_ready(cmp_state)
         except AgenteComparaComparisonError as exc:
             raise AgenteComparaTempTableError(
                 exc.error_code,
                 exc.message,
             ) from exc
+        comparison_public = public_comparison_summary(cmp_state)
     logger.info(
         "Agente Compara temp_table save: temp_table_id=%s user_id=%s status=%s tables=%s routes=%s fees=%s coverage_rows=%s taxes=%s",
         saved.get("temp_table_id"),
@@ -11966,7 +12054,12 @@ def _sync_outdated_pricing_rule_stale(record: dict) -> dict:
     )
 
 
-def save_temp_table_record(record: dict, *, table_id: str | None = None) -> dict:
+def save_temp_table_record(
+    record: dict,
+    *,
+    table_id: str | None = None,
+    promote_primary: bool = True,
+) -> dict:
     _require_session()
     temp_table_id = (record.get("temp_table_id") or uuid4().hex).strip()
     record = _sync_outdated_fiscal_stale(dict(record))
@@ -12009,7 +12102,12 @@ def save_temp_table_record(record: dict, *, table_id: str | None = None) -> dict
             save_document_record(persisted_document)
     path = _temp_table_path(temp_table_id)
     _write_temp_table_atomic(path, record)
-    set_temp_table_id(session, temp_table_id, table_id=table_id or record.get(FIELD_TABLE_ID))
+    set_temp_table_id(
+        session,
+        temp_table_id,
+        table_id=table_id or record.get(FIELD_TABLE_ID),
+        promote_primary=promote_primary,
+    )
     set_temp_table_source_doc_ids(session, list(record.get("source_documents") or []), table_id=table_id)
     state = get_comparison_state(session)
     if state is not None:

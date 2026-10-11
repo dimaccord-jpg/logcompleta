@@ -2356,6 +2356,40 @@
     background: var(--af-surface-muted);
   }
 
+  .agente-compara-coverage-target-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .agente-compara-coverage-target {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.45rem 0.65rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(0, 191, 255, 0.18);
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .agente-compara-coverage-target.is-selected {
+    border-color: rgba(0, 191, 255, 0.75);
+  }
+
+  .agente-compara-coverage-target-status.is-ready {
+    color: #7dffa0;
+  }
+
+  .agente-compara-coverage-target-status.is-pending {
+    color: #ffd27a;
+  }
+
   .agente-compara-coverage-upload-header {
     display: flex;
     align-items: center;

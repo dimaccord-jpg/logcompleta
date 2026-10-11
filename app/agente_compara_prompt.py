@@ -123,6 +123,7 @@ Regras obrigatorias:
 - Nao complete faixas faltantes para encaixar em schema fixo.
 - Diferencie: (A) coluna observada no documento -> freight_tables.columns/rows; (B) coluna inferida -> marque em column_meta com origin "inferred"; (C) campo tecnico para calculo -> freight_routes ou chaves tecnicas opcionais, nunca como cabecalho observado.
 - Preencha freight_routes apenas quando houver matriz clara de origem/destino/tipo/faixas estruturaveis E freight_tables nao bastar.
+- freight_routes complementa a tabela. Nao substitui arquivo de abrangencia/cidades atendidas e nao invente relacao cidade-zona para suprir coverage externa.
 - Em freight_routes, inclua somente campos realmente encontrados no documento; omita campos ausentes (nao envie weight_30: null se a coluna nao existir).
 - Use column_labels em freight_routes para mapear chave tecnica -> rotulo do documento (ex.: freight_weight_kg -> "Excedente por kg").
 - Nao reconstrua freight_tables a partir de freight_routes.
