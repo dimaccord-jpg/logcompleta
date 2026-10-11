@@ -309,6 +309,202 @@ def _parse_extraction_response(text: str) -> dict | None:
     return None
 
 
+def _nullable_json(*kinds: str) -> dict[str, Any]:
+    return {"anyOf": [{"type": kind} for kind in kinds] + [{"type": "null"}]}
+
+
+def _open_object(properties: dict[str, Any] | None = None) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "object", "additionalProperties": True}
+    if properties:
+        schema["properties"] = properties
+    return schema
+
+
+def _string_list() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+def _loose_list() -> dict[str, Any]:
+    """Listas legadas cujo item o backend conserva sem schema fechado."""
+    return {
+        "type": "array",
+        "items": {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "number"},
+                {"type": "boolean"},
+                {"type": "null"},
+                {"type": "object", "additionalProperties": True},
+            ]
+        },
+    }
+
+
+def temp_table_extraction_response_json_schema() -> dict[str, Any]:
+    """JSON Schema do payload técnico aceito pela temp_table.
+
+    Transporte via response_json_schema, com chaves camelCase. O caminho
+    response_schema do SDK projeta additional_properties e a API rejeita.
+    Nenhum campo é obrigatório: a extração continua partial-first.
+    """
+    nullable_text = _nullable_json("string")
+    nullable_scalar = _nullable_json("string", "number")
+    context = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "route_label": nullable_text,
+            "origin": nullable_text,
+            "destination": nullable_text,
+            "customer": nullable_text,
+            "supplier": nullable_text,
+            "valid_from": nullable_text,
+            "valid_to": nullable_text,
+            "delivery_deadline": nullable_text,
+        },
+    }
+    freight_table = _open_object(
+        {
+            "table_title": nullable_text,
+            "table_type": nullable_text,
+            "context": context,
+            "columns": _string_list(),
+            "rows": {
+                "type": "array",
+                "items": {"type": "object", "additionalProperties": True},
+            },
+            "column_meta": {"type": "object", "additionalProperties": True},
+            "notes": nullable_text,
+            "evidence_ref": nullable_text,
+            "confidence": nullable_text,
+            "supplier": nullable_text,
+            "provider": nullable_text,
+            "carrier": nullable_text,
+            "carrier_name": nullable_text,
+        }
+    )
+    freight_route = _open_object(
+        {
+            "origin": nullable_text,
+            "destination": nullable_text,
+            "freight_type": nullable_text,
+            "weight_30": nullable_scalar,
+            "weight_50": nullable_scalar,
+            "weight_70": nullable_scalar,
+            "weight_100": nullable_scalar,
+            "boarding_fee": nullable_scalar,
+            "freight_value_pct": nullable_scalar,
+            "freight_weight_kg": nullable_scalar,
+            "pedagio": nullable_scalar,
+            "column_labels": {"type": "object", "additionalProperties": True},
+            "notes": nullable_text,
+            "evidence_ref": nullable_text,
+            "confidence": nullable_text,
+        }
+    )
+    freight_value = _open_object(
+        {
+            "label": nullable_text,
+            "value": nullable_scalar,
+            "unit": nullable_text,
+            "notes": nullable_text,
+        }
+    )
+    accessorial_fee = _open_object(
+        {
+            "name": nullable_text,
+            "value": nullable_scalar,
+            "unit": nullable_text,
+            "calculation_basis": nullable_text,
+            "raw_calculation_basis": nullable_text,
+            "notes": nullable_text,
+            "scope": nullable_text,
+            "calculation_base_id": nullable_text,
+            "calculation_base_label": nullable_text,
+            "related_to": nullable_text,
+            "component_group": nullable_text,
+            "modifier_type": nullable_text,
+            "minimum_amount": nullable_scalar,
+            "maximum_amount": nullable_scalar,
+            "calculation_type": nullable_text,
+            "canonical_component": nullable_text,
+            "evidence_ref": nullable_text,
+        }
+    )
+    weight_range = _open_object(
+        {
+            "label": nullable_text,
+            "min_weight": nullable_scalar,
+            "max_weight": nullable_scalar,
+            "unit": nullable_text,
+            "notes": nullable_text,
+        }
+    )
+    properties = {
+        "status": {
+            "type": "string",
+            "enum": [
+                "needs_review",
+                "failed",
+                "awaiting_validation",
+                "validated",
+            ],
+        },
+        "detected_carrier": nullable_text,
+        "freight_tables": {"type": "array", "items": freight_table},
+        "freight_routes": {"type": "array", "items": freight_route},
+        "freight_values": {"type": "array", "items": freight_value},
+        "accessorial_fees": {"type": "array", "items": accessorial_fee},
+        "weight_ranges": {"type": "array", "items": weight_range},
+        "reading_alerts": _string_list(),
+        "evidence_refs": _string_list(),
+        "origins": _loose_list(),
+        "destinations": _loose_list(),
+        "routes": _loose_list(),
+        "charge_type_detected": nullable_text,
+        "extracted_items": _loose_list(),
+        "uncertain_fields": _loose_list(),
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "propertyOrdering": list(properties),
+        "properties": properties,
+    }
+
+
+def build_temp_table_extraction_generation_config():
+    """Structured Output JSON. Não usa response_schema tipado."""
+    from google.genai import types
+
+    return types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_json_schema=temp_table_extraction_response_json_schema(),
+    )
+
+
+def _safe_finish_reason(response: Any) -> str | None:
+    """Nome do finish_reason, sem texto da resposta."""
+    candidates = getattr(response, "candidates", None)
+    if not isinstance(candidates, (list, tuple)) or not candidates:
+        return None
+    reason = getattr(candidates[0], "finish_reason", None)
+    if reason is None:
+        return None
+    name = getattr(reason, "name", None)
+    if isinstance(name, str) and name.strip() and name.strip().lower() != "none":
+        token = name.strip()
+    elif isinstance(reason, str):
+        token = reason.strip()
+    else:
+        token = str(reason).strip()
+        if "." in token:
+            token = token.rsplit(".", 1)[-1].strip()
+    if not token or any(char.isspace() for char in token) or len(token) > 64:
+        return None
+    return token
+
+
 def _failed_extraction_payload(*, reading_alerts: list[str] | str) -> dict:
     alerts = [reading_alerts] if isinstance(reading_alerts, str) else list(reading_alerts)
     return {
@@ -479,6 +675,7 @@ def run_agente_compara_temp_table_extraction(
         return record
 
     model_candidates = _get_model_candidates()
+    generation_config = build_temp_table_extraction_generation_config()
     last_error: Exception | None = None
     last_timeout = False
     timeout_models_attempted: list[str] = []
@@ -493,21 +690,29 @@ def run_agente_compara_temp_table_extraction(
                 client,
                 model=model,
                 contents=contents,
+                config=generation_config,
                 agent="agente_compara",
                 flow_type=AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
                 api_key_label=_api_key_label(),
                 usuario=usuario_operacional_da_chamada(),
                 attempt_key=f"{AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE}:{model}:{uuid4().hex}",
             )
-            text = (getattr(response, "text", None) or "").strip()
+            raw_text = getattr(response, "text", None) or ""
+            if not isinstance(raw_text, str):
+                raw_text = ""
+            text = raw_text.strip()
             payload = _parse_extraction_response(text)
             if payload is None:
                 fallback_following = model_index + 1 < len(model_candidates)
+                finish_reason = _safe_finish_reason(response)
                 logger.warning(
                     "Agente Compara temp_table extraction parser_no_json: "
-                    "model=%s model_index=%s motivo=parser_no_json fallback_following=%s",
+                    "model=%s model_index=%s motivo=parser_no_json "
+                    "response_text_length=%s finish_reason=%s fallback_following=%s",
                     model,
                     model_index,
+                    len(raw_text),
+                    finish_reason or "unavailable",
                     fallback_following,
                 )
                 continue

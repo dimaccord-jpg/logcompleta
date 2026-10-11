@@ -28,6 +28,7 @@ def _install_extraction_stubs(monkeypatch, *, responses, models):
                 "contents": contents,
                 "agent": agent,
                 "flow_type": flow_type,
+                "config": _kw.get("config"),
             }
         )
         outcome = responses[len(calls) - 1]
@@ -75,13 +76,36 @@ def _run():
     return temp_mod.run_agente_compara_temp_table_extraction(["doc-1"], session_obj={})
 
 
+def _assert_structured_output(config):
+    assert config is not None
+    dumped = config.model_dump(exclude_none=True)
+    assert dumped["response_mime_type"] == "application/json"
+    schema = dumped["response_json_schema"]
+    assert isinstance(schema, dict) and schema.get("type") == "object"
+    assert schema.get("additionalProperties") is False
+    assert "required" not in schema
+    assert "response_schema" not in dumped
+    for field in (
+        "status",
+        "detected_carrier",
+        "freight_tables",
+        "freight_routes",
+        "accessorial_fees",
+        "evidence_refs",
+        "reading_alerts",
+    ):
+        assert field in schema["properties"]
+
+
 def _assert_prompt_sequence(calls):
     assert calls, "provider deve ser chamado"
     assert TECHNICAL_MARKER in calls[0]["contents"]
     assert FALLBACK_MARKER not in calls[0]["contents"]
+    _assert_structured_output(calls[0]["config"])
     for call in calls[1:]:
         assert FALLBACK_MARKER in call["contents"]
         assert TECHNICAL_MARKER not in call["contents"]
+        _assert_structured_output(call["config"])
 
 
 def test_a_unparseable_first_model_falls_through_to_valid_second(monkeypatch, caplog):
@@ -109,6 +133,8 @@ def test_a_unparseable_first_model_falls_through_to_valid_second(monkeypatch, ca
     assert "model_index=0" in caplog.text
     assert "motivo=parser_no_json" in caplog.text
     assert "fallback_following=True" in caplog.text
+    assert f"response_text_length={len(SECRET_RESPONSE)}" in caplog.text
+    assert "finish_reason=unavailable" in caplog.text
     assert SECRET_RESPONSE not in caplog.text
     assert VALID_JSON not in caplog.text
 
@@ -161,6 +187,8 @@ def test_c_all_unparseable_responses_fail_once_with_parser_alert(monkeypatch, ca
     assert "fallback_following=True" in caplog.text
     assert "fallback_following=False" in caplog.text
     assert "model_index=2" in caplog.text
+    assert "response_text_length=" in caplog.text
+    assert "finish_reason=unavailable" in caplog.text
     for secret in secret_responses:
         assert secret not in caplog.text
 
@@ -196,6 +224,7 @@ def test_e_valid_json_on_first_model_does_not_call_fallback(monkeypatch, caplog)
 
     assert len(calls) == 1
     assert calls[0]["model"] == "gemini-primary"
+    _assert_structured_output(calls[0]["config"])
     assert TECHNICAL_MARKER in calls[0]["contents"]
     assert FALLBACK_MARKER not in calls[0]["contents"]
     assert len(applied) == 1
@@ -218,3 +247,5 @@ def test_f_provider_call_count_matches_attempts_until_valid_payload(monkeypatch)
     assert [call["model"] for call in calls] == ["gemini-primary", "gemini-fallback"]
     assert len(applied) == 1
     assert calls[0]["model"] != calls[1]["model"]
+    for call in calls:
+        _assert_structured_output(call["config"])
