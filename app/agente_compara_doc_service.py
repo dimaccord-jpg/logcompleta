@@ -5116,6 +5116,8 @@ def _build_rule_from_freight_route(route: dict) -> tuple[str, dict] | None:
             },
         )
     if excess_rate is not None:
+        # Fallback autônomo. Não consulta freight_table: o excedente isolado
+        # de uma tabela já publicada é absorvido antes de publicar a regra.
         return (
             region,
             {
@@ -5298,6 +5300,7 @@ _FREIGHT_ROUTE_NON_TARIFF_KEYS = frozenset(
         "evidence_ref",
         "confidence",
         "column_labels",
+        "excess_threshold_kg",
         "origin_city",
         "origin_uf",
         "region",
@@ -5957,6 +5960,156 @@ def _unique_lookup_keys(lookup_keys) -> list[str]:
     return keys
 
 
+_EXCESS_WEIGHT_RATE_FIELDS = frozenset({"freight_weight_kg", "frete_peso_kg"})
+
+
+def _same_excess_executable_amount(left, right) -> bool:
+    """Mesmo valor executável, sem arredondar para centavos.
+
+    0.54 e 0.540 coincidem. 0.544, 0.5400001 e 0.5399999 não.
+    """
+    if not _is_finite_number(left) or not _is_finite_number(right):
+        return False
+    try:
+        left_amount = Decimal(str(float(left))).normalize()
+        right_amount = Decimal(str(float(right))).normalize()
+    except (InvalidOperation, ValueError):
+        return False
+    return left_amount == right_amount
+
+
+def _route_structured_excess_threshold_kg(route: dict) -> float | None:
+    """Limiar já numérico. Rótulo, frase e texto não entram nesta decisão."""
+    if not isinstance(route, dict):
+        return None
+    raw = route.get("excess_threshold_kg")
+    if not _is_finite_number(raw) or float(raw) < 0:
+        return None
+    return float(raw)
+
+
+def _last_bracket_max_kg(rule: dict):
+    brackets = rule.get("brackets") if isinstance(rule.get("brackets"), list) else []
+    for bracket in reversed(brackets):
+        if isinstance(bracket, dict) and _is_finite_number(bracket.get("max_kg")):
+            return float(bracket["max_kg"])
+    return None
+
+
+def _freight_route_isolated_weight_rates(route: dict) -> list[tuple[str, float]] | None:
+    """Aliases sem faixa weight_<n>. Campo preenchido e inválido fecha a absorção."""
+    if not isinstance(route, dict) or _freight_route_weight_amounts(route):
+        return None
+    found: list[tuple[str, float]] = []
+    for field in ("freight_weight_kg", "frete_peso_kg"):
+        raw = route.get(field)
+        if _cell_is_blank(raw):
+            continue
+        rate = _executable_tariff_amount(raw)
+        if rate is None:
+            return None
+        found.append((field, rate))
+    if not found:
+        return None
+    for key, value in route.items():
+        if not isinstance(key, str):
+            continue
+        normalized_key = key.strip().lower()
+        if (
+            not normalized_key
+            or normalized_key in _FREIGHT_ROUTE_NON_TARIFF_KEYS
+            or normalized_key in _EXCESS_WEIGHT_RATE_FIELDS
+            or _freight_route_weight_key_limit(normalized_key) is not None
+        ):
+            continue
+        if isinstance(value, (dict, list, tuple)):
+            continue
+        if _executable_tariff_amount(value) is not None:
+            return None
+    return found
+
+
+def _freight_table_rule_indexes_for_keys(rules: list[dict], lookup_keys: list[str]) -> list[int]:
+    incoming = set(_unique_lookup_keys(lookup_keys))
+    if not incoming:
+        return []
+    matches: list[int] = []
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict) or not _rule_comes_from_freight_table(rule):
+            continue
+        existing_keys = rule.get("lookup_keys") or []
+        if any(isinstance(key, str) and key in incoming for key in existing_keys):
+            matches.append(index)
+    return matches
+
+
+def _attach_route_evidence_to_rule(
+    rules: list[dict],
+    owned: dict[str, int],
+    rule_index: int,
+    lookup_keys: list[str],
+    source_refs: list[str],
+) -> None:
+    """Agrega evidência da rota. Alias já pertencente a outra regra fica onde está."""
+    existing = rules[rule_index]
+    merged_keys = _unique_lookup_keys(existing.get("lookup_keys"))
+    for key in _unique_lookup_keys(lookup_keys):
+        if key in merged_keys:
+            continue
+        previous = owned.get(key)
+        if previous is not None and previous != rule_index:
+            continue
+        merged_keys.append(key)
+        owned[key] = rule_index
+    existing["lookup_keys"] = merged_keys
+    refs = [ref for ref in (existing.get("source_refs") or []) if isinstance(ref, str) and ref]
+    for ref in source_refs or []:
+        if isinstance(ref, str) and ref and ref not in refs:
+            refs.append(ref)
+    if refs:
+        existing["source_refs"] = refs
+
+
+def _absorb_excess_only_route_into_complete_table(
+    route: dict,
+    rules: list[dict],
+    owned: dict[str, int],
+    lookup_keys: list[str],
+    source_refs: list[str],
+) -> bool:
+    """Absorve a rota só quando taxa e limiar já vieram estruturados.
+
+    Fail-closed: limiar ausente, taxa diferente, alias divergente
+    ou mais de uma tabela devolve a rota ao fluxo normal.
+    """
+    aliases = _freight_route_isolated_weight_rates(route)
+    if not aliases:
+        return False
+    _field, rate = aliases[0]
+    if any(not _same_excess_executable_amount(rate, amount) for _alias, amount in aliases[1:]):
+        return False
+    matches = _freight_table_rule_indexes_for_keys(rules, lookup_keys)
+    if len(matches) != 1:
+        return False
+    rule_index = matches[0]
+    existing = rules[rule_index]
+    if existing.get("pricing_type") != "range_plus_excess_per_kg":
+        return False
+    excess = existing.get("excess") if isinstance(existing.get("excess"), dict) else None
+    if not excess or not _same_excess_executable_amount(excess.get("rate_per_kg"), rate):
+        return False
+    threshold = _route_structured_excess_threshold_kg(route)
+    last_max = _last_bracket_max_kg(existing)
+    if (
+        threshold is None
+        or last_max is None
+        or not _same_excess_executable_amount(threshold, last_max)
+    ):
+        return False
+    _attach_route_evidence_to_rule(rules, owned, rule_index, lookup_keys, source_refs)
+    return True
+
+
 def _absorb_equivalent_freight_route(
     rules: list[dict],
     owned: dict[str, int],
@@ -6448,6 +6601,14 @@ def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
             lookup_keys,
             source_ref=source_ref,
             route_index=route_index,
+        ):
+            continue
+        if _absorb_excess_only_route_into_complete_table(
+            route,
+            rules,
+            owned,
+            lookup_keys,
+            [source_ref],
         ):
             continue
         if _absorb_equivalent_freight_route(
@@ -12629,6 +12790,7 @@ FREIGHT_ROUTE_RESERVED_KEYS = frozenset(
         "evidence_ref",
         "confidence",
         "column_labels",
+        "excess_threshold_kg",
         *(alias for _, aliases in FREIGHT_ROUTE_TECHNICAL_FIELDS for alias in aliases),
         *(primary for primary, _ in FREIGHT_ROUTE_TECHNICAL_FIELDS),
     }
@@ -12811,6 +12973,17 @@ def _synthesize_freight_tables_from_routes(routes: list[dict]) -> list[dict]:
     ]
 
 
+def _preserve_structured_excess_threshold_kg(value):
+    """Conserva número já estruturado. Não lê rótulo nem frase."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
 def _normalize_freight_route_item(item) -> dict | None:
     if not isinstance(item, dict):
         return None
@@ -12837,6 +13010,11 @@ def _normalize_freight_route_item(item) -> dict | None:
             continue
         result[primary] = value
         has_useful_value = True
+
+    if "excess_threshold_kg" in item:
+        threshold = _preserve_structured_excess_threshold_kg(item.get("excess_threshold_kg"))
+        if threshold is not None:
+            result["excess_threshold_kg"] = threshold
 
     for key, val in item.items():
         if key in FREIGHT_ROUTE_RESERVED_KEYS or not isinstance(key, str):

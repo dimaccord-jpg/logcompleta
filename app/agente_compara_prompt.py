@@ -125,7 +125,8 @@ Regras obrigatorias:
 - Preencha freight_routes apenas quando houver matriz clara de origem/destino/tipo/faixas estruturaveis E freight_tables nao bastar.
 - freight_routes complementa a tabela. Nao substitui arquivo de abrangencia/cidades atendidas e nao invente relacao cidade-zona para suprir coverage externa.
 - Em freight_routes, inclua somente campos realmente encontrados no documento; omita campos ausentes (nao envie weight_30: null se a coluna nao existir).
-- Use column_labels em freight_routes para mapear chave tecnica -> rotulo do documento (ex.: freight_weight_kg -> "Excedente por kg").
+- Use column_labels em freight_routes para mapear chave tecnica -> rotulo do documento (ex.: freight_weight_kg -> "Excedente por kg"). column_labels e evidencia do rotulo, nao a decisao economica.
+- Quando o rotulo de freight_weight_kg ou frete_peso_kg tornar o limite do excedente inequivoco, preencha excess_threshold_kg com esse peso em kg, como numero. Exemplo: rotulo ">500 kg" -> excess_threshold_kg = 500. Se a evidencia for ambigua ou ausente, excess_threshold_kg = null. Nao invente esse numero.
 - Nao reconstrua freight_tables a partir de freight_routes.
 - Nao coloque generalidades em freight_routes.
 - Nao coloque servicos adicionais em freight_routes.
@@ -262,6 +263,7 @@ Formato sugerido para freight_routes (opcional — fallback tecnico; omita campo
     "weight_100": "190,00",
     "freight_value_pct": "0,3000",
     "freight_weight_kg": "1,5000",
+    "excess_threshold_kg": null,
     "column_labels": {
       "weight_50": "Até 50 kg",
       "weight_100": "Até 100 kg",
@@ -334,7 +336,7 @@ Extraia apenas dados brutos do anexo, em JSON puro, sem markdown e sem texto ext
 
 Priorize:
 1. freight_tables (columns e rows com rotulos reais do documento; nao invente faixas ausentes)
-2. freight_routes (somente campos realmente presentes; use column_labels para rotulos do documento)
+2. freight_routes (somente campos realmente presentes; use column_labels para rotulos do documento). Se o rotulo do excedente for inequivoco, preencha excess_threshold_kg com o numero em kg (ex.: ">500 kg" -> 500). Caso ambiguo ou ausente, use null. Nao invente.
 3. weight_ranges
 4. accessorial_fees (name, value, unit, calculation_basis, raw_calculation_basis)
 5. reading_alerts e evidence_refs

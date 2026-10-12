@@ -395,6 +395,7 @@ def temp_table_extraction_response_json_schema() -> dict[str, Any]:
             "boarding_fee": nullable_scalar,
             "freight_value_pct": nullable_scalar,
             "freight_weight_kg": nullable_scalar,
+            "excess_threshold_kg": _nullable_json("number", "integer"),
             "pedagio": nullable_scalar,
             "column_labels": {"type": "object", "additionalProperties": True},
             "notes": nullable_text,
