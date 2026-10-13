@@ -28,6 +28,21 @@ VALID_JSON = (
     '"freight_routes":[],"accessorial_fees":[],"reading_alerts":[],"evidence_refs":[]}'
 )
 SECRET_RESPONSE = "RESPOSTA_SIGILOSA_NAO_LOGAR_9f3a sem json aproveitavel"
+_USO_CONHECIDO = SimpleNamespace(
+    prompt_token_count=10,
+    candidates_token_count=10,
+    thoughts_token_count=0,
+    total_token_count=20,
+)
+
+
+def _com_consumo_conhecido(origem):
+    if getattr(origem, "usage_metadata", None) is not None:
+        return origem
+    if getattr(origem, "response", None) is not None or getattr(origem, "result", None) is not None:
+        return origem
+    origem.usage_metadata = _USO_CONHECIDO
+    return origem
 
 
 def _install(monkeypatch, *, responses, models):
@@ -38,10 +53,10 @@ def _install(monkeypatch, *, responses, models):
         calls.append({"model": model, "config": kwargs.get("config"), "contents": contents})
         outcome = responses[len(calls) - 1]
         if isinstance(outcome, Exception):
-            raise outcome
+            raise _com_consumo_conhecido(outcome)
         if isinstance(outcome, str):
-            return SimpleNamespace(text=outcome)
-        return outcome
+            return SimpleNamespace(text=outcome, usage_metadata=_USO_CONHECIDO)
+        return _com_consumo_conhecido(outcome)
 
     def _apply(payload, source_doc_ids=None, **kwargs):
         applied.append({"payload": payload, "source_doc_ids": source_doc_ids, **kwargs})

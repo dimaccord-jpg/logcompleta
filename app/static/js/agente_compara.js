@@ -1814,6 +1814,65 @@
     return !!(titleEl.textContent && body.childNodes.length);
   }
 
+  var EXTRACTION_FAILURE_UI = {
+    extracao_teto_tecnico: {
+      title: 'Capacidade máxima excedida',
+      subtitle: 'O documento ultrapassa o limite técnico desta leitura.'
+    },
+    extracao_creditos_insuficientes: {
+      title: 'Créditos insuficientes',
+      subtitle: 'A leitura cabe no limite técnico, mas o saldo não cobre a operação.'
+    },
+    extracao_provedor_indisponivel: {
+      title: 'Serviço temporariamente indisponível',
+      subtitle: 'Tente novamente em instantes.'
+    },
+    extracao_json_invalido: {
+      title: 'Falha no processamento',
+      subtitle: 'A resposta não pôde ser aproveitada.'
+    },
+    extracao_resposta_truncada: {
+      title: 'Falha no processamento',
+      subtitle: 'A resposta veio incompleta. Isso não é falta de créditos.'
+    },
+    extracao_consumo_incerto: {
+      title: 'Operação não concluída',
+      subtitle: 'A confirmação financeira desta tentativa ainda está pendente.'
+    },
+    extracao_operacao_indisponivel: {
+      title: 'Não foi possível processar a tabela',
+      subtitle: 'Tente novamente em instantes.'
+    }
+  };
+
+  function extractionFailureSource(options) {
+    if (options && options.tempTable && typeof options.tempTable === 'object') {
+      return options.tempTable;
+    }
+    return currentTempTable;
+  }
+
+  function extractionFailureCode(source) {
+    if (!source || typeof source !== 'object') return '';
+    var code = source.error_code || source.failure_code || '';
+    return typeof code === 'string' ? code : '';
+  }
+
+  function appendConsumoIncertoNotice(container, tempTable) {
+    if (!container || !tempTable || typeof tempTable !== 'object') return;
+    var status = String(tempTable.status || '').toLowerCase();
+    if (status !== 'needs_review' && status !== 'awaiting_validation' && status !== 'validated') return;
+    if (extractionFailureCode(tempTable) !== 'extracao_consumo_incerto') return;
+    var text = tempTable.safe_message || ERROR_MESSAGES.extracao_consumo_incerto || '';
+    if (!text) return;
+    var note = document.createElement('p');
+    note.className = 'agente-compara-extracao-consumo-incerto';
+    note.setAttribute('role', 'alert');
+    note.setAttribute('data-error-code', 'extracao_consumo_incerto');
+    note.textContent = text;
+    container.appendChild(note);
+  }
+
   function renderFailedFlowView(options) {
     options = options || {};
     var titleEl = byId('agenteComparaTempTableModalTitle');
@@ -1823,19 +1882,29 @@
     var modal = byId('agenteComparaTempTableModal');
     if (!titleEl || !subtitleEl || !body) return false;
     restoreCarrierIdentifyPanelHome();
-    var message = options.message || comparisonFlowFailedMessage ||
+    var source = extractionFailureSource(options);
+    var code = extractionFailureCode(source);
+    var presentation = EXTRACTION_FAILURE_UI[code] || null;
+    var message = (source && source.safe_message) || options.message || comparisonFlowFailedMessage ||
       'Não foi possível processar a tabela. Tente novamente.';
     comparisonFlowFailedMessage = message;
-    titleEl.textContent = 'Não foi possível processar a tabela';
-    subtitleEl.textContent = options.subtitle || 'Revise o arquivo enviado e tente novamente.';
+    titleEl.textContent = (presentation && presentation.title) || 'Não foi possível processar a tabela';
+    subtitleEl.textContent = (presentation && presentation.subtitle) || options.subtitle ||
+      'Revise o arquivo enviado e tente novamente.';
     body.hidden = false;
     if (footer) footer.hidden = false;
     body.replaceChildren();
     var panel = document.createElement('div');
     panel.className = 'agente-compara-flow-failed-panel';
+    if (code) panel.setAttribute('data-error-code', code);
     var text = document.createElement('p');
     text.className = 'agente-compara-flow-failed-text';
-    text.textContent = message;
+    text.setAttribute('role', 'alert');
+    if (source && source.upgrade_cta) {
+      fillLimitMessageElement(text, source);
+    } else {
+      text.textContent = message;
+    }
     panel.appendChild(text);
     var retryBtn = document.createElement('button');
     retryBtn.type = 'button';
@@ -2668,7 +2737,14 @@
     cleiton_doc_missing_file: 'Nenhum arquivo selecionado.',
     cleiton_doc_upload_failed: 'Não foi possível enviar o documento. Tente novamente.',
     auth_required: 'É necessário estar logado para anexar documentos.',
-    franquia_blocked: 'Operação indisponível para este usuário no momento.'
+    franquia_blocked: 'Operação indisponível para este usuário no momento.',
+    extracao_teto_tecnico: 'Este documento excede a capacidade máxima de processamento permitida.',
+    extracao_creditos_insuficientes: 'O saldo de créditos não é suficiente para concluir esta leitura.',
+    extracao_provedor_indisponivel: 'O serviço de leitura está temporariamente indisponível. Tente novamente em instantes.',
+    extracao_json_invalido: 'Não foi possível concluir o processamento da tabela porque a resposta veio em formato inválido. Tente novamente.',
+    extracao_resposta_truncada: 'Não foi possível concluir o processamento porque a resposta foi interrompida antes de ficar completa. Isso não é falta de créditos. Tente novamente.',
+    extracao_consumo_incerto: 'A operação não foi concluída. A confirmação do estado financeiro desta tentativa ainda está pendente.',
+    extracao_operacao_indisponivel: 'Não foi possível iniciar a leitura neste momento. Tente novamente em instantes.'
   };
 
   var CHAT_FIXED_ERRORS = {
@@ -7584,6 +7660,15 @@
     var status = String(tempTable.status).toLowerCase();
     if (status === lastAnnouncedTempTableStatus) return;
     var message = TEMP_TABLE_OPERATIONAL_MESSAGES[status];
+    if (status === 'failed' && tempTable.safe_message) {
+      message = tempTable.safe_message;
+    } else if (
+      status === 'needs_review'
+      && extractionFailureCode(tempTable) === 'extracao_consumo_incerto'
+      && tempTable.safe_message
+    ) {
+      message = TEMP_TABLE_OPERATIONAL_MESSAGES.needs_review + ' ' + tempTable.safe_message;
+    }
     if (!message) return;
     lastAnnouncedTempTableStatus = status;
     appendOperationalMessage(message);
@@ -7995,7 +8080,9 @@
     if (status === 'needs_review') {
       return 'Tabela temporária disponível para revisão e edição.';
     }
-    if (status === 'failed') return 'Não foi possível estruturar a tabela temporária.';
+    if (status === 'failed') {
+      return tempTable.safe_message || 'Não foi possível estruturar a tabela temporária.';
+    }
     if (status === 'expired') return 'Tabela temporária expirada.';
     if (status === 'discarded') return 'Tabela temporária invalidada.';
     return 'Tabela temporária extraída para revisão.';
@@ -15368,6 +15455,7 @@ function renderDocumentItem(doc) {
       return;
     }
     body.replaceChildren();
+    appendConsumoIncertoNotice(body, tempTable);
 
     if (isComparisonReviewMode()) {
       prepareConfigurationReviewRender();

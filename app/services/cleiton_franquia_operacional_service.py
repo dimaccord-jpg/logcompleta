@@ -21,6 +21,7 @@ from app.extensions import db
 from app.models import (
     CleitonCostConfig,
     Franquia,
+    IaChamadaTentativa,
     IaConsumoAbatimento,
     IaConsumoEvento,
     ProcessingEvent,
@@ -253,13 +254,42 @@ def creditos_totais_de_evento_processing(ev: ProcessingEvent, cfg: CleitonCostCo
     return _quantize_credit(total), None
 
 
+def competencia_registrada_no_ciclo(ciclo_inicio, ciclo_fim, franquia: Franquia) -> bool:
+    """A tentativa sem ciclo gravado segue o saldo vigente. Com ciclo, só o período atual."""
+    if ciclo_inicio is None and ciclo_fim is None:
+        return True
+    return ciclo_inicio == franquia.inicio_ciclo and ciclo_fim == franquia.fim_ciclo
+
+
+def reserva_bloqueante_do_ciclo(franquia: Franquia) -> Decimal:
+    """Reserva ativa de outro ciclo não reduz o saldo já renovado."""
+    bruta = _to_decimal(getattr(franquia, "reserva_pendente", None))
+    franquia_id = getattr(franquia, "id", None)
+    if franquia_id is None:
+        return bruta
+    ativas = (
+        db.session.query(IaChamadaTentativa)
+        .filter(
+            IaChamadaTentativa.franquia_id == int(franquia_id),
+            IaChamadaTentativa.reserva_ativa.is_(True),
+        )
+        .all()
+    )
+    fora = Decimal("0")
+    for row in ativas:
+        if competencia_registrada_no_ciclo(row.ciclo_inicio, row.ciclo_fim, franquia):
+            continue
+        fora += _to_decimal(row.reserved_credits)
+    return _quantize_credit(max(Decimal("0"), bruta - fora))
+
+
 def saldo_disponivel_chamada_ia(franquia: Franquia) -> Decimal | None:
-    """Limite menos consumo liquidado menos reservas pendentes. None = sem teto."""
+    """Limite menos consumo do ciclo menos reservas deste ciclo. None = sem teto."""
     limite = _limite_efetivo_bloqueio(franquia.limite_total)
     if limite is None:
         return None
     consumo = _to_decimal(franquia.consumo_acumulado)
-    reserva = _to_decimal(getattr(franquia, "reserva_pendente", None))
+    reserva = reserva_bloqueante_do_ciclo(franquia)
     return _quantize_credit(limite - consumo - reserva)
 
 
@@ -547,6 +577,67 @@ def _resultado_ja_apropriado(marca: IaConsumoAbatimento) -> ResultadoGovernancaO
     )
 
 
+def _evento_no_ciclo_da_franquia(evento_id: int, franquia: Franquia) -> bool:
+    tentativa = (
+        db.session.query(IaChamadaTentativa)
+        .filter(IaChamadaTentativa.ia_consumo_evento_id == int(evento_id))
+        .one_or_none()
+    )
+    if tentativa is None:
+        return True
+    return competencia_registrada_no_ciclo(
+        tentativa.ciclo_inicio,
+        tentativa.ciclo_fim,
+        franquia,
+    )
+
+
+def _lancar_sem_abater_saldo_atual(
+    franquia: Franquia,
+    creditos: Decimal,
+    *,
+    evento_ia_id: int,
+    commit: bool,
+) -> ResultadoGovernancaOperacional:
+    """Registra o lançamento do ciclo de origem sem mexer no saldo já renovado."""
+    st_antes = franquia.status
+    db.session.add(
+        IaConsumoAbatimento(
+            ia_consumo_evento_id=int(evento_ia_id),
+            franquia_id=franquia.id,
+            creditos=creditos,
+            created_at=utcnow_naive(),
+        )
+    )
+    try:
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+    except IntegrityError as exc:
+        db.session.rollback()
+        if _integrity_e_unicidade_abatimento(exc):
+            return ResultadoGovernancaOperacional(
+                abateu_franquia=False,
+                creditos=creditos,
+                motivo_nao_abateu="ja_apropriado",
+                franquia_id=int(franquia.id),
+                status_anterior=st_antes,
+                status_novo=None,
+                erro_config=None,
+            )
+        raise
+    return ResultadoGovernancaOperacional(
+        abateu_franquia=False,
+        creditos=creditos,
+        motivo_nao_abateu="competencia_ciclo_anterior",
+        franquia_id=franquia.id,
+        status_anterior=st_antes,
+        status_novo=st_antes,
+        erro_config=None,
+    )
+
+
 def _persistir_abatimento(
     franquia_id: int | None,
     creditos: Decimal,
@@ -596,6 +687,13 @@ def _persistir_abatimento(
     ensure_franquia_operacional_inicializada(fr)
     garantir_ciclo_operacional_franquia(fr.id, commit=False)
     db.session.flush()
+    if evento_ia_id is not None and not _evento_no_ciclo_da_franquia(int(evento_ia_id), fr):
+        return _lancar_sem_abater_saldo_atual(
+            fr,
+            creditos,
+            evento_ia_id=int(evento_ia_id),
+            commit=commit,
+        )
     st_antes = fr.status
     db.session.execute(
         stmt_incremento_consumo(),

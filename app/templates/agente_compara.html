@@ -2039,6 +2039,24 @@
   .agente-compara-flow-failed-text {
     margin: 0;
     color: var(--af-text-primary, #F0F0F5);
+    overflow-wrap: anywhere;
+  }
+
+  .agente-compara-flow-failed-text a {
+    color: var(--af-cyan, #00BFFF);
+    font-weight: 600;
+    text-decoration: underline;
+    overflow-wrap: anywhere;
+  }
+
+  .agente-compara-extracao-consumo-incerto {
+    margin: 0 0 0.85rem;
+    padding: 0.75rem 0.9rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--af-border, rgba(255, 255, 255, 0.12));
+    background: rgba(255, 183, 3, 0.12);
+    color: var(--af-text-primary, #F0F0F5);
+    overflow-wrap: anywhere;
   }
 
   body.agente-compara-temp-table-modal-editing .agente-compara-temp-table-modal-body {
@@ -3879,6 +3897,15 @@
     .agente-compara-temp-table-modal-footer {
       padding-left: 0.85rem;
       padding-right: 0.85rem;
+    }
+
+    .agente-compara-flow-failed-panel,
+    .agente-compara-extracao-consumo-incerto {
+      width: 100%;
+    }
+
+    .agente-compara-flow-retry-btn {
+      width: 100%;
     }
 
     .agente-compara-temp-table-modal-edit-banner,

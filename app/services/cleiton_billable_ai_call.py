@@ -96,6 +96,7 @@ MOTIVO_LIQUIDACAO = "liquidacao_interrompida"
 MOTIVO_USO_EXCEDE = "uso_excede_reserva"
 MOTIVO_TETO_REQUEST_MUTAVEL = "teto_request_mutavel"
 MOTIVO_TETO_RESERVA_JOB = "teto_excede_reserva_job"
+MOTIVO_ORCAMENTO_OPERACAO = "orcamento_operacao_insuficiente"
 
 # google-genai 1.63.0 HttpOptions. Aceitos na fachada billable, e só estes:
 # timeout int; base_url e api_version str; headers dict[str, str] puro;
@@ -218,6 +219,7 @@ class BillableAiCallResult:
     complete: bool
     reserved_credits: Decimal
     actual_credits: Decimal | None
+    provider_exception: Any = None
 
 
 def gemini_http_options(*, timeout_ms: int):
@@ -673,8 +675,24 @@ def _thinking_budget_explicito(thinking_raw: Any) -> tuple[bool, Any]:
 def resolver_limites_config(
     config: Any,
     max_output_tokens: int | None = None,
+    *,
+    output_token_cap: int | None = None,
+    thinking_token_cap: int | None = None,
 ) -> tuple[int, int, int, str | None]:
     """Saída por candidato, candidatos e thinking que a config enviada torna verificáveis."""
+    if output_token_cap is None:
+        teto_saida = BILLABLE_AI_MAX_OUTPUT_TOKENS
+    else:
+        teto_saida = _inteiro_estrito(output_token_cap)
+        if teto_saida is None or teto_saida < 1:
+            return 0, 0, 0, MOTIVO_TETO
+    if thinking_token_cap is None:
+        teto_thinking = BILLABLE_AI_MAX_THINKING_TOKENS
+    else:
+        teto_thinking = _inteiro_estrito(thinking_token_cap)
+        if teto_thinking is None or teto_thinking < 0:
+            return 0, 0, 0, MOTIVO_TETO
+
     presente_saida, bruto_saida = _campo_explicito(config, "max_output_tokens", "maxOutputTokens")
     if presente_saida:
         saida_pedido = _inteiro_estrito(bruto_saida)
@@ -688,10 +706,10 @@ def resolver_limites_config(
             return 0, 0, 0, MOTIVO_TETO
         saida = explicito if saida_pedido is None else min(saida_pedido, explicito)
     else:
-        saida = BILLABLE_AI_MAX_OUTPUT_TOKENS if saida_pedido is None else saida_pedido
+        saida = teto_saida if saida_pedido is None else saida_pedido
     if saida < 1:
         return 0, 0, 0, MOTIVO_TETO
-    saida = min(saida, BILLABLE_AI_MAX_OUTPUT_TOKENS)
+    saida = min(saida, teto_saida)
 
     presente_cand, bruto_cand = _campo_explicito(config, "candidate_count", "candidateCount")
     if not presente_cand:
@@ -703,18 +721,18 @@ def resolver_limites_config(
 
     presente_think, bruto_think = _campo_explicito(config, "thinking_config", "thinkingConfig")
     if not presente_think or bruto_think is None:
-        budget: int | None = BILLABLE_AI_MAX_THINKING_TOKENS
+        budget: int | None = teto_thinking
     elif isinstance(bruto_think, (str, int, float, bool, bytes, bytearray)):
         return 0, 0, 0, MOTIVO_TETO
     else:
         presente_budget, bruto_budget = _thinking_budget_explicito(bruto_think)
         if not presente_budget:
-            budget = BILLABLE_AI_MAX_THINKING_TOKENS
+            budget = teto_thinking
         else:
             budget = _inteiro_estrito(bruto_budget)
             if budget is None or budget < 0:
                 return 0, 0, 0, MOTIVO_TETO
-    budget = min(int(budget), BILLABLE_AI_MAX_THINKING_TOKENS)
+    budget = min(int(budget), teto_thinking)
     return saida, candidatos, budget, None
 
 
@@ -1170,6 +1188,7 @@ def _bloquear_sem_reserva(
     model: str,
     motivo: str,
     mensagem_usuario: str | None = None,
+    tokens_entrada: int | None = None,
 ) -> None:
     if has_app_context():
         try:
@@ -1193,12 +1212,15 @@ def _bloquear_sem_reserva(
         except Exception:
             db.session.rollback()
             logger.warning("Falha ao persistir tentativa bloqueada %s", attempt_key)
-    raise BillableAiAdmissionBlocked(
+    erro = BillableAiAdmissionBlocked(
         motivo,
         motivo=motivo,
         attempt_key=attempt_key,
         mensagem_usuario=mensagem_usuario,
     )
+    if isinstance(tokens_entrada, int) and not isinstance(tokens_entrada, bool) and tokens_entrada >= 0:
+        erro.tokens_entrada = tokens_entrada
+    raise erro
 
 
 def _bloquear_governanca(
@@ -1288,7 +1310,12 @@ def liquidar_tentativa_ia(attempt_id: int, *, status_final: str = IaChamadaTenta
         ) from exc
 
 
-def _liquidar_tentativa_ia(attempt_id: int, *, status_final: str) -> IaChamadaTentativa | None:
+def _liquidar_tentativa_ia(
+    attempt_id: int,
+    *,
+    status_final: str,
+    commit: bool = True,
+) -> IaChamadaTentativa | None:
     attempt = db.session.get(IaChamadaTentativa, int(attempt_id))
     if attempt is None:
         return None
@@ -1338,10 +1365,11 @@ def _liquidar_tentativa_ia(attempt_id: int, *, status_final: str) -> IaChamadaTe
         return db.session.get(IaChamadaTentativa, int(attempt_id))
 
     if attempt.debita_cliente and creditos > 0:
-        aplicar_motor_apos_ia_consumo_evento(int(evento.id), commit=True)
+        aplicar_motor_apos_ia_consumo_evento(int(evento.id), commit=commit)
 
     _checkpoint_pos_debito()
-    _begin_write_lock()
+    if commit:
+        _begin_write_lock()
     locked = (
         db.session.query(IaChamadaTentativa)
         .filter(IaChamadaTentativa.id == int(attempt_id))
@@ -1352,7 +1380,8 @@ def _liquidar_tentativa_ia(attempt_id: int, *, status_final: str) -> IaChamadaTe
         IaChamadaTentativa.STATUS_SETTLED,
         IaChamadaTentativa.STATUS_PROVIDER_FAILED,
     ):
-        _commit_session()
+        if commit:
+            _commit_session()
         return locked
     if locked.reserva_ativa and locked.franquia_id is not None:
         franquia = (
@@ -1372,6 +1401,150 @@ def _liquidar_tentativa_ia(attempt_id: int, *, status_final: str) -> IaChamadaTe
     locked.status = status_final
     locked.settled_at = utcnow_naive()
     locked.failure_reason = None if status_final == IaChamadaTentativa.STATUS_SETTLED else locked.failure_reason
+    if commit:
+        _commit_session()
+        return db.session.get(IaChamadaTentativa, int(attempt_id))
+    db.session.flush()
+    return locked
+
+
+def _abatimento_comprovado(attempt: IaChamadaTentativa):
+    """Prova financeira já persistida. Status sozinho não comprova débito."""
+    evento_id = attempt.ia_consumo_evento_id
+    if evento_id is None:
+        return None
+    from app.models import IaConsumoAbatimento
+
+    return (
+        db.session.query(IaConsumoAbatimento)
+        .filter(IaConsumoAbatimento.ia_consumo_evento_id == int(evento_id))
+        .one_or_none()
+    )
+
+
+def _encerrar_reserva_na_transacao(attempt: IaChamadaTentativa) -> None:
+    if attempt.reserva_ativa and attempt.franquia_id is not None:
+        franquia = (
+            db.session.query(Franquia)
+            .filter(Franquia.id == int(attempt.franquia_id))
+            .with_for_update()
+            .one_or_none()
+        )
+        if franquia is not None:
+            ensure_franquia_operacional_inicializada(franquia)
+            atual = _to_decimal(franquia.reserva_pendente)
+            franquia.reserva_pendente = _quantize_credit(
+                max(Decimal("0"), atual - _to_decimal(attempt.reserved_credits))
+            )
+    attempt.reserva_ativa = False
+
+
+def _finalizar_tentativa_comprovada(attempt: IaChamadaTentativa, abatimento) -> None:
+    if abatimento is None:
+        return
+    if (
+        attempt.status == IaChamadaTentativa.STATUS_SETTLED
+        and attempt.settled_at is not None
+        and not attempt.reserva_ativa
+    ):
+        return
+    _encerrar_reserva_na_transacao(attempt)
+    attempt.actual_credits = _quantize_credit(_to_decimal(abatimento.creditos))
+    attempt.status = IaChamadaTentativa.STATUS_SETTLED
+    if attempt.settled_at is None:
+        attempt.settled_at = utcnow_naive()
+    attempt.failure_reason = None
+
+
+def _dispensar_tentativa_na_transacao(attempt: IaChamadaTentativa, motivo: str) -> None:
+    if attempt.settled_at is not None:
+        return
+    if attempt.status in (
+        IaChamadaTentativa.STATUS_UNCERTAIN,
+        IaChamadaTentativa.STATUS_SETTLED,
+        IaChamadaTentativa.STATUS_PROVIDER_FAILED,
+        IaChamadaTentativa.STATUS_RELEASED,
+        IaChamadaTentativa.STATUS_BLOCKED,
+        IaChamadaTentativa.STATUS_GOVERNANCE_BLOCKED,
+    ):
+        return
+    _encerrar_reserva_na_transacao(attempt)
+    attempt.status = IaChamadaTentativa.STATUS_RELEASED
+    attempt.failure_reason = _reason(motivo)
+    attempt.settled_at = utcnow_naive()
+
+
+def liquidar_entrega_agente_compara(attempt_id: int, *, prefixo: str) -> IaChamadaTentativa | None:
+    """Uma entrega, um débito. A consulta e a liquidação dividem a mesma trava."""
+    if not has_app_context():
+        return None
+    try:
+        return _liquidar_entrega_agente_compara(int(attempt_id), prefixo=prefixo)
+    except BillableAiUncertainError:
+        raise
+    except Exception as exc:
+        _marcar_incerta(int(attempt_id), MOTIVO_LIQUIDACAO)
+        raise BillableAiUncertainError(
+            MOTIVO_LIQUIDACAO,
+            motivo=MOTIVO_LIQUIDACAO,
+            provider_called=True,
+        ) from exc
+
+
+def _liquidar_entrega_agente_compara(attempt_id: int, *, prefixo: str) -> IaChamadaTentativa | None:
+    if not prefixo.startswith("ac-tt:") or len(prefixo) < 39:
+        return _liquidar_tentativa_ia(int(attempt_id), status_final=IaChamadaTentativa.STATUS_SETTLED)
+    _begin_write_lock()
+    tentativas = (
+        db.session.query(IaChamadaTentativa)
+        .filter(IaChamadaTentativa.attempt_key.startswith(prefixo))
+        .order_by(IaChamadaTentativa.id.asc())
+        .with_for_update()
+        .all()
+    )
+    atual = next((item for item in tentativas if int(item.id) == int(attempt_id)), None)
+    if atual is None:
+        atual = (
+            db.session.query(IaChamadaTentativa)
+            .filter(IaChamadaTentativa.id == int(attempt_id))
+            .with_for_update()
+            .one_or_none()
+        )
+        if atual is not None:
+            tentativas.append(atual)
+    if atual is None:
+        _commit_session()
+        return None
+    if atual.franquia_id is not None:
+        (
+            db.session.query(Franquia)
+            .filter(Franquia.id == int(atual.franquia_id))
+            .with_for_update()
+            .one_or_none()
+        )
+    comprovadas = []
+    for tentativa in tentativas:
+        abatimento = _abatimento_comprovado(tentativa)
+        if abatimento is not None:
+            comprovadas.append((tentativa, abatimento))
+        elif (
+            tentativa.status == IaChamadaTentativa.STATUS_SETTLED
+            and tentativa.settled_at is not None
+        ):
+            comprovadas.append((tentativa, None))
+    if comprovadas:
+        for tentativa, abatimento in comprovadas:
+            if abatimento is not None:
+                _finalizar_tentativa_comprovada(tentativa, abatimento)
+        if all(int(tentativa.id) != int(atual.id) for tentativa, _abatimento in comprovadas):
+            _dispensar_tentativa_na_transacao(atual, "entrega_ja_faturada")
+        _commit_session()
+        return db.session.get(IaChamadaTentativa, int(attempt_id))
+    _liquidar_tentativa_ia(
+        int(attempt_id),
+        status_final=IaChamadaTentativa.STATUS_SETTLED,
+        commit=False,
+    )
     _commit_session()
     return db.session.get(IaChamadaTentativa, int(attempt_id))
 
@@ -1447,8 +1620,16 @@ def cleiton_governed_billable_ai_call(
     purpose: str | None = None,
     max_output_tokens: int | None = None,
     max_reserved_credits: Decimal | int | str | None = None,
+    output_token_cap: int | None = None,
+    thinking_token_cap: int | None = None,
+    operation_token_budget: int | None = None,
+    adiar_liquidacao: bool = False,
 ) -> BillableAiCallResult:
-    """Único entry point novo de geração externa governada e faturável."""
+    """Único entry point novo de geração externa governada e faturável.
+
+    adiar_liquidacao só é usado pela extração do AgenteCompara. O padrão
+    continua liquidando na hora e não altera os demais agentes.
+    """
     key = (attempt_key or uuid4().hex)[:160]
     if not has_app_context():
         raise BillableAiAdmissionBlocked(
@@ -1482,9 +1663,26 @@ def cleiton_governed_billable_ai_call(
             motivo=MOTIVO_SDK_RETRY,
         )
 
+    orcamento_operacao: int | None = None
+    if operation_token_budget is not None:
+        orcamento_operacao = _inteiro_estrito(operation_token_budget)
+        if orcamento_operacao is None or orcamento_operacao < 1:
+            _bloquear_sem_reserva(
+                attempt_key=key,
+                ident=None,
+                agent=agent,
+                flow_type=flow_type,
+                operation=operation,
+                provider=provider,
+                model=model,
+                motivo=MOTIVO_ORCAMENTO_OPERACAO,
+            )
+
     saida, candidatos, thinking, erro_limite = resolver_limites_config(
         config,
         max_output_tokens=max_output_tokens,
+        output_token_cap=output_token_cap,
+        thinking_token_cap=thinking_token_cap,
     )
     if erro_limite:
         _bloquear_sem_reserva(
@@ -1602,6 +1800,78 @@ def cleiton_governed_billable_ai_call(
             provider=provider,
             model=model,
             motivo=erro_count,
+        )
+
+    if orcamento_operacao is not None:
+        from app.services.agente_compara_extraction_budget import encaixar_limites_na_operacao
+
+        encaixe = encaixar_limites_na_operacao(
+            entrada,
+            saida,
+            thinking,
+            orcamento_operacao,
+            candidatos=candidatos,
+            model=model,
+        )
+        if encaixe is None:
+            logger.info(
+                "Orcamento tecnico da extracao recusado attempt_key=%s autorizado=%s entrada=%s saida_pedida=%s thinking_pedido=%s",
+                key,
+                orcamento_operacao,
+                entrada,
+                saida,
+                thinking,
+            )
+            _bloquear_sem_reserva(
+                attempt_key=key,
+                ident=None,
+                agent=agent,
+                flow_type=flow_type,
+                operation=operation,
+                provider=provider,
+                model=model,
+                motivo=MOTIVO_ORCAMENTO_OPERACAO,
+                tokens_entrada=entrada,
+            )
+        saida, thinking = encaixe
+        config_cap, teto_ok, motivo_cfg = _preparar_config_limitada(
+            safe_config,
+            saida=saida,
+            candidatos=candidatos,
+            thinking=thinking,
+        )
+        if not teto_ok:
+            _bloquear_sem_reserva(
+                attempt_key=key,
+                ident=None,
+                agent=agent,
+                flow_type=flow_type,
+                operation=operation,
+                provider=provider,
+                model=model,
+                motivo=motivo_cfg or MOTIVO_TETO_REQUEST_MUTAVEL,
+            )
+        try:
+            config_geracao = copy.deepcopy(config_cap)
+        except Exception:
+            _bloquear_sem_reserva(
+                attempt_key=key,
+                ident=None,
+                agent=agent,
+                flow_type=flow_type,
+                operation=operation,
+                provider=provider,
+                model=model,
+                motivo=MOTIVO_TETO_REQUEST_MUTAVEL,
+            )
+        logger.info(
+            "Orcamento tecnico da extracao attempt_key=%s autorizado=%s entrada=%s saida=%s thinking=%s total=%s",
+            key,
+            orcamento_operacao,
+            entrada,
+            saida,
+            thinking,
+            tokens_teto_total(entrada, saida, thinking, candidatos),
         )
 
     total_tokens = tokens_teto_total(entrada, saida, thinking, candidatos)
@@ -1800,6 +2070,7 @@ def cleiton_governed_billable_ai_call(
             attempt_id=attempt.id,
             attempt_key=key,
             observation=observation,
+            liquidar=not adiar_liquidacao,
         )
     except BillableAiUncertainError:
         raise
@@ -1816,7 +2087,40 @@ def cleiton_governed_billable_ai_call(
         ) from exc
 
 
-def _concluir_chamada_observada(*, attempt_id: int, attempt_key: str, observation: Any) -> BillableAiCallResult:
+def liberar_reserva_confirmada(attempt_id: int, *, motivo: str) -> None:
+    """Libera a reserva sem débito depois de falha confirmada da entrega."""
+    if not has_app_context():
+        return
+    try:
+        identificador = int(attempt_id)
+    except (TypeError, ValueError):
+        return
+    attempt = db.session.get(IaChamadaTentativa, identificador)
+    if attempt is None or attempt.settled_at is not None:
+        return
+    if attempt.status in (
+        IaChamadaTentativa.STATUS_UNCERTAIN,
+        IaChamadaTentativa.STATUS_SETTLED,
+        IaChamadaTentativa.STATUS_PROVIDER_FAILED,
+        IaChamadaTentativa.STATUS_RELEASED,
+        IaChamadaTentativa.STATUS_BLOCKED,
+        IaChamadaTentativa.STATUS_GOVERNANCE_BLOCKED,
+    ):
+        return
+    _liberar_reserva(
+        identificador,
+        status=IaChamadaTentativa.STATUS_RELEASED,
+        reason=motivo,
+    )
+
+
+def _concluir_chamada_observada(
+    *,
+    attempt_id: int,
+    attempt_key: str,
+    observation: Any,
+    liquidar: bool = True,
+) -> BillableAiCallResult:
     _vincular_evento(attempt_id, observation.evento_id)
     if observation.persist_status != PERSIST_OK or observation.evento_id is None:
         _marcar_incerta(attempt_id, MOTIVO_PERSISTENCIA_EVENTO)
@@ -1844,6 +2148,24 @@ def _concluir_chamada_observada(*, attempt_id: int, attempt_key: str, observatio
             attempt_key=attempt_key,
             provider_called=True,
         ) from observation.provider_exception
+
+    if not liquidar:
+        row = db.session.get(IaChamadaTentativa, attempt_id)
+        return BillableAiCallResult(
+            response=observation.response,
+            evento_id=observation.evento_id,
+            input_tokens=observation.input_tokens,
+            output_tokens=observation.output_tokens,
+            total_tokens=observation.total_tokens,
+            persist_status=observation.persist_status,
+            attempt_id=attempt_id,
+            attempt_key=attempt_key,
+            status=row.status if row is not None else IaChamadaTentativa.STATUS_CALLING,
+            complete=False,
+            reserved_credits=_to_decimal(row.reserved_credits) if row is not None else Decimal("0"),
+            actual_credits=None,
+            provider_exception=observation.provider_exception,
+        )
 
     status_final = (
         IaChamadaTentativa.STATUS_PROVIDER_FAILED
@@ -1912,6 +2234,10 @@ def cleiton_governed_generate_content(
     franquia_id: int | None = None,
     usuario_id: int | None = None,
     max_output_tokens: int | None = None,
+    output_token_cap: int | None = None,
+    thinking_token_cap: int | None = None,
+    operation_token_budget: int | None = None,
+    adiar_liquidacao: bool = False,
 ) -> Any:
     """Assinatura histórica dos runners: a fachada é o entry point e devolve a resposta."""
     result = cleiton_governed_billable_ai_call(
@@ -1932,7 +2258,20 @@ def cleiton_governed_generate_content(
         attempt_key=attempt_key,
         purpose=purpose,
         max_output_tokens=max_output_tokens,
+        output_token_cap=output_token_cap,
+        thinking_token_cap=thinking_token_cap,
+        operation_token_budget=operation_token_budget,
+        adiar_liquidacao=adiar_liquidacao,
     )
+    if adiar_liquidacao:
+        if result.provider_exception is not None:
+            exc = result.provider_exception
+            try:
+                exc.attempt_id = result.attempt_id
+            except Exception:
+                pass
+            raise exc
+        return result
     if not result.complete:
         raise BillableAiUncertainError(
             "consumo_incerto",

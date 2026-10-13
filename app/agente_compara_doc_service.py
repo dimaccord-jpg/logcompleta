@@ -198,6 +198,38 @@ TEMP_TABLE_CREDIT_PRESERVED = "preserved"
 TEMP_TABLE_CREDIT_NOT_CONSUMED = "not_consumed"
 TEMP_TABLE_CREDIT_RESTORED = "restored"
 TEMP_TABLE_CREDIT_NOT_APPLICABLE = "not_applicable"
+TEMP_TABLE_CREDIT_UNCONFIRMED = "unconfirmed"
+
+ERROR_EXTRACAO_TETO_TECNICO = "extracao_teto_tecnico"
+ERROR_EXTRACAO_CREDITOS_INSUFICIENTES = "extracao_creditos_insuficientes"
+ERROR_EXTRACAO_PROVEDOR_INDISPONIVEL = "extracao_provedor_indisponivel"
+ERROR_EXTRACAO_JSON_INVALIDO = "extracao_json_invalido"
+ERROR_EXTRACAO_RESPOSTA_TRUNCADA = "extracao_resposta_truncada"
+ERROR_EXTRACAO_CONSUMO_INCERTO = "extracao_consumo_incerto"
+ERROR_EXTRACAO_OPERACAO_INDISPONIVEL = "extracao_operacao_indisponivel"
+
+_MSG_EXTRACAO_TETO = (
+    "Este documento excede a capacidade máxima de processamento permitida."
+)
+_MSG_EXTRACAO_PROVEDOR = (
+    "O serviço de leitura está temporariamente indisponível. Tente novamente em instantes."
+)
+_MSG_EXTRACAO_JSON = (
+    "Não foi possível concluir o processamento da tabela porque a resposta veio em formato inválido. "
+    "Tente novamente."
+)
+_MSG_EXTRACAO_TRUNCADA = (
+    "Não foi possível concluir o processamento porque a resposta foi interrompida antes de ficar completa. "
+    "Isso não é falta de créditos. Tente novamente."
+)
+_MSG_EXTRACAO_INCERTO = (
+    "A operação não foi concluída. A confirmação do estado financeiro desta tentativa ainda está pendente."
+)
+_MSG_EXTRACAO_OPERACAO = "Não foi possível iniciar a leitura neste momento. Tente novamente em instantes."
+_MSG_EXTRACAO_CREDITOS_PREFIXO = (
+    "O saldo de créditos não é suficiente para concluir esta leitura. "
+    "Para contratar ou ampliar o plano, "
+)
 
 TEMP_TABLE_VERSION_MARKER = "agente_compara_temp_table_v1"
 TEMP_TABLE_OPERATIONAL_OWNER = "cleiton"
@@ -977,6 +1009,107 @@ def _emit_agente_compara_operational_billing(
             )
 
 
+_CODIGOS_EXTRACAO_USUARIO = frozenset(
+    {
+        ERROR_EXTRACAO_TETO_TECNICO,
+        ERROR_EXTRACAO_CREDITOS_INSUFICIENTES,
+        ERROR_EXTRACAO_PROVEDOR_INDISPONIVEL,
+        ERROR_EXTRACAO_JSON_INVALIDO,
+        ERROR_EXTRACAO_RESPOSTA_TRUNCADA,
+        ERROR_EXTRACAO_CONSUMO_INCERTO,
+        ERROR_EXTRACAO_OPERACAO_INDISPONIVEL,
+    }
+)
+
+
+def _error_code_extracao_permitido(raw) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    code = raw.strip().lower()
+    if code in _CODIGOS_EXTRACAO_USUARIO:
+        return code
+    return None
+
+
+def _error_code_preservado_na_tabela(raw, status: str) -> str | None:
+    """Código público. Consumo incerto permanece na tabela útil em revisão."""
+    code = _error_code_extracao_permitido(raw)
+    if code is None:
+        return None
+    if status == TEMP_TABLE_STATUS_FAILED:
+        return code
+    if code == ERROR_EXTRACAO_CONSUMO_INCERTO and status == TEMP_TABLE_STATUS_NEEDS_REVIEW:
+        return code
+    return None
+
+
+def _aviso_consumo_incerto_na_revisao(record: dict) -> bool:
+    status = (record.get("status") or "").strip().lower()
+    return (
+        status == TEMP_TABLE_STATUS_NEEDS_REVIEW
+        and _error_code_extracao_permitido(record.get("error_code")) == ERROR_EXTRACAO_CONSUMO_INCERTO
+    )
+
+
+def _aplicar_aviso_consumo_incerto(record: dict) -> None:
+    """Aviso financeiro sem converter a tabela para failed e sem CTA."""
+    classified = _classificar_falha_extracao_conhecida(ERROR_EXTRACAO_CONSUMO_INCERTO) or {}
+    record["error_code"] = ERROR_EXTRACAO_CONSUMO_INCERTO
+    record["failure_origin"] = classified.get("failure_origin")
+    record["failure_code"] = classified.get("failure_code") or ERROR_EXTRACAO_CONSUMO_INCERTO
+    record["safe_message"] = classified.get("safe_message")
+    record["credit_disposition"] = classified.get("credit_disposition") or TEMP_TABLE_CREDIT_UNCONFIRMED
+    record["retryable"] = False
+    record.pop("upgrade_cta", None)
+
+
+def _cta_publico_extracao(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    url = raw.get("upgrade_url")
+    label = raw.get("upgrade_label")
+    message = raw.get("message")
+    if not isinstance(url, str) or not url.startswith("/") or url.startswith("//"):
+        return None
+    if not isinstance(label, str) or not label.strip():
+        return None
+    if not isinstance(message, str):
+        return None
+    suffix = raw.get("message_suffix")
+    code = raw.get("error_code")
+    path = url.split("?", 1)[0].split("#", 1)[0]
+    if not path.startswith("/") or path.startswith("//"):
+        return None
+    return {
+        "error_code": code if isinstance(code, str) and code.strip() else ERROR_EXTRACAO_CREDITOS_INSUFICIENTES,
+        "message": message,
+        "message_suffix": suffix if isinstance(suffix, str) else "",
+        "upgrade_url": path,
+        "upgrade_label": label.strip(),
+    }
+
+
+def _upgrade_cta_creditos_extracao() -> dict:
+    """CTA já usado na operação: caminho e rótulo de contratação, sem recalcular plano."""
+    from app.services.cleiton_mensageria_operacao_service import (
+        UPGRADE_LABEL_DEFAULT,
+        UPGRADE_PATH_DEFAULT,
+    )
+
+    return {
+        "error_code": ERROR_EXTRACAO_CREDITOS_INSUFICIENTES,
+        "message": _MSG_EXTRACAO_CREDITOS_PREFIXO,
+        "message_suffix": ".",
+        "upgrade_url": UPGRADE_PATH_DEFAULT,
+        "upgrade_label": UPGRADE_LABEL_DEFAULT,
+    }
+
+
+def _mensagem_creditos_extracao() -> str:
+    cta = _upgrade_cta_creditos_extracao()
+    return f"{cta['message']}{cta['upgrade_label']}{cta['message_suffix']}"
+
+
 def _classify_temp_table_failure(*, reading_alerts: list[str] | None = None, error_code: str | None = None) -> dict:
     alerts = [
         str(item).strip().lower()
@@ -984,6 +1117,9 @@ def _classify_temp_table_failure(*, reading_alerts: list[str] | None = None, err
         if isinstance(item, str) and str(item).strip()
     ]
     code = (error_code or "").strip().lower()
+    especifico = _classificar_falha_extracao_conhecida(code)
+    if especifico is not None:
+        return especifico
     joined = " ".join(alerts)
     retryable_platform_markers = ("timeout", "rate limit", "indispon", "infra", "rede", "storage", "tempor", "gemini", "provider")
     document_markers = ("arquivo vazio", "formato", "corrompido", "incompat", "dados mínimos")
@@ -992,6 +1128,76 @@ def _classify_temp_table_failure(*, reading_alerts: list[str] | None = None, err
     if any(marker in joined for marker in document_markers):
         return {"failure_origin": TEMP_TABLE_FAILURE_ORIGIN_DOCUMENT, "failure_code": code or "document_invalid", "retryable": False, "credit_disposition": TEMP_TABLE_CREDIT_NOT_APPLICABLE, "safe_message": "Não foi possível preparar a tabela com o documento enviado."}
     return {"failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM, "failure_code": code or "platform_processing_failed", "retryable": False, "credit_disposition": TEMP_TABLE_CREDIT_PRESERVED, "safe_message": "N\u00e3o foi poss\u00edvel preparar a tabela neste momento."}
+
+
+def alerta_usuario_extracao(code: str | None) -> str | None:
+    classified = _classificar_falha_extracao_conhecida((code or "").strip().lower())
+    if classified is None:
+        return None
+    message = classified.get("safe_message")
+    return message if isinstance(message, str) and message.strip() else None
+
+
+def _classificar_falha_extracao_conhecida(code: str) -> dict | None:
+    """Mensagem da extração. Não altera reserva, débito nem retry gratuito."""
+    if code == ERROR_EXTRACAO_TETO_TECNICO:
+        return {
+            "failure_origin": TEMP_TABLE_FAILURE_ORIGIN_DOCUMENT,
+            "failure_code": code,
+            "retryable": False,
+            "credit_disposition": TEMP_TABLE_CREDIT_NOT_APPLICABLE,
+            "safe_message": _MSG_EXTRACAO_TETO,
+        }
+    if code == ERROR_EXTRACAO_CREDITOS_INSUFICIENTES:
+        return {
+            "failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM,
+            "failure_code": code,
+            "retryable": False,
+            "credit_disposition": TEMP_TABLE_CREDIT_NOT_APPLICABLE,
+            "safe_message": _mensagem_creditos_extracao(),
+            "upgrade_cta": _upgrade_cta_creditos_extracao(),
+        }
+    if code == ERROR_EXTRACAO_PROVEDOR_INDISPONIVEL:
+        return {
+            "failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM,
+            "failure_code": code,
+            "retryable": False,
+            "credit_disposition": TEMP_TABLE_CREDIT_NOT_APPLICABLE,
+            "safe_message": _MSG_EXTRACAO_PROVEDOR,
+        }
+    if code == ERROR_EXTRACAO_JSON_INVALIDO:
+        return {
+            "failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM,
+            "failure_code": code,
+            "retryable": False,
+            "credit_disposition": TEMP_TABLE_CREDIT_NOT_APPLICABLE,
+            "safe_message": _MSG_EXTRACAO_JSON,
+        }
+    if code == ERROR_EXTRACAO_RESPOSTA_TRUNCADA:
+        return {
+            "failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM,
+            "failure_code": code,
+            "retryable": False,
+            "credit_disposition": TEMP_TABLE_CREDIT_NOT_APPLICABLE,
+            "safe_message": _MSG_EXTRACAO_TRUNCADA,
+        }
+    if code == ERROR_EXTRACAO_CONSUMO_INCERTO:
+        return {
+            "failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM,
+            "failure_code": code,
+            "retryable": False,
+            "credit_disposition": TEMP_TABLE_CREDIT_UNCONFIRMED,
+            "safe_message": _MSG_EXTRACAO_INCERTO,
+        }
+    if code == ERROR_EXTRACAO_OPERACAO_INDISPONIVEL:
+        return {
+            "failure_origin": TEMP_TABLE_FAILURE_ORIGIN_PLATFORM,
+            "failure_code": code,
+            "retryable": False,
+            "credit_disposition": TEMP_TABLE_CREDIT_NOT_APPLICABLE,
+            "safe_message": _MSG_EXTRACAO_OPERACAO,
+        }
+    return None
 
 
 def _load_previous_slot_document_record(*, table_entry: dict | None) -> dict | None:
@@ -8751,6 +8957,13 @@ def _public_temp_table(record: dict | None) -> dict | None:
         "uncertain_fields": list(record.get("uncertain_fields") or []),
         "reading_alerts": list(record.get("reading_alerts") or []),
         "evidence_refs": list(record.get("evidence_refs") or []),
+        "error_code": record.get("error_code"),
+        "failure_origin": record.get("failure_origin"),
+        "failure_code": record.get("failure_code"),
+        "retryable": bool(record.get("retryable")) if record.get("failure_code") or record.get("error_code") else record.get("retryable"),
+        "credit_disposition": record.get("credit_disposition"),
+        "safe_message": record.get("safe_message"),
+        "upgrade_cta": _cta_publico_extracao(record.get("upgrade_cta")),
         "created_at": record.get("created_at"),
         "updated_at": record.get("updated_at"),
         "expires_at": record.get("expires_at"),
@@ -12362,7 +12575,8 @@ def save_temp_table_record(
         (now + timedelta(hours=max(1, int(storage_config.upload_ttl_hours)))).isoformat(),
     )
     record.setdefault("active_document_id", (list(record.get("source_documents") or []) or [None])[0])
-    if (record.get("status") or "").strip().lower() == TEMP_TABLE_STATUS_FAILED:
+    status_persistido = (record.get("status") or "").strip().lower()
+    if status_persistido == TEMP_TABLE_STATUS_FAILED:
         record.update(
             _classify_temp_table_failure(
                 reading_alerts=list(record.get("reading_alerts") or []),
@@ -12370,6 +12584,8 @@ def save_temp_table_record(
             )
         )
         record["confirmed"] = False
+    elif _aviso_consumo_incerto_na_revisao(record):
+        _aplicar_aviso_consumo_incerto(record)
     else:
         record["failure_origin"] = None
         record["failure_code"] = None
@@ -13453,6 +13669,7 @@ def _coerce_temp_table_payload(
         "uncertain_fields": uncertain,
         "reading_alerts": alerts,
         "evidence_refs": _list_field_from_raw(normalized, "evidence_refs"),
+        "error_code": _error_code_preservado_na_tabela(raw.get("error_code"), status),
         "created_at": created_at,
         "updated_at": now,
         "expires_at": _temp_table_expires_at(_normalize_source_doc_ids(source_doc_ids)),
