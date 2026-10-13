@@ -2773,6 +2773,7 @@
   var tempTableSaveInFlight = false;
   var tempTableSaveExecutionId = null;
   var tempTableValidationErrors = [];
+  var tempTablePricingContractBlock = null;
   var openFreightTableKeys = new Set();
   var hasUserTouchedFreightTableOpenState = false;
   var tempTableModalActiveTab = 'freight';
@@ -7120,15 +7121,77 @@
     };
   }
 
+  function clonePricingContractIssues(validation) {
+    var issues = validation && Array.isArray(validation.blocking_issues) ? validation.blocking_issues : [];
+    return issues.filter(function (issue) {
+      return issue && issue.section === 'pricing_contract';
+    }).map(function (issue) {
+      return {
+        code: issue.code || '',
+        section: 'pricing_contract',
+        item_id: issue.item_id || '',
+        index: issue.index,
+        field: issue.field || 'pricing_contract',
+        label: issue.label ? String(issue.label) : (issue.item_id ? String(issue.item_id) : 'Tabela tarifária'),
+        reason_code: issue.reason_code || issue.code || '',
+        severity: 'blocking',
+        message: issue.message ? String(issue.message) : ''
+      };
+    });
+  }
+
+  function freightPricingSourceFingerprint(tempTable) {
+    if (!tempTable || typeof tempTable !== 'object') return '';
+    try {
+      return JSON.stringify({
+        freight_tables: tempTable.freight_tables || null,
+        freight_routes: tempTable.freight_routes || null
+      });
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function rememberPricingContractBlock(tempTable, validation) {
+    if (!tempTable || !validation || typeof validation !== 'object') {
+      tempTablePricingContractBlock = null;
+      return;
+    }
+    tempTablePricingContractBlock = {
+      fingerprint: freightPricingSourceFingerprint(tempTable),
+      issues: clonePricingContractIssues(validation)
+    };
+  }
+
+  function activePricingContractBlockingIssues() {
+    if (!tempTablePricingContractBlock || !currentTempTable) return [];
+    if (freightPricingSourceFingerprint(currentTempTable) !== tempTablePricingContractBlock.fingerprint) {
+      return [];
+    }
+    return tempTablePricingContractBlock.issues.slice();
+  }
+
   function resolveTempTableValidationState() {
-    if (tempTableEditMode) {
+    var remote = currentTempTable && currentTempTable.validation;
+    if (!tempTableEditMode) {
+      if (remote && typeof remote === 'object' && typeof remote.can_confirm === 'boolean') {
+        return remote;
+      }
       return buildLocalTempTableValidationSummary();
     }
-    var remote = currentTempTable && currentTempTable.validation;
-    if (remote && typeof remote === 'object' && typeof remote.can_confirm === 'boolean') {
-      return remote;
-    }
-    return buildLocalTempTableValidationSummary();
+    var local = buildLocalTempTableValidationSummary();
+    var pricingIssues = activePricingContractBlockingIssues();
+    if (!pricingIssues.length) return local;
+    var localIssues = Array.isArray(local.blocking_issues) ? local.blocking_issues : [];
+    var merged = pricingIssues.concat(localIssues);
+    return {
+      schema_version: 1,
+      can_confirm: false,
+      blocking_count: merged.length,
+      warning_count: Number(local.warning_count) || 0,
+      blocking_issues: merged,
+      warnings: Array.isArray(local.warnings) ? local.warnings : []
+    };
   }
 
   function tempTableConfirmationCanProceed() {
@@ -7174,9 +7237,10 @@
       list.className = 'agente-compara-temp-table-validation-list';
       issues.slice(0, 8).forEach(function (issue) {
         var item = document.createElement('li');
-        var label = (issue && issue.label) ? String(issue.label) : 'Item';
-        var message = (issue && issue.message) ? String(issue.message) : '';
-        item.textContent = message ? (label + ': ' + message) : label;
+        item.textContent = formatTempTableBlockingIssue(issue);
+        if (issue && issue.section === 'pricing_contract' && issue.code) {
+          item.setAttribute('data-pricing-code', String(issue.code));
+        }
         if (issue && issue.index != null) {
           item.setAttribute('data-accessorial-fee-index', String(issue.index));
         }
@@ -7184,6 +7248,19 @@
       });
       el.appendChild(list);
     }
+  }
+
+  function formatTempTableBlockingIssue(issue) {
+    if (issue && issue.section === 'pricing_contract') {
+      var pricingLabel = issue.label
+        ? String(issue.label)
+        : (issue.item_id ? String(issue.item_id) : 'Tabela tarifária');
+      var pricingMessage = issue.message ? String(issue.message) : '';
+      return pricingMessage ? (pricingLabel + ': ' + pricingMessage) : pricingLabel;
+    }
+    var label = (issue && issue.label) ? String(issue.label) : 'Item';
+    var message = (issue && issue.message) ? String(issue.message) : '';
+    return message ? (label + ': ' + message) : label;
   }
 
   function validateLinkedMinimumAccessorialFee(fee, fees, feeIndex) {
@@ -7443,7 +7520,9 @@
     if (isBlocking) {
       if (currentTempTable && validation) {
         currentTempTable.validation = validation;
+        rememberPricingContractBlock(currentTempTable, validation);
       }
+      ensureTempTableEditModeForValidation();
       if (errors.length) {
         setTempTableValidationErrors(errors);
       } else if (data.message) {
@@ -7452,14 +7531,17 @@
       } else {
         return false;
       }
-      ensureTempTableEditModeForValidation();
       renderTempTableModalContent(currentTempTable);
       focusFirstTempTableValidationError();
       return true;
     }
+    if (currentTempTable && validation) {
+      currentTempTable.validation = validation;
+      rememberPricingContractBlock(currentTempTable, validation);
+    }
     if (!errors.length) return false;
-    setTempTableValidationErrors(errors);
     ensureTempTableEditModeForValidation();
+    setTempTableValidationErrors(errors);
     renderTempTableModalContent(currentTempTable);
     focusFirstTempTableValidationError();
     return true;
@@ -9136,6 +9218,11 @@
   function setCurrentTempTable(tempTable, options) {
     options = options || {};
     currentTempTable = tempTable || null;
+    if (currentTempTable && currentTempTable.validation && typeof currentTempTable.validation === 'object') {
+      rememberPricingContractBlock(currentTempTable, currentTempTable.validation);
+    } else {
+      tempTablePricingContractBlock = null;
+    }
     if (options.refreshAuditBi !== false) {
       refreshAuditBiDashboardFromCurrentTempTable();
     }
@@ -11051,11 +11138,13 @@ function renderDocumentItem(doc) {
           appendEditableCell(tr, readFreightRouteField(route, field), function (newValue) {
             if (!currentTempTable.freight_routes[rowIndex]) return;
             writeFreightRouteField(currentTempTable.freight_routes[rowIndex], field, newValue);
+            updateTempTableModalFooter();
           });
         } else {
           appendEditableCell(tr, readFreightRouteColumnValue(route, column.key), function (newValue) {
             if (!currentTempTable.freight_routes[rowIndex]) return;
             currentTempTable.freight_routes[rowIndex][column.key] = newValue;
+            updateTempTableModalFooter();
           });
         }
       });
@@ -11063,6 +11152,7 @@ function renderDocumentItem(doc) {
         if (!Array.isArray(currentTempTable.freight_routes)) return;
         currentTempTable.freight_routes.splice(rowIndex, 1);
         renderTempTableModalContent(currentTempTable);
+        updateTempTableModalFooter();
       });
       tbody.appendChild(tr);
     });
@@ -11273,6 +11363,7 @@ function renderDocumentItem(doc) {
               }
             });
             renderTempTableModalContent(currentTempTable);
+            updateTempTableModalFooter();
           });
           headerWrap.appendChild(colBtn);
           th.appendChild(headerWrap);
@@ -11308,6 +11399,7 @@ function renderDocumentItem(doc) {
                 currentTempTable.freight_tables[tableIndex].rows[rowIndex] = {};
               }
               currentTempTable.freight_tables[tableIndex].rows[rowIndex][col] = newValue;
+              updateTempTableModalFooter();
             });
           } else {
             appendTableCell(tr, row[col], false, true);
@@ -11324,6 +11416,7 @@ function renderDocumentItem(doc) {
           if (!tableRef || !Array.isArray(tableRef.rows)) return;
           tableRef.rows.splice(rowIndex, 1);
           renderTempTableModalContent(currentTempTable);
+          updateTempTableModalFooter();
         });
       }
       tbody.appendChild(tr);

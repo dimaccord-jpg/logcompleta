@@ -5093,10 +5093,7 @@ def _build_rules_from_matrix_table(table: dict, origin_by_rule: dict | None = No
         return []
     origin_city_col, origin_uf_col = _matrix_origin_columns(table)
 
-    selected_dimension_col = _sanitize_cell_string(table.get("_selected_pricing_dimension_column"))
-    region_col = selected_dimension_col if selected_dimension_col in columns else None
-    if region_col is None:
-        region_col = next((col for col in columns if _is_region_column(col)), None)
+    region_col = _pricing_dimension_column(table)
     uf_col = next((col for col in columns if _is_destination_uf_column(col)), None)
     range_cols = [
         (col, parsed)
@@ -5908,12 +5905,32 @@ def _row_range_columns(table: dict) -> tuple[str | None, str | None]:
     return range_col, value_col
 
 
-def _selected_region_column(table: dict) -> str | None:
+def _exact_grupo_dimension_column(columns: list) -> str | None:
+    """Cabeçalho normalizado exatamente ``grupo``. Sem regex e sem sinônimos."""
+    for column in columns:
+        if _normalize_coverage_header(column) == "grupo":
+            return column
+    return None
+
+
+def _pricing_dimension_column(table: dict) -> str | None:
+    """Dimensão tarifária da matriz, sem alargar ``_is_region_column``.
+
+    Precedência: seleção explícita válida, coluna já reconhecida como região,
+    depois cabeçalho normalizado exatamente ``grupo``.
+    """
     columns = _table_columns(table)
     selected = _sanitize_cell_string(table.get("_selected_pricing_dimension_column"))
     if selected and selected in columns:
         return selected
-    return next((col for col in columns if _is_region_column(col)), None)
+    region_col = next((col for col in columns if _is_region_column(col)), None)
+    if region_col:
+        return region_col
+    return _exact_grupo_dimension_column(columns)
+
+
+def _selected_region_column(table: dict) -> str | None:
+    return _pricing_dimension_column(table)
 
 
 def _inspect_pricing_table_cells(table: dict, table_index: int, findings: list[dict], seen: set) -> None:
