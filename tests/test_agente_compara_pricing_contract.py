@@ -12,6 +12,7 @@ from app.agente_compara_calculation_service import (
 from app.agente_compara_doc_service import (
     AUDIT_STATUS_UNSUPPORTED_PRICING,
     _build_freight_pricing_index_legacy,
+    _build_rules_from_matrix_table,
     _compile_pricing_contract,
     _find_pricing_rule_match,
     _freight_route_is_weight_100_only,
@@ -27,6 +28,7 @@ from app.agente_compara_doc_service import (
 from app.agente_compara_temp_table_validation_service import (
     CODE_AMBIGUOUS_COMPLETE_TABLE_MATCH,
     CODE_CONFLICTING_LOOKUP_KEY,
+    CODE_INVALID_EXCESS,
     CODE_INVALID_RANGE,
     CODE_INVALID_TARIFF,
     CODE_MISSING_LOOKUP_KEY,
@@ -826,6 +828,325 @@ def test_parse_range_from_label_ignores_hyphen_without_weight_context():
     assert _parse_range_from_label("80000-82999") is None
     assert _parse_range_from_label("Rota 1-2") is None
     assert _parse_range_from_label("30-10 kg") is None
+
+
+_I01A_RANGE_HEADERS = ("0-10", "11-30", "31-50", "51-100", "101-200", "201-500")
+_I01A_EXCESS_HEADER = "Excedente >500"
+_I01A_NORMALIZED_BOUNDS = (
+    (0.0, 10.0),
+    (10.0, 30.0),
+    (30.0, 50.0),
+    (50.0, 100.0),
+    (100.0, 200.0),
+    (200.0, 500.0),
+)
+_I01A_CITIES = (
+    ("Curitiba/PR", ("R$ 34,80", "R$ 49,35", "R$ 65,40", "R$ 91,75", "R$ 137,90", "R$ 269,40"), "R$ 0,71/kg", 0.71, (34.80, 49.35, 65.40, 91.75, 137.90, 269.40)),
+    ("Londrina/PR", ("R$ 37,20", "R$ 52,80", "R$ 69,10", "R$ 97,30", "R$ 145,20", "R$ 283,70"), "R$ 0,74/kg", 0.74, (37.20, 52.80, 69.10, 97.30, 145.20, 283.70)),
+    ("Joinville/SC", ("R$ 39,10", "R$ 55,60", "R$ 72,90", "R$ 101,80", "R$ 151,90", "R$ 296,20"), "R$ 0,77/kg", 0.77, (39.10, 55.60, 72.90, 101.80, 151.90, 296.20)),
+    ("Florianópolis/SC", ("R$ 43,50", "R$ 61,80", "R$ 80,70", "R$ 112,90", "R$ 168,40", "R$ 327,60"), "R$ 0,83/kg", 0.83, (43.50, 61.80, 80.70, 112.90, 168.40, 327.60)),
+    ("Belo Horizonte/MG", ("R$ 41,20", "R$ 58,90", "R$ 77,10", "R$ 108,20", "R$ 161,50", "R$ 315,40"), "R$ 0,80/kg", 0.80, (41.20, 58.90, 77.10, 108.20, 161.50, 315.40)),
+    ("Uberlândia/MG", ("R$ 47,80", "R$ 67,60", "R$ 88,30", "R$ 123,90", "R$ 184,70", "R$ 359,50"), "R$ 0,91/kg", 0.91, (47.80, 67.60, 88.30, 123.90, 184.70, 359.50)),
+)
+
+
+def _i01a_row(city: str, amounts: tuple[str, ...], excess: str) -> dict:
+    row = {"Destino": city, _I01A_EXCESS_HEADER: excess}
+    for header, amount in zip(_I01A_RANGE_HEADERS, amounts):
+        row[header] = amount
+    return row
+
+
+def _i01a_weight_matrix(*, notes: str, excess_by_city: dict[str, str] | None = None) -> dict:
+    rows = []
+    for city, amounts, excess, *_rest in _I01A_CITIES:
+        rows.append(_i01a_row(city, amounts, (excess_by_city or {}).get(city, excess)))
+    return {
+        "freight_tables": [
+            {
+                "table_title": "Tabela comercial - origem Campinas/SP",
+                "columns": ["Destino", *_I01A_RANGE_HEADERS, _I01A_EXCESS_HEADER],
+                "rows": rows,
+                "notes": notes,
+                "context": {"origin": "Campinas/SP"},
+            }
+        ],
+        "freight_routes": [],
+    }
+
+
+def _executable_rules_by_region(table: dict) -> dict[str, dict]:
+    contract, _findings = _compile_pricing_contract(table)
+    return {
+        rule.get("region"): rule
+        for rule in contract["rules"]
+        if rule.get("pricing_type") == "range_plus_excess_per_kg"
+    }
+
+
+def test_i01a_unitless_headers_compile_when_matrix_proves_weight():
+    assert _parse_range_from_label("0-10") is None
+    assert _parse_range_from_label("0-10 kg") == (0.0, 10.0)
+    assert _is_excess_column(_I01A_EXCESS_HEADER) is True
+    assert _parse_range_from_label(_I01A_EXCESS_HEADER) is None
+
+    table = _i01a_weight_matrix(notes="Faixa máxima 500 kg + excedente por kg")
+    curitiba_row = table["freight_tables"][0]["rows"][0]
+    built = _build_rules_from_matrix_table(
+        {
+            "table_title": table["freight_tables"][0]["table_title"],
+            "columns": table["freight_tables"][0]["columns"],
+            "rows": [curitiba_row],
+            "notes": table["freight_tables"][0]["notes"],
+            "context": table["freight_tables"][0]["context"],
+        }
+    )
+    assert built
+    assert {rule["pricing_type"] for _key, rule in built} == {"range_plus_excess_per_kg"}
+    assert all(rule["brackets"] for _key, rule in built)
+    assert all(rule["excess"]["rate_per_kg"] == 0.71 for _key, rule in built)
+
+    rules = _executable_rules_by_region(table)
+    assert set(rules) == {city for city, *_rest in _I01A_CITIES}
+    for city, _amounts, _excess, rate, values in _I01A_CITIES:
+        rule = rules[city]
+        assert [
+            (bracket["min_kg"], bracket["max_kg"], bracket["value"]) for bracket in rule["brackets"]
+        ] == [(*bounds, amount) for bounds, amount in zip(_I01A_NORMALIZED_BOUNDS, values)]
+        assert rule["brackets"][-1]["max_kg"] == 500.0
+        assert rule["excess"]["rate_per_kg"] == rate
+        assert all(bracket.get("label") != _I01A_EXCESS_HEADER for bracket in rule["brackets"])
+
+    validation = validate_pricing_contract_for_confirmation(table)
+    blocking = {issue["code"] for issue in validation["blocking_issues"]}
+    assert CODE_INVALID_EXCESS not in blocking
+    assert CODE_NO_EXECUTABLE_PRICING_RULE not in blocking
+    assert validation["can_confirm"] is True, validation["blocking_issues"]
+
+    curitiba = rules["Curitiba/PR"]
+    within_band = calculate_weight_freight(10, curitiba)
+    next_band = calculate_weight_freight(10.5, curitiba)
+    at_limit = calculate_weight_freight(500, curitiba)
+    above_limit = calculate_weight_freight(600, curitiba)
+    assert within_band["expected_freight"] == 34.80
+    assert next_band["expected_freight"] == 49.35
+    assert at_limit["expected_freight"] == 269.40
+    assert above_limit["calculation_basis"] == "range_plus_excess_per_kg"
+    assert above_limit["expected_freight"] == 340.40
+
+
+def test_excess_threshold_alone_does_not_prove_unitless_ranges():
+    excess_by_city = {city: excess.replace("R$ ", "").replace("/kg", "") for city, _amounts, excess, *_rest in _I01A_CITIES}
+    table = _i01a_weight_matrix(notes="", excess_by_city=excess_by_city)
+    assert _is_excess_column(_I01A_EXCESS_HEADER) is True
+    rules = _executable_rules_by_region(table)
+    assert rules == {}
+    validation = validate_pricing_contract_for_confirmation(table)
+    assert validation["can_confirm"] is False
+    assert CODE_NO_EXECUTABLE_PRICING_RULE in {issue["code"] for issue in validation["blocking_issues"]}
+
+    proved_by_cell = _i01a_weight_matrix(notes="")
+    proved_rules = _executable_rules_by_region(proved_by_cell)
+    assert len(proved_rules) == 6
+    assert proved_rules["Curitiba/PR"]["brackets"][-1]["max_kg"] == 500.0
+    assert proved_rules["Curitiba/PR"]["excess"]["rate_per_kg"] == 0.71
+    assert validate_pricing_contract_for_confirmation(proved_by_cell)["can_confirm"] is True
+
+
+def test_unitless_numeric_columns_without_weight_context_stay_blocked():
+    table = {
+        "freight_tables": [
+            {
+                "table_title": "Tabela comercial",
+                "columns": ["Destino", "0-10", "11-30"],
+                "rows": [{"Destino": "Curitiba/PR", "0-10": "34,80", "11-30": "49,35"}],
+                "notes": "",
+            }
+        ],
+        "freight_routes": [],
+    }
+    built = _build_rules_from_matrix_table(table["freight_tables"][0])
+    assert built
+    assert {rule["pricing_type"] for _key, rule in built} == {AUDIT_STATUS_UNSUPPORTED_PRICING}
+    assert all(not rule["brackets"] for _key, rule in built)
+    assert all(rule["excess"] is None for _key, rule in built)
+    validation = validate_pricing_contract_for_confirmation(table)
+    assert validation["can_confirm"] is False
+    assert CODE_NO_EXECUTABLE_PRICING_RULE in {issue["code"] for issue in validation["blocking_issues"]}
+
+    prose_table = {
+        "freight_tables": [
+            {
+                "table_title": "Tabela comercial",
+                "columns": ["Destino", "0 a 10", "11-30"],
+                "rows": [{"Destino": "Curitiba/PR", "0 a 10": "34,80", "11-30": "49,35"}],
+                "notes": "",
+            }
+        ],
+        "freight_routes": [],
+    }
+    prose_rules = [
+        rule
+        for rule in build_pricing_contract(prose_table)["rules"]
+        if rule.get("pricing_type") == "fixed_range"
+    ]
+    assert len(prose_rules) == 1
+    assert [bracket["label"] for bracket in prose_rules[0]["brackets"]] == ["0 a 10"]
+
+
+def test_weight_context_does_not_absorb_unrelated_numeric_columns():
+    table = {
+        "freight_tables": [
+            {
+                "table_title": "Faixas de peso (kg)",
+                "columns": [
+                    "Destino",
+                    "Prazo",
+                    "0-10",
+                    "11-30",
+                    "80000-82999",
+                    "Rota 1-2",
+                    "11-30 dias",
+                    "Excedente >30",
+                ],
+                "rows": [
+                    {
+                        "Destino": "Curitiba/PR",
+                        "Prazo": "5",
+                        "0-10": "34,80",
+                        "11-30": "49,35",
+                        "80000-82999": "12,00",
+                        "Rota 1-2": "9,00",
+                        "11-30 dias": "8,00",
+                        "Excedente >30": "0,71",
+                    }
+                ],
+                "notes": "",
+            }
+        ],
+        "freight_routes": [],
+    }
+    rules = _executable_rules_by_region(table)
+    rule = rules["Curitiba/PR"]
+    assert [(bracket["min_kg"], bracket["max_kg"], bracket["value"]) for bracket in rule["brackets"]] == [
+        (0.0, 10.0, 34.80),
+        (10.0, 30.0, 49.35),
+    ]
+    assert rule["excess"]["rate_per_kg"] == 0.71
+    assert [bracket["label"] for bracket in rule["brackets"]] == ["0-10", "11-30"]
+
+
+def test_incomplete_unitless_weight_row_stays_blocked():
+    table = _i01a_weight_matrix(notes="Faixa máxima 500 kg + excedente por kg")
+    for row in table["freight_tables"][0]["rows"]:
+        for header in _I01A_RANGE_HEADERS:
+            row[header] = None
+    validation = validate_pricing_contract_for_confirmation(table)
+    assert validation["can_confirm"] is False
+    blocking = {issue["code"] for issue in validation["blocking_issues"]}
+    assert CODE_INVALID_EXCESS in blocking
+    assert CODE_NO_EXECUTABLE_PRICING_RULE in blocking
+
+
+def _unitless_destination_table(
+    *,
+    columns: list[str],
+    row: dict,
+    notes: str,
+    title: str = "Tabela comercial",
+) -> dict:
+    return {
+        "freight_tables": [
+            {
+                "table_title": title,
+                "columns": columns,
+                "rows": [row],
+                "notes": notes,
+            }
+        ],
+        "freight_routes": [],
+    }
+
+
+def _assert_weight_not_priced(table: dict, weight: float, forbidden_amount: float) -> dict:
+    contract, _findings = _compile_pricing_contract(table)
+    priced = []
+    for rule in contract["rules"]:
+        if rule.get("pricing_type") not in {"fixed_range", "range_plus_excess_per_kg"}:
+            continue
+        calculated = calculate_weight_freight(weight, rule)
+        if calculated is not None:
+            priced.append(calculated["expected_freight"])
+    assert forbidden_amount not in priced
+    assert priced == []
+    validation = validate_pricing_contract_for_confirmation(table)
+    assert validation["can_confirm"] is False
+    return validation
+
+
+def test_day_narrative_does_not_confirm_unitless_ranges_as_weight():
+    columns = ["Destino", "0-10", "11-30", "Excedente >30"]
+    row = {"Destino": "Curitiba/PR", "0-10": "34,80", "11-30": "49,35", "Excedente >30": "0,71"}
+    notes = "Faixas de prazo em dias; excedente por dia"
+    table = _unitless_destination_table(columns=columns, row=row, notes=notes)
+    validation = _assert_weight_not_priced(table, 10, 34.80)
+    assert CODE_NO_EXECUTABLE_PRICING_RULE in {issue["code"] for issue in validation["blocking_issues"]}
+
+    contradicted = _unitless_destination_table(
+        columns=columns,
+        row={**row, "Excedente >30": "0,71/kg"},
+        notes=notes,
+        title="Faixas de peso (kg)",
+    )
+    contradicted_validation = _assert_weight_not_priced(contradicted, 10, 34.80)
+    assert contradicted_validation["can_confirm"] is False
+
+
+def test_disconnected_unitless_weight_ranges_stay_blocked():
+    table = _unitless_destination_table(
+        columns=["Destino", "0-10", "31-50", "Excedente >50"],
+        row={"Destino": "Curitiba/PR", "0-10": "34,80", "31-50": "65,40", "Excedente >50": "0,71"},
+        notes="Faixa de peso em kg",
+        title="Faixas de peso (kg)",
+    )
+    validation = _assert_weight_not_priced(table, 20, 65.40)
+    assert CODE_INVALID_RANGE in {issue["code"] for issue in validation["blocking_issues"]}
+
+
+def test_blank_intermediate_unitless_band_stays_blocked():
+    table = _unitless_destination_table(
+        columns=["Destino", "0-10", "11-30", "31-50", "Excedente >50"],
+        row={
+            "Destino": "Curitiba/PR",
+            "0-10": "34,80",
+            "11-30": None,
+            "31-50": "65,40",
+            "Excedente >50": "0,71",
+        },
+        notes="Faixa de peso em kg",
+        title="Faixas de peso (kg)",
+    )
+    validation = _assert_weight_not_priced(table, 20, 65.40)
+    blocking = {issue["code"] for issue in validation["blocking_issues"]}
+    assert CODE_INVALID_RANGE in blocking
+
+
+def test_labeled_weight_gap_keeps_existing_normalization():
+    table = _unitless_destination_table(
+        columns=["Destino", "0-10 kg", "31-50 kg"],
+        row={"Destino": "Sul", "0-10 kg": "10,00", "31-50 kg": "20,00"},
+        notes="",
+        title="Faixas com unidade",
+    )
+    rules = [
+        rule
+        for rule in build_pricing_contract(table)["rules"]
+        if rule.get("pricing_type") == "fixed_range"
+    ]
+    assert len(rules) == 1
+    assert calculate_weight_freight(20, rules[0])["expected_freight"] == 20.0
+    validation = validate_pricing_contract_for_confirmation(table)
+    assert validation["can_confirm"] is True, validation["blocking_issues"]
 
 
 def test_parse_range_from_label_does_not_treat_greater_than_weight_as_closed_range():

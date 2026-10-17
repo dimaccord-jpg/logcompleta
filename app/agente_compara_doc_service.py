@@ -435,6 +435,7 @@ _PRICING_CONTRACT_TYPES = frozenset(
 )
 _PRICING_CONTRACT_RANGE_TYPES = frozenset({"fixed_range", "range_plus_excess_per_kg"})
 _WEIGHT_KG_HEADER_RE = re.compile(r"\bkg\b|\bkgs\b|\bpeso\b")
+_HEADER_NUMBER_RE = re.compile(r"\d+(?:[,.]\d+)?")
 ISS_SOURCE_NAME = "Cadastro municipal/manual"
 ISS_SOURCE_TYPE = "manual"
 TEMP_TABLE_REVIEW_ACTION_SKIP_COVERAGE_AND_ADVANCE = "skip_coverage_and_advance"
@@ -3776,13 +3777,25 @@ def _parse_weight_number(value) -> float | None:
     return parsed
 
 
-def _parse_range_from_label(label) -> tuple[float | None, float | None] | None:
+def _header_is_pure_numeric_pair(normalized: str) -> bool:
+    tokens = [token for token in normalized.split(" ") if token]
+    if len(tokens) != 2:
+        return False
+    for token in tokens:
+        try:
+            float(token.replace(",", "."))
+        except ValueError:
+            return False
+    return True
+
+
+def _parse_range_from_label(label, *, allow_unitless: bool = False) -> tuple[float | None, float | None] | None:
     if _is_excess_column(label):
         return None
     normalized = _normalize_coverage_header(label)
     if not normalized or "acima" in normalized:
         return None
-    numbers = [float(item.replace(",", ".")) for item in re.findall(r"\d+(?:[,.]\d+)?", normalized)]
+    numbers = [float(item.replace(",", ".")) for item in _HEADER_NUMBER_RE.findall(normalized)]
     if not numbers:
         return None
     has_weight_unit = bool(_WEIGHT_KG_HEADER_RE.search(normalized))
@@ -3797,17 +3810,245 @@ def _parse_range_from_label(label) -> tuple[float | None, float | None] | None:
     ):
         return (numbers[0], numbers[1])
     # "0-10 kg" perde o hífen em _normalize_coverage_header ("0 10 kg").
-    # Reconhece hífen, en dash e em dash só com dois limites e unidade de peso.
-    if (
-        has_weight_unit
-        and len(numbers) == 2
+    # Hífen, en dash e em dash exigem unidade de peso, salvo faixa numérica pura
+    # habilitada pelo contexto da matriz.
+    hyphenated = (
+        len(numbers) == 2
         and numbers[0] <= numbers[1]
         and re.search(r"\d\s*[-–—]\s*\d", str(label))
-    ):
+    )
+    if hyphenated and has_weight_unit:
+        return (numbers[0], numbers[1])
+    if hyphenated and allow_unitless and _header_is_pure_numeric_pair(normalized):
         return (numbers[0], numbers[1])
     if len(numbers) == 1 and has_weight_unit:
         return (0.0, numbers[0])
     return None
+
+
+def _same_kg_bound(left: float, right: float) -> bool:
+    return abs(float(left) - float(right)) <= 1e-6
+
+
+def _bounds_continue(previous_max: float, next_min: float) -> bool:
+    return next_min + 1e-6 >= previous_max and next_min <= previous_max + 1.0 + 1e-6
+
+
+def _matrix_weight_evidence_texts(table: dict) -> list[str]:
+    """Textos da matriz que podem provar unidade de peso, sem varrer tarifas comuns."""
+    texts: list[str] = []
+    for value in (table.get("table_title"), table.get("notes")):
+        if isinstance(value, str) and value.strip():
+            texts.append(value)
+    context = table.get("context")
+    if isinstance(context, dict):
+        for value in context.values():
+            if isinstance(value, str) and value.strip():
+                texts.append(value)
+    columns = _table_columns(table)
+    for column in columns:
+        if isinstance(column, str) and column.strip():
+            texts.append(column)
+    excess_columns = [column for column in columns if _is_excess_column(column)]
+    for row in _table_rows(table):
+        if not isinstance(row, dict):
+            continue
+        for column in excess_columns:
+            value = row.get(column)
+            if isinstance(value, str) and value.strip():
+                texts.append(value)
+    return texts
+
+
+def _matrix_has_weight_unit(table: dict) -> bool:
+    for text in _matrix_weight_evidence_texts(table):
+        normalized = _normalize_coverage_header(text)
+        if normalized and _WEIGHT_KG_HEADER_RE.search(normalized):
+            return True
+    return False
+
+
+def _matrix_weight_unit_numbers(table: dict) -> set[float]:
+    found: set[float] = set()
+    for text in _matrix_weight_evidence_texts(table):
+        normalized = _normalize_coverage_header(text)
+        if not normalized or not _WEIGHT_KG_HEADER_RE.search(normalized):
+            continue
+        for item in _HEADER_NUMBER_RE.findall(normalized):
+            found.add(float(item.replace(",", ".")))
+    return found
+
+
+def _excess_threshold_numbers(table: dict) -> set[float]:
+    found: set[float] = set()
+    for column in _table_columns(table):
+        if not _is_excess_column(column):
+            continue
+        normalized = _normalize_coverage_header(column)
+        numbers = [float(item.replace(",", ".")) for item in _HEADER_NUMBER_RE.findall(normalized)]
+        if len(numbers) == 1:
+            found.add(numbers[0])
+    return found
+
+
+def _matrix_narrative_texts(table: dict) -> list[str]:
+    """Título, notas e contexto já usados como evidência da matriz.
+
+    O prazo de entrega fica de fora: ele descreve a operação, não a unidade da faixa.
+    """
+    texts: list[str] = []
+    for value in (table.get("table_title"), table.get("notes")):
+        if isinstance(value, str) and value.strip():
+            texts.append(value)
+    context = table.get("context")
+    if isinstance(context, dict):
+        for key, value in context.items():
+            if key == "delivery_deadline":
+                continue
+            if isinstance(value, str) and value.strip():
+                texts.append(value)
+    return texts
+
+
+def _matrix_narrative_contradicts_weight(table: dict) -> bool:
+    """A narrativa da matriz declara prazo em dias para as faixas ou para o excedente.
+
+    Reusa o texto normalizado da evidência já coletada. Não classifica cabeçalho.
+    """
+    day_tokens = {"dia", "dias", "diaria"}
+    band_tokens = {"faixa", "faixas", "prazo"}
+    for text in _matrix_narrative_texts(table):
+        normalized = _normalize_coverage_header(text)
+        if not normalized:
+            continue
+        tokens = {token for token in normalized.split(" ") if token}
+        if "por" in tokens and tokens & day_tokens:
+            return True
+        if tokens & day_tokens and tokens & band_tokens:
+            return True
+    return False
+
+
+def _bounds_have_internal_gap(bounds: list[tuple[float | None, float | None]]) -> bool:
+    """Lacuna ou sobreposição entre faixas já delimitadas. Uma faixa sozinha não é lacuna."""
+    ordered: list[tuple[float, float]] = []
+    for lo, hi in bounds:
+        if lo is None or hi is None:
+            return True
+        ordered.append((float(lo), float(hi)))
+    ordered.sort(key=lambda item: (item[0], item[1]))
+    for previous, nxt in zip(ordered, ordered[1:]):
+        if not _bounds_continue(previous[1], nxt[0]):
+            return True
+    return False
+
+
+def _unitless_range_pairs(
+    pairs: list[tuple[str, tuple[float | None, float | None]]],
+) -> list[tuple[str, tuple[float | None, float | None]]]:
+    return [pair for pair in pairs if _parse_range_from_label(pair[0]) is None]
+
+
+def _unitless_range_is_seed(
+    bounds: tuple[float | None, float | None],
+    *,
+    thresholds: set[float],
+    weight_numbers: set[float],
+    has_weight_unit: bool,
+    labeled: list[tuple[float | None, float | None]],
+) -> bool:
+    lo, hi = bounds
+    if lo is None or hi is None:
+        return False
+    positive_weight = bool(has_weight_unit or weight_numbers or labeled)
+    # O limiar do excedente só ancora uma faixa quando o peso já está provado.
+    if positive_weight and any(_same_kg_bound(hi, threshold) for threshold in thresholds):
+        return True
+    if any(_same_kg_bound(lo, number) or _same_kg_bound(hi, number) for number in weight_numbers):
+        return True
+    if has_weight_unit and _same_kg_bound(lo, 0.0):
+        return True
+    for labeled_lo, labeled_hi in labeled:
+        if labeled_lo is None or labeled_hi is None:
+            continue
+        if _bounds_continue(float(labeled_hi), float(lo)) or _bounds_continue(float(hi), float(labeled_lo)):
+            return True
+    return False
+
+
+def _select_unitless_weight_ranges(
+    bare: list[tuple[str, tuple[float | None, float | None]]],
+    labeled: list[tuple[float | None, float | None]],
+    *,
+    thresholds: set[float],
+    weight_numbers: set[float],
+    has_weight_unit: bool,
+) -> list[tuple[str, tuple[float | None, float | None]]]:
+    if not bare:
+        return []
+    if not weight_numbers and not has_weight_unit and not labeled:
+        return []
+    accepted: set[int] = set()
+    for index, (_column, bounds) in enumerate(bare):
+        if _unitless_range_is_seed(
+            bounds,
+            thresholds=thresholds,
+            weight_numbers=weight_numbers,
+            has_weight_unit=has_weight_unit,
+            labeled=labeled,
+        ):
+            accepted.add(index)
+    changed = True
+    while changed:
+        changed = False
+        for index, (_column, bounds) in enumerate(bare):
+            if index in accepted or bounds[0] is None or bounds[1] is None:
+                continue
+            lo = float(bounds[0])
+            hi = float(bounds[1])
+            for other in list(accepted):
+                other_bounds = bare[other][1]
+                if other_bounds[0] is None or other_bounds[1] is None:
+                    continue
+                if _bounds_continue(float(other_bounds[1]), lo) or _bounds_continue(hi, float(other_bounds[0])):
+                    accepted.add(index)
+                    changed = True
+                    break
+    return [bare[index] for index in range(len(bare)) if index in accepted]
+
+
+def _matrix_range_columns(table: dict) -> list[tuple[str, tuple[float | None, float | None]]]:
+    """Faixas da matriz. Coluna numérica pura só entra com prova de peso."""
+    labeled: list[tuple[str, tuple[float | None, float | None]]] = []
+    bare: list[tuple[str, tuple[float | None, float | None]]] = []
+    for column in _table_columns(table):
+        if _is_excess_column(column):
+            continue
+        parsed = _parse_range_from_label(column)
+        if parsed is not None:
+            labeled.append((column, parsed))
+            continue
+        parsed = _parse_range_from_label(column, allow_unitless=True)
+        if parsed is not None:
+            bare.append((column, parsed))
+    if not bare:
+        return labeled
+    # Excedente sem unidade não prova peso quando a narrativa já declara dias.
+    if _matrix_narrative_contradicts_weight(table):
+        return labeled
+    weight_labeled = [
+        bounds
+        for column, bounds in labeled
+        if _WEIGHT_KG_HEADER_RE.search(_normalize_coverage_header(column))
+    ]
+    selected = _select_unitless_weight_ranges(
+        bare,
+        weight_labeled,
+        thresholds=_excess_threshold_numbers(table),
+        weight_numbers=_matrix_weight_unit_numbers(table),
+        has_weight_unit=_matrix_has_weight_unit(table),
+    )
+    return labeled + selected
 
 
 def _normalize_brackets(brackets: list[dict]) -> list[dict]:
@@ -5095,13 +5336,8 @@ def _build_rules_from_matrix_table(table: dict, origin_by_rule: dict | None = No
 
     region_col = _pricing_dimension_column(table)
     uf_col = next((col for col in columns if _is_destination_uf_column(col)), None)
-    range_cols = [
-        (col, parsed)
-        for col in columns
-        if not _is_excess_column(col)
-        for parsed in [_parse_range_from_label(col)]
-        if parsed is not None
-    ]
+    range_cols = _matrix_range_columns(table)
+    unitless_gap = _bounds_have_internal_gap([bounds for _col, bounds in _unitless_range_pairs(range_cols)])
     direct_kg_col = next((col for col in columns if _is_direct_kg_column(col)), None)
     direct_ton_col = next((col for col in columns if _is_direct_ton_column(col)), None)
     excess_col = next((col for col in columns if _is_excess_column(col)), None)
@@ -5173,8 +5409,15 @@ def _build_rules_from_matrix_table(table: dict, origin_by_rule: dict | None = No
                     )
                 )
                 continue
+        unitless_incomplete = unitless_gap or any(
+            _parse_brazilian_money(row.get(col)) is None for col, _bounds in _unitless_range_pairs(range_cols)
+        )
         brackets = []
         for col, parsed_range in range_cols:
+            # Faixa sem unidade desconectada ou sem tarifa não entra na normalização.
+            # Faixa com unidade permanece no fluxo anterior.
+            if unitless_incomplete and _parse_range_from_label(col) is None:
+                continue
             value = _parse_brazilian_money(row.get(col))
             if value is None:
                 continue
@@ -5451,9 +5694,9 @@ def _table_rows(table: dict) -> list:
 
 
 def _table_is_pricing_shaped(table: dict) -> bool:
+    if _matrix_range_columns(table):
+        return True
     for column in _table_columns(table):
-        if _parse_range_from_label(column) is not None:
-            return True
         if _is_excess_column(column) or _is_direct_kg_column(column) or _is_direct_ton_column(column):
             return True
         if _is_value_column(column):
@@ -5469,9 +5712,9 @@ def _table_block_has_no_executable_tariff(table: dict) -> bool:
     Nome de coluna como Valor não basta para exigir regra no gate.
     """
     columns = _table_columns(table)
+    if _matrix_range_columns(table):
+        return False
     for column in columns:
-        if _parse_range_from_label(column) is not None:
-            return False
         if _is_excess_column(column) or _is_direct_kg_column(column) or _is_direct_ton_column(column):
             return False
         if "peso" in _normalize_coverage_header(column):
@@ -5986,7 +6229,19 @@ def _inspect_pricing_table_cells(table: dict, table_index: int, findings: list[d
         direct_kg_col = next((col for col in columns if _is_direct_kg_column(col)), None)
         direct_ton_col = next((col for col in columns if _is_direct_ton_column(col)), None)
         excess_col = next((col for col in columns if _is_excess_column(col)), None)
-        range_cols = [col for col in columns if _parse_range_from_label(col) is not None and not _is_excess_column(col)]
+        range_pairs = _matrix_range_columns(table)
+        range_cols = [col for col, _parsed in range_pairs]
+        unitless_pairs = _unitless_range_pairs(range_pairs)
+        if _bounds_have_internal_gap([bounds for _col, bounds in unitless_pairs]):
+            _add_pricing_finding(
+                findings,
+                seen,
+                kind="invalid_range",
+                source_ref=source_ref,
+                index=table_index,
+                field="brackets",
+                label=table.get("table_title") or "Faixas",
+            )
         for row_index, row in enumerate(rows):
             if not isinstance(row, dict):
                 continue
@@ -6012,6 +6267,16 @@ def _inspect_pricing_table_cells(table: dict, table_index: int, findings: list[d
                     )
                 raw = row.get(column)
                 if _cell_is_blank(raw):
+                    if parsed_header is None:
+                        _add_pricing_finding(
+                            findings,
+                            seen,
+                            kind="invalid_range",
+                            source_ref=row_ref,
+                            index=row_index,
+                            field=column,
+                            label=region or column,
+                        )
                     continue
                 if _executable_tariff_amount(raw) is None:
                     _add_pricing_finding(
@@ -6686,7 +6951,7 @@ def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
             )
         region_col = _selected_region_column(table)
         columns = _table_columns(table)
-        range_cols = [col for col in columns if _parse_range_from_label(col) is not None and not _is_excess_column(col)]
+        range_cols = [col for col, _parsed in _matrix_range_columns(table)]
         direct_kg_col = next((col for col in columns if _is_direct_kg_column(col)), None)
         direct_ton_col = next((col for col in columns if _is_direct_ton_column(col)), None)
         for row_index, row in enumerate(_table_rows(table)):
