@@ -412,6 +412,92 @@ def evaluate_comparison_chat_availability(
     return resolve_chat_availability(state, calc_status=status_payload)
 
 
+SNAPSHOT_NOT_AUTHORIZED = "comparison_not_authorized"
+SNAPSHOT_UNAVAILABLE = "snapshot_unavailable"
+SNAPSHOT_OBSOLETE = "snapshot_obsolete"
+SNAPSHOT_MISMATCH = "snapshot_mismatch"
+
+
+def authorize_comparison_snapshot_identity(
+    *,
+    session_obj,
+    conta_id: int,
+    usuario_id: int,
+    franquia_id: int,
+    comparison_id: str | None = None,
+) -> dict[str, Any]:
+    """Confere conta, usuário e comparação vigente.
+
+    Não carrega resultado, não lê arquivo e não escolhe consulta. Ausência de
+    identidade carimbada no estado não autoriza a comparação.
+    """
+
+    if (
+        type(conta_id) is not int
+        or type(usuario_id) is not int
+        or type(franquia_id) is not int
+        or conta_id <= 0
+        or usuario_id <= 0
+        or franquia_id <= 0
+    ):
+        return {"error_code": SNAPSHOT_NOT_AUTHORIZED, "comparison_id": None}
+    state = get_comparison_state(session_obj)
+    if not isinstance(state, dict):
+        return {"error_code": SNAPSHOT_NOT_AUTHORIZED, "comparison_id": None}
+    from app.agente_compara_chat_contracts import ChatContractError, canonical_comparison_id
+    from app.cleiton_doc_escopo import record_matches_explicit_scope
+
+    scope = {"conta_id": conta_id, "franquia_id": franquia_id, "usuario_id": usuario_id}
+    if not record_matches_explicit_scope(state, scope):
+        return {"error_code": SNAPSHOT_NOT_AUTHORIZED, "comparison_id": None}
+    if (
+        type(state.get("conta_id")) is not int
+        or type(state.get("usuario_id")) is not int
+        or type(state.get("franquia_id")) is not int
+        or state.get("conta_id") != conta_id
+        or state.get("usuario_id") != usuario_id
+        or state.get("franquia_id") != franquia_id
+    ):
+        return {"error_code": SNAPSHOT_NOT_AUTHORIZED, "comparison_id": None}
+    session_comparison = str(state.get("comparison_id") or "")
+    requested = (comparison_id or "").strip()
+    if requested and requested != session_comparison:
+        return {"error_code": SNAPSHOT_NOT_AUTHORIZED, "comparison_id": None}
+    try:
+        canonical_comparison_id(session_comparison)
+    except ChatContractError:
+        return {"error_code": SNAPSHOT_NOT_AUTHORIZED, "comparison_id": None}
+    return {"error_code": None, "comparison_id": session_comparison}
+
+
+def official_snapshot_release_error(status_payload: dict | None) -> str | None:
+    """Diz se o resultado READY pode ser lido. Não devolve o objeto reidratado.
+
+    O ``result`` do status operacional é uma reidratação. Ele só indica que o
+    serviço oficial liberou o artefato. O checksum do executor continua sendo
+    o do artefato armazenado, não o deste objeto.
+    """
+
+    if not isinstance(status_payload, dict):
+        return SNAPSHOT_UNAVAILABLE
+    if bool(status_payload.get("stale")):
+        return SNAPSHOT_OBSOLETE
+    if str(status_payload.get("status") or "") != STEP_CALCULATION_READY:
+        return SNAPSHOT_UNAVAILABLE
+    from app.agente_compara_calculation_execution_service import (
+        BILLING_STATUS_APPLIED,
+        ERROR_RESULT_CORRUPT_PUBLIC,
+    )
+
+    if str(status_payload.get("billing_status") or "") != BILLING_STATUS_APPLIED:
+        return SNAPSHOT_UNAVAILABLE
+    if status_payload.get("ok") is False or status_payload.get("result") is None:
+        if str(status_payload.get("error_code") or "") == ERROR_RESULT_CORRUPT_PUBLIC:
+            return SNAPSHOT_MISMATCH
+        return SNAPSHOT_UNAVAILABLE
+    return None
+
+
 def normalize_ui_context(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}

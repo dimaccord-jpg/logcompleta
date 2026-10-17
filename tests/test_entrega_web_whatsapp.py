@@ -1304,12 +1304,9 @@ def test_comparacao_cacheada_nao_classifica_de_novo(ctx, monkeypatch):
         contagem["decidir"] += 1
         return False
 
-    def _gerar(*_args, **_kwargs):
-        contagem["gerar"] += 1
-        return SimpleNamespace(text="Cobertura da tabela Alpha.", usage_metadata=None)
-
     monkeypatch.setattr(entrega, "decidir_enviar_para_meu_whatsapp", _decidir)
-    monkeypatch.setattr(comparacao, "cleiton_governed_generate_content", _gerar)
+    geracoes = []
+    _stub_selecao_da_comparacao(monkeypatch, comparacao, geracoes, "Cobertura da tabela Alpha.")
 
     class _Sessao(dict):
         modified = False
@@ -1331,7 +1328,51 @@ def test_comparacao_cacheada_nao_classifica_de_novo(ctx, monkeypatch):
     )
     assert primeira.get("answer")
     assert segunda.get("cached") is True
-    assert contagem == {"decidir": 1, "gerar": 1}
+    assert contagem["decidir"] == 1
+    assert len(geracoes) == 2
+
+
+def _stub_selecao_da_comparacao(monkeypatch, comparacao, geracoes, resposta):
+    import json
+
+    plano = json.dumps(
+        {
+            "selection_version": "comparison_chat_selection_v1",
+            "action": "query",
+            "clarification": None,
+            "catalog_version": "comparison_chat_query_catalog_v1",
+            "queries": [{"query_id": "q1", "type": "official_summary"}],
+        },
+        ensure_ascii=False,
+    )
+
+    def _gerar(*_args, **kwargs):
+        geracoes.append(True)
+        contents = str(kwargs.get("contents") or "")
+        if "Seleção de consultas" in contents:
+            return SimpleNamespace(text=plano, usage_metadata=None)
+        return SimpleNamespace(text=resposta, usage_metadata=None)
+
+    def _autoriza(**kwargs):
+        return {"error_code": None, "comparison_id": kwargs.get("comparison_id") or "cmp"}
+
+    monkeypatch.setattr(comparacao, "cleiton_governed_generate_content", _gerar)
+    monkeypatch.setattr(comparacao, "authorize_comparison_snapshot_identity", _autoriza)
+    monkeypatch.setattr(
+        comparacao,
+        "execute_comparison_chat_analytical_plan",
+        lambda **_kwargs: {
+            "status": "ok",
+            "error_code": None,
+            "publication": {
+                "publication_version": "comparison_chat_publication_v1",
+                "status": "ok",
+                "evidence_sufficient": True,
+                "queries": [],
+                "losses": [],
+            },
+        },
+    )
 
 
 def _gates_comparacao(monkeypatch, comparacao):
@@ -1430,12 +1471,7 @@ def test_comparacao_negativo_segue_chat(ctx, monkeypatch):
     _cliente_falso(monkeypatch, comparacao)
     _gates_comparacao(monkeypatch, comparacao)
     geracoes = []
-
-    def _gerar(*_args, **_kwargs):
-        geracoes.append(True)
-        return SimpleNamespace(text="A tabela Alpha cobre mais faixas.", usage_metadata=None)
-
-    monkeypatch.setattr(comparacao, "cleiton_governed_generate_content", _gerar)
+    _stub_selecao_da_comparacao(monkeypatch, comparacao, geracoes, "A tabela Alpha cobre mais faixas.")
     resposta = comparacao.chat_agente_compara_comparison_reply(
         "Explique como funciona o WhatsApp.",
         [{"role": "model", "content": TEXTO}],
@@ -1443,7 +1479,7 @@ def test_comparacao_negativo_segue_chat(ctx, monkeypatch):
         usuario=user,
     )
     assert resposta["answer"] == "A tabela Alpha cobre mais faixas."
-    assert geracoes == [True]
+    assert geracoes == [True, True]
 
 
 def test_comparacao_falha_tecnica_nao_gera_resposta_logistica(ctx, monkeypatch):

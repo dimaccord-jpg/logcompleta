@@ -1,8 +1,10 @@
 """
 Backend do chat inteligente do AgenteCompara baseado na comparação vigente.
 
-Uma pergunta válida após READY => exatamente uma chamada ao Gemini.
-Falhas de provider/configuração retornam erro estruturado (nunca HTTP 200 falso).
+Pergunta válida após READY, sem usuário operacional: uma chamada ao Gemini.
+Com usuário operacional autenticado: uma seleção tipada e, quando o plano é
+válido, uma resposta fundamentada na publicação da ponte. No máximo essas duas
+gerações. Falhas de provider retornam erro estruturado (nunca HTTP 200 falso).
 Pré-READY é bloqueado pela rota (zero Gemini).
 Isolado de Cleide/audit_bi.
 """
@@ -23,11 +25,30 @@ from app.agente_compara_chat_context_service import (
     SCOPE_DECISION,
     SCOPE_OVERVIEW,
     AgenteComparaChatContextError,
+    authorize_comparison_snapshot_identity,
     build_comparison_chat_context,
     evaluate_comparison_chat_availability,
     resolve_chat_capability,
 )
-from app.agente_compara_chat_prompt import build_comparison_chat_user_prompt
+from app.agente_compara_chat_prompt import (
+    build_comparison_chat_selection_prompt,
+    build_comparison_chat_user_prompt,
+)
+from app.agente_compara_chat_semantic_selection import (
+    MSG_COMPARISON_NOT_AUTHORIZED,
+    MSG_COMPARISON_UNAVAILABLE,
+    authorized_tables_from_context,
+    copy_publication,
+    load_confirmed_referents,
+    operational_identity,
+    publication_is_answerable,
+    referents_for_prompt,
+    remember_confirmed_referents,
+    resolve_semantic_selection,
+    selection_catalog_document,
+    selective_chat_required,
+    user_message_for_bridge_error,
+)
 from app.agente_compara_comparison_state import get_comparison_state
 from app.agente_compara_doc_service import (
     AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
@@ -524,18 +545,32 @@ def _extract_response_text(response: Any) -> str:
     return cleaned
 
 
-def _run_one_gemini_call(
+def _selection_response_config():
+    """JSON sem ferramentas. A seleção não dispara execução automática no Gemini."""
+
+    try:
+        from google.genai import types
+
+        return types.GenerateContentConfig(
+            temperature=0,
+            candidate_count=1,
+            max_output_tokens=2048,
+            response_mime_type="application/json",
+            tools=[],
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
+    except Exception:
+        logger.info("comparison_chat_selection_config_unavailable")
+        return None
+
+
+def _generate_governed_text(
     *,
     prompt: str,
-    session_obj,
-    request_id: str | None,
-    scope_key: str,
-    scope: str,
-    basis: dict,
-    warnings: list[str],
-    decision_request: bool,
     usuario=None,
-) -> dict:
+    config=None,
+    billable_stage: str = "billable_ai_gate",
+) -> tuple[str, str]:
     client = _get_client()
     model = resolve_comparison_chat_model()
     try:
@@ -543,6 +578,7 @@ def _run_one_gemini_call(
             client,
             model=model,
             contents=prompt,
+            config=config,
             agent="agente_compara",
             flow_type=AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
             api_key_label=_api_key_label(),
@@ -557,7 +593,7 @@ def _run_one_gemini_call(
             exc.mensagem_usuario or MSG_PROVIDER_REQUEST_FAILED,
             retryable=False,
             http_status=403 if isinstance(exc, BillableAiAdmissionBlocked) else 503,
-            stage="billable_ai_gate",
+            stage=billable_stage,
             cause=exc,
         ) from exc
     except ComparisonChatProviderError:
@@ -571,12 +607,29 @@ def _run_one_gemini_call(
             exc.__class__.__name__,
         )
         raise ComparisonChatProviderRequestError(cause=exc) from exc
+    return _extract_response_text(response), model
 
-    try:
-        text = _extract_response_text(response)
-    except ComparisonChatProviderError:
-        raise
 
+def _run_one_gemini_call(
+    *,
+    prompt: str,
+    session_obj,
+    request_id: str | None,
+    scope_key: str,
+    scope: str,
+    basis: dict,
+    warnings: list[str],
+    decision_request: bool,
+    usuario=None,
+    config=None,
+    billable_stage: str = "billable_ai_gate",
+) -> dict:
+    text, model = _generate_governed_text(
+        prompt=prompt,
+        usuario=usuario,
+        config=config,
+        billable_stage=billable_stage,
+    )
     payload = {
         "answer": finalize_comparison_chat_answer(text, decision_request=decision_request),
         "flow_type": AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
@@ -671,6 +724,310 @@ def responder_entrega_whatsapp_se_pedida(
         "deterministic": True,
         "chat_available": True,
     }
+
+
+def _cache_deterministic_answer(
+    *,
+    answer: str,
+    session_obj,
+    request_id: str | None,
+    scope_key: str,
+    scope: str,
+    basis: dict,
+    warnings: list[str],
+    usuario,
+    comparison_id: str | None,
+    started: float,
+    merged_ui: dict,
+    stage: str,
+) -> dict:
+    payload = {
+        "answer": finalize_comparison_chat_answer(answer, decision_request=False),
+        "flow_type": AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
+        "deterministic": True,
+        "scope": scope,
+        "basis": basis,
+        "warnings": warnings,
+        "chat_available": True,
+        "capability": CAPABILITY_READY,
+    }
+    cache_comparison_chat_response(session_obj, request_id or "", payload, scope_key=scope_key)
+    _lembrar_resposta_comparacao(usuario, comparison_id, payload.get("answer") or "")
+    _safe_observability(
+        comparison_id=comparison_id,
+        request_id=request_id,
+        scope=scope,
+        table_count=int(basis.get("table_count") or 0),
+        row_count=int(basis.get("row_count_selected") or 0),
+        memory_count=int(basis.get("memory_count_selected") or 0),
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        model=None,
+        success=True,
+        fallback=True,
+        error=None,
+        selected_widget=(merged_ui.get("selected_widget") if isinstance(merged_ui, dict) else None),
+        stage=stage,
+        retryable=False,
+    )
+    return payload
+
+
+def _reply_from_semantic_selection(
+    *,
+    user_message: str,
+    history_slice: list[dict],
+    context: dict,
+    session_obj,
+    usuario,
+    request_id: str | None,
+    scope_key: str,
+    scope: str,
+    decision_request: bool,
+    basis: dict,
+    warnings: list[str],
+    started: float,
+    merged_ui: dict,
+) -> dict:
+    """Uma seleção e, no máximo, uma resposta. Sem terceira geração."""
+
+    comparison = context.get("comparison") if isinstance(context.get("comparison"), dict) else {}
+    comparison_id = str(comparison.get("comparison_id") or "").strip() or None
+    identity = operational_identity(usuario)
+    if identity is None:
+        return _cache_deterministic_answer(
+            answer=MSG_COMPARISON_NOT_AUTHORIZED,
+            session_obj=session_obj,
+            request_id=request_id,
+            scope_key=scope_key,
+            scope=scope,
+            basis=basis,
+            warnings=warnings,
+            usuario=usuario,
+            comparison_id=comparison_id,
+            started=started,
+            merged_ui=merged_ui,
+            stage="semantic_not_authorized",
+        )
+    conta_id, usuario_id, franquia_id = identity
+    authorization = authorize_comparison_snapshot_identity(
+        session_obj=session_obj,
+        conta_id=conta_id,
+        usuario_id=usuario_id,
+        franquia_id=franquia_id,
+        comparison_id=comparison_id,
+    )
+    if authorization.get("error_code") or not authorization.get("comparison_id"):
+        return _cache_deterministic_answer(
+            answer=MSG_COMPARISON_NOT_AUTHORIZED,
+            session_obj=session_obj,
+            request_id=request_id,
+            scope_key=scope_key,
+            scope=scope,
+            basis=basis,
+            warnings=warnings,
+            usuario=usuario,
+            comparison_id=comparison_id,
+            started=started,
+            merged_ui=merged_ui,
+            stage="semantic_not_authorized",
+        )
+    authorized_comparison_id = str(authorization["comparison_id"])
+    tables = authorized_tables_from_context(context)
+    referents = referents_for_prompt(load_confirmed_referents(session_obj, authorized_comparison_id))
+    try:
+        selection_prompt = build_comparison_chat_selection_prompt(
+            user_message=user_message,
+            history_slice=history_slice,
+            referents=referents,
+            authorized_tables=tables,
+            catalog=selection_catalog_document(),
+        )
+    except Exception as exc:
+        logger.exception("comparison chat selection prompt failed: %s", exc.__class__.__name__)
+        return {
+            "answer": "",
+            "flow_type": AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
+            "deterministic": True,
+            "error": ERROR_PROMPT_BUILD_FAILED,
+            "error_code": ERROR_PROMPT_BUILD_FAILED,
+            "message": MSG_PROMPT_BUILD_FAILED,
+            "http_status": 500,
+            "chat_available": True,
+            "capability": CAPABILITY_READY,
+            "retryable": False,
+            "scope": scope,
+            "basis": basis,
+        }
+    try:
+        selection_text, _model = _generate_governed_text(
+            prompt=selection_prompt,
+            usuario=usuario,
+            config=_selection_response_config(),
+            billable_stage="semantic_selection",
+        )
+    except ComparisonChatProviderError as exc:
+        return _provider_failure(
+            exc,
+            comparison_id=authorized_comparison_id,
+            request_id=request_id,
+            scope=scope,
+            basis=basis,
+            warnings=warnings,
+            started=started,
+            merged_ui=merged_ui,
+            observability_stage="semantic_selection",
+        )
+    selection = resolve_semantic_selection(selection_text, authorized_tables=tables)
+    if selection.action != "query" or not isinstance(selection.plan, dict):
+        return _cache_deterministic_answer(
+            answer=selection.clarification or MSG_COMPARISON_UNAVAILABLE,
+            session_obj=session_obj,
+            request_id=request_id,
+            scope_key=scope_key,
+            scope=scope,
+            basis=basis,
+            warnings=warnings,
+            usuario=usuario,
+            comparison_id=authorized_comparison_id,
+            started=started,
+            merged_ui=merged_ui,
+            stage="semantic_clarification" if selection.action == "clarify" else "semantic_malformed",
+        )
+    published = execute_comparison_chat_analytical_plan(
+        session_obj=session_obj,
+        usuario=usuario,
+        plan=selection.plan,
+        comparison_id=authorized_comparison_id,
+    )
+    publication = published.get("publication") if isinstance(published, dict) else None
+    if not isinstance(published, dict) or published.get("status") != "ok" or not publication_is_answerable(publication):
+        return _cache_deterministic_answer(
+            answer=user_message_for_bridge_error(published.get("error_code") if isinstance(published, dict) else None),
+            session_obj=session_obj,
+            request_id=request_id,
+            scope_key=scope_key,
+            scope=scope,
+            basis=basis,
+            warnings=warnings,
+            usuario=usuario,
+            comparison_id=authorized_comparison_id,
+            started=started,
+            merged_ui=merged_ui,
+            stage="semantic_execution",
+        )
+    safe_publication = copy_publication(publication)
+    try:
+        answer_prompt = build_comparison_chat_user_prompt(
+            user_message=user_message,
+            history_slice=history_slice,
+            context_payload={},
+            scope=scope,
+            evidence_publication=safe_publication,
+            confirmed_referents=referents,
+            authorized_tables=tables,
+        )
+    except Exception as exc:
+        logger.exception("comparison chat answer prompt failed: %s", exc.__class__.__name__)
+        return {
+            "answer": "",
+            "flow_type": AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
+            "deterministic": True,
+            "error": ERROR_PROMPT_BUILD_FAILED,
+            "error_code": ERROR_PROMPT_BUILD_FAILED,
+            "message": MSG_PROMPT_BUILD_FAILED,
+            "http_status": 500,
+            "chat_available": True,
+            "capability": CAPABILITY_READY,
+            "retryable": False,
+            "scope": scope,
+            "basis": basis,
+        }
+    try:
+        result = _run_one_gemini_call(
+            prompt=answer_prompt,
+            session_obj=session_obj,
+            request_id=request_id,
+            scope_key=scope_key,
+            scope=scope,
+            basis=basis,
+            warnings=warnings,
+            decision_request=decision_request,
+            usuario=usuario,
+            billable_stage="answer_generation",
+        )
+    except ComparisonChatProviderError as exc:
+        return _provider_failure(
+            exc,
+            comparison_id=authorized_comparison_id,
+            request_id=request_id,
+            scope=scope,
+            basis=basis,
+            warnings=warnings,
+            started=started,
+            merged_ui=merged_ui,
+            observability_stage="answer_generation",
+        )
+    remember_confirmed_referents(
+        session_obj,
+        authorized_comparison_id,
+        safe_publication,
+        tables,
+        referents,
+        referent_criterion=selection.referent_criterion,
+    )
+    result["chat_available"] = True
+    result["capability"] = CAPABILITY_READY
+    _safe_observability(
+        comparison_id=authorized_comparison_id,
+        request_id=request_id,
+        scope=scope,
+        table_count=int(basis.get("table_count") or 0),
+        row_count=int(basis.get("row_count_selected") or 0),
+        memory_count=int(basis.get("memory_count_selected") or 0),
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        model=result.get("model"),
+        success=True,
+        fallback=False,
+        error=None,
+        selected_widget=(merged_ui.get("selected_widget") if isinstance(merged_ui, dict) else None),
+        stage="provider_response",
+        retryable=False,
+    )
+    _lembrar_resposta_comparacao(usuario, authorized_comparison_id, result.get("answer") or "")
+    return result
+
+
+def _provider_failure(
+    exc: ComparisonChatProviderError,
+    *,
+    comparison_id: str | None,
+    request_id: str | None,
+    scope: str,
+    basis: dict,
+    warnings: list[str],
+    started: float,
+    merged_ui: dict,
+    observability_stage: str,
+) -> dict:
+    payload = _provider_error_payload(exc, scope=scope, basis=basis, warnings=warnings)
+    _safe_observability(
+        comparison_id=comparison_id,
+        request_id=request_id,
+        scope=scope,
+        table_count=int(basis.get("table_count") or 0),
+        row_count=int(basis.get("row_count_selected") or 0),
+        memory_count=int(basis.get("memory_count_selected") or 0),
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        model=None,
+        success=False,
+        fallback=False,
+        error=exc.error_code,
+        selected_widget=(merged_ui.get("selected_widget") if isinstance(merged_ui, dict) else None),
+        stage=observability_stage or exc.stage,
+        retryable=exc.retryable,
+        exception_class=(exc.__cause__.__class__.__name__ if exc.__cause__ else exc.__class__.__name__),
+    )
+    return payload
 
 
 def chat_agente_compara_comparison_reply(
@@ -897,6 +1254,23 @@ def chat_agente_compara_comparison_reply(
         )
         return payload
 
+    if selective_chat_required(usuario):
+        return _reply_from_semantic_selection(
+            user_message=clean_message,
+            history_slice=history_slice,
+            context=context,
+            session_obj=session_obj,
+            usuario=usuario,
+            request_id=request_id,
+            scope_key=scope_key,
+            scope=scope,
+            decision_request=decision_request,
+            basis=basis,
+            warnings=warnings,
+            started=started,
+            merged_ui=merged_ui,
+        )
+
     try:
         prompt = build_comparison_chat_user_prompt(
             user_message=clean_message,
@@ -990,3 +1364,27 @@ def chat_agente_compara_comparison_reply(
     )
     _lembrar_resposta_comparacao(usuario, comparison.get("comparison_id"), result.get("answer") or "")
     return result
+
+
+def execute_comparison_chat_analytical_plan(
+    *,
+    session_obj,
+    usuario,
+    plan,
+    comparison_id: str | None = None,
+    operation_id: str | None = None,
+) -> dict[str, Any]:
+    """Executa um plano já validado pela ponte analítica.
+
+    Não escolhe consultas, não chama Gemini e não grava operação.
+    """
+
+    from app.agente_compara_chat_analytical_bridge import execute_authorized_analytical_plan
+
+    return execute_authorized_analytical_plan(
+        session_obj=session_obj,
+        usuario=usuario,
+        plan=plan,
+        comparison_id=comparison_id,
+        operation_id=operation_id,
+    )
