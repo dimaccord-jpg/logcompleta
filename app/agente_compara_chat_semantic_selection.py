@@ -21,14 +21,18 @@ from typing import Any
 from app.agente_compara_chat_query_catalog import (
     BODY_FIELDS,
     CATALOG_VERSION,
+    COMPONENT_CODES,
     FILTER_FIELDS,
     MAX_PAGE_SIZE,
     MAX_QUERIES_PER_PLAN,
+    OFFICIAL_DIAGNOSTIC_CODES,
+    OFFICIAL_UF_CODES,
     PAGINATED_QUERY_TYPES,
     PUBLIC_UNIVERSES,
     PUBLICATION_VERSION,
     QUERY_TYPES,
     SORTS_BY_TYPE,
+    WEIGHT_BANDS_VERSION,
     QueryCatalogError,
     validate_query_plan,
 )
@@ -97,6 +101,47 @@ MSG_COMPARISON_UNAVAILABLE = (
 )
 MSG_COMPARISON_NOT_AUTHORIZED = (
     "Não foi possível consultar a comparação autorizada nesta conta."
+)
+
+_SELECTION_REJECTION_CODES = frozenset(
+    {
+        "invalid_json",
+        "missing_field",
+        "extra_field",
+        "wrong_version",
+        "wrong_action",
+        "clarify_incoherent",
+        "invalid_query",
+        "invalid_filter",
+        "invalid_referent_criterion",
+    }
+)
+_CATALOG_REJECTION_CODES = {
+    "unknown_field": "extra_field",
+    "invalid_catalog_version": "wrong_version",
+    "invalid_filter": "invalid_filter",
+    "invalid_uf": "invalid_filter",
+    "invalid_row_index": "invalid_filter",
+    "invalid_weight_band": "invalid_filter",
+    "invalid_table_reference": "invalid_filter",
+    "invalid_field_selection": "invalid_query",
+    "invalid_page": "invalid_query",
+    "invalid_sort": "invalid_query",
+    "invalid_query": "invalid_query",
+    "invalid_query_type": "invalid_query",
+    "plan_too_large": "invalid_query",
+    "too_many_queries": "invalid_query",
+    "forbidden_expression": "invalid_query",
+    "invalid_limit": "invalid_query",
+}
+_QUERY_PROPERTY_ORDER = ("query_id", "type", "filters", "fields", "page", "sort")
+_SELECTION_PROPERTY_ORDER = (
+    "selection_version",
+    "action",
+    "clarification",
+    "catalog_version",
+    "queries",
+    "referent_criterion",
 )
 
 _BRIDGE_UNAVAILABLE = frozenset(
@@ -302,24 +347,94 @@ def referents_confirmed_by_publication(
     return current
 
 
-def resolve_semantic_selection(text: str, *, authorized_tables: list[dict[str, Any]]) -> SemanticSelection:
+def selection_response_json_schema() -> dict[str, Any]:
+    """JSON Schema do envelope, com as chaves aceitas em responseJsonSchema.
+
+    O transporte é response_json_schema. O caminho response_schema do SDK
+    projeta additional_properties, property_ordering e min_items em snake_case,
+    e a API rejeita esse corpo. Este documento só orienta a geração: o
+    validador local continua fechado e o catálogo não vira plano.
+    """
+
+    queries = {
+        "type": "array",
+        "minItems": 0,
+        "maxItems": MAX_QUERIES_PER_PLAN,
+        "description": (
+            "Lista de consultas. Cada item exige query_id e type do catálogo. "
+            "filters, quando presente, é objeto. A lista fica vazia somente em clarify."
+        ),
+        "items": {"anyOf": [_query_response_schema(query_type) for query_type in sorted(QUERY_TYPES)]},
+    }
+    properties = {
+        "selection_version": {
+            "type": "string",
+            "enum": [SELECTION_VERSION],
+            "description": "Valor fixo comparison_chat_selection_v1.",
+        },
+        "action": {
+            "type": "string",
+            "enum": sorted(_SELECTION_ACTIONS),
+            "description": "query executa o plano. clarify pede esclarecimento e não traz consultas.",
+        },
+        "clarification": _nullable({"type": "string"}),
+        "catalog_version": {
+            "type": "string",
+            "enum": [CATALOG_VERSION],
+            "description": "Valor fixo comparison_chat_query_catalog_v1.",
+        },
+        "queries": queries,
+        "referent_criterion": _nullable(
+            {
+                "type": "string",
+                "enum": sorted(REFERENT_CRITERIA),
+                "description": (
+                    "Somente lowest_comparable_freight ou highest_savings. "
+                    "Null quando a pergunta não definir o critério."
+                ),
+            }
+        ),
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "propertyOrdering": list(_SELECTION_PROPERTY_ORDER),
+        "required": ["selection_version", "action", "catalog_version", "queries"],
+        "description": (
+            "Envelope comparison_chat_selection_v1. "
+            "Não devolva o documento do catálogo, SQL nem campos fora deste objeto."
+        ),
+        "properties": properties,
+    }
+
+
+def resolve_semantic_selection(
+    text: str,
+    *,
+    authorized_tables: list[dict[str, Any]],
+    finish_reason: str | None = None,
+) -> SemanticSelection:
     """Aceita só o envelope comparison_chat_selection_v1 completo."""
 
     document = _json_object(text)
-    if not isinstance(document, dict) or not _selection_envelope(document):
-        if isinstance(document, dict) and not _optional_referent_criterion(document)[0]:
-            logger.info("comparison_chat_selection_rejected code=invalid_referent_criterion")
+    if not isinstance(document, dict):
+        _log_selection_rejection("invalid_json", finish_reason)
+        return SemanticSelection("malformed", clarification=MSG_SELECTION_MALFORMED)
+    rejection = _selection_rejection_code(document)
+    if rejection:
+        _log_selection_rejection(rejection, finish_reason)
         return SemanticSelection("malformed", clarification=MSG_SELECTION_MALFORMED)
     criterion = _optional_referent_criterion(document)[1]
     if document.get("action") == "clarify":
         if document.get("queries") != []:
+            _log_selection_rejection("clarify_incoherent", finish_reason)
             return SemanticSelection("malformed", clarification=MSG_SELECTION_MALFORMED)
         return SemanticSelection("clarify", clarification=_safe_clarification(document.get("clarification")))
     plan = {"catalog_version": document.get("catalog_version"), "queries": document.get("queries")}
     try:
         validate_query_plan(plan)
     except QueryCatalogError as exc:
-        logger.info("comparison_chat_selection_rejected code=%s", exc.code)
+        _log_selection_rejection(_CATALOG_REJECTION_CODES.get(exc.code, "invalid_query"), finish_reason)
         return SemanticSelection("malformed", clarification=MSG_SELECTION_MALFORMED)
     if _plan_leaves_authorized_tables(plan, authorized_tables):
         return SemanticSelection("clarify", clarification=MSG_REFERENT_CLARIFICATION)
@@ -339,23 +454,143 @@ def user_message_for_bridge_error(error_code: str | None) -> str:
 def _selection_envelope(document: dict[str, Any] | None) -> bool:
     """Exige versão, ação, catálogo e coerência com as consultas. Não repara o JSON."""
 
+    return _selection_rejection_code(document) is None
+
+
+def _selection_rejection_code(document: dict[str, Any] | None) -> str | None:
+    """Um código estável, na primeira falha. Não descreve o conteúdo rejeitado."""
+
     if not isinstance(document, dict):
-        return False
-    if set(document) - _SELECTION_FIELDS or not _REQUIRED_SELECTION_FIELDS <= set(document):
-        return False
+        return "invalid_json"
+    keys = set(document)
+    if keys - _SELECTION_FIELDS:
+        return "extra_field"
+    if not _REQUIRED_SELECTION_FIELDS <= keys:
+        return "missing_field"
     if document.get("selection_version") != SELECTION_VERSION:
-        return False
+        return "wrong_version"
     if document.get("action") not in _SELECTION_ACTIONS:
-        return False
+        return "wrong_action"
     if document.get("catalog_version") != CATALOG_VERSION:
-        return False
+        return "wrong_version"
     if not isinstance(document.get("queries"), list):
-        return False
-    if "clarification" in document and document.get("clarification") is not None:
-        if not isinstance(document.get("clarification"), str):
-            return False
+        return "invalid_query"
+    clarification = document.get("clarification")
+    if "clarification" in document and clarification is not None and not isinstance(clarification, str):
+        return "invalid_query"
     accepted, _criterion = _optional_referent_criterion(document)
-    return accepted
+    if not accepted:
+        return "invalid_referent_criterion"
+    return None
+
+
+def _log_selection_rejection(code: str, finish_reason: str | None) -> None:
+    stable = code if code in _SELECTION_REJECTION_CODES else "invalid_query"
+    reason = _public_finish_reason(finish_reason)
+    if reason:
+        logger.info("comparison_chat_selection_rejected code=%s finish_reason=%s", stable, reason)
+        return
+    logger.info("comparison_chat_selection_rejected code=%s", stable)
+
+
+def _public_finish_reason(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    token = value.strip()
+    if not token or len(token) > 64 or any(char.isspace() for char in token):
+        return None
+    if not all(char.isalnum() or char == "_" for char in token):
+        return None
+    return token
+
+
+def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
+def _query_response_schema(query_type: str) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "query_id": {
+            "type": "string",
+            "description": "Identificador obrigatório da consulta.",
+        },
+        "type": {
+            "type": "string",
+            "enum": [query_type],
+            "description": "Tipo pertencente ao catálogo fechado.",
+        },
+    }
+    filters = _filter_response_schema(query_type)
+    if filters is not None:
+        properties["filters"] = _nullable(filters)
+    properties["fields"] = _nullable(
+        {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "enum": sorted(BODY_FIELDS[query_type])},
+        }
+    )
+    if query_type in PAGINATED_QUERY_TYPES:
+        properties["page"] = _nullable(
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "offset": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                },
+            }
+        )
+    sorts = sorted(SORTS_BY_TYPE[query_type])
+    if sorts:
+        properties["sort"] = _nullable({"type": "string", "enum": sorts})
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "propertyOrdering": [name for name in _QUERY_PROPERTY_ORDER if name in properties],
+        "required": ["query_id", "type"],
+        "properties": properties,
+    }
+
+
+def _filter_response_schema(query_type: str) -> dict[str, Any] | None:
+    allowed = FILTER_FIELDS[query_type]
+    if not allowed:
+        return None
+    properties: dict[str, Any] = {}
+    if "table_ids" in allowed:
+        properties["table_ids"] = {"type": "array", "items": {"type": "string"}}
+    if "row_indexes" in allowed:
+        properties["row_indexes"] = {"type": "array", "items": {"type": "integer"}}
+    if "component_codes" in allowed:
+        properties["component_codes"] = {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(COMPONENT_CODES)},
+        }
+    if "codes" in allowed:
+        properties["codes"] = {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(OFFICIAL_DIAGNOSTIC_CODES)},
+        }
+    if "ufs" in allowed:
+        properties["ufs"] = {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(OFFICIAL_UF_CODES)},
+        }
+    if "include_absent" in allowed:
+        properties["include_absent"] = {"type": "boolean"}
+    if "include_unusable" in allowed:
+        properties["include_unusable"] = {"type": "boolean"}
+    if "minimum_gap" in allowed:
+        properties["minimum_gap"] = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+    if "bands_version" in allowed:
+        properties["bands_version"] = {"type": "string", "enum": [WEIGHT_BANDS_VERSION]}
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "description": "Objeto de filtros deste tipo. Não é a lista de nomes do catálogo.",
+        "properties": properties,
+    }
 
 
 def _optional_referent_criterion(document: dict[str, Any]) -> tuple[bool, str | None]:

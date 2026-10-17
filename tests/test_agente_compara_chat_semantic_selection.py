@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import time
 from types import SimpleNamespace
 
@@ -23,6 +24,7 @@ from app.agente_compara_chat_semantic_selection import (
     referents_confirmed_by_publication,
     resolve_semantic_selection,
     selection_catalog_document,
+    selection_response_json_schema,
 )
 from app.agente_compara_comparison_state import AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY
 from app.run_agente_compara_comparison_chat import (
@@ -1323,3 +1325,222 @@ def test_absent_criterion_clears_the_previous_carrier(ctx, storage_env, monkeypa
     assert "referent_criterion" not in ready["session"][REFERENTS_SESSION_KEY]
     assert len(plans) == 2
     assert len(models.calls) == 4
+
+
+_SNAKE_SCHEMA_KEYS = {"additional_properties", "property_ordering", "min_items", "max_items"}
+_SECRET_SELECTION = "VALOR_SIGILOSO_238"
+
+
+def _schema_nodes(node):
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _schema_nodes(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _schema_nodes(item)
+
+
+def _assert_provider_schema(schema):
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["selection_version", "action", "catalog_version", "queries"]
+    assert set(schema["properties"]) == {
+        "selection_version",
+        "action",
+        "clarification",
+        "catalog_version",
+        "queries",
+        "referent_criterion",
+    }
+    assert schema["properties"]["selection_version"]["enum"] == [SELECTION_VERSION]
+    assert schema["properties"]["action"]["enum"] == ["clarify", "query"]
+    assert schema["properties"]["catalog_version"]["enum"] == [CATALOG_VERSION]
+    queries = schema["properties"]["queries"]
+    assert queries["type"] == "array"
+    variants = queries["items"]["anyOf"]
+    from app.agente_compara_chat_query_catalog import QUERY_TYPES
+
+    assert len(variants) == len(QUERY_TYPES)
+    seen_types = set()
+    for variant in variants:
+        assert variant["additionalProperties"] is False
+        assert variant["required"] == ["query_id", "type"]
+        query_type = variant["properties"]["type"]["enum"][0]
+        seen_types.add(query_type)
+        filters = variant["properties"].get("filters")
+        if filters is not None:
+            filter_schema = filters["anyOf"][0]
+            assert filter_schema["type"] == "object"
+            assert filter_schema["additionalProperties"] is False
+    assert seen_types == set(QUERY_TYPES)
+    criterion = schema["properties"]["referent_criterion"]["anyOf"][0]
+    assert criterion["enum"] == ["highest_savings", "lowest_comparable_freight"]
+    encoded = json.dumps(schema)
+    assert "publication_version" not in encoded
+    assert '"sorts"' not in encoded
+    assert '"paginated"' not in encoded
+    for node in _schema_nodes(schema):
+        assert _SNAKE_SCHEMA_KEYS.isdisjoint(node)
+
+
+def _rejection_lines(caplog):
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("comparison_chat_selection_rejected")
+    ]
+
+
+def test_total_savings_question_reaches_the_analytical_bridge(ctx, storage_env, monkeypatch):
+    del ctx, storage_env
+    ready = _ready_context(monkeypatch)
+    usuario = _usuario()
+    plan = [_query("economia_total", "official_summary")]
+
+    def handler(contents):
+        if "Seleção de consultas" in contents:
+            assert contents.rstrip().endswith("Qual foi a economia total?")
+            return SimpleNamespace(
+                text=_selection(plan),
+                candidates=[SimpleNamespace(finish_reason="STOP")],
+            )
+        return SimpleNamespace(text="A economia potencial está no resumo oficial.")
+
+    models, plans, publications = _install(monkeypatch, handler)
+    reply = _ask(ready, usuario, "Qual foi a economia total?", request_id="scrum238-economia")
+    assert reply.get("error") is None
+    assert reply["deterministic"] is False
+    assert plans == [{"catalog_version": CATALOG_VERSION, "queries": plan}]
+    assert publications[0]["queries"][0]["query_type"] == "official_summary"
+    assert len(models.calls) == 2
+    selection_config = models.calls[0]["config"]
+    dumped = selection_config.model_dump(exclude_none=True)
+    wire = selection_config.model_dump(exclude_none=True, by_alias=True)
+    assert dumped["response_mime_type"] == "application/json"
+    assert "response_schema" not in dumped
+    assert dumped["response_json_schema"] == selection_response_json_schema()
+    assert dumped["thinking_config"]["thinking_budget"] == 0
+    assert wire["responseJsonSchema"]["additionalProperties"] is False
+    assert "responseSchema" not in wire
+    assert wire["thinkingConfig"]["thinkingBudget"] == 0
+    assert models.calls[1]["config"] is None
+    _assert_provider_schema(dumped["response_json_schema"])
+
+
+def test_catalog_document_is_not_accepted_as_a_plan(ctx, storage_env, monkeypatch, caplog):
+    del ctx, storage_env
+    ready = _ready_context(monkeypatch)
+    usuario = _usuario()
+    catalog = selection_catalog_document()
+
+    def handler(contents):
+        assert "Seleção de consultas" in contents
+        return SimpleNamespace(text=json.dumps(catalog))
+
+    models, plans, _publications = _install(monkeypatch, handler)
+    import app.agente_compara_chat_semantic_selection as selection_mod
+
+    with caplog.at_level(logging.INFO, logger=selection_mod.logger.name):
+        reply = _ask(ready, usuario, "Qual foi a economia total?", request_id="scrum238-catalogo")
+    assert reply["deterministic"] is True
+    assert reply["answer"] == MSG_SELECTION_MALFORMED
+    assert plans == []
+    assert len(models.calls) == 1
+    lines = _rejection_lines(caplog)
+    assert lines == ["comparison_chat_selection_rejected code=extra_field"]
+    assert "Qual foi a economia total?" not in lines[0]
+    assert json.dumps(catalog) not in lines[0]
+
+
+def test_invalid_json_and_extra_fields_stay_blocked(caplog):
+    import app.agente_compara_chat_semantic_selection as selection_mod
+
+    secret_plan = json.loads(_selection([_query("q1", "official_summary")]))
+    secret_plan["nota"] = _SECRET_SELECTION
+    missing = json.loads(_selection([_query("q1", "official_summary")]))
+    del missing["action"]
+    wrong_action = json.loads(_selection([_query("q1", "official_summary")]))
+    wrong_action["action"] = "execute"
+    filters_as_list = json.loads(_selection([_query("q1", "carrier_comparison")]))
+    filters_as_list["queries"][0]["filters"] = ["table_ids"]
+    missing_query_id = json.loads(_selection([_query("q1", "official_summary")]))
+    del missing_query_id["queries"][0]["query_id"]
+    cases = [
+        ("{", "invalid_json", "MAX_TOKENS"),
+        (json.dumps(missing), "missing_field", None),
+        (json.dumps(secret_plan), "extra_field", None),
+        (_selection([_query("q1", "official_summary")], version="outra-versao"), "wrong_version", None),
+        (json.dumps(wrong_action), "wrong_action", None),
+        (
+            _selection([_query("q1", "official_summary")], action="clarify", clarification="Qual recorte?"),
+            "clarify_incoherent",
+            None,
+        ),
+        (json.dumps(missing_query_id), "invalid_query", None),
+        (json.dumps(filters_as_list), "invalid_filter", None),
+    ]
+    with caplog.at_level(logging.INFO, logger=selection_mod.logger.name):
+        for payload, code, finish in cases:
+            refused = resolve_semantic_selection(
+                payload,
+                authorized_tables=_TABLES,
+                finish_reason=finish if finish else payload,
+            )
+            assert refused.action == "malformed"
+            assert refused.plan is None
+            assert refused.clarification == MSG_SELECTION_MALFORMED
+            lines = _rejection_lines(caplog)
+            expected = f"comparison_chat_selection_rejected code={code}"
+            if finish:
+                expected += f" finish_reason={finish}"
+            assert lines[-1] == expected
+            assert _SECRET_SELECTION not in lines[-1]
+            assert payload not in lines[-1]
+            caplog.clear()
+
+
+def test_referent_criterion_schema_stays_closed(caplog):
+    schema = selection_response_json_schema()
+    criterion = schema["properties"]["referent_criterion"]["anyOf"][0]["enum"]
+    assert criterion == ["highest_savings", "lowest_comparable_freight"]
+    payload = json.loads(_selection([_query("q1", "carrier_comparison")]))
+    payload["referent_criterion"] = "minimum_freight"
+    import app.agente_compara_chat_semantic_selection as selection_mod
+
+    with caplog.at_level(logging.INFO, logger=selection_mod.logger.name):
+        refused = resolve_semantic_selection(
+            json.dumps(payload),
+            authorized_tables=_TABLES,
+            finish_reason="STOP",
+        )
+    assert refused.action == "malformed"
+    assert refused.referent_criterion is None
+    assert _rejection_lines(caplog) == [
+        "comparison_chat_selection_rejected code=invalid_referent_criterion finish_reason=STOP"
+    ]
+    assert "minimum_freight" not in _rejection_lines(caplog)[0]
+
+
+def test_selection_generation_does_not_add_a_third_call_or_change_cleiton():
+    import app.run_agente_compara_comparison_chat as chat
+
+    selection = inspect.getsource(chat._reply_from_semantic_selection)
+    assert selection.count("_generate_governed_text(") == 1
+    assert selection.count("_run_one_gemini_call(") == 1
+    governed = inspect.getsource(chat._generate_governed_text)
+    assert governed.count("cleiton_governed_generate_content(") == 1
+    answer = inspect.getsource(chat._run_one_gemini_call)
+    assert "thinking_budget" not in answer
+    assert "response_json_schema" not in answer
+    assert "thinking_budget=0" in inspect.getsource(chat._selection_response_config)
+    runner = inspect.getsource(chat.chat_agente_compara_comparison_reply)
+    assert "thinking_budget" not in runner
+    assert "response_json_schema" not in runner
+    module = inspect.getsource(chat)
+    assert ".generate_content(" not in module
+    assert "economia total" not in module
+    selection_module = inspect.getsource(
+        __import__("app.agente_compara_chat_semantic_selection", fromlist=["selection_response_json_schema"])
+    )
+    assert "economia total" not in selection_module

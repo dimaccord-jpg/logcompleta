@@ -46,6 +46,7 @@ from app.agente_compara_chat_semantic_selection import (
     remember_confirmed_referents,
     resolve_semantic_selection,
     selection_catalog_document,
+    selection_response_json_schema,
     selective_chat_required,
     user_message_for_bridge_error,
 )
@@ -546,7 +547,12 @@ def _extract_response_text(response: Any) -> str:
 
 
 def _selection_response_config():
-    """JSON sem ferramentas. A seleção não dispara execução automática no Gemini."""
+    """JSON Schema do envelope e thinking desligado. Só a seleção usa esta config.
+
+    response_json_schema preserva as chaves camelCase que a API aceita.
+    Se o SDK recusar o conjunto, a chamada segue sem config nova: não há
+    segundo transporte nem terceira geração.
+    """
 
     try:
         from google.genai import types
@@ -556,12 +562,45 @@ def _selection_response_config():
             candidate_count=1,
             max_output_tokens=2048,
             response_mime_type="application/json",
+            response_json_schema=selection_response_json_schema(),
             tools=[],
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
-    except Exception:
-        logger.info("comparison_chat_selection_config_unavailable")
+    except Exception as exc:
+        logger.info(
+            "comparison_chat_selection_config_unavailable exc_class=%s",
+            exc.__class__.__name__,
+        )
         return None
+
+
+def _safe_finish_reason(response: Any) -> str | None:
+    """Nome do finish_reason. Não devolve texto da resposta."""
+
+    candidates = getattr(response, "candidates", None)
+    if not isinstance(candidates, (list, tuple)) or not candidates:
+        return None
+    candidate = candidates[0]
+    reason = getattr(candidate, "finish_reason", None)
+    if reason is None and isinstance(candidate, dict):
+        reason = candidate.get("finish_reason") or candidate.get("finishReason")
+    if reason is None:
+        return None
+    name = getattr(reason, "name", None)
+    if isinstance(name, str) and name.strip() and name.strip().lower() != "none":
+        token = name.strip()
+    elif isinstance(reason, str):
+        token = reason.strip()
+    else:
+        token = str(reason).strip()
+        if "." in token:
+            token = token.rsplit(".", 1)[-1].strip()
+    if not token or any(char.isspace() for char in token) or len(token) > 64:
+        return None
+    if not all(char.isalnum() or char == "_" for char in token):
+        return None
+    return token
 
 
 def _generate_governed_text(
@@ -570,6 +609,7 @@ def _generate_governed_text(
     usuario=None,
     config=None,
     billable_stage: str = "billable_ai_gate",
+    generation_meta: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     client = _get_client()
     model = resolve_comparison_chat_model()
@@ -607,6 +647,8 @@ def _generate_governed_text(
             exc.__class__.__name__,
         )
         raise ComparisonChatProviderRequestError(cause=exc) from exc
+    if generation_meta is not None:
+        generation_meta["finish_reason"] = _safe_finish_reason(response)
     return _extract_response_text(response), model
 
 
@@ -858,12 +900,14 @@ def _reply_from_semantic_selection(
             "scope": scope,
             "basis": basis,
         }
+    generation_meta: dict[str, Any] = {}
     try:
         selection_text, _model = _generate_governed_text(
             prompt=selection_prompt,
             usuario=usuario,
             config=_selection_response_config(),
             billable_stage="semantic_selection",
+            generation_meta=generation_meta,
         )
     except ComparisonChatProviderError as exc:
         return _provider_failure(
@@ -877,7 +921,11 @@ def _reply_from_semantic_selection(
             merged_ui=merged_ui,
             observability_stage="semantic_selection",
         )
-    selection = resolve_semantic_selection(selection_text, authorized_tables=tables)
+    selection = resolve_semantic_selection(
+        selection_text,
+        authorized_tables=tables,
+        finish_reason=generation_meta.get("finish_reason"),
+    )
     if selection.action != "query" or not isinstance(selection.plan, dict):
         return _cache_deterministic_answer(
             answer=selection.clarification or MSG_COMPARISON_UNAVAILABLE,
