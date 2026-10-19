@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import time
 from types import SimpleNamespace
 
@@ -87,6 +88,112 @@ def _component(publication, row_index, slot, code):
         if record.get("record_role") == "detail" and facts.get("row_index") == row_index and facts.get("carrier_slot") == slot:
             return next(item for item in facts["components"] if item["code"] == code)
     raise AssertionError(f"componente ausente {row_index} {slot} {code}")
+
+
+_ORIGINAL_WINNER_CONTRADICTION = (
+    "Empate, map_status withheld ou ausência de bounded_best_freight impedem nomear um vencedor."
+)
+
+
+def _evidence_instructions(prompt: str) -> str:
+    body = prompt.split("Publicação oficial comparison_chat_publication_v1.", 1)[1]
+    return body.split("{", 1)[0]
+
+
+def _instruction_sentences(prompt: str) -> list[str]:
+    return [part.strip() for part in re.split(r"(?<=\.)\s+", _evidence_instructions(prompt)) if part.strip()]
+
+
+def _mentions_win_leadership(sentence: str) -> bool:
+    return re.search(
+        r"lideran[cç]a|ranking agregado|n[uú]mero de vit[oó]rias|maior n[uú]mero de vit[oó]rias",
+        sentence,
+        re.IGNORECASE,
+    ) is not None
+
+
+def _blocks_naming_because_of_tie(sentence: str) -> bool:
+    return re.search(r"\bempate\b|empatad", sentence, re.IGNORECASE) is not None and re.search(
+        r"imped\w+|n[aã]o declare uma [uú]nica vencedora|n[aã]o identifique",
+        sentence,
+        re.IGNORECASE,
+    ) is not None
+
+
+def _assert_win_count_leadership_contract(prompt: str) -> None:
+    """Separa vencedor de um frete individual da liderança pelas contagens de vitórias."""
+
+    assert _ORIGINAL_WINNER_CONTRADICTION not in prompt
+    assert not re.search(
+        r"aus[eê]ncia de bounded_best_freight imped\w+ nomear um vencedor",
+        prompt,
+        re.IGNORECASE,
+    )
+
+    sentences = _instruction_sentences(prompt)
+    tie_blocks = [sentence for sentence in sentences if _blocks_naming_because_of_tie(sentence)]
+    assert tie_blocks
+    for sentence in tie_blocks:
+        assert "frete individual" in sentence.lower(), sentence
+
+    assert any(
+        "frete individual" in sentence.lower()
+        and "menor custo" in sentence.lower()
+        and "bounded_best_freight" in sentence
+        and "map_status" in sentence
+        and re.search(r"\bempate\b", sentence, re.IGNORECASE)
+        and "insuficiente" in sentence.lower()
+        and "indicar empate" in sentence.lower()
+        and re.search(r"imped\w+", sentence, re.IGNORECASE)
+        for sentence in sentences
+    )
+    assert any(
+        "frete individual" in sentence.lower()
+        and re.search(r"empatad", sentence, re.IGNORECASE)
+        and re.search(r"n[aã]o declare uma [uú]nica vencedora", sentence, re.IGNORECASE)
+        for sentence in sentences
+    )
+    assert any(
+        re.search(r"maior n[uú]mero de vit[oó]rias", sentence, re.IGNORECASE)
+        and "fretes empatados" in sentence.lower()
+        and re.search(r"\bidentifique\b", sentence, re.IGNORECASE)
+        and not re.search(r"n[aã]o identifique|imped\w+", sentence, re.IGNORECASE)
+        for sentence in sentences
+    )
+    assert any(
+        re.search(r"empate n[aã]o [eé] vit[oó]ria|n[aã]o contabilizam vit[oó]ria", sentence, re.IGNORECASE)
+        for sentence in sentences
+    )
+    assert any(
+        re.search(r"mesma quantidade de vit[oó]rias|igualdade nas contagens", sentence, re.IGNORECASE)
+        and re.search(r"n[aã]o declare uma l[ií]der exclusiva", sentence, re.IGNORECASE)
+        for sentence in sentences
+    )
+    assert any(
+        "contagens oficiais" in sentence.lower()
+        and re.search(r"lideran[cç]a por n[uú]mero de vit[oó]rias", sentence, re.IGNORECASE)
+        for sentence in sentences
+    )
+
+    for sentence in sentences:
+        if "bounded_best_freight" not in sentence or not _mentions_win_leadership(sentence):
+            continue
+        lowered = sentence.lower()
+        assert "não invalida" in lowered, sentence
+        assert "registro individual" in lowered, sentence
+        assert "ranking agregado" in lowered, sentence
+        assert not re.search(r"\b(exig\w+|requer\w*|depend\w+|somente|apenas)\b", lowered), sentence
+    for sentence in sentences:
+        if "map_status" not in sentence.lower() or not _mentions_win_leadership(sentence):
+            continue
+        assert (
+            "não utilize map_status individual como impedimento genérico para liderança agregada"
+            in sentence.lower()
+        ), sentence
+    for sentence in sentences:
+        if not re.search(r"imped\w+ nomear um vencedor", sentence, re.IGNORECASE):
+            continue
+        assert "frete individual" in sentence.lower(), sentence
 
 
 def test_direct_question_overrides_the_five_part_report():
@@ -247,7 +354,7 @@ def test_carrier_difference_does_not_confuse_savings_with_lowest_freight():
     )
     assert "Maior economia não equivale automaticamente a menor frete" in prompt
     assert "Não atribua a economia agregada a uma transportadora" in prompt
-    assert "ausência de bounded_best_freight impedem nomear um vencedor" in prompt
+    _assert_win_count_leadership_contract(prompt)
     assert "global_superiority falso não autoriza" in prompt
     assert '"potential_savings_text": "30.00"' in prompt
     assert "bounded_best_freight" not in json.dumps(_published_from_prompt(prompt)["queries"][0]["allowed_claims"])
@@ -673,3 +780,180 @@ def test_whatsapp_still_precedes_the_analytical_answer(ctx, storage_env, monkeyp
     )
     assert reply["answer"] == "Entrega encaminhada."
     assert order == ["whatsapp"]
+
+
+def test_uf_exclusions_do_not_prove_absence_of_savings():
+    publication = _publication(
+        evidence_sufficient=False,
+        publication_complete=False,
+        losses=[{"code": "evidence_omitted", "count": 1, "blocks": ["geography_group", "potential_savings"]}],
+        queries=[
+            {
+                "query_type": "by_uf",
+                "allowed_claims": ["population_count"],
+                "evidence_sufficient": False,
+                "page": {"offset": 0, "limit": 1, "total": 12, "returned": 1, "sort": "uf_asc"},
+                "selection": {"ufs": ["SP"], "fields": ["exclusions"]},
+                "records": [
+                    {
+                        "record_role": "summary",
+                        "facts": {
+                            "selected_ufs": ["SP"],
+                            "filtered_uf_rows": 4,
+                            "absent_rows": 1,
+                            "unusable_rows": 2,
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+    prompt = _prompt("Quais UFs têm maior economia potencial?", publication)
+    assert "Uma publicação só com exclusões não basta para dizer que não existem economias por UF" in prompt
+    assert "groups e em official_analytics_geography" in prompt
+    assert "o dado não está na comparação oficial" in prompt
+    assert "a consulta selecionada não recuperou o campo" in prompt
+    assert "o dado ficou de fora por paginação, filtro ou limite" in prompt
+    assert "Não invente outra ordenação" in prompt
+    assert "potential_savings_desc" not in prompt
+    published = _published_from_prompt(prompt)
+    facts = published["queries"][0]["records"][0]["facts"]
+    assert facts["filtered_uf_rows"] == 4
+    assert facts["absent_rows"] == 1
+    assert published["queries"][0]["page"]["returned"] == 1
+    assert published["queries"][0]["page"]["total"] == 12
+    assert published["losses"][0]["code"] == "evidence_omitted"
+
+
+def test_wins_stay_inside_carriers_and_distinct_from_documents():
+    publication = _publication(
+        queries=[
+            {
+                "query_type": "carrier_comparison",
+                "allowed_claims": ["population_count", "potential_savings"],
+                "evidence_sufficient": True,
+                "records": [
+                    {
+                        "record_role": "summary",
+                        "facts": {
+                            "tie_count": 3,
+                            "decisive_row_count": 10,
+                            "comparable_row_count": 13,
+                            "carriers": [
+                                {"carrier_slot": 1, "wins": 6, "ties": 3, "comparable_row_count": 13},
+                                {"carrier_slot": 2, "wins": 4, "ties": 3, "comparable_row_count": 13},
+                            ],
+                        },
+                    }
+                ],
+            },
+            {
+                "query_type": "official_summary",
+                "allowed_claims": ["population_count"],
+                "evidence_sufficient": True,
+                "records": [
+                    {
+                        "record_role": "summary",
+                        "facts": {"document_count": 9, "total_rows": 13},
+                    }
+                ],
+            },
+        ]
+    )
+    prompt = _prompt("Qual transportadora venceu mais fretes?", publication)
+    assert (
+        "Empate, map_status withheld ou ausência de bounded_best_freight impedem nomear um vencedor."
+        not in prompt
+    )
+    _assert_win_count_leadership_contract(prompt)
+    assert "estão dentro de carriers" in prompt
+    assert "Não são um campo solto da consulta" in prompt
+    assert "wins conta linhas operacionais vencedoras" in prompt
+    assert "document_count do resumo oficial conta documentos distintos" in prompt
+    assert "Empate não é vitória de nenhuma transportadora" in prompt
+    assert (
+        "identifique a transportadora com o maior número de vitórias, "
+        "mesmo quando existirem fretes empatados"
+    ) in prompt
+    assert "não declare uma líder exclusiva nesse indicador" in prompt
+    assert "Não confunda vitórias por linhas operacionais com a quantidade de documentos distintos" in prompt
+    assert "Preserve as contagens, o universo e as limitações da publicação oficial" in prompt
+    assert "Vitória ausente não é zero vitória" in prompt
+    assert "tie_count, is_tie ou map_status tie impedem eleger uma transportadora" not in prompt
+    published = _published_from_prompt(prompt)
+    comparison = next(item for item in published["queries"] if item["query_type"] == "carrier_comparison")
+    summary = next(item for item in published["queries"] if item["query_type"] == "official_summary")
+    carriers = comparison["records"][0]["facts"]["carriers"]
+    assert carriers[0]["wins"] == 6
+    assert carriers[1]["wins"] == 4
+    assert carriers[0]["ties"] == 3
+    assert comparison["records"][0]["facts"]["tie_count"] == 3
+    assert summary["records"][0]["facts"]["document_count"] == 9
+    assert summary["records"][0]["facts"]["total_rows"] == 13
+
+
+def test_prompt_serializes_the_publication_once():
+    publication = _publication(
+        losses=[{"code": "page_incomplete", "count": 1, "blocks": ["page_ranking"]}],
+        queries=[
+            {
+                "query_type": "freight_components",
+                "allowed_claims": ["component_value", "component_provenance"],
+                "evidence_sufficient": True,
+                "population": {"universe": "all_operational_rows"},
+                "page": {"offset": 0, "limit": 50, "total": 80, "returned": 50},
+                "records": [
+                    {
+                        "record_role": "detail",
+                        "facts": {
+                            "components": [
+                                {
+                                    "code": "toll",
+                                    "label": "Pedágio",
+                                    "amount_text": "3.00",
+                                    "amount_state": "present",
+                                    "availability": "preserved",
+                                    "source": "memory_catalog_dict",
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+    rendered = json.dumps(publication, ensure_ascii=False, indent=2, default=str)
+    publication["context_text"] = rendered
+    publication["context_chars"] = len(rendered)
+    before = json.dumps(publication, ensure_ascii=False, sort_keys=True)
+    prompt = build_comparison_chat_user_prompt(
+        user_message="Como se compõe o pedágio?",
+        history_slice=[{"role": "user", "content": "mensagem anterior unica"}],
+        context_payload={},
+        scope="overview",
+        evidence_publication=publication,
+        confirmed_referents={"carrier": None, "uf": None, "ranked_rows": []},
+    )
+    assert json.dumps(publication, ensure_ascii=False, sort_keys=True) == before
+    assert "mensagem anterior unica" in prompt
+    published = _published_from_prompt(prompt)
+    assert "context_text" not in published
+    assert "context_chars" not in published
+    assert published["queries"][0]["allowed_claims"] == ["component_value", "component_provenance"]
+    assert published["queries"][0]["population"]["universe"] == "all_operational_rows"
+    assert published["queries"][0]["page"]["total"] == 80
+    assert published["losses"][0]["code"] == "page_incomplete"
+    assert published["queries"][0]["records"][0]["facts"]["components"][0]["source"] == "memory_catalog_dict"
+    assert prompt.count("memory_catalog_dict") == 1
+    assert prompt.count('"context_text"') == 0
+    legacy_dump = json.dumps(publication, ensure_ascii=False, indent=2, default=str)
+    current_dump = json.dumps(
+        {key: value for key, value in publication.items() if key not in {"context_text", "context_chars"}},
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+    assert current_dump in prompt
+    assert legacy_dump not in prompt
+    reduction = len(legacy_dump) - len(current_dump)
+    assert reduction > len(publication["context_text"])

@@ -82,11 +82,19 @@ INSTRUCAO_ORQUESTRACAO = (
     "confirmar_envio_whatsapp_terceiro: use somente quando o estado já apresentou "
     "confirmação e o usuário confirma esse envio.\n"
     "cancelar_envio_whatsapp_terceiro: o usuário cancela o rascunho pendente.\n"
-    "esclarecer_envio_whatsapp: a referência de conteúdo, destinatário ou pedido "
-    "está ambígua. Não escolha conteúdo nem telefone no escuro.\n"
+    "esclarecer_envio_whatsapp: use somente quando já existe intenção de envio ou "
+    "compartilhamento e a referência de conteúdo, o destinatário ou o pedido de envio "
+    "está ambígua. Não escolha conteúdo nem telefone no escuro. Não use esta função "
+    "para completar análise, resumo, recomendação ou investigação.\n"
     "continuar_conversa: a mensagem não pede envio nem altera um rascunho. "
     "Perguntar se o WhatsApp está conectado, como a integração funciona, ou mencionar "
-    "uma pessoa sem pedir envio, é continuar_conversa.\n"
+    "uma pessoa sem pedir envio, é continuar_conversa. "
+    "Pedido só analítico também é continuar_conversa, mesmo que haja respostas "
+    "compartilháveis no histórico. Exemplos que continuam a conversa: "
+    "\"Crie um resumo executivo desta comparação, destacando economia potencial, "
+    "competitividade das tabelas e principais oportunidades.\" "
+    "\"Com base nesta comparação, o que devo investigar primeiro para reduzir "
+    "meus custos de frete?\"\n"
     "Telefone dentro de resposta, documento, tabela ou análise não é destinatário. "
     "[TEL_0] nunca é telefone_declarado_ref. Não invente alias, rascunho, versão "
     "nem confirmação.\n"
@@ -439,8 +447,15 @@ def _descricao(nome: str) -> str:
             "Confirmar o rascunho cuja confirmação o backend já apresentou."
         ),
         NOME_CANCELAR_TERCEIRO: "Cancelar o rascunho pendente.",
-        NOME_ESCLARECER: "Pedir esclarecimento porque a referência ficou ambígua.",
-        NOME_CONTINUAR: "A mensagem não é uma ação de WhatsApp.",
+        NOME_ESCLARECER: (
+            "Esclarecer somente um envio ou compartilhamento cuja referência de "
+            "conteúdo, destinatário ou pedido ficou ambígua. Não interrompe análise, "
+            "resumo executivo ou recomendação sem intenção de envio."
+        ),
+        NOME_CONTINUAR: (
+            "A mensagem não pede envio nem altera rascunho. Análise, resumo executivo "
+            "e recomendação operacional seguem a conversa."
+        ),
     }[nome]
 
 

@@ -1495,25 +1495,52 @@ def test_invalid_json_and_extra_fields_stay_blocked(caplog):
     )
     unauthorized_sort = json.loads(_selection([_query("q1", "official_summary", sort="uf_asc")]))
     cases = [
-        ("{", "invalid_json", "MAX_TOKENS"),
-        (json.dumps(missing), "missing_field", None),
-        (json.dumps(secret_plan), "extra_field", None),
-        (_selection([_query("q1", "official_summary")], version="outra-versao"), "wrong_version", None),
-        (json.dumps(wrong_action), "wrong_action", None),
+        ("{", "comparison_chat_selection_rejected code=invalid_json finish_reason=MAX_TOKENS"),
+        (json.dumps(missing), "comparison_chat_selection_rejected code=missing_field"),
+        (json.dumps(secret_plan), "comparison_chat_selection_rejected code=extra_field"),
+        (
+            _selection([_query("q1", "official_summary")], version="outra-versao"),
+            "comparison_chat_selection_rejected code=wrong_version",
+        ),
+        (json.dumps(wrong_action), "comparison_chat_selection_rejected code=wrong_action"),
         (
             _selection([_query("q1", "official_summary")], action="clarify", clarification="Qual recorte?"),
-            "clarify_incoherent",
-            None,
+            "comparison_chat_selection_rejected code=clarify_incoherent",
         ),
-        (json.dumps(missing_query_id), "invalid_query", None),
-        (json.dumps(filters_as_list), "invalid_filter", None),
-        (unauthorized_type, "invalid_query", None),
-        (json.dumps(foreign_filter), "extra_field", None),
-        (json.dumps(page_over_limit), "invalid_query", None),
-        (json.dumps(unauthorized_sort), "invalid_query", None),
+        (
+            json.dumps(missing_query_id),
+            "comparison_chat_selection_rejected code=invalid_query field=query_id "
+            "query_type=official_summary query_index=0",
+        ),
+        (
+            json.dumps(filters_as_list),
+            "comparison_chat_selection_rejected code=invalid_filter field=filters "
+            "query_type=carrier_comparison query_index=0",
+        ),
+        (
+            unauthorized_type,
+            "comparison_chat_selection_rejected code=invalid_query origin=invalid_query_type "
+            "field=type query_index=0",
+        ),
+        (
+            json.dumps(foreign_filter),
+            "comparison_chat_selection_rejected code=extra_field origin=unknown_field "
+            "field=filters query_type=official_summary query_index=0",
+        ),
+        (
+            json.dumps(page_over_limit),
+            "comparison_chat_selection_rejected code=invalid_query origin=invalid_page "
+            "field=limit query_type=by_uf query_index=0",
+        ),
+        (
+            json.dumps(unauthorized_sort),
+            "comparison_chat_selection_rejected code=invalid_query origin=invalid_sort "
+            "field=sort query_type=official_summary query_index=0",
+        ),
     ]
     with caplog.at_level(logging.INFO, logger=selection_mod.logger.name):
-        for payload, code, finish in cases:
+        for payload, expected in cases:
+            finish = "MAX_TOKENS" if payload == "{" else None
             refused = resolve_semantic_selection(
                 payload,
                 authorized_tables=_TABLES,
@@ -1523,9 +1550,6 @@ def test_invalid_json_and_extra_fields_stay_blocked(caplog):
             assert refused.plan is None
             assert refused.clarification == MSG_SELECTION_MALFORMED
             lines = _rejection_lines(caplog)
-            expected = f"comparison_chat_selection_rejected code={code}"
-            if finish:
-                expected += f" finish_reason={finish}"
             assert lines[-1] == expected
             assert _SECRET_SELECTION not in lines[-1]
             assert payload not in lines[-1]
@@ -1552,6 +1576,176 @@ def test_referent_criterion_schema_stays_closed(caplog):
         "comparison_chat_selection_rejected code=invalid_referent_criterion finish_reason=STOP"
     ]
     assert "minimum_freight" not in _rejection_lines(caplog)[0]
+
+
+def test_selection_contract_explains_uf_wins_components_and_summary():
+    from app.agente_compara_chat_query_catalog import (
+        BODY_FIELDS,
+        COMPONENT_CODES,
+        PAGINATED_QUERY_TYPES,
+        QUERY_BY_UF,
+        QUERY_CARRIER_COMPARISON,
+        SORTS_BY_TYPE,
+    )
+
+    document = selection_catalog_document()
+    prompt = build_comparison_chat_selection_prompt(
+        user_message="Quais UFs têm maior economia potencial?",
+        history_slice=[],
+        referents={"carrier": None, "uf": None, "ranked_rows": []},
+        authorized_tables=_TABLES,
+        catalog=document,
+    )
+    by_uf = next(item for item in document["queries"] if item["type"] == "by_uf")
+    carrier = next(item for item in document["queries"] if item["type"] == "carrier_comparison")
+    assert by_uf["sorts"] == ["uf_asc"]
+    assert "potential_savings_desc" not in by_uf["sorts"]
+    assert "wins" not in carrier["fields"]
+    assert "carriers" in carrier["fields"]
+    assert SORTS_BY_TYPE[QUERY_BY_UF] == frozenset({"uf_asc"})
+    assert "wins" not in BODY_FIELDS[QUERY_CARRIER_COMPARISON]
+    assert QUERY_CARRIER_COMPARISON not in PAGINATED_QUERY_TYPES
+    assert "groups e official_analytics_geography" in prompt
+    assert "exclusions registra linhas ausentes" in prompt
+    assert "não autoriza concluir que não existem economias por UF" in prompt
+    assert "potential_savings_desc não pertence ao catálogo" in prompt
+    assert "falha de recuperação, não ausência na comparação oficial" in prompt
+    assert "wins não é campo de primeiro nível" in prompt
+    assert "Vitória é linha operacional comparável. Não é documento distinto." in prompt
+    assert "Empate não é vitória." in prompt
+    for code in ("weight_freight", "toll", "icms", "ad_valorem", "gris"):
+        assert code in COMPONENT_CODES
+        assert code in prompt
+    assert "gris é GRIS e permanece distinto de ad_valorem" in prompt
+    assert "risk_management não é código de component_codes" in prompt
+    assert "Tabela A ou Tabela B" in prompt
+    assert "correspondência única" in prompt
+    assert "official_summary sustenta o resumo" in prompt
+    assert "combine até quatro consultas autorizadas" in prompt
+    assert "Não invente consulta nem peça outra chamada" in prompt
+    schema = selection_response_json_schema()
+    encoded = json.dumps(schema)
+    assert len(encoded) < 4500
+    assert "official_analytics_geography" in schema["properties"]["queries"]["description"]
+    assert "wins não é campo" in schema["properties"]["queries"]["items"]["properties"]["fields"]["description"]
+    assert "uf_asc" in schema["properties"]["queries"]["items"]["properties"]["sort"]["description"]
+    assert "ad_valorem" in schema["properties"]["queries"]["items"]["properties"]["filters"]["properties"]["component_codes"]["description"]
+    _assert_provider_schema(schema)
+
+
+def test_component_codes_and_invented_references_stay_closed():
+    accepted = resolve_semantic_selection(
+        _selection(
+            [
+                _query(
+                    "partes",
+                    "freight_components",
+                    filters={
+                        "table_ids": ["t1"],
+                        "component_codes": ["weight_freight", "toll", "icms", "ad_valorem", "gris"],
+                    },
+                )
+            ]
+        ),
+        authorized_tables=_TABLES,
+    )
+    assert accepted.action == "query"
+    assert accepted.plan["queries"][0]["filters"]["component_codes"] == [
+        "weight_freight",
+        "toll",
+        "icms",
+        "ad_valorem",
+        "gris",
+    ]
+    invented_code = resolve_semantic_selection(
+        _selection(
+            [
+                _query(
+                    "partes",
+                    "freight_components",
+                    filters={"table_ids": ["t1"], "component_codes": ["frete_peso"]},
+                )
+            ]
+        ),
+        authorized_tables=_TABLES,
+    )
+    assert invented_code.action == "malformed"
+    assert invented_code.plan is None
+    invented_sort = resolve_semantic_selection(
+        _selection([_query("geo", "by_uf", sort="potential_savings_desc")]),
+        authorized_tables=_TABLES,
+    )
+    assert invented_sort.action == "malformed"
+    wins_field = resolve_semantic_selection(
+        _selection([_query("vitorias", "carrier_comparison", fields=["wins"])]),
+        authorized_tables=_TABLES,
+    )
+    assert wins_field.action == "malformed"
+    carriers = resolve_semantic_selection(
+        _selection([_query("vitorias", "carrier_comparison", fields=["carriers", "differences"])]),
+        authorized_tables=_TABLES,
+    )
+    assert carriers.action == "query"
+    exclusions_only = resolve_semantic_selection(
+        _selection([_query("geo", "by_uf", fields=["exclusions"])]),
+        authorized_tables=_TABLES,
+    )
+    assert exclusions_only.action == "query"
+    assert exclusions_only.plan["queries"][0]["fields"] == ["exclusions"]
+    invented_table = resolve_semantic_selection(
+        _selection([_query("partes", "freight_components", filters={"table_ids": ["TabelaA"]})]),
+        authorized_tables=_TABLES,
+    )
+    assert invented_table.action == "clarify"
+    assert invented_table.plan is None
+    spaced_table = resolve_semantic_selection(
+        _selection([_query("partes", "freight_components", filters={"table_ids": ["Tabela A"]})]),
+        authorized_tables=_TABLES,
+    )
+    assert spaced_table.action == "malformed"
+
+
+def test_rejection_log_uses_only_safe_metadata(caplog):
+    import app.agente_compara_chat_semantic_selection as selection_mod
+
+    question = "Qual a economia potencial por UF em reais 1234.56?"
+    payload = _selection([_query("q1", "by_uf", sort="potential_savings_desc", filters={"ufs": ["SP"]})])
+    with caplog.at_level(logging.INFO, logger=selection_mod.logger.name):
+        refused = resolve_semantic_selection(
+            payload,
+            authorized_tables=_TABLES,
+            finish_reason="STOP",
+            correlation_id=r"C:\segredo\1234.56",
+        )
+    assert refused.action == "malformed"
+    line = _rejection_lines(caplog)[-1]
+    assert line == (
+        "comparison_chat_selection_rejected code=invalid_query origin=invalid_sort "
+        "field=sort query_type=by_uf query_index=0 finish_reason=STOP"
+    )
+    assert question not in line
+    assert "1234.56" not in line
+    assert "correlation_id=" not in line
+    assert "potential_savings_desc" not in line
+    assert "SP" not in line
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=selection_mod.logger.name):
+        resolve_semantic_selection(
+            payload,
+            authorized_tables=_TABLES,
+            finish_reason="11987654321",
+            correlation_id="turno-238",
+        )
+    omitted = _rejection_lines(caplog)[-1]
+    assert omitted == (
+        "comparison_chat_selection_rejected code=invalid_query origin=invalid_sort "
+        "field=sort query_type=by_uf query_index=0"
+    )
+    assert "correlation_id=" not in omitted
+    assert "turno-238" not in omitted
+    assert "11987654321" not in omitted
+    assert "finish_reason=" not in omitted
+    assert question not in omitted
 
 
 def test_selection_generation_does_not_add_a_third_call_or_change_cleiton():

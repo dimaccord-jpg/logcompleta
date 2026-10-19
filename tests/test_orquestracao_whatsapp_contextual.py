@@ -1593,3 +1593,113 @@ def test_modelo_rejeita_rascunho_sem_referencia_opaca(ctx):
         )
         db.session.commit()
     db.session.rollback()
+
+
+_PEDIDO_RESUMO = (
+    "Crie um resumo executivo desta comparação, destacando economia potencial, "
+    "competitividade das tabelas e principais oportunidades."
+)
+_PEDIDO_INVESTIGACAO = (
+    "Com base nesta comparação, o que devo investigar primeiro para reduzir meus custos de frete?"
+)
+
+
+def test_instrucao_nao_trata_analise_como_esclarecimento_de_envio():
+    instrucao = orquestracao.INSTRUCAO_ORQUESTRACAO
+    assert _PEDIDO_RESUMO in instrucao
+    assert _PEDIDO_INVESTIGACAO in instrucao
+    assert "Pedido só analítico também é continuar_conversa" in instrucao
+    assert "Não use esta função para completar análise" in instrucao
+    assert "enviar_para_meu_whatsapp" in instrucao
+    assert "confirmar_envio_whatsapp_terceiro" in instrucao
+    assert "cancelar_envio_whatsapp_terceiro" in instrucao
+    descricoes = {
+        nome: orquestracao._descricao(nome)
+        for nome in (
+            NOME_ESCLARECER,
+            NOME_CONTINUAR,
+            NOME_ENVIAR_PARA_MEU_WHATSAPP,
+            NOME_CONFIRMAR_TERCEIRO,
+            NOME_CANCELAR_TERCEIRO,
+        )
+    }
+    assert "Não interrompe análise" in descricoes[NOME_ESCLARECER]
+    assert "resumo executivo" in descricoes[NOME_CONTINUAR]
+    assert "Não recebe telefone" in descricoes[NOME_ENVIAR_PARA_MEU_WHATSAPP]
+    assert "Confirmar o rascunho" in descricoes[NOME_CONFIRMAR_TERCEIRO]
+    assert "Cancelar o rascunho" in descricoes[NOME_CANCELAR_TERCEIRO]
+
+
+def test_analise_simulada_continua_e_envio_legitimo_permanece(monkeypatch):
+    capturado = {}
+
+    def _capturar(*_args, **kwargs):
+        capturado["config"] = kwargs["config"]
+        return _resposta_tool(NOME_CONTINUAR, {})
+
+    monkeypatch.setattr(orquestracao, "cleiton_governed_generate_content", _capturar)
+    catalogo = CatalogoDecisaoWhatsApp(
+        mensagem=_PEDIDO_RESUMO,
+        historico=[{"role": "model", "content": "Análise anterior.", "conteudo_alias": "[CONTEUDO_1]"}],
+        superficie="julia",
+        whatsapp_proprio_valido=True,
+        conteudos={"[CONTEUDO_1]": "rc" + "a" * 32},
+        telefones={},
+        rascunho_alias="[RASCUNHO_1]",
+        rascunho_referencia="rascunho-opaco",
+        rascunho_estado="aguardando_confirmacao",
+        rascunho_versao=2,
+        confirmacao_alias="[CONFIRMACAO_1]",
+        confirmacao_referencia="confirmacao-opaca",
+        capabilities=(
+            NOME_CONTINUAR,
+            NOME_ESCLARECER,
+            NOME_ENVIAR_PARA_MEU_WHATSAPP,
+            NOME_PREPARAR_TERCEIRO,
+            NOME_ATUALIZAR_TERCEIRO,
+            NOME_CONFIRMAR_TERCEIRO,
+            NOME_CANCELAR_TERCEIRO,
+        ),
+    )
+    acao = orquestracao.decidir_acao_whatsapp_contextual(
+        catalogo=catalogo,
+        agent="julia",
+        flow_type="julia_chat",
+        client=object(),
+        model="gemini-2.5-flash",
+        api_key_label="teste",
+    )
+    assert acao.tipo == NOME_CONTINUAR
+    assert _PEDIDO_RESUMO in capturado["config"].system_instruction
+    assert _PEDIDO_INVESTIGACAO in capturado["config"].system_instruction
+    esclarecer = orquestracao.interpretar_resposta_orquestracao(
+        _resposta_tool(NOME_ESCLARECER, {"motivo": "conteudo_ambiguo"}),
+        catalogo=catalogo,
+    )
+    assert esclarecer.tipo == NOME_ESCLARECER
+    assert esclarecer.argumentos == {"motivo": "conteudo_ambiguo"}
+    enviar = orquestracao.interpretar_resposta_orquestracao(
+        _resposta_tool(NOME_ENVIAR_PARA_MEU_WHATSAPP, {"conteudo_ref": "[CONTEUDO_1]"}),
+        catalogo=catalogo,
+    )
+    assert enviar.tipo == NOME_ENVIAR_PARA_MEU_WHATSAPP
+    assert enviar.argumentos == {"conteudo_ref": "[CONTEUDO_1]"}
+    confirmar = orquestracao.interpretar_resposta_orquestracao(
+        _resposta_tool(
+            NOME_CONFIRMAR_TERCEIRO,
+            {"rascunho_ref": "[RASCUNHO_1]", "versao": 2, "confirmacao_ref": "[CONFIRMACAO_1]"},
+        ),
+        catalogo=catalogo,
+    )
+    assert confirmar.tipo == NOME_CONFIRMAR_TERCEIRO
+    assert confirmar.argumentos["versao"] == 2
+    cancelar = orquestracao.interpretar_resposta_orquestracao(
+        _resposta_tool(NOME_CANCELAR_TERCEIRO, {"rascunho_ref": "[RASCUNHO_1]", "versao": 2}),
+        catalogo=catalogo,
+    )
+    assert cancelar.tipo == NOME_CANCELAR_TERCEIRO
+    repetido = orquestracao.interpretar_resposta_orquestracao(
+        _resposta_tool(NOME_CANCELAR_TERCEIRO, {"rascunho_ref": "[RASCUNHO_1]", "versao": 2}),
+        catalogo=catalogo,
+    )
+    assert repetido.argumentos == cancelar.argumentos

@@ -370,7 +370,11 @@ def selection_response_json_schema() -> dict[str, Any]:
         "maxItems": MAX_QUERIES_PER_PLAN,
         "description": (
             "Lista de consultas. Cada item exige query_id e type do catálogo. "
-            "filters, quando presente, é objeto. A lista fica vazia somente em clarify."
+            "filters, quando presente, é objeto. A lista fica vazia somente em clarify. "
+            "Economia geográfica usa by_uf com groups e official_analytics_geography. "
+            "Vitórias usam carrier_comparison e o campo carriers. "
+            "Componentes usam freight_components. "
+            "Resumo executivo pode combinar até quatro tipos já autorizados."
         ),
         "items": _query_item_response_schema(),
     }
@@ -421,9 +425,16 @@ def resolve_semantic_selection(
     *,
     authorized_tables: list[dict[str, Any]],
     finish_reason: str | None = None,
+    correlation_id: str | None = None,
 ) -> SemanticSelection:
-    """Aceita só o envelope comparison_chat_selection_v1 completo."""
+    """Aceita só o envelope comparison_chat_selection_v1 completo.
 
+    ``correlation_id`` não entra no diagnóstico: este módulo não produz o
+    identificador e não comprova a origem do valor recebido. A pergunta e o
+    plano não são registrados.
+    """
+
+    del correlation_id
     document = _json_object(text)
     if not isinstance(document, dict):
         _log_selection_rejection("invalid_json", finish_reason)
@@ -442,7 +453,15 @@ def resolve_semantic_selection(
     try:
         validate_query_plan(plan)
     except QueryCatalogError as exc:
-        _log_selection_rejection(_CATALOG_REJECTION_CODES.get(exc.code, "invalid_query"), finish_reason)
+        query_type, query_index = _query_rejection_locator(plan)
+        _log_selection_rejection(
+            _CATALOG_REJECTION_CODES.get(exc.code, "invalid_query"),
+            finish_reason,
+            origin=exc.code,
+            field=exc.field,
+            query_type=query_type,
+            query_index=query_index,
+        )
         return SemanticSelection("malformed", clarification=MSG_SELECTION_MALFORMED)
     if _plan_leaves_authorized_tables(plan, authorized_tables):
         return SemanticSelection("clarify", clarification=MSG_REFERENT_CLARIFICATION)
@@ -492,16 +511,121 @@ def _selection_rejection_code(document: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _log_selection_rejection(code: str, finish_reason: str | None) -> None:
+_PUBLIC_ORIGIN_CODES = frozenset(_CATALOG_REJECTION_CODES) | _SELECTION_REJECTION_CODES
+_PUBLIC_REJECTION_FIELDS = frozenset(
+    {
+        "queries",
+        "catalog_version",
+        "query_id",
+        "type",
+        "filters",
+        "fields",
+        "page",
+        "sort",
+        "offset",
+        "limit",
+        "table_ids",
+        "row_indexes",
+        "component_codes",
+        "codes",
+        "ufs",
+        "include_absent",
+        "include_unusable",
+        "minimum_gap",
+        "bands_version",
+    }
+)
+
+
+def _log_selection_rejection(
+    code: str,
+    finish_reason: str | None,
+    *,
+    origin: str | None = None,
+    field: str | None = None,
+    query_type: str | None = None,
+    query_index: int | None = None,
+) -> None:
+    """Metadados contratuais. Não recebe pergunta, plano, snapshot nem valor."""
+
     stable = code if code in _SELECTION_REJECTION_CODES else "invalid_query"
+    parts = [f"code={stable}"]
+    origin_token = _public_token(origin)
+    if origin_token and origin_token != stable and origin_token in _PUBLIC_ORIGIN_CODES:
+        parts.append(f"origin={origin_token}")
+    field_token = _public_token(field)
+    if field_token and field_token in _PUBLIC_REJECTION_FIELDS:
+        parts.append(f"field={field_token}")
+    if isinstance(query_type, str) and query_type in QUERY_TYPES:
+        parts.append(f"query_type={query_type}")
+    if type(query_index) is int and 0 <= query_index <= MAX_QUERIES_PER_PLAN:
+        parts.append(f"query_index={query_index}")
     reason = _public_finish_reason(finish_reason)
     if reason:
-        logger.info("comparison_chat_selection_rejected code=%s finish_reason=%s", stable, reason)
-        return
-    logger.info("comparison_chat_selection_rejected code=%s", stable)
+        parts.append(f"finish_reason={reason}")
+    logger.info("comparison_chat_selection_rejected %s", " ".join(parts))
+
+
+def _query_rejection_locator(plan: dict[str, Any]) -> tuple[str | None, int | None]:
+    """Índice e tipo da única consulta que o catálogo recusa. Não registra o plano."""
+
+    queries = plan.get("queries")
+    if not isinstance(queries, list) or not queries or len(queries) > MAX_QUERIES_PER_PLAN:
+        return None, None
+    failures: list[tuple[int, str | None]] = []
+    catalog_version = plan.get("catalog_version")
+    for index, item in enumerate(queries):
+        query_type = None
+        if isinstance(item, dict):
+            raw_type = item.get("type")
+            if isinstance(raw_type, str) and raw_type in QUERY_TYPES:
+                query_type = raw_type
+        trial = {"catalog_version": catalog_version, "queries": [item]}
+        try:
+            validate_query_plan(trial)
+        except QueryCatalogError:
+            failures.append((index, query_type))
+    if len(failures) != 1:
+        return None, None
+    index, query_type = failures[0]
+    return query_type, index
+
+
+_PUBLIC_FINISH_REASONS = frozenset(
+    {
+        "FINISH_REASON_UNSPECIFIED",
+        "STOP",
+        "MAX_TOKENS",
+        "SAFETY",
+        "RECITATION",
+        "LANGUAGE",
+        "OTHER",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "MALFORMED_FUNCTION_CALL",
+        "IMAGE_SAFETY",
+        "UNEXPECTED_TOOL_CALL",
+        "IMAGE_PROHIBITED_CONTENT",
+        "NO_IMAGE",
+        "IMAGE_RECITATION",
+        "IMAGE_OTHER",
+    }
+)
 
 
 def _public_finish_reason(value: str | None) -> str | None:
+    """Só o nome oficial do motivo de término. Alfanumérico não basta."""
+
+    if not isinstance(value, str):
+        return None
+    token = value.strip()
+    if token in _PUBLIC_FINISH_REASONS:
+        return token
+    return None
+
+
+def _public_token(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
     token = value.strip()
@@ -531,14 +655,23 @@ def _query_item_response_schema() -> dict[str, Any]:
             },
             "type": {
                 "type": "string",
-                "description": "Tipo pertencente ao catálogo fechado.",
+                "description": (
+                    "Tipo pertencente ao catálogo fechado. "
+                    "Economia por UF: by_uf. Vitórias: carrier_comparison. "
+                    "Componentes: freight_components. Não invente tipo."
+                ),
             },
             "filters": _query_filter_response_schema(),
             "fields": {
                 "type": "array",
                 "minItems": 1,
                 "items": {"type": "string"},
-                "description": "Campos opcionais já aceitos pelo catálogo para o tipo.",
+                "description": (
+                    "Campos opcionais já aceitos pelo catálogo para o tipo. "
+                    "Em by_uf, groups e official_analytics_geography sustentam a economia; "
+                    "exclusions sozinho não a prova. "
+                    "Em carrier_comparison, carriers publica as vitórias; wins não é campo."
+                ),
             },
             "page": {
                 "type": "object",
@@ -551,7 +684,10 @@ def _query_item_response_schema() -> dict[str, Any]:
             },
             "sort": {
                 "type": "string",
-                "description": "Ordenação opcional já aceita pelo catálogo para o tipo.",
+                "description": (
+                    "Ordenação opcional já aceita pelo catálogo para o tipo. "
+                    "by_uf aceita somente uf_asc. carrier_comparison não tem ordenação."
+                ),
             },
         },
     }
@@ -563,7 +699,15 @@ def _query_filter_response_schema() -> dict[str, Any]:
     properties: dict[str, Any] = {
         "table_ids": {"type": "array", "items": {"type": "string"}},
         "row_indexes": {"type": "array", "items": {"type": "integer"}},
-        "component_codes": {"type": "array", "items": {"type": "string"}},
+        "component_codes": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Códigos do catálogo, não rótulos. "
+                "weight_freight, toll, icms, ad_valorem e gris são distintos. "
+                "gris não é ad_valorem."
+            ),
+        },
         "codes": {"type": "array", "items": {"type": "string"}},
         "ufs": {"type": "array", "items": {"type": "string"}},
         "include_absent": {"type": "boolean"},
