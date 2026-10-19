@@ -21,18 +21,14 @@ from typing import Any
 from app.agente_compara_chat_query_catalog import (
     BODY_FIELDS,
     CATALOG_VERSION,
-    COMPONENT_CODES,
     FILTER_FIELDS,
     MAX_PAGE_SIZE,
     MAX_QUERIES_PER_PLAN,
-    OFFICIAL_DIAGNOSTIC_CODES,
-    OFFICIAL_UF_CODES,
     PAGINATED_QUERY_TYPES,
     PUBLIC_UNIVERSES,
     PUBLICATION_VERSION,
     QUERY_TYPES,
     SORTS_BY_TYPE,
-    WEIGHT_BANDS_VERSION,
     QueryCatalogError,
     validate_query_plan,
 )
@@ -135,6 +131,17 @@ _CATALOG_REJECTION_CODES = {
     "invalid_limit": "invalid_query",
 }
 _QUERY_PROPERTY_ORDER = ("query_id", "type", "filters", "fields", "page", "sort")
+_FILTER_PROPERTY_ORDER = (
+    "table_ids",
+    "row_indexes",
+    "component_codes",
+    "codes",
+    "ufs",
+    "include_absent",
+    "include_unusable",
+    "minimum_gap",
+    "bands_version",
+)
 _SELECTION_PROPERTY_ORDER = (
     "selection_version",
     "action",
@@ -352,8 +359,9 @@ def selection_response_json_schema() -> dict[str, Any]:
 
     O transporte é response_json_schema. O caminho response_schema do SDK
     projeta additional_properties, property_ordering e min_items em snake_case,
-    e a API rejeita esse corpo. Este documento só orienta a geração: o
-    validador local continua fechado e o catálogo não vira plano.
+    e a API rejeita esse corpo. O item de queries é um único objeto: um anyOf
+    por tipo estoura o limite de estados da API. Este documento só orienta a
+    geração. O validador local continua fechado e o catálogo não vira plano.
     """
 
     queries = {
@@ -364,7 +372,7 @@ def selection_response_json_schema() -> dict[str, Any]:
             "Lista de consultas. Cada item exige query_id e type do catálogo. "
             "filters, quando presente, é objeto. A lista fica vazia somente em clarify."
         ),
-        "items": {"anyOf": [_query_response_schema(query_type) for query_type in sorted(QUERY_TYPES)]},
+        "items": _query_item_response_schema(),
     }
     properties = {
         "selection_version": {
@@ -508,87 +516,66 @@ def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
     return {"anyOf": [schema, {"type": "null"}]}
 
 
-def _query_response_schema(query_type: str) -> dict[str, Any]:
-    properties: dict[str, Any] = {
-        "query_id": {
-            "type": "string",
-            "description": "Identificador obrigatório da consulta.",
-        },
-        "type": {
-            "type": "string",
-            "enum": [query_type],
-            "description": "Tipo pertencente ao catálogo fechado.",
-        },
-    }
-    filters = _filter_response_schema(query_type)
-    if filters is not None:
-        properties["filters"] = _nullable(filters)
-    properties["fields"] = _nullable(
-        {
-            "type": "array",
-            "minItems": 1,
-            "items": {"type": "string", "enum": sorted(BODY_FIELDS[query_type])},
-        }
-    )
-    if query_type in PAGINATED_QUERY_TYPES:
-        properties["page"] = _nullable(
-            {
+def _query_item_response_schema() -> dict[str, Any]:
+    """Um objeto só. Tipo, filtros, campos, página e ordenação ficam no validador."""
+
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "propertyOrdering": list(_QUERY_PROPERTY_ORDER),
+        "required": ["query_id", "type"],
+        "properties": {
+            "query_id": {
+                "type": "string",
+                "description": "Identificador obrigatório da consulta.",
+            },
+            "type": {
+                "type": "string",
+                "description": "Tipo pertencente ao catálogo fechado.",
+            },
+            "filters": _query_filter_response_schema(),
+            "fields": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string"},
+                "description": "Campos opcionais já aceitos pelo catálogo para o tipo.",
+            },
+            "page": {
                 "type": "object",
                 "additionalProperties": False,
+                "propertyOrdering": ["offset", "limit"],
                 "properties": {
                     "offset": {"type": "integer"},
                     "limit": {"type": "integer"},
                 },
-            }
-        )
-    sorts = sorted(SORTS_BY_TYPE[query_type])
-    if sorts:
-        properties["sort"] = _nullable({"type": "string", "enum": sorts})
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "propertyOrdering": [name for name in _QUERY_PROPERTY_ORDER if name in properties],
-        "required": ["query_id", "type"],
-        "properties": properties,
+            },
+            "sort": {
+                "type": "string",
+                "description": "Ordenação opcional já aceita pelo catálogo para o tipo.",
+            },
+        },
     }
 
 
-def _filter_response_schema(query_type: str) -> dict[str, Any] | None:
-    allowed = FILTER_FIELDS[query_type]
-    if not allowed:
-        return None
-    properties: dict[str, Any] = {}
-    if "table_ids" in allowed:
-        properties["table_ids"] = {"type": "array", "items": {"type": "string"}}
-    if "row_indexes" in allowed:
-        properties["row_indexes"] = {"type": "array", "items": {"type": "integer"}}
-    if "component_codes" in allowed:
-        properties["component_codes"] = {
-            "type": "array",
-            "items": {"type": "string", "enum": sorted(COMPONENT_CODES)},
-        }
-    if "codes" in allowed:
-        properties["codes"] = {
-            "type": "array",
-            "items": {"type": "string", "enum": sorted(OFFICIAL_DIAGNOSTIC_CODES)},
-        }
-    if "ufs" in allowed:
-        properties["ufs"] = {
-            "type": "array",
-            "items": {"type": "string", "enum": sorted(OFFICIAL_UF_CODES)},
-        }
-    if "include_absent" in allowed:
-        properties["include_absent"] = {"type": "boolean"}
-    if "include_unusable" in allowed:
-        properties["include_unusable"] = {"type": "boolean"}
-    if "minimum_gap" in allowed:
-        properties["minimum_gap"] = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
-    if "bands_version" in allowed:
-        properties["bands_version"] = {"type": "string", "enum": [WEIGHT_BANDS_VERSION]}
+def _query_filter_response_schema() -> dict[str, Any]:
+    """União dos filtros do catálogo, sem uma alternativa por tipo."""
+
+    properties: dict[str, Any] = {
+        "table_ids": {"type": "array", "items": {"type": "string"}},
+        "row_indexes": {"type": "array", "items": {"type": "integer"}},
+        "component_codes": {"type": "array", "items": {"type": "string"}},
+        "codes": {"type": "array", "items": {"type": "string"}},
+        "ufs": {"type": "array", "items": {"type": "string"}},
+        "include_absent": {"type": "boolean"},
+        "include_unusable": {"type": "boolean"},
+        "minimum_gap": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        "bands_version": {"type": "string"},
+    }
     return {
         "type": "object",
         "additionalProperties": False,
-        "description": "Objeto de filtros deste tipo. Não é a lista de nomes do catálogo.",
+        "propertyOrdering": list(_FILTER_PROPERTY_ORDER),
+        "description": "Objeto opcional de filtros. Não é a lista de nomes do catálogo.",
         "properties": properties,
     }
 

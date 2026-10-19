@@ -1358,25 +1358,47 @@ def _assert_provider_schema(schema):
     assert schema["properties"]["catalog_version"]["enum"] == [CATALOG_VERSION]
     queries = schema["properties"]["queries"]
     assert queries["type"] == "array"
-    variants = queries["items"]["anyOf"]
-    from app.agente_compara_chat_query_catalog import QUERY_TYPES
+    assert queries["minItems"] == 0
+    assert queries["maxItems"] == 4
+    item = queries["items"]
+    assert "anyOf" not in item
+    assert item["type"] == "object"
+    assert item["additionalProperties"] is False
+    assert item["required"] == ["query_id", "type"]
+    assert set(item["properties"]) == {"query_id", "type", "filters", "fields", "page", "sort"}
+    assert item["properties"]["query_id"]["type"] == "string"
+    assert item["properties"]["type"]["type"] == "string"
+    assert "enum" not in item["properties"]["type"]
+    filters = item["properties"]["filters"]
+    assert filters["type"] == "object"
+    assert filters["additionalProperties"] is False
+    assert "filters" not in item["required"]
+    from app.agente_compara_chat_query_catalog import FILTER_FIELDS, PAGE_FIELDS
 
-    assert len(variants) == len(QUERY_TYPES)
-    seen_types = set()
-    for variant in variants:
-        assert variant["additionalProperties"] is False
-        assert variant["required"] == ["query_id", "type"]
-        query_type = variant["properties"]["type"]["enum"][0]
-        seen_types.add(query_type)
-        filters = variant["properties"].get("filters")
-        if filters is not None:
-            filter_schema = filters["anyOf"][0]
-            assert filter_schema["type"] == "object"
-            assert filter_schema["additionalProperties"] is False
-    assert seen_types == set(QUERY_TYPES)
+    assert set(filters["properties"]) == set().union(*FILTER_FIELDS.values())
+    assert item["properties"]["fields"]["type"] == "array"
+    assert item["properties"]["fields"]["items"] == {"type": "string"}
+    page = item["properties"]["page"]
+    assert page["type"] == "object"
+    assert page["additionalProperties"] is False
+    assert set(page["properties"]) == set(PAGE_FIELDS)
+    assert item["properties"]["sort"]["type"] == "string"
     criterion = schema["properties"]["referent_criterion"]["anyOf"][0]
     assert criterion["enum"] == ["highest_savings", "lowest_comparable_freight"]
+    any_of_nodes = [node for node in _schema_nodes(schema) if "anyOf" in node]
+    assert len(any_of_nodes) == 3
+    assert all(len(node["anyOf"]) == 2 for node in any_of_nodes)
+    enum_values = [value for node in _schema_nodes(schema) if "enum" in node for value in node["enum"]]
+    assert enum_values == [
+        SELECTION_VERSION,
+        "clarify",
+        "query",
+        CATALOG_VERSION,
+        "highest_savings",
+        "lowest_comparable_freight",
+    ]
     encoded = json.dumps(schema)
+    assert len(encoded) < 4500
     assert "publication_version" not in encoded
     assert '"sorts"' not in encoded
     assert '"paginated"' not in encoded
@@ -1466,6 +1488,12 @@ def test_invalid_json_and_extra_fields_stay_blocked(caplog):
     filters_as_list["queries"][0]["filters"] = ["table_ids"]
     missing_query_id = json.loads(_selection([_query("q1", "official_summary")]))
     del missing_query_id["queries"][0]["query_id"]
+    unauthorized_type = _selection([_query("q1", "semantic_choice")])
+    foreign_filter = json.loads(_selection([_query("q1", "official_summary", filters={"ufs": ["SP"]})]))
+    page_over_limit = json.loads(
+        _selection([_query("q1", "by_uf", page={"offset": 0, "limit": 51})])
+    )
+    unauthorized_sort = json.loads(_selection([_query("q1", "official_summary", sort="uf_asc")]))
     cases = [
         ("{", "invalid_json", "MAX_TOKENS"),
         (json.dumps(missing), "missing_field", None),
@@ -1479,6 +1507,10 @@ def test_invalid_json_and_extra_fields_stay_blocked(caplog):
         ),
         (json.dumps(missing_query_id), "invalid_query", None),
         (json.dumps(filters_as_list), "invalid_filter", None),
+        (unauthorized_type, "invalid_query", None),
+        (json.dumps(foreign_filter), "extra_field", None),
+        (json.dumps(page_over_limit), "invalid_query", None),
+        (json.dumps(unauthorized_sort), "invalid_query", None),
     ]
     with caplog.at_level(logging.INFO, logger=selection_mod.logger.name):
         for payload, code, finish in cases:
