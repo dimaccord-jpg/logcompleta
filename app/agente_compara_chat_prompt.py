@@ -224,18 +224,77 @@ def _selection_reading_rules() -> str:
     )
 
 
-def _publication_for_prompt(publication: dict[str, Any]) -> dict[str, Any]:
-    """Representação só do prompt, sem os auxiliares já serializados dentro dela.
+# Metadados de identidade já presentes no envelope. A cópia do prompt os omite
+# no registro somente quando o valor é o mesmo já publicado acima.
+_ENVELOPE_META_REPETIDA = (
+    "publication_version",
+    "contract_version",
+    "operation_id",
+    "comparison_id",
+    "expected_result_version",
+    "catalog_version",
+)
 
-    O objeto recebido não é alterado. context_text repete a publicação canônica
-    e context_chars só mede esse texto.
+
+def _meta_repetida(valor: Any, referencia: Any) -> bool:
+    return referencia == valor
+
+
+def _compact_record_for_prompt(
+    record: Any,
+    envelope: dict[str, Any],
+    query: dict[str, Any],
+) -> Any:
+    """Tira do registro só a identidade que o envelope ou a consulta já carregam."""
+
+    if not isinstance(record, dict):
+        return record
+    slim: dict[str, Any] = {}
+    for key, value in record.items():
+        if key in _ENVELOPE_META_REPETIDA and key in envelope and _meta_repetida(value, envelope[key]):
+            continue
+        if key in {"query_id", "query_type"} and _meta_repetida(value, query.get(key)):
+            continue
+        if key == "schema_id" and _meta_repetida(value, query.get("query_type")):
+            continue
+        if key in {"page", "population"} and _meta_repetida(value, query.get(key)):
+            continue
+        slim[key] = value
+    return slim
+
+
+def _compact_query_for_prompt(query: Any, envelope: dict[str, Any]) -> Any:
+    if not isinstance(query, dict):
+        return query
+    copied: dict[str, Any] = {}
+    for key, value in query.items():
+        if key == "records" and isinstance(value, list):
+            copied[key] = [
+                _compact_record_for_prompt(record, envelope, query) for record in value
+            ]
+            continue
+        copied[key] = value
+    return copied
+
+
+def _publication_for_prompt(publication: dict[str, Any]) -> dict[str, Any]:
+    """Representação só do prompt. O objeto recebido não é alterado.
+
+    context_text repete a publicação canônica e context_chars só mede esse
+    texto. No registro, a identidade igual à do envelope ou da consulta também
+    sai. Fatos, valores, universos, exclusões, perdas, página distinta,
+    evidence_id e evidence_digest permanecem.
     """
 
-    return {
-        key: value
-        for key, value in publication.items()
-        if key not in {"context_text", "context_chars"}
-    }
+    compact: dict[str, Any] = {}
+    for key, value in publication.items():
+        if key in {"context_text", "context_chars"}:
+            continue
+        if key == "queries" and isinstance(value, list):
+            compact[key] = [_compact_query_for_prompt(query, publication) for query in value]
+            continue
+        compact[key] = value
+    return compact
 
 
 def _carrier_labels(authorized_tables: list[dict[str, Any]] | None) -> list[dict[str, Any]]:

@@ -638,6 +638,19 @@ def _lancar_sem_abater_saldo_atual(
     )
 
 
+def _debito_bloqueado_por_custo_assumido(evento_id: int) -> bool:
+    """A régua não muda. Tentativa já encerrada pela plataforma não gera abatimento."""
+    from app.services.cleiton_billable_ai_call import custo_assumido_pela_plataforma
+
+    tentativa = (
+        db.session.query(IaChamadaTentativa)
+        .filter(IaChamadaTentativa.ia_consumo_evento_id == int(evento_id))
+        .with_for_update()
+        .one_or_none()
+    )
+    return custo_assumido_pela_plataforma(tentativa)
+
+
 def _persistir_abatimento(
     franquia_id: int | None,
     creditos: Decimal,
@@ -658,6 +671,18 @@ def _persistir_abatimento(
     creditos = _quantize_credit(_to_decimal(creditos))
     if commit:
         _iniciar_transacao_exclusiva()
+    if evento_ia_id is not None and _debito_bloqueado_por_custo_assumido(int(evento_ia_id)):
+        if commit:
+            db.session.commit()
+        return ResultadoGovernancaOperacional(
+            abateu_franquia=False,
+            creditos=Decimal("0"),
+            motivo_nao_abateu="custo_assumido_plataforma",
+            franquia_id=int(franquia_id),
+            status_anterior=None,
+            status_novo=None,
+            erro_config=None,
+        )
     fr = db.session.execute(
         stmt_lock_franquia().execution_options(populate_existing=True),
         {"franquia_id": int(franquia_id)},

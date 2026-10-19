@@ -546,6 +546,35 @@ def _extract_response_text(response: Any) -> str:
     return cleaned
 
 
+def _answer_response_config():
+    """Teto executável da resposta analítica no Gemini 2.5.
+
+    Nesse modelo o thinking entra em max_output_tokens. thinking_budget=0 e um
+    candidato fazem a reserva usar o mesmo teto enviado ao provider. O padrão
+    global das outras habilidades permanece o da fachada.
+    """
+
+    limites = {
+        "candidate_count": 1,
+        "max_output_tokens": 8192,
+        "thinking_config": {"thinking_budget": 0},
+    }
+    try:
+        from google.genai import types
+
+        return types.GenerateContentConfig(
+            candidate_count=1,
+            max_output_tokens=8192,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        )
+    except Exception as exc:
+        logger.info(
+            "comparison_chat_answer_config_sdk_unavailable exc_class=%s",
+            exc.__class__.__name__,
+        )
+        return limites
+
+
 def _selection_response_config():
     """JSON Schema do envelope e thinking desligado. Só a seleção usa esta config.
 
@@ -624,6 +653,7 @@ def _generate_governed_text(
             api_key_label=_api_key_label(),
             usuario=usuario_operacional_da_chamada(usuario),
             attempt_key=f"{AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE}:{model}:{uuid4().hex}",
+            assumir_falha_sem_metricas=True,
         )
     except BillableAiCallError as exc:
         if not exc.terminal:
@@ -669,7 +699,7 @@ def _run_one_gemini_call(
     text, model = _generate_governed_text(
         prompt=prompt,
         usuario=usuario,
-        config=config,
+        config=_answer_response_config() if config is None else config,
         billable_stage=billable_stage,
     )
     payload = {

@@ -1446,7 +1446,11 @@ def test_total_savings_question_reaches_the_analytical_bridge(ctx, storage_env, 
     assert wire["responseJsonSchema"]["additionalProperties"] is False
     assert "responseSchema" not in wire
     assert wire["thinkingConfig"]["thinkingBudget"] == 0
-    assert models.calls[1]["config"] is None
+    answer_config = models.calls[1]["config"]
+    answer_dump = answer_config.model_dump(exclude_none=True)
+    assert answer_dump["max_output_tokens"] == 8192
+    assert answer_dump["candidate_count"] == 1
+    assert answer_dump["thinking_config"]["thinking_budget"] == 0
     _assert_provider_schema(dumped["response_json_schema"])
 
 

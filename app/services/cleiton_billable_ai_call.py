@@ -90,6 +90,8 @@ MOTIVO_TETO_ENTRADA = "teto_entrada_nao_verificavel"
 MOTIVO_PERSISTENCIA_RESERVA = "persistencia_reserva_falhou"
 MOTIVO_SUCCESS_NO_METRICS = "success_no_metrics"
 MOTIVO_PROVIDER_SEM_USAGE = "provider_sem_usage"
+MOTIVO_FALHA_ASSUMIDA_PLATAFORMA = "falha_assumida_plataforma"
+FLOW_CHAT_COMPARATIVO = "agente_compara_comparison_chat"
 MOTIVO_PERSISTENCIA_EVENTO = "persistencia_evento_falhou"
 MOTIVO_VINCULO_EVENTO = "vinculo_evento_falhou"
 MOTIVO_LIQUIDACAO = "liquidacao_interrompida"
@@ -1346,6 +1348,32 @@ def _liquidar_tentativa_ia(
         _marcar_incerta(attempt.id, MOTIVO_SUCCESS_NO_METRICS)
         return db.session.get(IaChamadaTentativa, int(attempt_id))
 
+    # A regra do chat precede a liquidação genérica. Ausência de métricas
+    # não é consumo zero e não encerra a tentativa sem o marcador.
+    if custo_assumido_pela_plataforma(attempt):
+        return attempt
+    if _falha_terminal_chat_sem_metricas(attempt, evento):
+        if attempt.status in (
+            IaChamadaTentativa.STATUS_RESERVED,
+            IaChamadaTentativa.STATUS_BLOCKED,
+            IaChamadaTentativa.STATUS_GOVERNANCE_BLOCKED,
+        ):
+            return attempt
+        desfecho = _assumir_falha_tecnica_sem_metricas(
+            int(attempt.id),
+            _motivo_para_assuncao(attempt),
+            commit=commit,
+        )
+        if desfecho != "com_metricas":
+            return db.session.get(IaChamadaTentativa, int(attempt_id))
+        attempt = db.session.get(IaChamadaTentativa, int(attempt_id))
+        if attempt is None or attempt.ia_consumo_evento_id is None:
+            return attempt
+        evento = db.session.get(IaConsumoEvento, int(attempt.ia_consumo_evento_id))
+        if evento is None:
+            _marcar_incerta(attempt.id, MOTIVO_PERSISTENCIA_EVENTO)
+            return db.session.get(IaChamadaTentativa, int(attempt_id))
+
     get_or_create_config()
     from app.services.cleiton_franquia_operacional_service import creditos_totais_de_evento_ia
 
@@ -1358,10 +1386,25 @@ def _liquidar_tentativa_ia(
     reservado = _quantize_credit(_to_decimal(attempt.reserved_credits))
     if attempt.debita_cliente and reservado > 0 and creditos > reservado:
         _marcar_incerta(attempt.id, MOTIVO_USO_EXCEDE)
-        tentativa = db.session.get(IaChamadaTentativa, int(attempt_id))
-        if tentativa is not None:
-            tentativa.actual_credits = creditos
+        _begin_write_lock()
+        tentativa = (
+            db.session.query(IaChamadaTentativa)
+            .filter(IaChamadaTentativa.id == int(attempt_id))
+            .with_for_update()
+            .one_or_none()
+        )
+        if tentativa is None:
             _commit_session()
+            return None
+        if custo_assumido_pela_plataforma(tentativa):
+            _commit_session()
+            return tentativa
+        if (
+            tentativa.settled_at is None
+            and tentativa.status == IaChamadaTentativa.STATUS_UNCERTAIN
+        ):
+            tentativa.actual_credits = creditos
+        _commit_session()
         return db.session.get(IaChamadaTentativa, int(attempt_id))
 
     if attempt.debita_cliente and creditos > 0:
@@ -1380,6 +1423,10 @@ def _liquidar_tentativa_ia(
         IaChamadaTentativa.STATUS_SETTLED,
         IaChamadaTentativa.STATUS_PROVIDER_FAILED,
     ):
+        if commit:
+            _commit_session()
+        return locked
+    if custo_assumido_pela_plataforma(locked):
         if commit:
             _commit_session()
         return locked
@@ -1553,6 +1600,114 @@ def _usage_ausente(evento: Any) -> bool:
     return evento.input_tokens is None and evento.output_tokens is None and evento.total_tokens is None
 
 
+def custo_assumido_pela_plataforma(attempt: IaChamadaTentativa | None) -> bool:
+    """Encerramento explícito em que a plataforma absorve o custo desconhecido."""
+    if attempt is None:
+        return False
+    motivo = attempt.failure_reason or ""
+    return motivo == MOTIVO_FALHA_ASSUMIDA_PLATAFORMA or motivo.startswith(
+        MOTIVO_FALHA_ASSUMIDA_PLATAFORMA + ":"
+    )
+
+
+def _chat_com_politica_de_custo_assumido(attempt: IaChamadaTentativa | None) -> bool:
+    """Opt-in persistido pelo flow do chat. As outras habilidades ficam de fora."""
+    return attempt is not None and attempt.flow_type == FLOW_CHAT_COMPARATIVO
+
+
+def _motivo_para_assuncao(attempt: IaChamadaTentativa) -> str:
+    motivo = (attempt.failure_reason or "").strip()
+    prefixo = MOTIVO_FALHA_ASSUMIDA_PLATAFORMA + ":"
+    if motivo.startswith(prefixo):
+        motivo = motivo[len(prefixo) :].strip()
+    if not motivo or motivo == MOTIVO_LIQUIDACAO:
+        return MOTIVO_PROVIDER_SEM_USAGE
+    return motivo
+
+
+def _falha_terminal_chat_sem_metricas(attempt: IaChamadaTentativa, evento: Any) -> bool:
+    """Falha terminal comprovada, sem consumo e sem métricas, na política do chat."""
+    if not _chat_com_politica_de_custo_assumido(attempt) or custo_assumido_pela_plataforma(attempt):
+        return False
+    if evento is None or evento.status != STATUS_FAILURE or not _usage_ausente(evento):
+        return False
+    return _abatimento_comprovado(attempt) is None
+
+
+def _assumir_falha_tecnica_sem_metricas(
+    attempt_id: int,
+    motivo_original: str,
+    *,
+    commit: bool = True,
+) -> str:
+    """Encerra a reserva depois da falha terminal sem métricas.
+
+    Reserva, status e marcador saem na mesma transação. Não debita
+    consumo_acumulado, não apaga tentativa nem evento e não mexe em reserva
+    que ainda não saiu do estado reservado. A segunda execução encontra a
+    tentativa já encerrada e não libera de novo. Se o commit falhar, o
+    rollback devolve o estado anterior e esta função pode repetir o encerramento.
+    """
+
+    def _fechar(resultado: str) -> str:
+        if commit:
+            _commit_session()
+        return resultado
+
+    if commit:
+        _begin_write_lock()
+    attempt = (
+        db.session.query(IaChamadaTentativa)
+        .filter(IaChamadaTentativa.id == int(attempt_id))
+        .with_for_update()
+        .one_or_none()
+    )
+    if attempt is None:
+        return _fechar("em_andamento")
+    if custo_assumido_pela_plataforma(attempt):
+        return _fechar("ja_assumida")
+    if _abatimento_comprovado(attempt) is not None or (
+        attempt.settled_at is not None
+        and attempt.status
+        in (
+            IaChamadaTentativa.STATUS_SETTLED,
+            IaChamadaTentativa.STATUS_PROVIDER_FAILED,
+        )
+    ):
+        return _fechar("ja_liquidada")
+    if attempt.status in (
+        IaChamadaTentativa.STATUS_RESERVED,
+        IaChamadaTentativa.STATUS_BLOCKED,
+        IaChamadaTentativa.STATUS_GOVERNANCE_BLOCKED,
+    ):
+        return _fechar("em_andamento")
+    if (
+        attempt.status == IaChamadaTentativa.STATUS_RELEASED
+        and attempt.settled_at is not None
+        and not attempt.reserva_ativa
+    ):
+        return _fechar("ja_assumida")
+    if attempt.ia_consumo_evento_id is not None:
+        from app.models import IaConsumoEvento
+
+        evento = (
+            db.session.query(IaConsumoEvento)
+            .filter(IaConsumoEvento.id == int(attempt.ia_consumo_evento_id))
+            .with_for_update()
+            .one_or_none()
+        )
+        if evento is not None and not _usage_ausente(evento):
+            return _fechar("com_metricas")
+    _encerrar_reserva_na_transacao(attempt)
+    attempt.status = IaChamadaTentativa.STATUS_RELEASED
+    attempt.failure_reason = _reason(
+        f"{MOTIVO_FALHA_ASSUMIDA_PLATAFORMA}:{motivo_original}"
+    )
+    attempt.settled_at = utcnow_naive()
+    db.session.flush()
+    return _fechar("assumida")
+
+
 def _marcar_incerta(attempt_id: int, reason: str) -> None:
     try:
         db.session.rollback()
@@ -1624,11 +1779,15 @@ def cleiton_governed_billable_ai_call(
     thinking_token_cap: int | None = None,
     operation_token_budget: int | None = None,
     adiar_liquidacao: bool = False,
+    assumir_falha_sem_metricas: bool = False,
 ) -> BillableAiCallResult:
     """Único entry point novo de geração externa governada e faturável.
 
     adiar_liquidacao só é usado pela extração do AgenteCompara. O padrão
     continua liquidando na hora e não altera os demais agentes.
+
+    assumir_falha_sem_metricas só é ligado pelas duas gerações do chat
+    comparativo. Nas demais habilidades, falha sem métrica continua incerta.
     """
     key = (attempt_key or uuid4().hex)[:160]
     if not has_app_context():
@@ -2071,6 +2230,7 @@ def cleiton_governed_billable_ai_call(
             attempt_key=key,
             observation=observation,
             liquidar=not adiar_liquidacao,
+            assumir_falha_sem_metricas=assumir_falha_sem_metricas,
         )
     except BillableAiUncertainError:
         raise
@@ -2120,6 +2280,7 @@ def _concluir_chamada_observada(
     attempt_key: str,
     observation: Any,
     liquidar: bool = True,
+    assumir_falha_sem_metricas: bool = False,
 ) -> BillableAiCallResult:
     _vincular_evento(attempt_id, observation.evento_id)
     if observation.persist_status != PERSIST_OK or observation.evento_id is None:
@@ -2141,13 +2302,38 @@ def _concluir_chamada_observada(
             response=observation.response,
         )
     if observation.status == STATUS_FAILURE and _usage_observation_ausente(observation):
-        _marcar_incerta(attempt_id, MOTIVO_PROVIDER_SEM_USAGE)
-        raise BillableAiUncertainError(
-            MOTIVO_PROVIDER_SEM_USAGE,
-            motivo=MOTIVO_PROVIDER_SEM_USAGE,
-            attempt_key=attempt_key,
-            provider_called=True,
-        ) from observation.provider_exception
+        if (
+            assumir_falha_sem_metricas
+            and observation.persist_status == PERSIST_OK
+            and observation.evento_id is not None
+        ):
+            desfecho = _assumir_falha_tecnica_sem_metricas(
+                attempt_id,
+                MOTIVO_PROVIDER_SEM_USAGE,
+            )
+            if desfecho == "em_andamento":
+                _marcar_incerta(attempt_id, MOTIVO_PROVIDER_SEM_USAGE)
+                raise BillableAiUncertainError(
+                    MOTIVO_PROVIDER_SEM_USAGE,
+                    motivo=MOTIVO_PROVIDER_SEM_USAGE,
+                    attempt_key=attempt_key,
+                    provider_called=True,
+                ) from observation.provider_exception
+            if desfecho not in {"com_metricas", "ja_liquidada"}:
+                raise BillableAiUncertainError(
+                    MOTIVO_PROVIDER_SEM_USAGE,
+                    motivo=MOTIVO_PROVIDER_SEM_USAGE,
+                    attempt_key=attempt_key,
+                    provider_called=True,
+                ) from observation.provider_exception
+        else:
+            _marcar_incerta(attempt_id, MOTIVO_PROVIDER_SEM_USAGE)
+            raise BillableAiUncertainError(
+                MOTIVO_PROVIDER_SEM_USAGE,
+                motivo=MOTIVO_PROVIDER_SEM_USAGE,
+                attempt_key=attempt_key,
+                provider_called=True,
+            ) from observation.provider_exception
 
     if not liquidar:
         row = db.session.get(IaChamadaTentativa, attempt_id)
@@ -2238,6 +2424,7 @@ def cleiton_governed_generate_content(
     thinking_token_cap: int | None = None,
     operation_token_budget: int | None = None,
     adiar_liquidacao: bool = False,
+    assumir_falha_sem_metricas: bool = False,
 ) -> Any:
     """Assinatura histórica dos runners: a fachada é o entry point e devolve a resposta."""
     result = cleiton_governed_billable_ai_call(
@@ -2262,6 +2449,7 @@ def cleiton_governed_generate_content(
         thinking_token_cap=thinking_token_cap,
         operation_token_budget=operation_token_budget,
         adiar_liquidacao=adiar_liquidacao,
+        assumir_falha_sem_metricas=assumir_falha_sem_metricas,
     )
     if adiar_liquidacao:
         if result.provider_exception is not None:
