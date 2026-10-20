@@ -23,11 +23,22 @@ from app.models import (
     utcnow_naive,
 )
 from app.agente_compara_chat_prompt import build_comparison_chat_user_prompt
+from app.agente_compara_chat_query_catalog import CATALOG_VERSION
+from app.agente_compara_chat_semantic_selection import SELECTION_VERSION
+from app.agente_compara_comparison_state import AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY
 from app.run_agente_compara_comparison_chat import (
+    ERROR_ADMISSION_BLOCKED,
+    ERROR_FRANCHISE_EXHAUSTED,
+    ERROR_PLAN_BLOCKED,
+    ERROR_PLAN_EXPIRED,
+    MSG_ADMISSION_BLOCKED,
+    MSG_PLAN_BLOCKED_MANUAL,
+    MSG_PLAN_EXPIRED,
     ComparisonChatProviderError,
     _answer_response_config,
     _generate_governed_text,
     _selection_response_config,
+    chat_agente_compara_comparison_reply,
 )
 from app.services.cleiton_billable_ai_call import (
     BILLABLE_AI_MAX_OUTPUT_TOKENS,
@@ -216,73 +227,90 @@ def test_padrao_global_das_outras_habilidades_permanece():
     assert resolver_limites_config(selecao) == (2048, 1, 0, None)
 
 
-def test_504_na_selecao_encerra_reserva_sem_debito(app, monkeypatch):
+def _assert_contrato_gemini(chamada, *, contents, saida, mime=None, temperature=None):
+    """Mesmo payload da base a8c09ed: sem teto objetivo e sem transporte extra."""
+
+    assert chamada["model"] == "gemini-2.5-flash"
+    assert chamada["contents"] == contents
+    dump = chamada["config"].model_dump(exclude_none=True)
+    assert dump["max_output_tokens"] == saida
+    assert dump["candidate_count"] == 1
+    assert dump["thinking_config"]["thinking_budget"] == 0
+    assert "http_options" not in dump
+    if mime is None:
+        assert set(dump) == {"candidate_count", "max_output_tokens", "thinking_config"}
+    else:
+        assert dump["response_mime_type"] == mime
+        assert dump["temperature"] == temperature
+        assert dump["tools"] == []
+        assert dump["automatic_function_calling"]["disable"] is True
+    saida_lida, candidatos, thinking, erro = resolver_limites_config(chamada["config"])
+    assert erro is None
+    assert (saida_lida, candidatos, thinking) == (saida, 1, 0)
+
+
+def test_504_na_selecao_nao_reserva_nem_debita(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(email="selecao-504@test.com")
         client = _Client(lambda model, contents, config: (_ for _ in ()).throw(GatewayTimeout()))
         _patch_client(monkeypatch, client)
+        prompt = "selecione a consulta de economia"
         with pytest.raises(ComparisonChatProviderError):
             _generate_governed_text(
-                prompt="selecione a consulta de economia",
+                prompt=prompt,
                 usuario=usuario,
                 config=_selection_response_config(),
                 billable_stage="semantic_selection",
             )
         atual = _franquia(franquia.id)
-        tentativa = IaChamadaTentativa.query.one()
         assert atual.consumo_acumulado == 0
         assert atual.reserva_pendente == 0
-        assert tentativa.reserva_ativa is False
-        assert tentativa.status == "released"
-        assert custo_assumido_pela_plataforma(tentativa)
-        assert tentativa.failure_reason == f"{MOTIVO_FALHA_ASSUMIDA_PLATAFORMA}:provider_sem_usage"
-        assert tentativa.actual_credits is None
-        assert tentativa.ia_consumo_evento_id is not None
-        evento = db.session.get(IaConsumoEvento, tentativa.ia_consumo_evento_id)
-        assert evento is not None
+        assert IaChamadaTentativa.query.count() == 0
+        assert client.models.count_calls == []
+        assert len(client.models.calls) == 1
+        _assert_contrato_gemini(
+            client.models.calls[0],
+            contents=prompt,
+            saida=2048,
+            mime="application/json",
+            temperature=0,
+        )
+        evento = IaConsumoEvento.query.one()
         assert evento.status == "failure"
         assert evento.total_tokens is None
+        assert evento.franquia_id == franquia.id
+        assert evento.usuario_id == usuario.id
+        assert evento.flow_type == "agente_compara_comparison_chat"
+        assert evento.origem_sistema is False
         assert IaConsumoAbatimento.query.count() == 0
-        entrada, saida, candidatos, thinking = _componentes(client)
-        assert (saida, candidatos, thinking) == (2048, 1, 0)
-        assert tentativa.reserved_credits == _creditos(tokens_teto_total(entrada, saida, thinking, candidatos))
-        repetido = _import_assumir()(tentativa.id, "provider_sem_usage")
-        assert repetido == "ja_assumida"
-        assert _franquia(franquia.id).reserva_pendente == 0
+        repetido = aplicar_motor_apos_ia_consumo_evento(evento.id)
+        assert repetido.abateu_franquia is False
         assert _franquia(franquia.id).consumo_acumulado == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
 
 
-def test_504_na_resposta_analitica_encerra_reserva_sem_debito(app, monkeypatch):
+def test_504_na_resposta_analitica_nao_reserva_nem_debita(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(email="analitica-504@test.com")
         client = _Client(lambda model, contents, config: (_ for _ in ()).throw(GatewayTimeout()))
         _patch_client(monkeypatch, client)
+        prompt = "explique a economia publicada"
         with pytest.raises(ComparisonChatProviderError):
             _generate_governed_text(
-                prompt="explique a economia publicada",
+                prompt=prompt,
                 usuario=usuario,
                 config=_answer_response_config(),
                 billable_stage="answer_generation",
             )
         atual = _franquia(franquia.id)
-        tentativa = IaChamadaTentativa.query.one()
         assert atual.consumo_acumulado == 0
         assert atual.reserva_pendente == 0
-        assert tentativa.reserva_ativa is False
-        assert custo_assumido_pela_plataforma(tentativa)
+        assert IaChamadaTentativa.query.count() == 0
         assert IaConsumoAbatimento.query.count() == 0
-        entrada, saida, candidatos, thinking = _componentes(client)
-        assert (saida, candidatos, thinking) == (8192, 1, 0)
-        assert client.models.calls[-1]["model"] == "gemini-2.5-flash"
-        teto = tokens_teto_total(entrada, saida, thinking, candidatos)
-        dobro = tokens_teto_total(entrada, 8192, 8192, 1)
-        assert teto == entrada + 8192
-        assert dobro - teto == 8192
-        assert tentativa.reserved_credits == _creditos(teto)
-        assert tentativa.reserved_credits != _creditos(dobro)
+        _assert_contrato_gemini(client.models.calls[-1], contents=prompt, saida=8192)
 
 
-def test_evento_tardio_nao_cobra_depois_do_encerramento(app, monkeypatch):
+def test_falha_sem_metricas_nao_debita_nem_cria_reserva(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(email="tardio@test.com")
         client = _Client(lambda model, contents, config: (_ for _ in ()).throw(GatewayTimeout()))
@@ -294,24 +322,17 @@ def test_evento_tardio_nao_cobra_depois_do_encerramento(app, monkeypatch):
                 config=_answer_response_config(),
                 billable_stage="answer_generation",
             )
-        tentativa = IaChamadaTentativa.query.one()
-        evento = db.session.get(IaConsumoEvento, tentativa.ia_consumo_evento_id)
-        evento.input_tokens = 80
-        evento.output_tokens = 20
-        evento.total_tokens = 100
-        db.session.commit()
-        liquidar_tentativa_ia(tentativa.id)
+        assert IaChamadaTentativa.query.count() == 0
+        evento = IaConsumoEvento.query.one()
+        assert evento.input_tokens is None
+        assert evento.output_tokens is None
+        assert evento.total_tokens is None
         resultado = aplicar_motor_apos_ia_consumo_evento(evento.id)
-        assert resultado.motivo_nao_abateu == "custo_assumido_plataforma"
         assert resultado.abateu_franquia is False
         atual = _franquia(franquia.id)
         assert atual.consumo_acumulado == 0
         assert atual.reserva_pendente == 0
         assert IaConsumoAbatimento.query.count() == 0
-        preservada = db.session.get(IaChamadaTentativa, tentativa.id)
-        assert custo_assumido_pela_plataforma(preservada)
-        assert preservada.actual_credits is None
-        assert preservada.ia_consumo_evento_id == evento.id
 
 
 def test_sucesso_debita_o_consumo_real_uma_vez(app, monkeypatch):
@@ -319,8 +340,9 @@ def test_sucesso_debita_o_consumo_real_uma_vez(app, monkeypatch):
         usuario, franquia = _seed(email="sucesso@test.com")
         client = _Client(_ok)
         _patch_client(monkeypatch, client)
+        prompt = "quanto foi a economia"
         texto, model = _generate_governed_text(
-            prompt="quanto foi a economia",
+            prompt=prompt,
             usuario=usuario,
             config=_answer_response_config(),
             billable_stage="answer_generation",
@@ -328,47 +350,47 @@ def test_sucesso_debita_o_consumo_real_uma_vez(app, monkeypatch):
         assert texto == "resposta oficial"
         assert model == "gemini-2.5-flash"
         atual = _franquia(franquia.id)
-        tentativa = IaChamadaTentativa.query.one()
+        assert IaChamadaTentativa.query.count() == 0
         assert atual.consumo_acumulado == Decimal("0.1")
         assert atual.reserva_pendente == 0
-        assert tentativa.status == "settled"
-        assert tentativa.actual_credits == Decimal("0.1")
-        assert tentativa.reserva_ativa is False
-        assert tentativa.reserved_credits > tentativa.actual_credits
         assert IaConsumoAbatimento.query.count() == 1
+        evento = IaConsumoEvento.query.one()
+        assert evento.franquia_id == franquia.id
+        assert evento.usuario_id == usuario.id
+        assert evento.status == "success"
+        assert evento.total_tokens == 100
+        abatimento = IaConsumoAbatimento.query.one()
+        assert abatimento.ia_consumo_evento_id == evento.id
+        assert abatimento.creditos == Decimal("0.1")
         antes = atual.consumo_acumulado
-        liquidar_tentativa_ia(tentativa.id)
-        aplicar_motor_apos_ia_consumo_evento(tentativa.ia_consumo_evento_id)
+        repetido = aplicar_motor_apos_ia_consumo_evento(evento.id)
+        assert repetido.abateu_franquia is False
+        assert repetido.motivo_nao_abateu == "ja_apropriado"
         assert _franquia(franquia.id).consumo_acumulado == antes
         assert IaConsumoAbatimento.query.count() == 1
-        entrada, saida, candidatos, thinking = _componentes(client)
-        assert (saida, candidatos, thinking) == (8192, 1, 0)
-        assert tentativa.reserved_credits == _creditos(
-            tokens_teto_total(entrada, saida, thinking, candidatos)
-        )
+        assert client.models.count_calls == []
+        _assert_contrato_gemini(client.models.calls[-1], contents=prompt, saida=8192)
 
 
-def test_saldo_insuficiente_recusa_antes_da_geracao(app, monkeypatch):
+def test_saldo_parcial_nao_reserva_e_debita_o_consumo_real(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(limite="1", email="sem-saldo@test.com")
         client = _Client(_ok)
         _patch_client(monkeypatch, client)
-        with pytest.raises(ComparisonChatProviderError) as exc:
-            _generate_governed_text(
-                prompt="pergunta que nao pode reservar o teto",
-                usuario=usuario,
-                config=_answer_response_config(),
-                billable_stage="answer_generation",
-            )
-        assert exc.value.http_status == 403
-        assert client.models.calls == []
+        texto, _model = _generate_governed_text(
+            prompt="pergunta dentro da franquia ativa",
+            usuario=usuario,
+            config=_answer_response_config(),
+            billable_stage="answer_generation",
+        )
+        assert texto == "resposta oficial"
+        assert len(client.models.calls) == 1
+        assert client.models.count_calls == []
         atual = _franquia(franquia.id)
-        assert atual.consumo_acumulado == 0
+        assert atual.consumo_acumulado == Decimal("0.1")
         assert atual.reserva_pendente == 0
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "blocked"
-        assert tentativa.reserva_ativa is False
-        assert tentativa.reserved_credits == 0
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 1
 
 
 def test_falha_com_consumo_confirmado_liquida(app, monkeypatch):
@@ -390,13 +412,16 @@ def test_falha_com_consumo_confirmado_liquida(app, monkeypatch):
                 billable_stage="semantic_selection",
             )
         atual = _franquia(franquia.id)
-        tentativa = IaChamadaTentativa.query.one()
+        assert IaChamadaTentativa.query.count() == 0
         assert atual.consumo_acumulado == Decimal("0.1")
         assert atual.reserva_pendente == 0
-        assert tentativa.status == "provider_failed"
-        assert tentativa.actual_credits == Decimal("0.1")
-        assert custo_assumido_pela_plataforma(tentativa) is False
-        assert IaConsumoAbatimento.query.count() == 1
+        evento = IaConsumoEvento.query.one()
+        assert evento.status == "failure"
+        assert evento.total_tokens == 100
+        assert IaConsumoAbatimento.query.one().creditos == Decimal("0.1")
+        repetido = aplicar_motor_apos_ia_consumo_evento(evento.id)
+        assert repetido.abateu_franquia is False
+        assert _franquia(franquia.id).consumo_acumulado == Decimal("0.1")
 
 
 def test_outra_habilidade_sem_metricas_continua_incerta(app):
@@ -954,3 +979,550 @@ def test_concorrencia_sem_metricas_encerra_uma_vez(tmp_path):
         assert IaConsumoAbatimento.query.count() == 0
         assert assumir(attempt_id, "provider_sem_usage") == "ja_assumida"
     assert len(resultados) == 2
+
+
+PERGUNTA_OBJETIVA = (
+    "Qual transportadora apresenta o menor frete nesta comparação? "
+    "Responda apenas com o nome e o valor."
+)
+PERGUNTA_COMPLEXA = (
+    "Explique os componentes de frete e a oportunidade de negociação por UF."
+)
+def _selection_oficial(query_type="official_summary", query_id="menor"):
+    return json.dumps(
+        {
+            "selection_version": SELECTION_VERSION,
+            "action": "query",
+            "clarification": None,
+            "catalog_version": CATALOG_VERSION,
+            "queries": [{"query_id": query_id, "type": query_type}],
+            "referent_criterion": "lowest_comparable_freight",
+        },
+        ensure_ascii=False,
+    )
+
+
+class _Fluxo:
+    def __init__(self, *, inflar_resposta=False, falhar_resposta=False):
+        self.calls = []
+        self.count_calls = []
+        self.inflar_resposta = inflar_resposta
+        self.falhar_resposta = falhar_resposta
+
+    def count_tokens(self, *, model, contents, config=None):
+        self.count_calls.append({"model": model, "contents": contents, "config": config})
+        if self.inflar_resposta and isinstance(contents, str) and "Seleção de consultas" not in contents:
+            return SimpleNamespace(total_tokens=100_000)
+        tokens, erro = estimar_tokens_entrada(contents, config)
+        if erro:
+            raise RuntimeError("count_indisponivel")
+        return SimpleNamespace(total_tokens=tokens)
+
+    def generate_content(self, *, model, contents, config=None):
+        self.calls.append({"model": model, "contents": contents, "config": config})
+        selecao = isinstance(contents, str) and "Seleção de consultas" in contents
+        if not selecao and self.falhar_resposta:
+            raise GatewayTimeout()
+        if selecao:
+            texto = _selection_oficial(
+                "official_summary" if PERGUNTA_OBJETIVA in contents else "freight_components",
+                "menor" if PERGUNTA_OBJETIVA in contents else "componentes",
+            )
+        else:
+            texto = "Transportadora Alfa: R$ 10,00."
+        return SimpleNamespace(
+            text=texto,
+            usage_metadata=_usage(80),
+            candidates=[SimpleNamespace(finish_reason="STOP")],
+        )
+
+
+def _cliente_fluxo(*, inflar_resposta=False, falhar_resposta=False):
+    models = _Fluxo(inflar_resposta=inflar_resposta, falhar_resposta=falhar_resposta)
+    return SimpleNamespace(
+        models=models,
+        http_options=SimpleNamespace(retry_options=SimpleNamespace(attempts=1)),
+    ), models
+
+
+def _preparar_comparacao(monkeypatch, usuario, franquia):
+    from tests.test_agente_compara_chat_analytical_bridge import _ready_context
+
+    ready = _ready_context(monkeypatch)
+    state = ready["session"][AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY]
+    state["conta_id"] = usuario.conta_id
+    state["usuario_id"] = usuario.id
+    state["franquia_id"] = franquia.id
+    monkeypatch.setattr(
+        "app.run_agente_compara_comparison_chat.get_agente_compara_config",
+        lambda: SimpleNamespace(question_max_chars=4000, chat_max_history=10),
+    )
+    return ready
+
+
+@pytest.fixture
+def storage_env(tmp_path, monkeypatch):
+    from tests.cleiton_doc_fixtures import patch_cleiton_doc_store
+    import time
+
+    import app.agente_compara_calculation_result_storage as storage_mod
+
+    patch_cleiton_doc_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "app.agente_compara_calculation_result_storage.get_cleiton_doc_tmp_dir",
+        lambda: str(tmp_path),
+    )
+    monkeypatch.setattr(storage_mod, "_calc_storage_sweep_monotonic", time.monotonic())
+    return tmp_path
+
+
+def _rodar(
+    monkeypatch,
+    *,
+    limite,
+    pergunta,
+    client,
+    email,
+    consumo="0",
+    bloqueio=False,
+    ciclo_vencido=False,
+):
+    usuario, franquia = _seed(limite=limite, email=email)
+    franquia.consumo_acumulado = Decimal(consumo)
+    franquia.bloqueio_manual = bloqueio
+    if ciclo_vencido:
+        franquia.fim_ciclo = utcnow_naive() - timedelta(days=1)
+    db.session.commit()
+    ready = _preparar_comparacao(monkeypatch, usuario, franquia)
+    _patch_client(monkeypatch, client)
+    resposta = chat_agente_compara_comparison_reply(
+        pergunta,
+        [],
+        session_obj=ready["session"],
+        usuario=usuario,
+        comparison_id=ready["comparison_id"],
+        request_id=f"scrum238-{email}",
+        entrega_ja_avaliada=True,
+    )
+    return usuario, franquia, resposta
+
+
+def test_prompt_e_config_gemini_equivalem_a_base():
+    from app.agente_compara_chat_prompt import build_comparison_chat_selection_prompt
+    from app.agente_compara_chat_semantic_selection import selection_catalog_document
+
+    prompt = build_comparison_chat_selection_prompt(
+        user_message=PERGUNTA_OBJETIVA,
+        history_slice=[],
+        referents={},
+        authorized_tables=[{"table_id": "t1", "slot_number": 1, "carrier_name": "Alfa"}],
+        catalog=selection_catalog_document(),
+    )
+    assert "Menor frete, somente nome e valor" not in prompt
+    assert "use somente official_summary" not in prompt
+    assert "Resumo executivo e prioridade de investigação" in prompt
+    resposta = _answer_response_config().model_dump(exclude_none=True)
+    assert resposta["max_output_tokens"] == 8192
+    assert resposta["candidate_count"] == 1
+    assert resposta["thinking_config"]["thinking_budget"] == 0
+    assert "http_options" not in resposta
+    assert "automatic_function_calling" not in resposta
+    selecao = _selection_response_config().model_dump(exclude_none=True)
+    assert selecao["max_output_tokens"] == 2048
+    assert selecao["temperature"] == 0
+    assert "http_options" not in selecao
+    assert resolver_limites_config(_answer_response_config()) == (8192, 1, 0, None)
+    assert resolver_limites_config(_selection_response_config()) == (2048, 1, 0, None)
+
+
+def test_chamada_interna_sem_usuario_nao_gera_nem_grava_evento(app, monkeypatch):
+    with app.app_context():
+        _usuario_row, franquia = _seed(email="interno-sem-usuario@test.com")
+        client = _Client(_ok)
+        _patch_client(monkeypatch, client)
+        with pytest.raises(ComparisonChatProviderError) as exc:
+            _generate_governed_text(
+                prompt="chamada interna sem operador",
+                usuario=None,
+                config=_answer_response_config(),
+                billable_stage="answer_generation",
+            )
+        assert exc.value.error_code == ERROR_ADMISSION_BLOCKED
+        assert exc.value.message == MSG_ADMISSION_BLOCKED
+        assert client.models.calls == []
+        assert client.models.count_calls == []
+        assert IaConsumoEvento.query.count() == 0
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 0
+        atual = _franquia(franquia.id)
+        assert atual.consumo_acumulado == 0
+        assert atual.reserva_pendente == 0
+        for item in Franquia.query.all():
+            assert item.consumo_acumulado == 0
+            assert item.reserva_pendente == 0
+
+
+def test_identidade_incompleta_nao_gera_nem_grava_evento(app, monkeypatch):
+    with app.app_context():
+        _usuario_row, franquia = _seed(email="identidade-incompleta@test.com")
+        client = _Client(_ok)
+        _patch_client(monkeypatch, client)
+        incompleto = SimpleNamespace(
+            id=1,
+            conta_id=1,
+            franquia_id=None,
+            is_authenticated=True,
+        )
+        with pytest.raises(ComparisonChatProviderError) as exc:
+            _generate_governed_text(
+                prompt="identidade sem franquia",
+                usuario=incompleto,
+                config=_selection_response_config(),
+                billable_stage="semantic_selection",
+            )
+        assert exc.value.error_code == ERROR_ADMISSION_BLOCKED
+        assert client.models.calls == []
+        assert IaConsumoEvento.query.count() == 0
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 0
+        assert _franquia(franquia.id).consumo_acumulado == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
+
+
+def test_chamada_interna_com_franquia_real_nao_contorna_autorizacao(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(email="interno-franquia-real@test.com")
+        franquia.bloqueio_manual = True
+        db.session.commit()
+        client = _Client(_ok)
+        _patch_client(monkeypatch, client)
+        interno = SimpleNamespace(
+            id=usuario.id,
+            conta_id=usuario.conta_id,
+            franquia_id=franquia.id,
+            is_authenticated=True,
+        )
+        with pytest.raises(ComparisonChatProviderError) as exc:
+            _generate_governed_text(
+                prompt="chamada interna com franquia bloqueada",
+                usuario=interno,
+                config=_answer_response_config(),
+                billable_stage="answer_generation",
+            )
+        assert exc.value.error_code == ERROR_PLAN_BLOCKED
+        assert exc.value.message == MSG_PLAN_BLOCKED_MANUAL
+        assert client.models.calls == []
+        assert IaConsumoEvento.query.count() == 0
+        assert IaChamadaTentativa.query.count() == 0
+        assert _franquia(franquia.id).consumo_acumulado == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
+
+
+def _objeto_autenticado(usuario, franquia_id):
+    return SimpleNamespace(
+        id=usuario.id,
+        conta_id=usuario.conta_id,
+        franquia_id=franquia_id,
+        is_authenticated=True,
+    )
+
+
+def _assert_chamada_recusada_sem_efeito(client, franquia_id):
+    assert client.models.calls == []
+    assert client.models.count_calls == []
+    assert IaConsumoEvento.query.count() == 0
+    assert IaChamadaTentativa.query.count() == 0
+    assert IaConsumoAbatimento.query.count() == 0
+    atual = _franquia(franquia_id)
+    assert atual.consumo_acumulado == 0
+    assert atual.reserva_pendente == 0
+
+
+def test_chamada_interna_com_franquia_inexistente_nao_gera_nem_grava_evento(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(email="interno-franquia-ausente@test.com")
+        client = _Client(_ok)
+        _patch_client(monkeypatch, client)
+        with pytest.raises(ComparisonChatProviderError) as exc:
+            _generate_governed_text(
+                prompt="franquia inexistente",
+                usuario=_objeto_autenticado(usuario, 999999),
+                config=_answer_response_config(),
+                billable_stage="answer_generation",
+            )
+        assert exc.value.error_code == ERROR_ADMISSION_BLOCKED
+        assert exc.value.message == MSG_ADMISSION_BLOCKED
+        _assert_chamada_recusada_sem_efeito(client, franquia.id)
+        assert db.session.get(Franquia, 999999) is None
+
+
+def test_falha_na_consulta_ou_autorizacao_nao_gera_nem_grava_evento(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(email="interno-consulta-falha@test.com")
+        client = _Client(_ok)
+        _patch_client(monkeypatch, client)
+
+        def _consulta_indisponivel(_usuario):
+            raise RuntimeError("consulta indisponivel")
+
+        monkeypatch.setattr(
+            "app.run_agente_compara_comparison_chat._franquia_persistida",
+            _consulta_indisponivel,
+        )
+        with pytest.raises(ComparisonChatProviderError) as consulta:
+            _generate_governed_text(
+                prompt="consulta da franquia indisponivel",
+                usuario=_objeto_autenticado(usuario, franquia.id),
+                config=_answer_response_config(),
+                billable_stage="answer_generation",
+            )
+        assert consulta.value.error_code == ERROR_ADMISSION_BLOCKED
+        assert consulta.value.message == MSG_ADMISSION_BLOCKED
+        _assert_chamada_recusada_sem_efeito(client, franquia.id)
+
+        def _autorizacao_indisponivel(*_args, **_kwargs):
+            raise RuntimeError("autorizacao indisponivel")
+
+        monkeypatch.setattr(
+            "app.run_agente_compara_comparison_chat._franquia_persistida",
+            lambda _usuario: True,
+        )
+        monkeypatch.setattr(
+            "app.services.cleiton_operacao_autorizacao_service.avaliar_autorizacao_operacao_por_franquia",
+            _autorizacao_indisponivel,
+        )
+        with pytest.raises(ComparisonChatProviderError) as autorizacao:
+            _generate_governed_text(
+                prompt="autorizacao indisponivel",
+                usuario=usuario,
+                config=_answer_response_config(),
+                billable_stage="answer_generation",
+            )
+        assert autorizacao.value.error_code == ERROR_ADMISSION_BLOCKED
+        assert autorizacao.value.message == MSG_ADMISSION_BLOCKED
+        _assert_chamada_recusada_sem_efeito(client, franquia.id)
+
+
+def test_chamada_interna_com_franquia_ativa_gera_e_cobra(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(email="interno-franquia-ativa@test.com")
+        client = _Client(_ok)
+        _patch_client(monkeypatch, client)
+        texto, model = _generate_governed_text(
+            prompt="consulta com franquia ativa",
+            usuario=_objeto_autenticado(usuario, franquia.id),
+            config=_answer_response_config(),
+            billable_stage="answer_generation",
+        )
+        assert texto == "resposta oficial"
+        assert model == "gemini-2.5-flash"
+        assert len(client.models.calls) == 1
+        atual = _franquia(franquia.id)
+        assert atual.consumo_acumulado == Decimal("0.1")
+        assert atual.reserva_pendente == 0
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 1
+        evento = IaConsumoEvento.query.one()
+        assert evento.franquia_id == franquia.id
+        assert evento.status == "success"
+
+
+def test_chamada_interna_com_franquia_expirada_nao_gera(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(email="interno-franquia-expirada@test.com")
+        franquia.fim_ciclo = utcnow_naive() - timedelta(days=1)
+        db.session.commit()
+        client = _Client(_ok)
+        _patch_client(monkeypatch, client)
+        with pytest.raises(ComparisonChatProviderError) as exc:
+            _generate_governed_text(
+                prompt="franquia expirada",
+                usuario=_objeto_autenticado(usuario, franquia.id),
+                config=_answer_response_config(),
+                billable_stage="answer_generation",
+            )
+        assert exc.value.error_code == ERROR_PLAN_EXPIRED
+        assert exc.value.message == MSG_PLAN_EXPIRED
+        _assert_chamada_recusada_sem_efeito(client, franquia.id)
+
+
+def test_pergunta_complexa_mantem_o_teto_analitico(app, storage_env, monkeypatch):
+    del storage_env
+    with app.app_context():
+        client, models = _cliente_fluxo()
+        _usuario_row, franquia, resposta = _rodar(
+            monkeypatch,
+            limite="100",
+            pergunta=PERGUNTA_COMPLEXA,
+            client=client,
+            email="complexa@test.com",
+        )
+        assert resposta.get("error") is None
+        assert len(models.calls) == 2
+        assert models.count_calls == []
+        assert resolver_limites_config(models.calls[1]["config"]) == (8192, 1, 0, None)
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoEvento.query.count() == 2
+        assert _franquia(franquia.id).consumo_acumulado == Decimal("0.16")
+        assert _franquia(franquia.id).reserva_pendente == 0
+
+
+def test_saldo_parcial_executa_as_duas_geracoes_sem_reserva(app, storage_env, monkeypatch):
+    del storage_env
+    with app.app_context():
+        client, models = _cliente_fluxo()
+        _usuario_row, franquia, resposta = _rodar(
+            monkeypatch,
+            limite="1",
+            pergunta=PERGUNTA_OBJETIVA,
+            client=client,
+            email="inviavel@test.com",
+        )
+        assert resposta.get("error") is None
+        assert len(models.calls) == 2
+        assert models.count_calls == []
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 2
+        atual = _franquia(franquia.id)
+        assert atual.consumo_acumulado == Decimal("0.16")
+        assert atual.reserva_pendente == 0
+        assert atual.consumo_acumulado < franquia.limite_total
+
+
+def test_contagem_inflada_nao_bloqueia_a_segunda_geracao(app, storage_env, monkeypatch):
+    del storage_env
+    with app.app_context():
+        client, models = _cliente_fluxo(inflar_resposta=True)
+        _usuario_row, franquia, resposta = _rodar(
+            monkeypatch,
+            limite="30",
+            pergunta=PERGUNTA_OBJETIVA,
+            client=client,
+            email="admissao@test.com",
+        )
+        assert resposta.get("error") is None
+        assert len(models.calls) == 2
+        assert models.count_calls == []
+        assert "Seleção de consultas" in models.calls[0]["contents"]
+        assert IaChamadaTentativa.query.count() == 0
+        atual = _franquia(franquia.id)
+        assert atual.reserva_pendente == 0
+        assert atual.consumo_acumulado == Decimal("0.16")
+        assert IaConsumoAbatimento.query.count() == 2
+
+
+def test_franquia_esgotada_informa_o_limite_do_plano(app, storage_env, monkeypatch):
+    del storage_env
+    with app.app_context():
+        client, models = _cliente_fluxo()
+        _usuario_row, _franquia_row, resposta = _rodar(
+            monkeypatch,
+            limite="5",
+            consumo="5",
+            pergunta=PERGUNTA_OBJETIVA,
+            client=client,
+            email="esgotada@test.com",
+        )
+        assert resposta["error_code"] == ERROR_FRANCHISE_EXHAUSTED
+        assert "Você atingiu o limite de uso do plano Free" in resposta["message"]
+        assert models.calls == []
+        assert models.count_calls == []
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoEvento.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 0
+
+
+def test_plano_bloqueado_nao_usa_a_mensagem_de_limite(app, storage_env, monkeypatch):
+    del storage_env
+    with app.app_context():
+        client, models = _cliente_fluxo()
+        _usuario_row, _franquia_row, resposta = _rodar(
+            monkeypatch,
+            limite="100",
+            bloqueio=True,
+            pergunta=PERGUNTA_OBJETIVA,
+            client=client,
+            email="bloqueada@test.com",
+        )
+        assert resposta["error_code"] == ERROR_PLAN_BLOCKED
+        assert resposta["message"] == MSG_PLAN_BLOCKED_MANUAL
+        assert "atingiu o limite" not in resposta["message"]
+        assert models.calls == []
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 0
+
+
+def test_plano_expirado_nao_usa_a_mensagem_de_limite(app, storage_env, monkeypatch):
+    del storage_env
+    with app.app_context():
+        client, models = _cliente_fluxo()
+        _usuario_row, _franquia_row, resposta = _rodar(
+            monkeypatch,
+            limite="100",
+            ciclo_vencido=True,
+            pergunta=PERGUNTA_OBJETIVA,
+            client=client,
+            email="expirada@test.com",
+        )
+        assert resposta["error_code"] == ERROR_PLAN_EXPIRED
+        assert resposta["message"] == MSG_PLAN_EXPIRED
+        assert "atingiu o limite" not in resposta["message"]
+        assert models.calls == []
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 0
+
+
+def test_plano_degradado_autoriza_e_debita_sem_reserva(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(limite="5", email="degradada@test.com", categoria="starter")
+        franquia.consumo_acumulado = Decimal("5")
+        db.session.commit()
+        client = _Client(_ok)
+        _patch_client(monkeypatch, client)
+        texto, _model = _generate_governed_text(
+            prompt="consulta com franquia degradada",
+            usuario=usuario,
+            config=_answer_response_config(),
+            billable_stage="answer_generation",
+        )
+        assert texto == "resposta oficial"
+        assert len(client.models.calls) == 1
+        atual = _franquia(franquia.id)
+        assert atual.consumo_acumulado == Decimal("5.1")
+        assert atual.reserva_pendente == 0
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 1
+
+
+def test_plano_desobediente_nao_descarta_evidencia_nem_encolhe_a_analise(app, storage_env, monkeypatch):
+    del storage_env
+    with app.app_context():
+
+        class _Desobediente(_Fluxo):
+            def generate_content(self, *, model, contents, config=None):
+                self.calls.append({"model": model, "contents": contents, "config": config})
+                if isinstance(contents, str) and "Seleção de consultas" in contents:
+                    texto = _selection_oficial("freight_components", "partes")
+                else:
+                    texto = "Os componentes publicados estão na evidência."
+                return SimpleNamespace(
+                    text=texto,
+                    usage_metadata=_usage(80),
+                    candidates=[SimpleNamespace(finish_reason="STOP")],
+                )
+
+        models = _Desobediente()
+        client = SimpleNamespace(
+            models=models,
+            http_options=SimpleNamespace(retry_options=SimpleNamespace(attempts=1)),
+        )
+        _usuario_row, _franquia_row, resposta = _rodar(
+            monkeypatch,
+            limite="100",
+            pergunta=PERGUNTA_OBJETIVA,
+            client=client,
+            email="desobediente@test.com",
+        )
+        assert resposta.get("error") is None
+        assert resolver_limites_config(models.calls[1]["config"]) == (8192, 1, 0, None)
+        assert "freight_components" in models.calls[1]["contents"]

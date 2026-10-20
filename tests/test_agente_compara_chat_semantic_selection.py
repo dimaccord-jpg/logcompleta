@@ -31,18 +31,28 @@ from app.run_agente_compara_comparison_chat import (
     chat_agente_compara_comparison_reply,
     responder_entrega_whatsapp_se_pedida,
 )
-from app.services.cleiton_billable_ai_call import BillableAiAdmissionBlocked
 from tests.cleiton_doc_fixtures import patch_cleiton_doc_store
 from tests.test_agente_compara_chat_analytical_bridge import (
     _SECRET_CARRIER,
     _SECRET_DOCUMENT,
     _ready_context,
     _usuario,
+    persistir_franquias_do_chat,
 )
 
 _OTHER_CONTA = 44
 _OTHER_USUARIO = 55
 _OTHER_FRANQUIA = 66
+
+
+@pytest.fixture(autouse=True)
+def _franquia_do_operador_de_chat(request):
+    if "ctx" not in request.fixturenames:
+        yield
+        return
+    request.getfixturevalue("ctx")
+    persistir_franquias_do_chat()
+    yield
 
 
 @pytest.fixture
@@ -515,49 +525,53 @@ def test_user_isolation_and_authorized_plan_only(ctx, storage_env, monkeypatch):
 
 def test_financial_blocks_and_selection_failure_do_not_spawn_a_third_call(ctx, storage_env, monkeypatch):
     del ctx, storage_env
+    from app.extensions import db
+    from app.models import Franquia
+    from app.run_agente_compara_comparison_chat import ERROR_PLAN_BLOCKED
+
     ready = _ready_context(monkeypatch)
     usuario = _usuario()
+    franquia = db.session.get(Franquia, usuario.franquia_id)
+    franquia.bloqueio_manual = True
+    db.session.commit()
     mode = {"phase": "selection_block"}
 
     def handler(contents):
         phase = mode["phase"]
-        if phase == "selection_block":
-            raise BillableAiAdmissionBlocked(
-                "bloqueio",
-                motivo="franquia",
-                mensagem_usuario="Franquia esgotada.",
-            )
-        if phase == "answer_block" and "Seleção de consultas" not in contents:
-            raise BillableAiAdmissionBlocked(
-                "bloqueio",
-                motivo="franquia",
-                mensagem_usuario="Franquia esgotada na resposta.",
-            )
-        if phase == "answer_fail" and "Seleção de consultas" not in contents:
+        if phase == "answer_fail" and "Sele\u00e7\u00e3o de consultas" not in contents:
             raise RuntimeError("provider-down")
-        if "Seleção de consultas" in contents:
+        if "Sele\u00e7\u00e3o de consultas" in contents:
+            if phase == "answer_block":
+                franquia.bloqueio_manual = True
+                db.session.commit()
             return SimpleNamespace(text=_selection([_query("resumo", "official_summary")]))
-        return SimpleNamespace(text="não deveria chegar")
+        return SimpleNamespace(text="unexpected answer")
 
     models, plans, _publications = _install(monkeypatch, handler)
-    blocked = _ask(ready, usuario, "Qual transportadora teve a maior economia?", request_id="fin-1")
+    question = "Qual transportadora teve a maior economia?"
+    blocked = _ask(ready, usuario, question, request_id="fin-1")
     assert blocked["http_status"] == 403
-    assert blocked["error"] == "provider_request_failed"
+    assert blocked["error"] == ERROR_PLAN_BLOCKED
     assert plans == []
-    assert len(models.calls) == 1
+    assert models.calls == []
 
     mode["phase"] = "answer_block"
-    answer_blocked = _ask(ready, usuario, "Qual transportadora teve a maior economia?", request_id="fin-2")
+    franquia.bloqueio_manual = False
+    db.session.commit()
+    answer_blocked = _ask(ready, usuario, question, request_id="fin-2")
     assert answer_blocked["http_status"] == 403
+    assert answer_blocked["error"] == ERROR_PLAN_BLOCKED
     assert len(plans) == 1
-    assert len(models.calls) == 3
+    assert len(models.calls) == 1
 
     mode["phase"] = "answer_fail"
-    failed = _ask(ready, usuario, "Qual transportadora teve a maior economia?", request_id="fin-3")
+    franquia.bloqueio_manual = False
+    db.session.commit()
+    failed = _ask(ready, usuario, question, request_id="fin-3")
     assert failed["error"] == "provider_request_failed"
     assert failed.get("answer") == ""
     assert len(plans) == 2
-    assert len(models.calls) == 5
+    assert len(models.calls) == 3
 
 
 def test_valid_cache_does_not_generate_again(ctx, storage_env, monkeypatch):

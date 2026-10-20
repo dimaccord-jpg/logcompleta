@@ -1,10 +1,11 @@
 """
 Backend do chat inteligente do AgenteCompara baseado na comparação vigente.
 
-Pergunta válida após READY, sem usuário operacional: uma chamada ao Gemini.
+Pergunta válida após READY exige usuário e franquia antes de qualquer geração.
 Com usuário operacional autenticado: uma seleção tipada e, quando o plano é
 válido, uma resposta fundamentada na publicação da ponte. No máximo essas duas
-gerações. Falhas de provider retornam erro estruturado (nunca HTTP 200 falso).
+gerações. Sem identidade válida não há chamada ao Gemini nem evento financeiro.
+Falhas de provider retornam erro estruturado (nunca HTTP 200 falso).
 Pré-READY é bloqueado pela rota (zero Gemini).
 Isolado de Cleide/audit_bi.
 """
@@ -15,7 +16,6 @@ import os
 import re
 import time
 from typing import Any
-from uuid import uuid4
 
 from app.agente_compara_chat_context_service import (
     CAPABILITY_LOCKED,
@@ -64,12 +64,9 @@ from app.run_agente_compara_insights_chat import (
     finalize_insights_answer,
     sanitize_agente_compara_sender_signature,
 )
+from app.run_cleiton_gemini_governance import cleiton_governed_generate_content
 from app.services.cleiton_billable_ai_call import (
-    BillableAiAdmissionBlocked,
-    BillableAiCallError,
-    cleiton_governed_generate_content,
     gemini_http_options,
-    usuario_operacional_da_chamada,
 )
 from app.services.agente_compara_config_service import get_agente_compara_config
 from app.cleiton_doc_escopo import (
@@ -546,6 +543,35 @@ def _extract_response_text(response: Any) -> str:
     return cleaned
 
 
+_MOTIVOS_FRANQUIA_ESGOTADA = frozenset(
+    {
+        "degraded_saldo_insuficiente",
+        "limite_atingido_free",
+        "limite_atingido_starter_pro",
+        "limite_atingido_plano_indefinido",
+        "limite_atingido_fallback",
+    }
+)
+_MOTIVOS_PLANO_EXPIRADO = frozenset(
+    {
+        "vigencia_expirada",
+        "limite_ou_vigencia_avulso",
+    }
+)
+
+ERROR_FRANCHISE_EXHAUSTED = "comparison_chat_franchise_exhausted"
+ERROR_PLAN_BLOCKED = "comparison_chat_plan_blocked"
+ERROR_PLAN_EXPIRED = "comparison_chat_plan_expired"
+ERROR_ADMISSION_BLOCKED = "comparison_chat_admission_blocked"
+
+MSG_PLAN_BLOCKED = "Sua franquia está bloqueada para operação no momento."
+MSG_PLAN_BLOCKED_MANUAL = (
+    "Sua franquia está temporariamente bloqueada por ação administrativa."
+)
+MSG_PLAN_EXPIRED = "A vigência operacional da sua franquia expirou."
+MSG_ADMISSION_BLOCKED = "Não foi possível autorizar esta consulta no momento."
+
+
 def _answer_response_config():
     """Teto executável da resposta analítica no Gemini 2.5.
 
@@ -604,6 +630,207 @@ def _selection_response_config():
         return None
 
 
+def _plano_codigo_do_usuario(usuario) -> str | None:
+    from flask import has_app_context
+
+    if usuario is None or not has_app_context():
+        return None
+    identity = operational_identity(usuario)
+    if identity is None:
+        return None
+    try:
+        from app.services.cleiton_plano_resolver import resolver_plano_operacional_para_franquia
+
+        plano = resolver_plano_operacional_para_franquia(identity[2])
+    except Exception:
+        return None
+    if plano is None:
+        return None
+    codigo = getattr(plano, "codigo", None)
+    if not isinstance(codigo, str) or not codigo.strip():
+        return None
+    return codigo.strip()
+
+
+def _classificar_recusa_financeira(motivo: str, plano_codigo: str | None) -> tuple[str, str] | None:
+    """Mensagem segura. Não devolve crédito, token, saldo nem chave interna."""
+
+    if motivo in _MOTIVOS_FRANQUIA_ESGOTADA:
+        from app.services.cleiton_mensageria_operacao_service import (
+            montar_mensagem_limite_plano_texto,
+        )
+        from app.services.plano_service import obter_nome_exibivel_plano
+
+        return ERROR_FRANCHISE_EXHAUSTED, montar_mensagem_limite_plano_texto(
+            obter_nome_exibivel_plano(plano_codigo)
+        )
+    if motivo == "bloqueio_manual":
+        return ERROR_PLAN_BLOCKED, MSG_PLAN_BLOCKED_MANUAL
+    if motivo == "franquia_bloqueada":
+        return ERROR_PLAN_BLOCKED, MSG_PLAN_BLOCKED
+    if motivo in _MOTIVOS_PLANO_EXPIRADO:
+        return ERROR_PLAN_EXPIRED, MSG_PLAN_EXPIRED
+    return None
+
+
+_SEM_VINCULO_DE_IDENTIDADE = object()
+
+
+def _erro_identidade_ausente(stage: str) -> ComparisonChatProviderError:
+    """Recusa antes do Gemini. Não reserva crédito e não grava evento."""
+
+    return ComparisonChatProviderError(
+        ERROR_ADMISSION_BLOCKED,
+        MSG_ADMISSION_BLOCKED,
+        retryable=False,
+        http_status=403,
+        stage=stage,
+    )
+
+
+def _franquia_persistida(usuario) -> bool:
+    """A franquia indicada pelo operador existe nesta base. Não cria linha."""
+
+    tripla = operational_identity(usuario)
+    if tripla is None:
+        return False
+    from app.extensions import db
+    from app.models import Franquia
+
+    return db.session.get(Franquia, tripla[2]) is not None
+
+
+def _recusa_consulta_indisponivel(stage: str) -> ComparisonChatProviderError:
+    logger.info("comparison_chat_operational_auth_unread")
+    return ComparisonChatProviderError(
+        ERROR_ADMISSION_BLOCKED,
+        MSG_ADMISSION_BLOCKED,
+        retryable=False,
+        http_status=403,
+        stage=stage,
+    )
+
+
+def _recusar_operacao_bloqueada(usuario, *, stage: str) -> ComparisonChatProviderError | None:
+    """Autorização operacional da Júlia. Não reserva crédito nem lê teto de tokens.
+
+    usuario=None não herda o usuário da requisição e não vira origem de sistema.
+    A origem de sistema explícita permanece na fachada global, identificada.
+    Franquia ausente, inválida ou ilegível recusa antes do Gemini.
+    """
+
+    from flask import has_app_context
+
+    from app.models import User
+
+    if usuario is None or getattr(usuario, "is_authenticated", False) is not True:
+        return _erro_identidade_ausente(stage)
+    if not isinstance(usuario, User):
+        if operational_identity(usuario) is None or not has_app_context():
+            return _erro_identidade_ausente(stage)
+        try:
+            franquia_existe = _franquia_persistida(usuario)
+        except Exception:
+            return _recusa_consulta_indisponivel(stage)
+        if not franquia_existe:
+            return _erro_identidade_ausente(stage)
+    elif not has_app_context():
+        return _erro_identidade_ausente(stage)
+    try:
+        from app.services.cleiton_operacao_autorizacao_service import (
+            avaliar_autorizacao_operacao_por_franquia,
+        )
+
+        authz = avaliar_autorizacao_operacao_por_franquia(usuario)
+        if not isinstance(authz, dict):
+            return _recusa_consulta_indisponivel(stage)
+        permitido = authz.get("permitido") is True
+    except Exception:
+        return _recusa_consulta_indisponivel(stage)
+    if permitido:
+        if operational_identity(usuario) is None:
+            return _erro_identidade_ausente(stage)
+        return None
+    classe = _classificar_recusa_financeira(
+        str(authz.get("motivo") or ""),
+        _plano_codigo_do_usuario(usuario),
+    )
+    if classe is None:
+        mensagem = authz.get("mensagem_usuario") or MSG_ADMISSION_BLOCKED
+        return ComparisonChatProviderError(
+            ERROR_ADMISSION_BLOCKED,
+            mensagem,
+            retryable=False,
+            http_status=403,
+            stage=stage,
+        )
+    codigo, mensagem = classe
+    return ComparisonChatProviderError(
+        codigo,
+        mensagem,
+        retryable=False,
+        http_status=403,
+        stage=stage,
+    )
+
+
+def _abrir_identidade_da_chamada(usuario, *, stage: str):
+    """Grava a franquia do operador para o evento e o abatimento. Restaura depois."""
+
+    from flask import has_app_context
+
+    from app.consumo_identidade import (
+        TIPO_ORIGEM_HTTP_USUARIO,
+        get_consumo_identidade,
+        identidade_de_usuario,
+        set_consumo_identidade,
+    )
+    from app.models import User
+
+    if usuario is None or getattr(usuario, "is_authenticated", False) is not True:
+        raise _erro_identidade_ausente(stage)
+    if isinstance(usuario, User):
+        try:
+            ident = identidade_de_usuario(usuario, TIPO_ORIGEM_HTTP_USUARIO)
+        except Exception as exc:
+            raise ComparisonChatProviderError(
+                ERROR_ADMISSION_BLOCKED,
+                MSG_ADMISSION_BLOCKED,
+                retryable=False,
+                http_status=403,
+                stage=stage,
+                cause=exc,
+            ) from exc
+        if ident.get("usuario_id") is None or ident.get("franquia_id") is None:
+            raise _erro_identidade_ausente(stage)
+    else:
+        tripla = operational_identity(usuario)
+        if tripla is None or not has_app_context():
+            raise _erro_identidade_ausente(stage)
+        conta_id, usuario_id, franquia_id = tripla
+        ident = {
+            "conta_id": conta_id,
+            "franquia_id": franquia_id,
+            "usuario_id": usuario_id,
+            "tipo_origem": TIPO_ORIGEM_HTTP_USUARIO,
+            "origem_sistema": False,
+        }
+    anterior = get_consumo_identidade()
+    set_consumo_identidade(ident)
+    return anterior
+
+
+def _fechar_identidade_da_chamada(anterior) -> None:
+    from app.consumo_identidade import clear_consumo_identidade, set_consumo_identidade
+
+    if anterior is _SEM_VINCULO_DE_IDENTIDADE:
+        return
+    if anterior is None:
+        clear_consumo_identidade()
+        return
+    set_consumo_identidade(anterior)
+
+
 def _safe_finish_reason(response: Any) -> str | None:
     """Nome do finish_reason. Não devolve texto da resposta."""
 
@@ -640,9 +867,18 @@ def _generate_governed_text(
     billable_stage: str = "billable_ai_gate",
     generation_meta: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
+    """Autoriza a franquia, gera com a governança da Júlia e debita o consumo real."""
+
+    from app.services.cleiton_ai_data_governance import CleitonAiGovernanceBlockedError
+
     client = _get_client()
     model = resolve_comparison_chat_model()
+    recusa = _recusar_operacao_bloqueada(usuario, stage=billable_stage)
+    if recusa is not None:
+        raise recusa
+    vinculo = _SEM_VINCULO_DE_IDENTIDADE
     try:
+        vinculo = _abrir_identidade_da_chamada(usuario, stage=billable_stage)
         response = cleiton_governed_generate_content(
             client,
             model=model,
@@ -651,23 +887,18 @@ def _generate_governed_text(
             agent="agente_compara",
             flow_type=AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE,
             api_key_label=_api_key_label(),
-            usuario=usuario_operacional_da_chamada(usuario),
-            attempt_key=f"{AGENTE_COMPARA_COMPARISON_CHAT_FLOW_TYPE}:{model}:{uuid4().hex}",
-            assumir_falha_sem_metricas=True,
         )
-    except BillableAiCallError as exc:
-        if not exc.terminal:
-            raise
+    except ComparisonChatProviderError:
+        raise
+    except CleitonAiGovernanceBlockedError as exc:
         raise ComparisonChatProviderError(
             ERROR_PROVIDER_REQUEST_FAILED,
-            exc.mensagem_usuario or MSG_PROVIDER_REQUEST_FAILED,
+            MSG_PROVIDER_REQUEST_FAILED,
             retryable=False,
-            http_status=403 if isinstance(exc, BillableAiAdmissionBlocked) else 503,
+            http_status=503,
             stage=billable_stage,
             cause=exc,
         ) from exc
-    except ComparisonChatProviderError:
-        raise
     except Exception as exc:
         if _is_provider_timeout(exc):
             raise ComparisonChatProviderTimeout(cause=exc) from exc
@@ -677,6 +908,8 @@ def _generate_governed_text(
             exc.__class__.__name__,
         )
         raise ComparisonChatProviderRequestError(cause=exc) from exc
+    finally:
+        _fechar_identidade_da_chamada(vinculo)
     if generation_meta is not None:
         generation_meta["finish_reason"] = _safe_finish_reason(response)
     return _extract_response_text(response), model

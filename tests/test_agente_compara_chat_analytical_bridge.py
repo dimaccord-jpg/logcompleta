@@ -6,6 +6,7 @@ import json
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -64,6 +65,42 @@ def _usuario(conta_id=_CONTA, usuario_id=_USUARIO, franquia_id=_FRANQUIA, *, aut
         franquia_id=franquia_id,
         is_authenticated=authenticated,
     )
+
+
+def persistir_franquias_do_chat():
+    """Operadores de teste do chat apontam para franquias ativas já gravadas."""
+
+    from app.extensions import db
+    from app.models import Conta, Franquia, utcnow_naive
+
+    agora = utcnow_naive()
+    for conta_id, franquia_id in ((_CONTA, _FRANQUIA), (_OTHER_CONTA, _OTHER_FRANQUIA)):
+        if db.session.get(Conta, conta_id) is None:
+            db.session.add(
+                Conta(
+                    id=conta_id,
+                    nome=f"Conta {conta_id}",
+                    slug=f"chat-op-{conta_id}",
+                    status=Conta.STATUS_ATIVA,
+                )
+            )
+        if db.session.get(Franquia, franquia_id) is None:
+            db.session.add(
+                Franquia(
+                    id=franquia_id,
+                    conta_id=conta_id,
+                    nome=f"Franquia {franquia_id}",
+                    slug=f"chat-fr-{franquia_id}",
+                    status=Franquia.STATUS_ACTIVE,
+                    limite_total=Decimal("1000000"),
+                    consumo_acumulado=Decimal("0"),
+                    reserva_pendente=Decimal("0"),
+                    bloqueio_manual=False,
+                    inicio_ciclo=agora,
+                    fim_ciclo=agora + timedelta(days=28),
+                )
+            )
+    db.session.commit()
 
 
 def _tables():

@@ -17,8 +17,19 @@ from tests.test_agente_compara_chat_analytical_bridge import (
     _SECRET_DOCUMENT,
     _ready_context,
     _usuario,
+    persistir_franquias_do_chat,
 )
 from tests.test_agente_compara_chat_semantic_selection import _ask, _install, _query, _selection
+
+
+@pytest.fixture(autouse=True)
+def _franquia_do_operador_de_chat(request):
+    if "ctx" not in request.fixturenames:
+        yield
+        return
+    request.getfixturevalue("ctx")
+    persistir_franquias_do_chat()
+    yield
 
 
 @pytest.fixture

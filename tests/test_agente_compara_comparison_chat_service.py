@@ -33,6 +33,20 @@ from app.run_agente_compara_comparison_chat import (
 from app.services.agente_compara_config_service import AgenteComparaConfig, DEFAULT_FALLBACK_MESSAGE
 
 
+@pytest.fixture
+def operador(ctx, monkeypatch):
+    from tests.test_scrum238_chat_financeiro import _seed
+
+    usuario, _franquia = _seed(email="chat-service@test.com")
+    # Exercise the original single-generation boundary with valid identity.
+    # The semantic and financial suites exercise the real two-call path.
+    monkeypatch.setattr(
+        "app.run_agente_compara_comparison_chat.selective_chat_required",
+        lambda _usuario: False,
+    )
+    return usuario
+
+
 def _cfg():
     return AgenteComparaConfig(
         chat_enabled=True,
@@ -284,7 +298,7 @@ def test_resolve_model_not_empty():
     assert isinstance(model, str) and model.strip()
 
 
-def test_provider_not_configured_returns_503_payload(ctx, monkeypatch):
+def test_provider_not_configured_returns_503_payload(ctx, operador, monkeypatch):
     state, result, analytics = _ready_bundle()
     sess = _session({AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY: state})
     monkeypatch.setattr("app.run_agente_compara_comparison_chat.get_agente_compara_config", _cfg)
@@ -305,6 +319,8 @@ def test_provider_not_configured_returns_503_payload(ctx, monkeypatch):
         "Olá",
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id="req-no-key",
     )
@@ -328,7 +344,7 @@ def test_provider_not_configured_returns_503_payload(ctx, monkeypatch):
         ("pergunta livre sem keyword xyz999", "Resposta Gemini livre"),
     ],
 )
-def test_valid_ready_questions_call_strict_gemini_once(ctx, monkeypatch, question, expected_snippet):
+def test_valid_ready_questions_call_strict_gemini_once(ctx, operador, monkeypatch, question, expected_snippet):
     state, result, analytics = _ready_bundle()
     sess = _session({AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY: state})
     monkeypatch.setattr("app.run_agente_compara_comparison_chat.get_agente_compara_config", _cfg)
@@ -354,6 +370,8 @@ def test_valid_ready_questions_call_strict_gemini_once(ctx, monkeypatch, questio
         question,
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id=f"req-ok-{abs(hash(question)) % 100000}",
     )
@@ -374,7 +392,7 @@ def test_valid_ready_questions_call_strict_gemini_once(ctx, monkeypatch, questio
         "Qual transportadora devo contratar?",
     ],
 )
-def test_decision_requests_call_gemini_once(ctx, monkeypatch, question):
+def test_decision_requests_call_gemini_once(ctx, operador, monkeypatch, question):
     state, result, analytics = _ready_bundle()
     sess = _session({AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY: state})
     monkeypatch.setattr("app.run_agente_compara_comparison_chat.get_agente_compara_config", _cfg)
@@ -399,6 +417,8 @@ def test_decision_requests_call_gemini_once(ctx, monkeypatch, question):
         question,
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id=f"req-decision-{abs(hash(question)) % 10000}",
     )
@@ -409,7 +429,7 @@ def test_decision_requests_call_gemini_once(ctx, monkeypatch, question):
     assert "contrate agora" not in text
 
 
-def test_provider_request_failed(ctx, monkeypatch):
+def test_provider_request_failed(ctx, operador, monkeypatch):
     state, result, analytics = _ready_bundle()
     sess = _session({AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY: state})
     monkeypatch.setattr("app.run_agente_compara_comparison_chat.get_agente_compara_config", _cfg)
@@ -429,6 +449,8 @@ def test_provider_request_failed(ctx, monkeypatch):
         "Olá",
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id="req-provider-fail",
     )
@@ -440,7 +462,7 @@ def test_provider_request_failed(ctx, monkeypatch):
     assert len(client.models.calls) == 1
 
 
-def test_provider_timeout(ctx, monkeypatch):
+def test_provider_timeout(ctx, operador, monkeypatch):
     state, result, analytics = _ready_bundle()
     sess = _session({AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY: state})
     monkeypatch.setattr("app.run_agente_compara_comparison_chat.get_agente_compara_config", _cfg)
@@ -460,6 +482,8 @@ def test_provider_timeout(ctx, monkeypatch):
         "Olá",
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id="req-timeout",
     )
@@ -470,7 +494,7 @@ def test_provider_timeout(ctx, monkeypatch):
 
 
 @pytest.mark.parametrize("response_factory", [lambda: None, lambda: SimpleNamespace(), lambda: SimpleNamespace(text=""), lambda: SimpleNamespace(text="   ")])
-def test_provider_empty_or_invalid_response(ctx, monkeypatch, response_factory):
+def test_provider_empty_or_invalid_response(ctx, operador, monkeypatch, response_factory):
     state, result, analytics = _ready_bundle()
     sess = _session({AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY: state})
     monkeypatch.setattr("app.run_agente_compara_comparison_chat.get_agente_compara_config", _cfg)
@@ -490,6 +514,8 @@ def test_provider_empty_or_invalid_response(ctx, monkeypatch, response_factory):
         "Olá",
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id=f"req-empty-{id(response_factory)}",
     )
@@ -499,7 +525,7 @@ def test_provider_empty_or_invalid_response(ctx, monkeypatch, response_factory):
     assert len(client.models.calls) == 1
 
 
-def test_one_call_per_question_and_cache(ctx, monkeypatch):
+def test_one_call_per_question_and_cache(ctx, operador, monkeypatch):
     state, result, analytics = _ready_bundle()
     sess = _session({AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY: state})
     monkeypatch.setattr("app.run_agente_compara_comparison_chat.get_agente_compara_config", _cfg)
@@ -519,6 +545,8 @@ def test_one_call_per_question_and_cache(ctx, monkeypatch):
         "Qual transportadora teve maior cobertura?",
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id="req-one-1",
     )
@@ -526,6 +554,8 @@ def test_one_call_per_question_and_cache(ctx, monkeypatch):
         "Qual transportadora teve maior cobertura?",
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id="req-one-1",
     )
@@ -534,7 +564,7 @@ def test_one_call_per_question_and_cache(ctx, monkeypatch):
     assert len(client.models.calls) == 1
 
 
-def test_pre_ready_blocks_without_gemini(ctx, monkeypatch):
+def test_pre_ready_blocks_without_gemini(ctx, operador, monkeypatch):
     state, result, analytics = _ready_bundle()
     state["current_step"] = STEP_PREPARE_TABLE_1
     sess = _session({AGENTE_COMPARA_COMPARISON_STATE_SESSION_KEY: state})
@@ -557,6 +587,8 @@ def test_pre_ready_blocks_without_gemini(ctx, monkeypatch):
         "oi",
         [],
         session_obj=sess,
+        usuario=operador,
+        entrega_ja_avaliada=True,
         comparison_id="cmp-svc-1",
         request_id="req-pre",
     )
@@ -589,10 +621,10 @@ def test_deterministic_fallback_is_not_provider_success_mask():
     assert answer == ""
 
 
-def test_empty_and_invalid_message(ctx, monkeypatch):
+def test_empty_and_invalid_message(ctx, operador, monkeypatch):
     monkeypatch.setattr("app.run_agente_compara_comparison_chat.get_agente_compara_config", _cfg)
     sess = _session()
-    empty = chat_agente_compara_comparison_reply("", [], session_obj=sess)
+    empty = chat_agente_compara_comparison_reply("", [], session_obj=sess, usuario=operador)
     assert empty["error"] == "invalid_message"
-    too_long = chat_agente_compara_comparison_reply("x" * 20000, [], session_obj=sess, question_max_chars=100)
+    too_long = chat_agente_compara_comparison_reply("x" * 20000, [], session_obj=sess, question_max_chars=100, usuario=operador)
     assert too_long["error"] == "invalid_message"
