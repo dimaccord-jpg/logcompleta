@@ -1,4 +1,4 @@
-"""SCRUM-146 lote 3: competência do ciclo em que a reserva nasceu.
+"""SCRUM-146: competência do ciclo da franquia.
 
 Provedor simulado e banco descartável. Não chama o Gemini pago.
 """
@@ -26,15 +26,12 @@ from app.models import (
     User,
     utcnow_naive,
 )
-from app.services.agente_compara_extraction_billing import liquidar_ou_dispensar_entrega
 from app.services.agente_compara_extraction_budget import (
     EXTRACAO_TETO_TECNICO_TOKENS,
-    consultar_tokens_saldo,
+    montar_orcamento_tentativa,
 )
 from app.services.cleiton_billable_ai_call import (
     cleiton_governed_billable_ai_call,
-    liberar_reserva_confirmada,
-    liquidar_entrega_agente_compara,
     liquidar_tentativa_ia,
 )
 from app.services.cleiton_franquia_operacional_service import saldo_disponivel_chamada_ia
@@ -161,80 +158,6 @@ def _pendurar(franquia, creditos="40"):
     return row
 
 
-def test_reserva_e_liquidacao_no_mesmo_ciclo(app):
-    with app.app_context():
-        usuario, franquia = _seed(email="mesmo-ciclo@test.com")
-        inicio, fim = franquia.inicio_ciclo, franquia.fim_ciclo
-        resultado = _abrir(usuario)
-        tentativa = db.session.get(IaChamadaTentativa, resultado.attempt_id)
-        reservado = tentativa.reserved_credits
-        assert tentativa.ciclo_inicio == inicio
-        assert tentativa.ciclo_fim == fim
-        assert tentativa.reserva_ativa is True
-        assert _saldo(franquia.id) == Decimal(franquia.limite_total) - reservado
-
-        liquidada = liquidar_entrega_agente_compara(resultado.attempt_id, prefixo=PREFIXO)
-        atual = _franquia(franquia.id)
-        assert liquidada.status == "settled"
-        assert liquidada.ciclo_inicio == inicio
-        assert liquidada.ciclo_fim == fim
-        assert liquidada.actual_credits == Decimal("1")
-        assert atual.consumo_acumulado == Decimal("1")
-        assert atual.reserva_pendente == 0
-        assert atual.inicio_ciclo == inicio
-        assert atual.fim_ciclo == fim
-        assert IaConsumoAbatimento.query.count() == 1
-        assert _saldo(franquia.id) == Decimal(atual.limite_total) - Decimal("1")
-
-
-def test_reserva_no_ciclo_a_entrega_util_no_ciclo_b(app):
-    with app.app_context():
-        usuario, franquia = _seed(email="entrega-b@test.com")
-        resultado = _abrir(usuario)
-        tentativa = db.session.get(IaChamadaTentativa, resultado.attempt_id)
-        inicio_a, fim_a = tentativa.ciclo_inicio, tentativa.ciclo_fim
-        evento_id = tentativa.ia_consumo_evento_id
-        tokens = db.session.get(IaConsumoEvento, evento_id).total_tokens
-        _avancar(franquia.id, consumo="2")
-        assert _saldo(franquia.id) == Decimal("98")
-
-        liquidada = liquidar_ou_dispensar_entrega(resultado.attempt_id, DIGEST)
-        atual = _franquia(franquia.id)
-        assert liquidada.status == "settled"
-        assert liquidada.ciclo_inicio == inicio_a
-        assert liquidada.ciclo_fim == fim_a
-        assert liquidada.actual_credits == Decimal("1")
-        assert atual.consumo_acumulado == Decimal("2")
-        assert atual.inicio_ciclo != inicio_a
-        assert _saldo(franquia.id) == Decimal("98")
-        assert IaConsumoAbatimento.query.count() == 1
-        assert db.session.get(IaConsumoEvento, evento_id).total_tokens == tokens
-        marca = IaConsumoAbatimento.query.one()
-        assert marca.creditos == Decimal("1")
-        assert marca.ia_consumo_evento_id == evento_id
-
-
-def test_reserva_no_ciclo_a_falha_no_ciclo_b(app):
-    with app.app_context():
-        usuario, franquia = _seed(email="falha-b@test.com")
-        resultado = _abrir(usuario)
-        tentativa = db.session.get(IaChamadaTentativa, resultado.attempt_id)
-        inicio_a, fim_a = tentativa.ciclo_inicio, tentativa.ciclo_fim
-        _avancar(franquia.id, consumo="2")
-        liberar_reserva_confirmada(resultado.attempt_id, motivo="json_invalido")
-        atual = _franquia(franquia.id)
-        liberada = db.session.get(IaChamadaTentativa, resultado.attempt_id)
-        assert liberada.status == "released"
-        assert liberada.failure_reason == "json_invalido"
-        assert liberada.ciclo_inicio == inicio_a
-        assert liberada.ciclo_fim == fim_a
-        assert atual.consumo_acumulado == Decimal("2")
-        assert atual.reserva_pendente == 0
-        assert IaConsumoAbatimento.query.count() == 0
-        assert IaConsumoEvento.query.count() == 1
-        assert _saldo(franquia.id) == Decimal("98")
-
-
 def test_renovacao_com_reserva_pendente_nao_bloqueia_credito_novo(app):
     with app.app_context():
         _usuario, franquia = _seed(email="pendente@test.com", limite="100")
@@ -245,32 +168,8 @@ def test_renovacao_com_reserva_pendente_nao_bloqueia_credito_novo(app):
         assert atual.reserva_pendente == Decimal("40")
         assert atual.consumo_acumulado == 0
         assert _saldo(franquia.id) == Decimal("100")
-        assert consultar_tokens_saldo(_usuario) == (100_000, None)
-        assert EXTRACAO_TETO_TECNICO_TOKENS == 30_000
-
-
-def test_reexecucao_apos_renovacao_nao_duplica(app):
-    with app.app_context():
-        usuario, franquia = _seed(email="reexec@test.com")
-        primeiro = _abrir(usuario, model="gemini-test", adiar=False, sufixo="origem")
-        assert primeiro.complete is True
-        segundo = _abrir(usuario, model="gemini-lite", adiar=True, sufixo="tardio")
-        marca = IaConsumoAbatimento.query.one()
-        creditos = marca.creditos
-        marca_id = marca.id
-        _avancar(franquia.id, consumo="4")
-        liquidar_entrega_agente_compara(segundo.attempt_id, prefixo=PREFIXO)
-        liquidar_entrega_agente_compara(segundo.attempt_id, prefixo=PREFIXO)
-        liquidar_tentativa_ia(primeiro.attempt_id)
-        atual = _franquia(franquia.id)
-        tardia = db.session.get(IaChamadaTentativa, segundo.attempt_id)
-        assert tardia.status == "released"
-        assert tardia.failure_reason == "entrega_ja_faturada"
-        assert atual.consumo_acumulado == Decimal("4")
-        assert IaConsumoAbatimento.query.count() == 1
-        preservada = db.session.get(IaConsumoAbatimento, marca_id)
-        assert preservada.creditos == creditos
-        assert _saldo(franquia.id) == Decimal("96")
+        orcamento = montar_orcamento_tentativa(model="gemini-2.5-flash", consumido=0)
+        assert orcamento.autorizado == EXTRACAO_TETO_TECNICO_TOKENS
 
 
 def test_reconciliacao_nao_reintroduz_consumo_antigo(app):
@@ -409,25 +308,6 @@ def test_reconciliacao_nao_reintroduz_consumo_antigo(app):
         assert db.session.get(IaConsumoEvento, outro_agente.id).total_tokens == 1000
         assert db.session.get(IaConsumoEvento, anterior.id).total_tokens == 5000
         assert db.session.get(IaConsumoEvento, vigente.id).total_tokens == 1000
-
-
-def test_liquidacao_tardia_isola_outra_franquia(app):
-    with app.app_context():
-        usuario, franquia = _seed(email="isola-a@test.com")
-        _outro, vizinha = _seed(email="isola-b@test.com", consumo="7")
-        vizinha.reserva_pendente = Decimal("3")
-        vizinha.limite_total = Decimal("80")
-        db.session.commit()
-        ciclo_vizinha = (vizinha.inicio_ciclo, vizinha.fim_ciclo)
-        resultado = _abrir(usuario)
-        _avancar(franquia.id, consumo="2")
-        liquidar_entrega_agente_compara(resultado.attempt_id, prefixo=PREFIXO)
-        atual = _franquia(vizinha.id)
-        assert atual.consumo_acumulado == Decimal("7")
-        assert atual.reserva_pendente == Decimal("3")
-        assert atual.limite_total == Decimal("80")
-        assert (atual.inicio_ciclo, atual.fim_ciclo) == ciclo_vizinha
-        assert _franquia(franquia.id).consumo_acumulado == Decimal("2")
 
 
 def _vinculo(conta_id, plano):

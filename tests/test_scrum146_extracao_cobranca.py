@@ -5,11 +5,18 @@ Provedor simulado. Não chama o Gemini pago.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import timedelta
 from decimal import Decimal
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.models import IaChamadaTentativa, IaConsumoAbatimento, IaConsumoEvento, utcnow_naive
-from app.agente_compara_doc_service import ERROR_EXTRACAO_CONSUMO_INCERTO, ERROR_EXTRACAO_RESPOSTA_TRUNCADA
+from app.agente_compara_doc_service import (
+    ERROR_EXTRACAO_CONSUMO_INCERTO,
+    ERROR_EXTRACAO_RESPOSTA_TRUNCADA,
+    TEMP_TABLE_CREDIT_UNCONFIRMED,
+)
 from app.services.agente_compara_extraction_billing import entrega_faturavel
 from app.extensions import db
 from app.services.cleiton_billable_ai_call import cleiton_governed_billable_ai_call
@@ -100,14 +107,15 @@ def test_tabela_util_debita_uma_vez(app, monkeypatch):
         resultado = _extrair()
         assert resultado["status"] == "needs_review"
         assert entrega_faturavel(resultado) is True
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "settled"
-        assert tentativa.actual_credits == Decimal("0.080000")
+        assert IaChamadaTentativa.query.count() == 0
         assert _abatimentos() == 1
+        evento = IaConsumoEvento.query.one()
+        assert evento.total_tokens == 160
+        assert evento.franquia_id == franquia.id
+        assert evento.usuario_id == usuario.id
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).fim_ciclo == fim
-        assert IaConsumoEvento.query.one().total_tokens == 160
 
 
 def test_extracao_sem_entrega_util_debita_zero(app, monkeypatch):
@@ -121,9 +129,7 @@ def test_extracao_sem_entrega_util_debita_zero(app, monkeypatch):
         )
         resultado = _extrair()
         assert resultado["status"] == "failed"
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "released"
-        assert tentativa.failure_reason == "json_invalido"
+        assert IaChamadaTentativa.query.count() == 0
         assert IaConsumoEvento.query.one().total_tokens == 70
         assert _abatimentos() == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
@@ -142,7 +148,7 @@ def test_needs_review_util_cobra_e_inutilizavel_nao_cobra(app, monkeypatch):
         inutil = _extrair()
         assert inutil["status"] == "needs_review"
         assert entrega_faturavel(inutil) is False
-        assert IaChamadaTentativa.query.one().failure_reason == "tabela_inutilizavel"
+        assert IaChamadaTentativa.query.count() == 0
         assert _abatimentos() == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
 
@@ -185,13 +191,14 @@ def test_primario_falha_e_so_o_fallback_e_debitado(app, monkeypatch):
         assert _abatimentos() == 1
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
         assert _franquia(franquia.id).reserva_pendente == 0
-        liquidada = IaChamadaTentativa.query.filter_by(status="settled").one()
-        evento = db.session.get(IaConsumoEvento, liquidada.ia_consumo_evento_id)
-        assert evento.total_tokens == 160
-        assert IaConsumoEvento.query.count() == 2
-        falha = IaChamadaTentativa.query.filter_by(status="released").one()
-        assert falha.failure_reason == "erro_provedor"
-        assert falha.actual_credits is None
+        assert IaChamadaTentativa.query.count() == 0
+        eventos = IaConsumoEvento.query.order_by(IaConsumoEvento.id.asc()).all()
+        assert len(eventos) == 2
+        assert eventos[0].status == "failure"
+        assert eventos[0].total_tokens == 1000
+        assert eventos[1].status == "success"
+        assert eventos[1].total_tokens == 160
+        assert IaConsumoAbatimento.query.one().ia_consumo_evento_id == eventos[1].id
 
 
 def test_ambos_falham_debita_zero(app, monkeypatch):
@@ -217,7 +224,7 @@ def test_ambos_falham_debita_zero(app, monkeypatch):
         assert _abatimentos() == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
         assert _franquia(franquia.id).reserva_pendente == 0
-        assert {row.failure_reason for row in IaChamadaTentativa.query.all()} == {"erro_provedor"}
+        assert IaChamadaTentativa.query.count() == 0
 
 
 def test_max_tokens_nao_cobra_e_o_fallback_util_cobra_so_a_si(app, monkeypatch):
@@ -246,7 +253,7 @@ def test_max_tokens_nao_cobra_e_o_fallback_util_cobra_so_a_si(app, monkeypatch):
         assert entrega_faturavel(resultado) is True
         assert _abatimentos() == 1
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
-        assert IaChamadaTentativa.query.filter_by(failure_reason="max_tokens").count() == 1
+        assert IaChamadaTentativa.query.count() == 0
         assert IaConsumoEvento.query.count() == 2
 
 
@@ -273,9 +280,7 @@ def test_falha_ao_persistir_debita_zero(app, monkeypatch):
         monkeypatch.setattr(temp_mod, "apply_temp_table_extraction_from_model_payload", _apply)
         resultado = _extrair()
         assert resultado["status"] == "failed"
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "released"
-        assert tentativa.failure_reason == "persistencia_falhou"
+        assert IaChamadaTentativa.query.count() == 0
         assert IaConsumoEvento.query.one().total_tokens == 130
         assert _abatimentos() == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
@@ -299,8 +304,7 @@ def test_reexecucao_da_mesma_entrega_nao_duplica_debito(app, monkeypatch):
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
         assert _franquia(franquia.id).reserva_pendente == 0
         assert IaConsumoEvento.query.count() == 2
-        assert IaChamadaTentativa.query.filter_by(status="settled").count() == 1
-        assert IaChamadaTentativa.query.filter_by(failure_reason="entrega_ja_faturada").count() == 1
+        assert IaChamadaTentativa.query.count() == 0
 
 
 def test_consumo_incerto_nao_cobra_e_mantem_reserva(app, monkeypatch):
@@ -318,14 +322,11 @@ def test_consumo_incerto_nao_cobra_e_mantem_reserva(app, monkeypatch):
             totais=(1_000, 1_000),
         )
         resultado = _extrair()
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "uncertain"
-        assert tentativa.reserva_ativa is True
+        assert IaChamadaTentativa.query.count() == 0
         assert _abatimentos() == 0
         atual = _franquia(franquia.id)
         assert atual.consumo_acumulado == 0
-        assert atual.reserva_pendente == tentativa.reserved_credits
-        assert atual.reserva_pendente > 0
+        assert atual.reserva_pendente == 0
         assert resultado["status"] == "failed"
 
 
@@ -436,8 +437,8 @@ def test_cinco_payloads_sem_estrutura_tarifaria_nao_debitam(app, monkeypatch):
         assert _abatimentos() == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
         assert _franquia(franquia.id).reserva_pendente == 0
-        assert IaChamadaTentativa.query.count() == 5
-        assert {row.failure_reason for row in IaChamadaTentativa.query.all()} == {"tabela_inutilizavel"}
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoEvento.query.count() == 5
 
 
 def test_ciclo_mensal_nao_muda_com_a_cobranca_da_extracao(app, monkeypatch):
@@ -525,8 +526,7 @@ def test_execucoes_intercaladas_da_mesma_entrega_debitam_uma_vez(tmp_path, monke
         assert _abatimentos() == 1
         assert _franquia(franquia_id).consumo_acumulado == Decimal("0.080000")
         assert _franquia(franquia_id).reserva_pendente == 0
-        assert IaChamadaTentativa.query.filter_by(status="settled").count() == 1
-        assert IaChamadaTentativa.query.filter_by(failure_reason="entrega_ja_faturada").count() == 1
+        assert IaChamadaTentativa.query.count() == 0
         assert IaConsumoEvento.query.count() == 2
 
 
@@ -557,10 +557,11 @@ def test_json_util_truncado_nao_cobra_nem_entra_em_revisao(app, monkeypatch):
         assert _abatimentos() == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
         assert _franquia(franquia.id).reserva_pendente == 0
-        assert IaChamadaTentativa.query.filter_by(failure_reason="max_tokens").count() == 2
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoEvento.query.count() == 2
 
 
-def test_checkpoint_apos_tabela_util_avisa_consumo_incerto(app, monkeypatch):
+def test_falha_de_debito_preserva_tabela_sem_reserva(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(limite="100", email="checkpoint-aviso@test.com")
         client = _preparar(
@@ -570,14 +571,10 @@ def test_checkpoint_apos_tabela_util_avisa_consumo_incerto(app, monkeypatch):
             models=["gemini-2.5-flash", "gemini-2.5-flash-lite"],
         )
 
-        def _quebra_depois_do_debito():
-            db.session.commit()
-            raise RuntimeError("falha no checkpoint da liquidacao")
+        def _debito_falha(*_args, **_kwargs):
+            raise temp_mod.ExtracaoConsumoIncerto("debito_nao_confirmado")
 
-        monkeypatch.setattr(
-            "app.services.cleiton_billable_ai_call._checkpoint_pos_debito",
-            _quebra_depois_do_debito,
-        )
+        monkeypatch.setattr(temp_mod, "abater_entrega_confirmada", _debito_falha)
         resultado = _extrair()
         assert resultado["status"] == "needs_review"
         assert resultado["freight_tables"] == [TABELA_UTIL]
@@ -589,17 +586,14 @@ def test_checkpoint_apos_tabela_util_avisa_consumo_incerto(app, monkeypatch):
             assert promessa not in texto
         assert entrega_faturavel(resultado) is True
         assert [chamada["model"] for chamada in client.models.calls] == ["gemini-2.5-flash"]
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "uncertain"
-        assert tentativa.reserva_ativa is True
-        assert tentativa.status != "released"
+        assert IaChamadaTentativa.query.count() == 0
         atual = _franquia(franquia.id)
-        assert atual.reserva_pendente == tentativa.reserved_credits
-        assert atual.reserva_pendente > 0
-        assert _abatimentos() == 1
+        assert atual.reserva_pendente == 0
+        assert atual.consumo_acumulado == 0
+        assert _abatimentos() == 0
 
 
-def test_excecao_apos_debito_e_replay_encerra_a_reserva_original(app, monkeypatch):
+def test_replay_depois_do_debito_nao_cobra_de_novo(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(limite="100", email="replay@test.com")
         _preparar(
@@ -608,46 +602,22 @@ def test_excecao_apos_debito_e_replay_encerra_a_reserva_original(app, monkeypatc
             gerar=lambda model, contents, config: _resposta(JSON_UTIL, prompt=100, resposta=50, pensamento=10),
             models=["gemini-2.5-flash"],
         )
-
-        def _quebra_depois_do_debito():
-            db.session.commit()
-            raise RuntimeError("falha apos debito")
-
-        monkeypatch.setattr(
-            "app.services.cleiton_billable_ai_call._checkpoint_pos_debito",
-            _quebra_depois_do_debito,
-        )
         primeiro = _extrair()
         assert primeiro["status"] == "needs_review"
-        original = IaChamadaTentativa.query.one()
-        original_id = original.id
-        assert original.status == "uncertain"
-        assert original.reserva_ativa is True
-        assert _abatimentos() == 1
-        assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
-        assert _franquia(franquia.id).reserva_pendente == original.reserved_credits
-
-        monkeypatch.setattr(
-            "app.services.cleiton_billable_ai_call._checkpoint_pos_debito",
-            lambda: None,
-        )
-        _extrair()
-        db.session.expire_all()
-        original = db.session.get(IaChamadaTentativa, original_id)
-        assert original.status == "settled"
-        assert original.reserva_ativa is False
-        assert original.failure_reason is None
-        assert original.settled_at is not None
-        nova = IaChamadaTentativa.query.filter(IaChamadaTentativa.id != original_id).one()
-        assert nova.status == "released"
-        assert nova.failure_reason == "entrega_ja_faturada"
-        assert nova.reserva_ativa is False
+        assert IaChamadaTentativa.query.count() == 0
         assert _abatimentos() == 1
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
         assert _franquia(franquia.id).reserva_pendente == 0
 
+        _extrair()
+        db.session.expire_all()
+        assert _abatimentos() == 1
+        assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
+        assert _franquia(franquia.id).reserva_pendente == 0
+        assert IaChamadaTentativa.query.count() == 0
 
-def test_replay_preserva_reserva_incerta_sem_comprovacao(app, monkeypatch):
+
+def test_timeout_sem_metricas_nao_deixa_reserva_e_a_entrega_util_cobra_uma_vez(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(limite="100", email="incerta-replay@test.com")
 
@@ -662,12 +632,9 @@ def test_replay_preserva_reserva_incerta_sem_comprovacao(app, monkeypatch):
         )
         falha = _extrair()
         assert falha["status"] == "failed"
-        incerta = IaChamadaTentativa.query.one()
-        incerta_id = incerta.id
-        reservado = incerta.reserved_credits
-        assert incerta.status == "uncertain"
-        assert incerta.reserva_ativa is True
+        assert IaChamadaTentativa.query.count() == 0
         assert _abatimentos() == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
 
         _preparar(
             monkeypatch,
@@ -678,12 +645,10 @@ def test_replay_preserva_reserva_incerta_sem_comprovacao(app, monkeypatch):
         util = _extrair()
         assert entrega_faturavel(util) is True
         db.session.expire_all()
-        incerta = db.session.get(IaChamadaTentativa, incerta_id)
-        assert incerta.status == "uncertain"
-        assert incerta.reserva_ativa is True
+        assert IaChamadaTentativa.query.count() == 0
         assert _abatimentos() == 1
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
-        assert _franquia(franquia.id).reserva_pendente == reservado
+        assert _franquia(franquia.id).reserva_pendente == 0
 
 
 def test_excecao_no_cache_apos_entrega_preserva_a_tabela(app, monkeypatch):
@@ -717,5 +682,124 @@ def test_excecao_no_cache_apos_entrega_preserva_a_tabela(app, monkeypatch):
         assert _abatimentos() == 1
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
         assert _franquia(franquia.id).reserva_pendente == 0
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "settled"
+        assert IaChamadaTentativa.query.count() == 0
+
+
+_SEGREDO_COMMIT_ABATIMENTO = "SEGREDO_SQL_NAO_LOGAR_commit_abatimento"
+
+
+def _commit_confirma_o_abatimento() -> bool:
+    """O commit final grava o marcador no evento depois do débito já enviado à transação."""
+    import inspect
+
+    if not any(frame.function == "abater_entrega_confirmada" for frame in inspect.stack()):
+        return False
+    return any(isinstance(obj, IaConsumoEvento) for obj in db.session.dirty)
+
+
+def test_commit_financeiro_falho_preserva_tabela_sem_segunda_chamada(app, monkeypatch, caplog):
+    with app.app_context():
+        usuario, franquia = _seed(limite="100", email="commit-abatimento@test.com")
+        client = _preparar(
+            monkeypatch,
+            usuario=usuario,
+            gerar=lambda model, contents, config: _resposta(JSON_UTIL, prompt=100, resposta=50, pensamento=10),
+            models=["gemini-2.5-flash", "gemini-2.5-flash-lite"],
+        )
+        falhar = {"ativo": True}
+        real_commit = db.session.commit
+
+        def commit_do_abatimento():
+            if falhar["ativo"] and _commit_confirma_o_abatimento():
+                raise SQLAlchemyError(_SEGREDO_COMMIT_ABATIMENTO)
+            return real_commit()
+
+        monkeypatch.setattr(db.session, "commit", commit_do_abatimento)
+        caplog.set_level(logging.INFO)
+        resultado = _extrair()
+
+        assert resultado["status"] == "needs_review"
+        assert resultado["freight_tables"] == [TABELA_UTIL]
+        assert resultado["temp_table_id"] == "tt-entrega"
+        assert resultado["error_code"] == ERROR_EXTRACAO_CONSUMO_INCERTO
+        assert resultado["failure_code"] == ERROR_EXTRACAO_CONSUMO_INCERTO
+        assert resultado["credit_disposition"] == TEMP_TABLE_CREDIT_UNCONFIRMED
+        assert resultado["retryable"] is False
+        assert "pendente" in resultado["safe_message"]
+        assert entrega_faturavel(resultado) is True
+        assert [chamada["model"] for chamada in client.models.calls] == ["gemini-2.5-flash"]
+        assert _abatimentos() == 0
+        assert _franquia(franquia.id).consumo_acumulado == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
+        assert IaChamadaTentativa.query.count() == 0
+        avisos = [
+            rec.getMessage()
+            for rec in caplog.records
+            if rec.name == "app.services.agente_compara_extraction_billing"
+        ]
+        assert any(
+            "pendencia financeira no abatimento" in mensagem and "SQLAlchemyError" in mensagem
+            for mensagem in avisos
+        )
+        assert _SEGREDO_COMMIT_ABATIMENTO not in caplog.text
+
+        falhar["ativo"] = False
+        antes = len(client.models.calls)
+        segundo = _extrair()
+        assert len(client.models.calls) == antes + 1
+        assert segundo["status"] == "needs_review"
+        assert entrega_faturavel(segundo) is True
+        assert segundo.get("error_code") != ERROR_EXTRACAO_CONSUMO_INCERTO
+        assert _abatimentos() == 1
+        assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
+
+        _extrair()
+        db.session.expire_all()
+        assert _abatimentos() == 1
+        assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
+        assert _franquia(franquia.id).reserva_pendente == 0
+        primeiro = IaConsumoEvento.query.order_by(IaConsumoEvento.id.asc()).first()
+        digest = temp_mod.digest_da_entrega(
+            ["doc-1"],
+            comparison_id="cmp-entrega",
+            table_id="tbl-entrega",
+        )
+        assert temp_mod.abater_entrega_confirmada(primeiro.id, digest) == "ja_faturada"
+        db.session.expire_all()
+        assert _abatimentos() == 1
+        assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
+        assert _SEGREDO_COMMIT_ABATIMENTO not in caplog.text
+
+
+def test_persistencia_da_tabela_nao_vira_pendencia_financeira(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(limite="100", email="persistencia-tabela@test.com")
+
+        def _apply(payload, source_doc_ids=None, **kwargs):
+            payload = payload or {}
+            if payload.get("status") == "failed":
+                return _apply_fiel(payload, source_doc_ids=source_doc_ids, **kwargs)
+            raise SQLAlchemyError("gravacao da tabela")
+
+        client = _preparar(
+            monkeypatch,
+            usuario=usuario,
+            gerar=lambda model, contents, config: _resposta(JSON_UTIL, prompt=100, resposta=50, pensamento=10),
+            models=["gemini-2.5-flash", "gemini-2.5-flash-lite"],
+            totais=(1_000, 1_000),
+        )
+        monkeypatch.setattr(temp_mod, "apply_temp_table_extraction_from_model_payload", _apply)
+        resultado = _extrair()
+        assert resultado["status"] == "failed"
+        assert resultado["freight_tables"] == []
+        assert resultado.get("error_code") != ERROR_EXTRACAO_CONSUMO_INCERTO
+        assert resultado.get("credit_disposition") != TEMP_TABLE_CREDIT_UNCONFIRMED
+        assert entrega_faturavel(resultado) is False
+        assert [chamada["model"] for chamada in client.models.calls] == [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ]
+        assert _abatimentos() == 0
+        assert _franquia(franquia.id).consumo_acumulado == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
+        assert IaChamadaTentativa.query.count() == 0

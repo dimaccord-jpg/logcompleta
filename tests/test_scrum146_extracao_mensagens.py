@@ -4,6 +4,7 @@ Provedor simulado. Não altera teto, preço, reserva nem débito por entrega út
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -11,13 +12,15 @@ from app.agente_compara_doc_service import (
     ERROR_EXTRACAO_CONSUMO_INCERTO,
     ERROR_EXTRACAO_CREDITOS_INSUFICIENTES,
     ERROR_EXTRACAO_JSON_INVALIDO,
+    ERROR_EXTRACAO_OPERACAO_INDISPONIVEL,
     ERROR_EXTRACAO_PROVEDOR_INDISPONIVEL,
     ERROR_EXTRACAO_RESPOSTA_TRUNCADA,
     ERROR_EXTRACAO_TETO_TECNICO,
     _classify_temp_table_failure,
     _public_temp_table,
 )
-from app.models import IaChamadaTentativa
+from app.extensions import db
+from app.models import IaChamadaTentativa, utcnow_naive
 from app.services.agente_compara_extraction_budget import EXTRACAO_TETO_TECNICO_TOKENS
 from app.services.cleiton_mensageria_operacao_service import (
     UPGRADE_LABEL_DEFAULT,
@@ -30,6 +33,7 @@ from tests.test_scrum146_extracao_orcamento import (
     _count_fixo,
     _extrair,
     _franquia,
+    _limites,
     _resposta,
     _seed,
     _usage,
@@ -128,10 +132,7 @@ def test_documento_acima_do_teto_nao_oferece_cta_financeiro(app, monkeypatch):
         assert publico["upgrade_cta"] is None
         assert publico["error_code"] == ERROR_EXTRACAO_TETO_TECNICO
         assert "crédito" not in publico["safe_message"].lower()
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "blocked"
-        assert tentativa.failure_reason == "orcamento_operacao_insuficiente"
-        assert tentativa.reserved_credits == 0
+        assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
         assert DOC_SECRET not in publico["safe_message"]
@@ -158,7 +159,7 @@ def test_documento_grande_com_saldo_baixo_continua_sendo_teto(app, monkeypatch):
 
 def test_saldo_insuficiente_nao_inicia_geracao_e_oferece_cta(app, monkeypatch):
     with app.app_context():
-        usuario, franquia = _seed(limite="15", consumo="13", email="saldo-msg@test.com")
+        usuario, franquia = _seed(limite="15", consumo="15", email="saldo-msg@test.com")
         client = _Client(
             lambda model, contents, config: (_ for _ in ()).throw(AssertionError("nao gerar")),
             _count_fixo(100),
@@ -171,7 +172,7 @@ def test_saldo_insuficiente_nao_inicia_geracao_e_oferece_cta(app, monkeypatch):
         )
         resultado = _extrair()
         assert client.models.calls == []
-        assert len(client.models.count_calls) == 1
+        assert client.models.count_calls == []
         assert IaChamadaTentativa.query.count() == 0
         assert resultado["error_code"] == ERROR_EXTRACAO_CREDITOS_INSUFICIENTES
         publico = _publico(resultado["error_code"], resultado["reading_alerts"])
@@ -181,15 +182,15 @@ def test_saldo_insuficiente_nao_inicia_geracao_e_oferece_cta(app, monkeypatch):
         assert cta["error_code"] == ERROR_EXTRACAO_CREDITOS_INSUFICIENTES
         assert "créditos" in publico["safe_message"]
         assert "capacidade máxima de processamento permitida" not in publico["safe_message"]
-        assert _franquia(franquia.id).consumo_acumulado == Decimal("13")
+        assert _franquia(franquia.id).consumo_acumulado == Decimal("15")
         assert _franquia(franquia.id).reserva_pendente == 0
 
 
-def test_saldo_baixo_mas_documento_viavel_no_teto_oferece_cta(app, monkeypatch):
+def test_saldo_positivo_abaixo_do_antigo_teto_autoriza_a_extracao(app, monkeypatch):
     with app.app_context():
-        usuario, _franquia_row = _seed(limite="4", email="saldo-viavel@test.com")
+        usuario, franquia = _seed(limite="4", email="saldo-viavel@test.com")
         client = _Client(
-            lambda model, contents, config: (_ for _ in ()).throw(AssertionError("nao gerar")),
+            lambda model, contents, config: _resposta(VALID_JSON, prompt=40, resposta=20, pensamento=0),
             _count_fixo(5_000),
         )
         _instalar_capturando(
@@ -199,10 +200,14 @@ def test_saldo_baixo_mas_documento_viavel_no_teto_oferece_cta(app, monkeypatch):
             models=["gemini-2.5-flash"],
         )
         resultado = _extrair()
-        assert client.models.calls == []
-        assert len(client.models.count_calls) == 1
-        assert resultado["error_code"] == ERROR_EXTRACAO_CREDITOS_INSUFICIENTES
-        assert _publico(resultado["error_code"])["upgrade_cta"]["upgrade_url"] == "/contrate-um-plano"
+        assert len(client.models.calls) == 1
+        saida, thinking = _limites(client.models.calls[0]["config"])
+        assert 5_000 + saida + thinking == EXTRACAO_TETO_TECNICO_TOKENS
+        assert resultado["status"] == "needs_review"
+        assert resultado["error_code"] is None
+        assert IaChamadaTentativa.query.count() == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
+        assert _franquia(franquia.id).consumo_acumulado == 0
 
 
 def test_erro_de_servico_do_gemini_nao_e_limite_financeiro(app, monkeypatch):
@@ -230,9 +235,7 @@ def test_erro_de_servico_do_gemini_nao_e_limite_financeiro(app, monkeypatch):
         assert publico["upgrade_cta"] is None
         assert publico["failure_code"] != ERROR_EXTRACAO_CREDITOS_INSUFICIENTES
         assert "crédito" not in publico["safe_message"].lower()
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "released"
-        assert tentativa.failure_reason == "erro_provedor"
+        assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
 
@@ -311,11 +314,8 @@ def test_consumo_incerto_nao_promete_estorno_e_mantem_reserva(app, monkeypatch):
         assert publico["upgrade_cta"] is None
         for promessa in _PROMESSAS_INDEVIDAS:
             assert promessa not in texto
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "uncertain"
-        assert tentativa.reserva_ativa is True
-        assert _franquia(franquia.id).reserva_pendente == tentativa.reserved_credits
-        assert _franquia(franquia.id).reserva_pendente > 0
+        assert IaChamadaTentativa.query.count() == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
 
 
@@ -396,11 +396,11 @@ def test_entrada_de_31000_com_saldo_de_2000_e_teto_sem_cta(app, monkeypatch):
         assert DOC_SECRET not in publico["safe_message"]
 
 
-def test_entrada_viavel_com_saldo_de_2000_oferece_cta(app, monkeypatch):
+def test_entrada_viavel_com_saldo_de_2000_autoriza_sem_reserva(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(limite="1", email="saldo-2000@test.com")
         client = _Client(
-            lambda model, contents, config: (_ for _ in ()).throw(AssertionError("nao gerar")),
+            lambda model, contents, config: _resposta(VALID_JSON, prompt=40, resposta=20, pensamento=0),
             _count_fixo(1_000),
         )
         _instalar_capturando(
@@ -410,15 +410,12 @@ def test_entrada_viavel_com_saldo_de_2000_oferece_cta(app, monkeypatch):
             models=["gemini-2.5-flash"],
         )
         resultado = _extrair()
-        assert client.models.calls == []
-        assert len(client.models.count_calls) == 1
+        assert len(client.models.calls) == 1
+        saida, thinking = _limites(client.models.calls[0]["config"])
+        assert 1_000 + saida + thinking == EXTRACAO_TETO_TECNICO_TOKENS
+        assert resultado["status"] == "needs_review"
+        assert resultado["error_code"] is None
         assert IaChamadaTentativa.query.count() == 0
-        assert resultado["error_code"] == ERROR_EXTRACAO_CREDITOS_INSUFICIENTES
-        publico = _publico(resultado["error_code"], resultado["reading_alerts"])
-        cta = publico["upgrade_cta"]
-        assert cta["upgrade_url"] == UPGRADE_PATH_DEFAULT == "/contrate-um-plano"
-        assert cta["upgrade_label"] == UPGRADE_LABEL_DEFAULT
-        assert "créditos" in publico["safe_message"]
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
 
@@ -452,10 +449,7 @@ def test_json_valido_com_max_tokens_permanece_truncado(app, monkeypatch):
         assert publico["upgrade_cta"] is None
         assert publico["failure_code"] == ERROR_EXTRACAO_RESPOSTA_TRUNCADA
         assert publico["failure_code"] != ERROR_EXTRACAO_CREDITOS_INSUFICIENTES
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "released"
-        assert tentativa.failure_reason == "max_tokens"
-        assert tentativa.reserva_ativa is False
+        assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
 
@@ -510,6 +504,39 @@ def test_consumo_incerto_permanece_no_payload_publico_da_revisao(app, monkeypatc
         assert reloaded["status"] == "needs_review"
         assert reloaded["error_code"] == ERROR_EXTRACAO_CONSUMO_INCERTO
         assert reloaded["safe_message"] == saved["safe_message"]
+
+
+def test_bloqueio_manual_e_vigencia_expirada_nao_iniciam_geracao(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(limite="100", email="bloqueio@test.com")
+        franquia.bloqueio_manual = True
+        db.session.commit()
+        client = _Client(
+            lambda model, contents, config: (_ for _ in ()).throw(AssertionError("nao gerar")),
+            _count_fixo(100),
+        )
+        _instalar_capturando(
+            monkeypatch,
+            client=client,
+            usuario=usuario,
+            models=["gemini-2.5-flash"],
+        )
+        bloqueada = _extrair()
+        assert client.models.calls == []
+        assert client.models.count_calls == []
+        assert IaChamadaTentativa.query.count() == 0
+        assert bloqueada["error_code"] == ERROR_EXTRACAO_OPERACAO_INDISPONIVEL
+        assert _franquia(franquia.id).reserva_pendente == 0
+        assert _franquia(franquia.id).consumo_acumulado == 0
+
+        franquia.bloqueio_manual = False
+        franquia.fim_ciclo = utcnow_naive() - timedelta(days=1)
+        db.session.commit()
+        expirada = _extrair()
+        assert client.models.calls == []
+        assert IaChamadaTentativa.query.count() == 0
+        assert expirada["error_code"] == ERROR_EXTRACAO_OPERACAO_INDISPONIVEL
+        assert _franquia(franquia.id).reserva_pendente == 0
 
 
 def test_frontend_reusa_cta_e_mantem_codigos_no_desktop_e_no_mobile():

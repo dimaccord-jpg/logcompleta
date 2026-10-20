@@ -1486,116 +1486,6 @@ def _encerrar_reserva_na_transacao(attempt: IaChamadaTentativa) -> None:
     attempt.reserva_ativa = False
 
 
-def _finalizar_tentativa_comprovada(attempt: IaChamadaTentativa, abatimento) -> None:
-    if abatimento is None:
-        return
-    if (
-        attempt.status == IaChamadaTentativa.STATUS_SETTLED
-        and attempt.settled_at is not None
-        and not attempt.reserva_ativa
-    ):
-        return
-    _encerrar_reserva_na_transacao(attempt)
-    attempt.actual_credits = _quantize_credit(_to_decimal(abatimento.creditos))
-    attempt.status = IaChamadaTentativa.STATUS_SETTLED
-    if attempt.settled_at is None:
-        attempt.settled_at = utcnow_naive()
-    attempt.failure_reason = None
-
-
-def _dispensar_tentativa_na_transacao(attempt: IaChamadaTentativa, motivo: str) -> None:
-    if attempt.settled_at is not None:
-        return
-    if attempt.status in (
-        IaChamadaTentativa.STATUS_UNCERTAIN,
-        IaChamadaTentativa.STATUS_SETTLED,
-        IaChamadaTentativa.STATUS_PROVIDER_FAILED,
-        IaChamadaTentativa.STATUS_RELEASED,
-        IaChamadaTentativa.STATUS_BLOCKED,
-        IaChamadaTentativa.STATUS_GOVERNANCE_BLOCKED,
-    ):
-        return
-    _encerrar_reserva_na_transacao(attempt)
-    attempt.status = IaChamadaTentativa.STATUS_RELEASED
-    attempt.failure_reason = _reason(motivo)
-    attempt.settled_at = utcnow_naive()
-
-
-def liquidar_entrega_agente_compara(attempt_id: int, *, prefixo: str) -> IaChamadaTentativa | None:
-    """Uma entrega, um débito. A consulta e a liquidação dividem a mesma trava."""
-    if not has_app_context():
-        return None
-    try:
-        return _liquidar_entrega_agente_compara(int(attempt_id), prefixo=prefixo)
-    except BillableAiUncertainError:
-        raise
-    except Exception as exc:
-        _marcar_incerta(int(attempt_id), MOTIVO_LIQUIDACAO)
-        raise BillableAiUncertainError(
-            MOTIVO_LIQUIDACAO,
-            motivo=MOTIVO_LIQUIDACAO,
-            provider_called=True,
-        ) from exc
-
-
-def _liquidar_entrega_agente_compara(attempt_id: int, *, prefixo: str) -> IaChamadaTentativa | None:
-    if not prefixo.startswith("ac-tt:") or len(prefixo) < 39:
-        return _liquidar_tentativa_ia(int(attempt_id), status_final=IaChamadaTentativa.STATUS_SETTLED)
-    _begin_write_lock()
-    tentativas = (
-        db.session.query(IaChamadaTentativa)
-        .filter(IaChamadaTentativa.attempt_key.startswith(prefixo))
-        .order_by(IaChamadaTentativa.id.asc())
-        .with_for_update()
-        .all()
-    )
-    atual = next((item for item in tentativas if int(item.id) == int(attempt_id)), None)
-    if atual is None:
-        atual = (
-            db.session.query(IaChamadaTentativa)
-            .filter(IaChamadaTentativa.id == int(attempt_id))
-            .with_for_update()
-            .one_or_none()
-        )
-        if atual is not None:
-            tentativas.append(atual)
-    if atual is None:
-        _commit_session()
-        return None
-    if atual.franquia_id is not None:
-        (
-            db.session.query(Franquia)
-            .filter(Franquia.id == int(atual.franquia_id))
-            .with_for_update()
-            .one_or_none()
-        )
-    comprovadas = []
-    for tentativa in tentativas:
-        abatimento = _abatimento_comprovado(tentativa)
-        if abatimento is not None:
-            comprovadas.append((tentativa, abatimento))
-        elif (
-            tentativa.status == IaChamadaTentativa.STATUS_SETTLED
-            and tentativa.settled_at is not None
-        ):
-            comprovadas.append((tentativa, None))
-    if comprovadas:
-        for tentativa, abatimento in comprovadas:
-            if abatimento is not None:
-                _finalizar_tentativa_comprovada(tentativa, abatimento)
-        if all(int(tentativa.id) != int(atual.id) for tentativa, _abatimento in comprovadas):
-            _dispensar_tentativa_na_transacao(atual, "entrega_ja_faturada")
-        _commit_session()
-        return db.session.get(IaChamadaTentativa, int(attempt_id))
-    _liquidar_tentativa_ia(
-        int(attempt_id),
-        status_final=IaChamadaTentativa.STATUS_SETTLED,
-        commit=False,
-    )
-    _commit_session()
-    return db.session.get(IaChamadaTentativa, int(attempt_id))
-
-
 def _usage_ausente(evento: Any) -> bool:
     return evento.input_tokens is None and evento.output_tokens is None and evento.total_tokens is None
 
@@ -1783,7 +1673,7 @@ def cleiton_governed_billable_ai_call(
 ) -> BillableAiCallResult:
     """Único entry point novo de geração externa governada e faturável.
 
-    adiar_liquidacao só é usado pela extração do AgenteCompara. O padrão
+    adiar_liquidacao adia a liquidação da reserva desta fachada. O padrão
     continua liquidando na hora e não altera os demais agentes.
 
     assumir_falha_sem_metricas só é ligado pelas duas gerações do chat

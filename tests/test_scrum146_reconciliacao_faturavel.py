@@ -15,11 +15,8 @@ from app.models import (
     ProcessingEvent,
     utcnow_naive,
 )
-from app.services.agente_compara_extraction_billing import liquidar_ou_dispensar_entrega
 from app.services.cleiton_franquia_reconciliacao_service import reconciliar_franquia_cleiton
 from tests.test_scrum146_extracao_ciclo import (
-    DIGEST,
-    _abrir,
     _avancar,
     _pendurar,
     _saldo,
@@ -61,10 +58,9 @@ def test_extracao_sem_json_util_reconciliacao_nao_debita(app, monkeypatch):
         )
         resultado = _extrair()
         assert resultado["status"] == "failed"
-        tentativa = IaChamadaTentativa.query.one()
-        evento = db.session.get(IaConsumoEvento, tentativa.ia_consumo_evento_id)
-        assert tentativa.status == "released"
-        assert tentativa.failure_reason == "json_invalido"
+        assert IaChamadaTentativa.query.count() == 0
+        evento = IaConsumoEvento.query.one()
+        assert evento.status == "success"
         assert evento.total_tokens == 70
         assert _abatimentos() == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
@@ -109,9 +105,7 @@ def test_primario_descartado_fallback_util_mantem_so_0080(app, monkeypatch):
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
         marca = IaConsumoAbatimento.query.one()
         marca_id = marca.id
-        descartada = IaChamadaTentativa.query.filter_by(status="released").one()
-        evento_descartado = db.session.get(IaConsumoEvento, descartada.ia_consumo_evento_id)
-        assert descartada.failure_reason == "erro_provedor"
+        evento_descartado = IaConsumoEvento.query.filter_by(status="failure").one()
         assert evento_descartado.total_tokens == 1000
         assert IaConsumoAbatimento.query.filter_by(ia_consumo_evento_id=evento_descartado.id).count() == 0
 
@@ -144,8 +138,7 @@ def test_replay_apos_renovacao_nao_reincorpora_ciclo_a(app, monkeypatch):
         )
         primeiro = _extrair()
         assert primeiro["status"] == "needs_review"
-        original = IaChamadaTentativa.query.one()
-        inicio_a, fim_a = original.ciclo_inicio, original.ciclo_fim
+        assert IaChamadaTentativa.query.count() == 0
         marca = IaConsumoAbatimento.query.one()
         marca_id = marca.id
         creditos = marca.creditos
@@ -162,14 +155,13 @@ def test_replay_apos_renovacao_nao_reincorpora_ciclo_a(app, monkeypatch):
         )
         _extrair()
         db.session.expire_all()
-        replay = IaChamadaTentativa.query.filter_by(failure_reason="entrega_ja_faturada").one()
-        assert replay.status == "released"
-        assert replay.ciclo_inicio != inicio_a
-        assert replay.ia_consumo_evento_id is not None
-        assert replay.ia_consumo_evento_id != evento_a
-        assert db.session.get(IaConsumoEvento, replay.ia_consumo_evento_id).total_tokens == 160
+        assert IaChamadaTentativa.query.count() == 0
+        replay = IaConsumoEvento.query.filter(IaConsumoEvento.id != evento_a).one()
+        assert replay.total_tokens == 160
+        assert IaConsumoAbatimento.query.filter_by(ia_consumo_evento_id=replay.id).count() == 0
         assert IaConsumoAbatimento.query.count() == 1
         assert _franquia(franquia.id).consumo_acumulado == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
 
         corrigida = reconciliar_franquia_cleiton(franquia.id, aplicar_correcao=True)
         assert corrigida.total_recalculado == 0
@@ -179,9 +171,6 @@ def test_replay_apos_renovacao_nao_reincorpora_ciclo_a(app, monkeypatch):
         preservada = db.session.get(IaConsumoAbatimento, marca_id)
         assert preservada.creditos == creditos
         assert preservada.ia_consumo_evento_id == evento_a
-        original = IaChamadaTentativa.query.filter_by(status="settled").one()
-        assert original.ciclo_inicio == inicio_a
-        assert original.ciclo_fim == fim_a
 
         repetida = reconciliar_franquia_cleiton(franquia.id, aplicar_correcao=True)
         assert repetida.correcao_aplicada is False
@@ -218,31 +207,6 @@ def test_entrega_util_no_mesmo_ciclo_continua_faturavel(app, monkeypatch):
         assert repetida.status == "ok"
         assert _franquia(franquia.id).consumo_acumulado == Decimal("0.080000")
         assert IaConsumoAbatimento.query.count() == 1
-
-
-def test_liquidacao_tardia_permanece_no_ciclo_original(app):
-    with app.app_context():
-        usuario, franquia = _seed_ciclo(email="tardia-recon@test.com")
-        resultado = _abrir(usuario)
-        tentativa = db.session.get(IaChamadaTentativa, resultado.attempt_id)
-        inicio_a, fim_a = tentativa.ciclo_inicio, tentativa.ciclo_fim
-        _avancar(franquia.id, consumo="0")
-        liquidar_ou_dispensar_entrega(resultado.attempt_id, DIGEST)
-        marca = IaConsumoAbatimento.query.one()
-        marca_id = marca.id
-        assert marca.creditos == Decimal("1")
-        assert _franquia(franquia.id).consumo_acumulado == 0
-
-        corrigida = reconciliar_franquia_cleiton(franquia.id, aplicar_correcao=True)
-        assert corrigida.total_recalculado == 0
-        assert corrigida.status == "ok"
-        assert _franquia(franquia.id).consumo_acumulado == 0
-        preservada = db.session.get(IaConsumoAbatimento, marca_id)
-        assert preservada.creditos == Decimal("1")
-        liquidada = db.session.get(IaChamadaTentativa, resultado.attempt_id)
-        assert liquidada.ciclo_inicio == inicio_a
-        assert liquidada.ciclo_fim == fim_a
-        assert liquidada.status == "settled"
 
 
 def test_reserva_de_ciclo_anterior_nao_altera_saldo_novo(app):

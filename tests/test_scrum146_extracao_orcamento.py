@@ -17,7 +17,6 @@ from app.services.agente_compara_extraction_budget import (
     capacidade_do_modelo,
     consumo_tecnico,
     encaixar_limites_na_operacao,
-    tokens_cobertos_pelo_saldo,
 )
 from app.services.cleiton_billable_ai_call import (
     BILLABLE_AI_MAX_OUTPUT_TOKENS,
@@ -25,8 +24,6 @@ from app.services.cleiton_billable_ai_call import (
     cleiton_governed_billable_ai_call,
     resolver_limites_config,
 )
-from app.services.cleiton_cost_service import get_or_create_config
-from app.services.cleiton_franquia_operacional_service import converter_tokens_para_creditos
 from tests.conftest import seed_cleiton_cost_config, seed_conta_franquia_cliente, seed_sistema_interno, seed_usuario
 
 import app.run_agente_compara_temp_table as temp_mod
@@ -154,16 +151,6 @@ def _franquia(fid):
     return db.session.get(Franquia, fid)
 
 
-def test_regua_vem_da_config_e_nao_de_valor_fixo():
-    cfg_dois_mil = SimpleNamespace(credit_tokens_per_credit=2000.0)
-    cfg_mil = SimpleNamespace(credit_tokens_per_credit=1000.0)
-    assert tokens_cobertos_pelo_saldo(Decimal("15"), cfg_dois_mil) == 30_000
-    assert tokens_cobertos_pelo_saldo(Decimal("14"), cfg_dois_mil) == 28_000
-    assert tokens_cobertos_pelo_saldo(Decimal("2"), cfg_dois_mil) == 4_000
-    assert tokens_cobertos_pelo_saldo(Decimal("15"), cfg_mil) == 15_000
-    assert tokens_cobertos_pelo_saldo(None, cfg_dois_mil) is None
-
-
 def test_encaixe_respeita_teto_e_deixa_json_fora_do_thinking():
     modelo = capacidade_do_modelo("gemini-2.5-flash")
     dentro = encaixar_limites_na_operacao(
@@ -236,13 +223,7 @@ def test_operacao_dentro_do_teto_reserva_no_maximo_30000(app, monkeypatch, caplo
         assert total == EXTRACAO_TETO_TECNICO_TOKENS
         assert saida - thinking >= MIN_JSON_OUTPUT_TOKENS
         assert thinking < saida
-        creditos, erro = converter_tokens_para_creditos(total, get_or_create_config())
-        assert erro is None
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "released"
-        assert tentativa.failure_reason == "tabela_inutilizavel"
-        assert tentativa.reserved_credits == creditos
-        assert tentativa.actual_credits is None
+        assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).fim_ciclo == fim
@@ -267,16 +248,14 @@ def test_operacao_acima_de_30000_nao_gera(app, monkeypatch):
         resultado = _extrair()
         assert client.models.calls == []
         assert len(client.models.count_calls) == 1
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "blocked"
-        assert tentativa.failure_reason == "orcamento_operacao_insuficiente"
-        assert tentativa.reserved_credits == 0
+        assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
         assert resultado["status"] == "failed"
 
 
-def test_saldo_inferior_a_15_creditos_limita_a_autorizacao(app, monkeypatch):
+def test_saldo_positivo_abaixo_do_teto_autoriza_sem_reserva(app, monkeypatch, caplog):
+    """Saldo positivo abaixo do teto autoriza o orçamento técnico inteiro."""
     with app.app_context():
         usuario, franquia = _seed(limite="14")
         client = _Client(
@@ -284,19 +263,41 @@ def test_saldo_inferior_a_15_creditos_limita_a_autorizacao(app, monkeypatch):
             _count_fixo(500),
         )
         _instalar(monkeypatch, client=client, usuario=usuario, models=["gemini-2.5-flash"])
-        resultado = _extrair()
+        with caplog.at_level(logging.INFO):
+            resultado = _extrair()
         assert resultado["status"] == "needs_review"
+        assert len(client.models.calls) == 1
+        modelo = capacidade_do_modelo("gemini-2.5-flash")
+        esperado = encaixar_limites_na_operacao(
+            500,
+            modelo.max_output_tokens,
+            modelo.max_thinking_tokens,
+            EXTRACAO_TETO_TECNICO_TOKENS,
+            model="gemini-2.5-flash",
+        )
         saida, thinking = _limites(client.models.calls[0]["config"])
-        total = 500 + saida + thinking
-        assert total == 28_000
-        assert total < EXTRACAO_TETO_TECNICO_TOKENS
-        creditos, erro = converter_tokens_para_creditos(total, get_or_create_config())
-        assert erro is None and creditos == Decimal("14")
-        assert IaChamadaTentativa.query.one().reserved_credits == creditos
+        assert esperado == (saida, thinking)
+        assert 500 + saida + thinking == EXTRACAO_TETO_TECNICO_TOKENS
+        reduzido = encaixar_limites_na_operacao(
+            500,
+            modelo.max_output_tokens,
+            modelo.max_thinking_tokens,
+            28_000,
+            model="gemini-2.5-flash",
+        )
+        assert (saida, thinking) != reduzido
+        config = client.models.calls[0]["config"]
+        candidatos = config["candidate_count"] if isinstance(config, dict) else config.candidate_count
+        assert candidatos == 1
+        assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).reserva_pendente == 0
+        assert _franquia(franquia.id).consumo_acumulado == 0
+        assert "autorizado=30000" in caplog.text
+        assert "autorizado=28000" not in caplog.text
+        assert "tokens_saldo=" not in caplog.text
 
 
-def test_saldo_residual_de_2_creditos_nao_inicia_geracao(app, monkeypatch, caplog):
+def test_saldo_residual_positivo_inicia_no_teto_tecnico_sem_reserva(app, monkeypatch, caplog):
     with app.app_context():
         usuario, franquia = _seed(limite="15", consumo="13", email="residual@test.com")
         conta_rica, franquia_rica = seed_conta_franquia_cliente(slug="conta-rica")
@@ -309,25 +310,27 @@ def test_saldo_residual_de_2_creditos_nao_inicia_geracao(app, monkeypatch, caplo
         outro = seed_usuario(franquia_rica.id, conta_rica.id, email="rica@test.com")
         assert outro.id != usuario.id
         client = _Client(
-            lambda model, contents, config: (_ for _ in ()).throw(AssertionError("nao gerar")),
+            lambda model, contents, config: _resposta(VALID_JSON, prompt=40, resposta=20, pensamento=0),
             _count_fixo(100),
         )
         _instalar(monkeypatch, client=client, usuario=usuario, models=["gemini-2.5-flash"])
         with caplog.at_level(logging.INFO):
             resultado = _extrair()
-        assert client.models.calls == []
-        assert len(client.models.count_calls) == 1
+        assert len(client.models.calls) == 1
+        saida, thinking = _limites(client.models.calls[0]["config"])
+        assert 100 + saida + thinking == EXTRACAO_TETO_TECNICO_TOKENS
         assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).consumo_acumulado == Decimal("13")
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia_rica.id).consumo_acumulado == 0
-        assert resultado["status"] == "failed"
-        assert "tentativa nao iniciada" in caplog.text
-        assert "autorizado=4000" in caplog.text
+        assert resultado["status"] == "needs_review"
+        assert "autorizado=30000" in caplog.text
+        assert "autorizado=4000" not in caplog.text
+        assert "tokens_saldo=" not in caplog.text
         assert DOC_SECRET not in caplog.text
 
 
-def test_reserva_pendente_concorrente_reduz_o_orcamento(app, monkeypatch):
+def test_reserva_pendente_nao_reduz_o_orcamento_tecnico(app, monkeypatch):
     with app.app_context():
         usuario, franquia = _seed(limite="30", reserva="20")
         client = _Client(
@@ -338,12 +341,131 @@ def test_reserva_pendente_concorrente_reduz_o_orcamento(app, monkeypatch):
         resultado = _extrair()
         assert resultado["status"] == "needs_review"
         saida, thinking = _limites(client.models.calls[0]["config"])
-        total = 1_000 + saida + thinking
-        assert total == 20_000
-        creditos, erro = converter_tokens_para_creditos(total, get_or_create_config())
-        assert erro is None and creditos == Decimal("10")
-        assert IaChamadaTentativa.query.one().reserved_credits == creditos
+        modelo = capacidade_do_modelo("gemini-2.5-flash")
+        assert (saida, thinking) == encaixar_limites_na_operacao(
+            1_000,
+            modelo.max_output_tokens,
+            modelo.max_thinking_tokens,
+            EXTRACAO_TETO_TECNICO_TOKENS,
+            model="gemini-2.5-flash",
+        )
+        assert 1_000 + saida + thinking == EXTRACAO_TETO_TECNICO_TOKENS
+        assert (saida, thinking) != encaixar_limites_na_operacao(
+            1_000,
+            modelo.max_output_tokens,
+            modelo.max_thinking_tokens,
+            20_000,
+            model="gemini-2.5-flash",
+        )
+        assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).reserva_pendente == Decimal("20")
+        assert _franquia(franquia.id).consumo_acumulado == 0
+
+
+def test_saldos_positivos_preservam_o_mesmo_orcamento_tecnico(app, monkeypatch):
+    """0,10, 2, 14 e 21 créditos usam o mesmo encaixe técnico do saldo amplo."""
+    with app.app_context():
+        usuario, franquia = _seed(limite="100", email="saldo-igual@test.com")
+        referencia = None
+        payload_referencia = None
+        for limite in ("0.10", "2", "14", "21", "100"):
+            atual = _franquia(franquia.id)
+            atual.limite_total = Decimal(limite)
+            atual.consumo_acumulado = Decimal("0")
+            atual.reserva_pendente = Decimal("0")
+            db.session.commit()
+            recebidos = []
+
+            def _apply(payload, source_doc_ids=None, **kwargs):
+                recebidos.append(dict(payload or {}))
+                return {
+                    "status": (payload or {}).get("status") or "needs_review",
+                    "reading_alerts": list((payload or {}).get("reading_alerts") or []),
+                    "temp_table_id": "tt-orcamento",
+                    "version_marker": temp_mod.TEMP_TABLE_VERSION_MARKER,
+                }
+
+            client = _Client(
+                lambda model, contents, config: _resposta(
+                    VALID_JSON, prompt=40, resposta=40, pensamento=20
+                ),
+                _count_fixo(500),
+            )
+            _instalar(monkeypatch, client=client, usuario=usuario, models=["gemini-2.5-flash"])
+            monkeypatch.setattr(temp_mod, "apply_temp_table_extraction_from_model_payload", _apply)
+            resultado = _extrair()
+            assert resultado["status"] == "needs_review"
+            assert len(client.models.calls) == 1
+            modelo = capacidade_do_modelo("gemini-2.5-flash")
+            limites = _limites(client.models.calls[0]["config"])
+            assert limites == encaixar_limites_na_operacao(
+                500,
+                modelo.max_output_tokens,
+                modelo.max_thinking_tokens,
+                EXTRACAO_TETO_TECNICO_TOKENS,
+                model="gemini-2.5-flash",
+            )
+            assert 500 + limites[0] + limites[1] == EXTRACAO_TETO_TECNICO_TOKENS
+            assert IaChamadaTentativa.query.count() == 0
+            assert _franquia(franquia.id).reserva_pendente == 0
+            assert _franquia(franquia.id).consumo_acumulado == 0
+            assert recebidos
+            if referencia is None:
+                referencia = limites
+                payload_referencia = recebidos[0]
+            else:
+                assert limites == referencia
+                assert recebidos[0] == payload_referencia
+
+
+def test_fallback_com_saldo_baixo_respeita_teto_tecnico_acumulado(app, monkeypatch):
+    with app.app_context():
+        usuario, franquia = _seed(limite="14", email="fallback-saldo-baixo@test.com")
+
+        class _Falha(RuntimeError):
+            def __init__(self):
+                super().__init__("provider down")
+                self.usage_metadata = _usage(prompt=700, resposta=200, pensamento=100)
+
+        def gerar(model, contents, config):
+            if model == "gemini-2.5-flash":
+                raise _Falha()
+            return _resposta(VALID_JSON, prompt=80, resposta=40, pensamento=10)
+
+        client = _Client(gerar, _count_fixo(1_000, 1_000))
+        _instalar(
+            monkeypatch,
+            client=client,
+            usuario=usuario,
+            models=["gemini-2.5-flash", "gemini-2.5-flash-lite"],
+        )
+        resultado = _extrair()
+        assert resultado["status"] == "needs_review"
+        assert [chamada["model"] for chamada in client.models.calls] == [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ]
+        saida_primaria, thinking_primario = _limites(client.models.calls[0]["config"])
+        assert 1_000 + saida_primaria + thinking_primario == EXTRACAO_TETO_TECNICO_TOKENS
+        modelo = capacidade_do_modelo("gemini-2.5-flash-lite")
+        saida, thinking = _limites(client.models.calls[1]["config"])
+        assert (saida, thinking) == encaixar_limites_na_operacao(
+            1_000,
+            modelo.max_output_tokens,
+            modelo.max_thinking_tokens,
+            EXTRACAO_TETO_TECNICO_TOKENS - 1_000,
+            model="gemini-2.5-flash-lite",
+        )
+        assert 1_000 + saida + thinking == EXTRACAO_TETO_TECNICO_TOKENS - 1_000
+        assert (saida, thinking) != encaixar_limites_na_operacao(
+            1_000,
+            modelo.max_output_tokens,
+            modelo.max_thinking_tokens,
+            28_000,
+            model="gemini-2.5-flash-lite",
+        )
+        assert IaChamadaTentativa.query.count() == 0
+        assert _franquia(franquia.id).reserva_pendente == 0
 
 
 def test_primario_com_falha_e_fallback_dentro_do_restante(app, monkeypatch):
@@ -459,13 +581,10 @@ def test_consumo_incerto_nao_abre_fallback_e_mantem_reserva(app, monkeypatch):
         )
         resultado = _extrair()
         assert [chamada["model"] for chamada in client.models.calls] == ["gemini-2.5-flash"]
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "uncertain"
-        assert tentativa.reserva_ativa is True
+        assert IaChamadaTentativa.query.count() == 0
         atual = _franquia(franquia.id)
         assert atual.consumo_acumulado == 0
-        assert atual.reserva_pendente == tentativa.reserved_credits
-        assert atual.reserva_pendente > 0
+        assert atual.reserva_pendente == 0
         assert resultado["status"] == "failed"
 
 
@@ -733,13 +852,12 @@ def test_consumo_ausente_nao_continua_e_nao_duplica(app, monkeypatch):
         )
         resultado = _extrair()
         assert [chamada["model"] for chamada in client.models.calls] == ["gemini-2.5-flash"]
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "uncertain"
+        assert IaChamadaTentativa.query.count() == 0
         assert IaConsumoEvento.query.count() == 1
         assert _tokens_observados() == 0
         atual = _franquia(franquia.id)
         assert atual.consumo_acumulado == 0
-        assert atual.reserva_pendente == tentativa.reserved_credits
+        assert atual.reserva_pendente == 0
         assert resultado["status"] == "failed"
 
 
@@ -784,9 +902,7 @@ def test_pro_25800_bloqueia_sem_enviar_thinking_invalido(app, monkeypatch):
         pedido_contagem = client.models.count_calls[0]["config"]
         assert "thinking_config" not in pedido_contagem
         assert "thinking_budget" not in pedido_contagem
-        tentativa = IaChamadaTentativa.query.one()
-        assert tentativa.status == "blocked"
-        assert tentativa.failure_reason == "orcamento_operacao_insuficiente"
+        assert IaChamadaTentativa.query.count() == 0
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
         assert resultado["status"] == "failed"

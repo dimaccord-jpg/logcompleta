@@ -3,28 +3,15 @@ Orçamento técnico da extração de tabela do AgenteCompara.
 
 O teto de 30.000 tokens vale para a operação inteira, em qualquer plano:
 soma de entrada, thinking e resposta de todas as tentativas, inclusive fallback.
-O valor autorizado é o menor entre esse teto, os tokens cobertos pelo saldo
-disponível e a capacidade contabilizável do modelo selecionado.
+O valor autorizado é o menor entre o teto restante e a capacidade contabilizável
+do modelo selecionado. O saldo de créditos não dimensiona esse valor.
 
-O saldo já desconta créditos consumidos e reservas pendentes. A conversão usa
-CleitonCostConfig. A reserva, a liquidação e o ciclo mensal continuam na fachada
-billable, com a mesma fórmula de teto por chamada.
+A autorização da franquia, o débito e o ciclo mensal continuam fora deste orçamento.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_DOWN
 from typing import Any
-
-from flask import has_app_context
-
-from app.extensions import db
-from app.models import Franquia
-from app.services.cleiton_cost_service import get_or_create_config
-from app.services.cleiton_franquia_operacional_service import (
-    converter_tokens_para_creditos,
-    saldo_disponivel_chamada_ia,
-)
 
 EXTRACAO_TETO_TECNICO_TOKENS = 30_000
 MIN_JSON_OUTPUT_TOKENS = 4_096
@@ -37,7 +24,7 @@ _THINKING_MINIMO: tuple[tuple[str, int, bool], ...] = (
 )
 
 # Limites publicados do modelo. A capacidade contabilizável soma saída e thinking
-# porque o teto da operação e a reserva da fachada somam os dois.
+# porque o teto da operação soma os dois.
 _MODELOS: tuple[tuple[str, int, int], ...] = (
     ("gemini-2.5-flash-lite", 65_536, 24_576),
     ("gemini-2.5-flash", 65_536, 24_576),
@@ -47,10 +34,6 @@ _MODELOS: tuple[tuple[str, int, int], ...] = (
 )
 _SAIDA_CONSERVADORA = 8_192
 _THINKING_CONSERVADOR = 8_192
-
-
-class ReguaExtracaoIndisponivel(Exception):
-    """A régua de CleitonCostConfig não converte tokens em créditos."""
 
 
 @dataclass(frozen=True)
@@ -67,9 +50,7 @@ class CapacidadeModelo:
 class OrcamentoExtracao:
     autorizado: int
     teto_tecnico: int
-    tokens_saldo: int | None
     capacidade_modelo: int
-    recusado: str | None = None
 
 
 def capacidade_do_modelo(model: str) -> CapacidadeModelo:
@@ -81,100 +62,27 @@ def capacidade_do_modelo(model: str) -> CapacidadeModelo:
     return CapacidadeModelo(_SAIDA_CONSERVADORA, _THINKING_CONSERVADOR)
 
 
-def tokens_cobertos_pelo_saldo(saldo: Decimal | None, cfg: Any) -> int | None:
-    """
-    Maior quantidade de tokens cuja conversão não ultrapassa o saldo.
-
-    None significa franquia sem teto comercial. A taxa vem só da config.
-    """
-    if saldo is None:
-        return None
-    rate = getattr(cfg, "credit_tokens_per_credit", None)
-    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate <= 0:
-        raise ReguaExtracaoIndisponivel("regua_indisponivel")
-    if saldo <= 0:
-        return 0
-    rate_d = Decimal(str(rate))
-    bruto = int((saldo * rate_d).to_integral_value(rounding=ROUND_DOWN))
-    for _ in range(8):
-        if bruto <= 0:
-            return 0
-        creditos, erro = converter_tokens_para_creditos(bruto, cfg)
-        if erro or creditos is None:
-            raise ReguaExtracaoIndisponivel("regua_indisponivel")
-        if creditos <= saldo:
-            return bruto
-        bruto -= 1
-    return 0
-
-
-def consultar_tokens_saldo(usuario: Any) -> tuple[int | None, str | None]:
-    """
-    Tokens ainda autorizáveis para a franquia do usuário.
-
-    Sem usuário ou sem contexto, devolve (None, None): a fachada continua
-    responsável pela identidade. None no saldo da franquia é ausência de teto.
-    """
-    if usuario is None or not has_app_context():
-        return None, None
-    fid = getattr(usuario, "franquia_id", None)
-    if fid is None or isinstance(fid, bool):
-        return None, None
-    try:
-        franquia_id = int(fid)
-    except (TypeError, ValueError):
-        return 0, "franquia_indisponivel"
-    franquia = db.session.get(Franquia, franquia_id)
-    if franquia is None:
-        return 0, "franquia_indisponivel"
-    saldo = saldo_disponivel_chamada_ia(franquia)
-    try:
-        return tokens_cobertos_pelo_saldo(saldo, get_or_create_config()), None
-    except ReguaExtracaoIndisponivel:
-        return 0, "regua_indisponivel"
-
-
 def orcamento_autorizado(
     *,
     teto_restante: int,
     modelo: CapacidadeModelo,
-    tokens_saldo: int | None,
-    recusado: str | None = None,
 ) -> OrcamentoExtracao:
-    """Menor valor entre teto técnico restante, saldo e capacidade do modelo."""
+    """Menor valor entre o teto técnico restante e a capacidade do modelo."""
     restante = max(0, min(EXTRACAO_TETO_TECNICO_TOKENS, int(teto_restante)))
     capacidade = int(modelo.capacidade_contabil)
-    if recusado:
-        autorizado = 0
-    else:
-        partes = [restante, capacidade]
-        if tokens_saldo is not None:
-            partes.append(max(0, int(tokens_saldo)))
-        autorizado = min(partes)
     return OrcamentoExtracao(
-        autorizado=autorizado,
+        autorizado=min(restante, capacidade),
         teto_tecnico=EXTRACAO_TETO_TECNICO_TOKENS,
-        tokens_saldo=tokens_saldo,
         capacidade_modelo=capacidade,
-        recusado=recusado,
     )
 
 
-def montar_orcamento_tentativa(*, usuario: Any, model: str, consumido: int) -> OrcamentoExtracao:
-    """Orçamento da próxima tentativa, já descontado o consumo técnico anterior."""
-    modelo = capacidade_do_modelo(model)
-    tokens_saldo, recusado = consultar_tokens_saldo(usuario)
+def montar_orcamento_tentativa(*, model: str, consumido: int) -> OrcamentoExtracao:
+    """Orçamento técnico da próxima tentativa, já descontado o consumo anterior."""
     return orcamento_autorizado(
         teto_restante=EXTRACAO_TETO_TECNICO_TOKENS - max(0, int(consumido)),
-        modelo=modelo,
-        tokens_saldo=tokens_saldo,
-        recusado=recusado,
+        modelo=capacidade_do_modelo(model),
     )
-
-
-def tentativa_viavel(autorizado: int, *, min_json: int = MIN_JSON_OUTPUT_TOKENS) -> bool:
-    """Há tokens suficientes para uma resposta JSON mesmo com entrada vazia."""
-    return isinstance(autorizado, int) and not isinstance(autorizado, bool) and autorizado >= min_json
 
 
 def _regra_thinking(model: str | None) -> tuple[int, bool] | None:
@@ -219,7 +127,7 @@ def encaixar_limites_na_operacao(
 
     O thinking fica estritamente abaixo da saída reservada ao JSON: no Gemini 2.5
     os tokens de thinking contam dentro de max_output_tokens. A soma contabilizada
-    continua entrada + saída + thinking, a mesma da reserva financeira.
+    continua entrada + saída + thinking.
     Thinking positivo abaixo do mínimo do modelo não é enviado: Flash-Lite cai
     para zero quando isso cabe; Pro só segue se o mínimo e o JSON couberem.
     """

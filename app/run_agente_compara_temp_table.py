@@ -48,10 +48,12 @@ from app.agente_compara_prompt import (
     build_agente_compara_temp_table_technical_prompt,
 )
 from app.services.agente_compara_extraction_billing import (
-    attempt_key_da_tentativa,
+    ExtracaoConsumoIncerto,
+    ExtracaoRecusada,
+    abater_entrega_confirmada,
+    cleiton_governed_generate_content,
     digest_da_entrega,
     entrega_faturavel,
-    liquidar_ou_dispensar_entrega,
 )
 from app.services.agente_compara_extraction_budget import (
     EXTRACAO_TETO_TECNICO_TOKENS,
@@ -59,16 +61,10 @@ from app.services.agente_compara_extraction_budget import (
     capacidade_do_modelo,
     consumo_tecnico,
     montar_orcamento_tentativa,
-    tentativa_viavel,
 )
 from app.services.cleiton_billable_ai_call import (
-    MOTIVO_ORCAMENTO_OPERACAO,
-    BillableAiCallError,
     BillableAiUncertainError,
-    cleiton_governed_generate_content,
-    contar_tokens_oficiais,
     gemini_http_options,
-    liberar_reserva_confirmada,
     usuario_operacional_da_chamada,
 )
 from app.services.agente_compara_config_service import get_active_calculation_bases_for_runtime
@@ -548,100 +544,12 @@ def _teto_restante(consumido: int) -> int:
     return EXTRACAO_TETO_TECNICO_TOKENS - max(0, int(consumido))
 
 
-def _entrada_nao_cabe_no_teto(entrada: int | None, restante: int) -> bool:
-    """Entrada oficial acima do teto, ou sem folga para o JSON mínimo."""
-    if isinstance(entrada, bool) or not isinstance(entrada, int) or entrada < 0:
-        return False
-    if entrada > EXTRACAO_TETO_TECNICO_TOKENS:
-        return True
-    return entrada + MIN_JSON_OUTPUT_TOKENS > restante
-
-
-def _contagem_oficial_da_entrada(client, model: str, contents: Any, config: Any) -> int | None:
-    """
-    count_tokens oficial, sem geração e sem reserva.
-
-    None quando a contagem não é possível. Não usa estimativa local.
-    """
-    from app.services.cleiton_ai_data_governance import (
-        CleitonAiGovernanceBlockedError,
-        purpose_from_flow_type,
-    )
-    from app.services.cleiton_billable_ai_call import _payload_seguro_para_metering
-
-    try:
-        safe_contents, safe_config = _payload_seguro_para_metering(
-            contents,
-            config,
-            purpose=purpose_from_flow_type(
-                AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
-                "agente_compara",
-            ),
-            agent="agente_compara",
-        )
-    except CleitonAiGovernanceBlockedError as exc:
-        logger.info(
-            "Agente Compara extracao contagem oficial indisponivel model=%s tipo=%s",
-            model,
-            exc.__class__.__name__,
-        )
-        return None
-    except Exception as exc:
-        logger.info(
-            "Agente Compara extracao contagem oficial indisponivel model=%s tipo=%s",
-            model,
-            exc.__class__.__name__,
-        )
-        return None
-    total, erro = contar_tokens_oficiais(
-        client,
-        model=model,
-        contents=safe_contents,
-        config=safe_config,
-        agent="agente_compara",
-        flow_type=AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
-    )
-    if erro or isinstance(total, bool) or not isinstance(total, int):
-        return None
-    return total
-
-
-def _causa_recusa_antes_da_geracao(
-    orcamento,
-    consumido: int,
-    entrada: int | None = None,
-) -> str:
-    """Recusa sem chamar o modelo. O teto técnico vem antes do saldo."""
-    if orcamento.recusado:
-        return ERROR_EXTRACAO_OPERACAO_INDISPONIVEL
-    restante = _teto_restante(consumido)
-    if restante < MIN_JSON_OUTPUT_TOKENS:
-        return ERROR_EXTRACAO_TETO_TECNICO
-    if _entrada_nao_cabe_no_teto(entrada, restante):
-        return ERROR_EXTRACAO_TETO_TECNICO
-    saldo = orcamento.tokens_saldo
-    if saldo is not None and saldo < MIN_JSON_OUTPUT_TOKENS:
+def _codigo_da_recusa(codigo: str) -> str:
+    if codigo == "creditos":
         return ERROR_EXTRACAO_CREDITOS_INSUFICIENTES
-    return ERROR_EXTRACAO_TETO_TECNICO
-
-
-def _causa_orcamento_recusado_na_chamada(exc: BillableAiCallError, orcamento, consumido: int) -> str:
-    """
-    O bloqueio interno só vira CTA de créditos quando a entrada cabe no teto de 30.000
-    e o saldo é que impediu a geração.
-    """
-    if getattr(exc, "motivo", None) != MOTIVO_ORCAMENTO_OPERACAO:
-        return ERROR_EXTRACAO_OPERACAO_INDISPONIVEL
-    restante = _teto_restante(consumido)
-    entrada = getattr(exc, "tokens_entrada", None)
-    if isinstance(entrada, bool) or not isinstance(entrada, int):
+    if codigo == "teto":
         return ERROR_EXTRACAO_TETO_TECNICO
-    if entrada + MIN_JSON_OUTPUT_TOKENS > restante:
-        return ERROR_EXTRACAO_TETO_TECNICO
-    saldo = orcamento.tokens_saldo
-    if saldo is not None and saldo < restante and restante >= MIN_JSON_OUTPUT_TOKENS:
-        return ERROR_EXTRACAO_CREDITOS_INSUFICIENTES
-    return ERROR_EXTRACAO_TETO_TECNICO
+    return ERROR_EXTRACAO_OPERACAO_INDISPONIVEL
 
 
 def _falha_final_da_extracao(
@@ -721,14 +629,14 @@ def _build_provider_timeout_alerts(
 
 
 def _superficie_da_resposta(response: Any) -> tuple[Any, int | None]:
-    """Separa a resposta do provedor do identificador da tentativa retida."""
-    attempt_id = getattr(response, "attempt_id", None)
-    if isinstance(attempt_id, bool) or not isinstance(attempt_id, int):
-        attempt_id = None
+    """Separa a resposta do provedor do evento de consumo observado."""
+    evento_id = getattr(response, "evento_id", None)
+    if isinstance(evento_id, bool) or not isinstance(evento_id, int):
+        evento_id = None
     inner = getattr(response, "response", None)
     if inner is not None and getattr(response, "text", None) is None:
-        return inner, attempt_id
-    return response, attempt_id
+        return inner, evento_id
+    return response, evento_id
 
 
 def _is_provider_timeout(exc: Exception) -> bool:
@@ -884,11 +792,6 @@ def run_agente_compara_temp_table_extraction(
         table_id=table_id,
     )
 
-    def _dispensar(attempt_id: int | None, motivo: str) -> None:
-        if not attempt_id:
-            return
-        liberar_reserva_confirmada(int(attempt_id), motivo=motivo)
-
     def _devolver(record: dict | None, *, preservar_entrega_confirmada: bool = False) -> dict | None:
         try:
             _register_nonbillable_processing_event(
@@ -922,7 +825,7 @@ def run_agente_compara_temp_table_extraction(
         return record
 
     def _avisar_consumo_incerto(record: dict) -> None:
-        """Pendência financeira na tabela útil. Não altera status nem a reserva."""
+        """Pendência financeira na tabela útil. Não altera status e não cria reserva."""
         mensagem = alerta_usuario_extracao(ERROR_EXTRACAO_CONSUMO_INCERTO)
         record["error_code"] = ERROR_EXTRACAO_CONSUMO_INCERTO
         record["failure_code"] = ERROR_EXTRACAO_CONSUMO_INCERTO
@@ -940,12 +843,12 @@ def run_agente_compara_temp_table_extraction(
                 exc.__class__.__name__,
             )
 
-    def _cobrar_entrega(attempt_id: int | None, record: dict) -> dict:
+    def _cobrar_entrega(evento_id: int | None, record: dict) -> dict:
         confirmada = False
-        if attempt_id:
+        if evento_id:
             try:
-                liquidada = liquidar_ou_dispensar_entrega(int(attempt_id), digest_entrega)
-            except BillableAiUncertainError:
+                desfecho = abater_entrega_confirmada(int(evento_id), digest_entrega)
+            except (BillableAiUncertainError, ExtracaoConsumoIncerto):
                 logger.info(
                     "Agente Compara extracao consumo incerto na liquidacao; debito nao confirmado"
                 )
@@ -954,9 +857,7 @@ def run_agente_compara_temp_table_extraction(
                     _persistir_aviso_consumo_incerto(record)
                 return _devolver(record, preservar_entrega_confirmada=True)
             else:
-                status = getattr(liquidada, "status", None)
-                motivo = getattr(liquidada, "failure_reason", None)
-                confirmada = status == "settled" or motivo == "entrega_ja_faturada"
+                confirmada = desfecho in {"debitada", "ja_faturada"}
         return _devolver(record, preservar_entrega_confirmada=confirmada)
 
     def _somar_consumo(origem: Any) -> bool:
@@ -982,41 +883,22 @@ def run_agente_compara_temp_table_extraction(
     for model_index, model in enumerate(model_candidates):
         usuario = usuario_operacional_da_chamada()
         orcamento = montar_orcamento_tentativa(
-            usuario=usuario,
             model=model,
             consumido=consumido,
         )
+        restante = _teto_restante(consumido)
+        capacidade = capacidade_do_modelo(model)
         logger.info(
             "Agente Compara extracao orcamento model=%s autorizado=%s teto_tecnico=%s "
-            "tokens_saldo=%s capacidade_modelo=%s consumido=%s recusado=%s",
+            "capacidade_modelo=%s consumido=%s",
             model,
             orcamento.autorizado,
             orcamento.teto_tecnico,
-            "sem_teto" if orcamento.tokens_saldo is None else orcamento.tokens_saldo,
             orcamento.capacidade_modelo,
             consumido,
-            orcamento.recusado or "-",
         )
-        if orcamento.recusado or not tentativa_viavel(orcamento.autorizado):
-            causa_falha = _causa_recusa_antes_da_geracao(orcamento, consumido)
-            if causa_falha == ERROR_EXTRACAO_CREDITOS_INSUFICIENTES:
-                contents = _build_extraction_contents(
-                    document_context_block=doc_ctx.get("context_block") or None,
-                    document_file_parts=doc_ctx.get("gemini_file_parts") or None,
-                    use_fallback_prompt=model_index > 0,
-                )
-                entrada = _contagem_oficial_da_entrada(
-                    client,
-                    model,
-                    contents,
-                    generation_config,
-                )
-                if entrada is not None:
-                    causa_falha = _causa_recusa_antes_da_geracao(
-                        orcamento,
-                        consumido,
-                        entrada=entrada,
-                    )
+        if restante < MIN_JSON_OUTPUT_TOKENS or orcamento.autorizado < 1:
+            causa_falha = ERROR_EXTRACAO_TETO_TECNICO
             logger.info(
                 "Agente Compara extracao tentativa nao iniciada model=%s autorizado=%s causa=%s",
                 model,
@@ -1024,14 +906,13 @@ def run_agente_compara_temp_table_extraction(
                 causa_falha,
             )
             break
-        capacidade = capacidade_do_modelo(model)
         contents = _build_extraction_contents(
             document_context_block=doc_ctx.get("context_block") or None,
             document_file_parts=doc_ctx.get("gemini_file_parts") or None,
             use_fallback_prompt=model_index > 0,
         )
         contabilizada = False
-        attempt_id: int | None = None
+        evento_id: int | None = None
         resposta_recebida = False
         try:
             response = cleiton_governed_generate_content(
@@ -1043,13 +924,11 @@ def run_agente_compara_temp_table_extraction(
                 flow_type=AGENTE_COMPARA_TEMP_TABLE_EXTRACTION_FLOW_TYPE,
                 api_key_label=_api_key_label(),
                 usuario=usuario,
-                attempt_key=attempt_key_da_tentativa(digest_entrega, model),
                 output_token_cap=capacidade.max_output_tokens,
                 thinking_token_cap=capacidade.max_thinking_tokens,
                 operation_token_budget=orcamento.autorizado,
-                adiar_liquidacao=True,
             )
-            superficie, attempt_id = _superficie_da_resposta(response)
+            superficie, evento_id = _superficie_da_resposta(response)
             contabilizada = _somar_consumo(superficie)
             resposta_recebida = True
             raw_text = getattr(superficie, "text", None) or ""
@@ -1082,7 +961,6 @@ def run_agente_compara_temp_table_extraction(
                     if finish_reason == "MAX_TOKENS"
                     else ERROR_EXTRACAO_JSON_INVALIDO
                 )
-                _dispensar(attempt_id, "max_tokens" if finish_reason == "MAX_TOKENS" else "json_invalido")
                 continue
             if franquia_scope is not None:
                 payload["franquia_scope"] = franquia_scope
@@ -1096,28 +974,25 @@ def run_agente_compara_temp_table_extraction(
                 slot_number=slot_number,
             )
             if not isinstance(record, dict):
-                _dispensar(attempt_id, "persistencia_falhou")
                 continue
             if not entrega_faturavel(record):
-                _dispensar(attempt_id, "tabela_inutilizavel")
                 return _devolver(record)
-            return _cobrar_entrega(attempt_id, record)
-        except BillableAiUncertainError as exc:
+            return _cobrar_entrega(evento_id, record)
+        except ExtracaoRecusada as exc:
+            causa_falha = _codigo_da_recusa(exc.codigo)
+            logger.info(
+                "Agente Compara extracao tentativa nao iniciada model=%s autorizado=%s causa=%s",
+                model,
+                orcamento.autorizado,
+                causa_falha,
+            )
+            break
+        except (BillableAiUncertainError, ExtracaoConsumoIncerto) as exc:
             last_error = exc
             causa_falha = ERROR_EXTRACAO_CONSUMO_INCERTO
             break
-        except BillableAiCallError as exc:
-            if not exc.terminal:
-                raise
-            last_error = exc
-            causa_falha = _causa_orcamento_recusado_na_chamada(exc, orcamento, consumido)
-            break
         except Exception as exc:
             last_error = exc
-            if attempt_id is None:
-                extra = getattr(exc, "attempt_id", None)
-                if isinstance(extra, int) and not isinstance(extra, bool):
-                    attempt_id = extra
             if not contabilizada:
                 contabilizada = _somar_consumo(exc)
             if _is_provider_timeout(exc):
@@ -1140,10 +1015,6 @@ def run_agente_compara_temp_table_extraction(
                     model,
                 )
                 break
-            _dispensar(
-                attempt_id,
-                "persistencia_falhou" if resposta_recebida else "erro_provedor",
-            )
 
     if last_error:
         logger.exception(

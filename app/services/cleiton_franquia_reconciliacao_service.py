@@ -112,6 +112,15 @@ def _somar_creditos_abativeis_franquia(franquia_id: int) -> tuple[Decimal, int, 
             total += creditos
             n_ia_ok += 1
             continue
+        if ev.flow_type == "agente_compara_temp_table_extraction":
+            marca = abatimentos.get(int(ev.id))
+            creditos = _to_decimal(marca.creditos) if marca is not None else Decimal("0")
+            if creditos <= 0:
+                n_ia_skip += 1
+                continue
+            total += creditos
+            n_ia_ok += 1
+            continue
         pode, _ = deve_abater_franquia_do_cliente(
             franquia_id=ev.franquia_id,
             usuario_id=ev.usuario_id,
