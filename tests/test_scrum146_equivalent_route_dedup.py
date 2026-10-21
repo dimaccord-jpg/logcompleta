@@ -119,10 +119,12 @@ def test_same_lookup_keys_with_different_tariff_stay_blocking():
     assert route_rule["brackets"][0]["value"] == 99.0
     assert "freight_routes[0]" not in (table_rule.get("source_refs") or [])
     assert any(item.get("kind") == "conflicting_lookup_key" for item in findings)
-    validation = validate_pricing_contract_for_confirmation(table, contract)
-    assert validation["can_confirm"] is False
-    assert CODE_CONFLICTING_LOOKUP_KEY in {issue["code"] for issue in validation["blocking_issues"]}
-    assert _pricing_blocking_count(table) > 0
+    executable = build_pricing_contract(table)
+    validation = validate_pricing_contract_for_confirmation(table, executable)
+    assert [rule["brackets"][0]["value"] for rule in executable["rules"]] == [32.0]
+    assert validation["can_confirm"] is True
+    assert CODE_CONFLICTING_LOOKUP_KEY not in {issue["code"] for issue in validation["blocking_issues"]}
+    assert _pricing_blocking_count(table) == 0
 
 
 def test_equivalent_route_alias_is_merged_into_existing_rule():
@@ -256,7 +258,8 @@ def test_comp01a_eixolog_alfa_equivalent_routes_are_not_conflicting():
         assert any(str(ref).startswith("freight_routes[") for ref in rule["source_refs"])
         assert any(str(ref).startswith("freight_tables[") for ref in rule["source_refs"])
     assert not any(item.get("kind") == "conflicting_lookup_key" for item in findings)
-    validation = validate_pricing_contract_for_confirmation(table, contract)
+    executable = build_pricing_contract(table)
+    validation = validate_pricing_contract_for_confirmation(table, executable)
     pricing_blocking_count = validation["blocking_count"]
     assert pricing_blocking_count == 0
     assert validation["can_confirm"] is True

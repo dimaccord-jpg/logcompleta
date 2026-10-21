@@ -109,6 +109,20 @@ def _unresolved_abstract_zones(record: dict | None) -> set[str]:
 
 
 def _pricing_contract_for_gate(record: dict) -> dict:
+    """Lê o contrato persistido válido antes de recompilar.
+
+    A recompilação atual desativa freight_routes e apaga chaves de cidade já
+    reconhecidas num contrato histórico. Um contrato novo confirmado já foi
+    persistido por essa mesma compilação, então a abrangência não muda.
+    """
+    stored = record.get("pricing_contract") if isinstance(record, dict) else None
+    try:
+        from app.agente_compara_doc_service import _pricing_contract_is_usable
+
+        if _pricing_contract_is_usable(record, stored):
+            return stored
+    except Exception:
+        logger.exception("Falha ao ler contrato persistido para a situação de coverage.")
     try:
         from app.agente_compara_doc_service import build_pricing_contract
 

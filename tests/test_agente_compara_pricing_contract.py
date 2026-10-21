@@ -743,22 +743,22 @@ def test_legacy_route_origin_is_not_treated_as_city_selector():
         ],
     }
     contract = build_pricing_contract(table)
-    lookup_keys = [key for rule in contract["rules"] for key in rule["lookup_keys"]]
-    assert not any(key.startswith("ORIGIN:") for key in lookup_keys)
-    assert "SP|INTERIOR" in lookup_keys
-    assert "JOINVILLE" in lookup_keys
-    assert "MG-CAP" in lookup_keys
+    assert contract["rules"] == []
     route_validation = validate_pricing_contract_for_confirmation(table)
     assert route_validation["can_confirm"] is False
-    assert CODE_CONFLICTING_LOOKUP_KEY in {issue["code"] for issue in route_validation["blocking_issues"]}
+    assert CODE_NO_EXECUTABLE_PRICING_RULE in {issue["code"] for issue in route_validation["blocking_issues"]}
+    preserved, _findings = _compile_pricing_contract(table, include_freight_routes=True)
+    preserved_keys = [key for rule in preserved["rules"] for key in rule["lookup_keys"]]
+    assert not any(key.startswith("ORIGIN:") for key in preserved_keys)
+    assert "SP|INTERIOR" in preserved_keys
+    assert "JOINVILLE" in preserved_keys
     without_contract = {
         "freight_tables": [],
         "freight_routes": table["freight_routes"][:2],
     }
     legacy = _build_freight_pricing_index_legacy(without_contract)
-    assert "SP|INTERIOR" in legacy
-    assert "JOINVILLE" in legacy
-    assert set(build_freight_pricing_index(without_contract)) == set(legacy)
+    assert legacy == {}
+    assert build_freight_pricing_index(without_contract) == {}
     origin_matrix_without_contract = _origin_distinguished_table()
     legacy_matrix = build_freight_pricing_index(origin_matrix_without_contract)
     assert not any(str(key).startswith("ORIGIN:") for key in legacy_matrix)
@@ -786,27 +786,9 @@ def test_explicit_route_origin_fields_qualify_lookup_keys():
         ],
     }
     validation = validate_pricing_contract_for_confirmation(table)
-    assert validation["can_confirm"] is True, validation["blocking_issues"]
-    lookup_keys = [key for rule in build_pricing_contract(table)["rules"] for key in rule["lookup_keys"]]
-    assert lookup_keys == [
-        "ORIGIN:SP|CAMPINAS=>MG-CAP",
-        "ORIGIN:SP|GUARULHOS=>MG-CAP",
-    ]
-    calculated = _calculate(
-        table,
-        [
-            _row(
-                destination_city="Belo Horizonte",
-                destination_uf="MG",
-                weight=8,
-                origin_city="Campinas",
-                origin_uf="SP",
-                invoice_value=None,
-            )
-        ],
-        _mg_cap_coverage(),
-    )
-    assert calculated["results"][0]["calculated_freight"] == 10.0
+    assert validation["can_confirm"] is False
+    assert build_pricing_contract(table)["rules"] == []
+    assert CODE_NO_EXECUTABLE_PRICING_RULE in {issue["code"] for issue in validation["blocking_issues"]}
 
 
 def test_parse_range_from_label_accepts_hyphenated_weight_headers():
@@ -1356,11 +1338,11 @@ def test_active_route_without_destination_blocks_confirmation():
         ],
     }
     contract = build_pricing_contract(table)
-    assert any("Sul" in (rule.get("lookup_keys") or []) for rule in contract["rules"])
+    assert contract["rules"] == []
+    assert table["freight_routes"][1] == {"weight_10": "25,00"}
     validation = validate_pricing_contract_for_confirmation(table)
     assert validation["can_confirm"] is False
-    assert CODE_MISSING_LOOKUP_KEY in {issue["code"] for issue in validation["blocking_issues"]}
-    assert any(issue.get("field") == "destination" for issue in validation["blocking_issues"])
+    assert CODE_NO_EXECUTABLE_PRICING_RULE in {issue["code"] for issue in validation["blocking_issues"]}
 
 
 @pytest.mark.parametrize(
@@ -1539,10 +1521,8 @@ def test_freight_route_city_slash_uf_adds_canonical_key_without_city_only_alias(
         "freight_tables": [],
         "freight_routes": [{"destination": "Curitiba/PR", "weight_10": "32,00"}],
     }
-    keys = build_pricing_contract(table)["rules"][0]["lookup_keys"]
-    assert "Curitiba/PR" in keys
-    assert "PR|CURITIBA" in keys
-    assert "CURITIBA" not in keys
+    assert build_pricing_contract(table)["rules"] == []
+    assert table["freight_routes"] == [{"destination": "Curitiba/PR", "weight_10": "32,00"}]
 
 
 _COMP01B_COLUMNS = [
@@ -1624,6 +1604,7 @@ def _comp01b_sulcarga_table() -> dict:
 
 
 def _assert_comp01b_zone_amounts(table: dict, zone: dict) -> None:
+    coverage = _coverage_rows((zone["uf"], zone["city"], zone["zone"]))
     for weight, amount in zone["expected"].items():
         calculated = _calculate(
             table,
@@ -1635,11 +1616,12 @@ def _assert_comp01b_zone_amounts(table: dict, zone: dict) -> None:
                     invoice_value=None,
                 )
             ],
-            {"rows": []},
+            coverage,
         )
         result = calculated["results"][0]
         assert result["calculated_freight"] == amount, (zone["zone"], weight, result)
         assert result["status"] == "calculated"
+        assert result["evidence"]["pricing_lookup_key"] == zone["zone"]
 
 
 def test_comp01b_partial_route_does_not_publish_degraded_fixed_range():
@@ -1660,7 +1642,10 @@ def test_comp01b_partial_route_does_not_publish_degraded_fixed_range():
     assert p1["excess"]["rate_per_kg"] == 0.56
     assert p1["brackets"][-1]["max_kg"] == 500.0
     assert p1["brackets"][-1]["value"] == 288.0
-    validation = validate_pricing_contract_for_confirmation(table, contract)
+    executable = build_pricing_contract(table)
+    executable_p1 = next(rule for rule in executable["rules"] if rule["region"] == "P1")
+    assert "PR|CURITIBA" not in executable_p1["lookup_keys"]
+    validation = validate_pricing_contract_for_confirmation(table, executable)
     assert validation["can_confirm"] is True, validation["blocking_issues"]
 
 
@@ -1688,12 +1673,12 @@ def test_comp01b_city_lookup_uses_complete_zone_tariff(zone):
 def test_comp01b_curitiba_index_is_the_complete_p1_rule():
     table = _comp01b_sulcarga_table()
     index = build_freight_pricing_index(_with_contract(table))
-    assert index["PR|CURITIBA"] is index["P1"]
+    assert "PR|CURITIBA" not in index
     assert index["P1"]["pricing_type"] == "range_plus_excess_per_kg"
     assert "Curitiba/PR" not in {
         rule.get("region") for rule in build_pricing_contract(table)["rules"]
     }
-    calculated = calculate_weight_freight(620, index["PR|CURITIBA"])
+    calculated = calculate_weight_freight(620, index["P1"])
     assert calculated["calculation_basis"] == "range_plus_excess_per_kg"
     assert calculated["expected_freight"] == 355.20
 
@@ -1703,13 +1688,8 @@ def test_weight_100_only_route_without_table_stays_executable():
         "freight_tables": [],
         "freight_routes": [{"destination": "Curitiba/PR", "weight_100": "94,00"}],
     }
-    rule = build_pricing_contract(table)["rules"][0]
-    assert rule["pricing_type"] == "fixed_range"
-    assert rule["region"] == "Curitiba/PR"
-    assert [(bracket["min_kg"], bracket["max_kg"], bracket["value"]) for bracket in rule["brackets"]] == [
-        (0.0, 100.0, 94.0)
-    ]
-    assert calculate_weight_freight(6, rule)["expected_freight"] == 94.0
+    assert build_pricing_contract(table)["rules"] == []
+    assert validate_pricing_contract_for_confirmation(table)["can_confirm"] is False
 
 
 def test_autonomous_complete_freight_route_stays_independent():
@@ -1721,23 +1701,15 @@ def test_autonomous_complete_freight_route_stays_independent():
         "weight_100": "55,00",
     }
     alone = {"freight_tables": [], "freight_routes": [route]}
-    alone_rule = build_pricing_contract(alone)["rules"][0]
-    assert alone_rule["region"] == "Santos/SP"
-    assert alone_rule["pricing_type"] == "fixed_range"
-    assert calculate_weight_freight(6, alone_rule)["expected_freight"] == 22.0
-    assert calculate_weight_freight(85, alone_rule)["expected_freight"] == 55.0
+    assert build_pricing_contract(alone)["rules"] == []
+    assert alone["freight_routes"] == [route]
 
     combined = _comp01b_sulcarga_table()
     combined["freight_routes"].append(route)
     contract = build_pricing_contract(combined)
-    regions = [rule["region"] for rule in contract["rules"]]
-    assert regions == ["P1", "P2", "S1", "S2", "Santos/SP"]
-    santos = contract["rules"][-1]
-    assert santos["pricing_type"] == "fixed_range"
-    assert "SP|SANTOS" in santos["lookup_keys"]
-    assert calculate_weight_freight(6, santos)["expected_freight"] == 22.0
+    assert [rule["region"] for rule in contract["rules"]] == ["P1", "P2", "S1", "S2"]
     assert "SP|SANTOS" not in {
-        key for rule in contract["rules"] if rule["region"] != "Santos/SP" for key in rule["lookup_keys"]
+        key for rule in contract["rules"] for key in rule["lookup_keys"]
     }
 
 
@@ -1805,11 +1777,13 @@ def test_ambiguous_weight_100_echo_stays_executable_and_unlinked():
         {"min_kg": 0.0, "max_kg": 100.0, "value": 94.0, "label": "Até 100 kg"}
     ]
     assert any(item.get("kind") == "ambiguous_complete_table_match" for item in findings)
-    validation = validate_pricing_contract_for_confirmation(table, contract)
-    assert CODE_AMBIGUOUS_COMPLETE_TABLE_MATCH in {
+    executable = build_pricing_contract(table)
+    assert [rule["region"] for rule in executable["rules"]] == ["P1", "P2"]
+    validation = validate_pricing_contract_for_confirmation(table, executable)
+    assert CODE_AMBIGUOUS_COMPLETE_TABLE_MATCH not in {
         issue["code"] for issue in validation["blocking_issues"]
     }
-    assert validation["can_confirm"] is False
+    assert validation["can_confirm"] is True
 
 
 def test_route_with_higher_weight_bands_is_not_weight_100_only():
@@ -1823,11 +1797,8 @@ def test_route_with_higher_weight_bands_is_not_weight_100_only():
     table = _comp01b_sulcarga_table()
     table["freight_routes"] = [route]
     contract = build_pricing_contract(table)
-    curitiba = next(rule for rule in contract["rules"] if rule["region"] == "Curitiba/PR")
+    assert "Curitiba/PR" not in {rule["region"] for rule in contract["rules"]}
     p1 = next(rule for rule in contract["rules"] if rule["region"] == "P1")
-    assert [bracket["max_kg"] for bracket in curitiba["brackets"]] == [100.0, 200.0, 500.0]
-    assert [bracket["value"] for bracket in curitiba["brackets"]] == [94.0, 139.0, 288.0]
-    assert "PR|CURITIBA" in curitiba["lookup_keys"]
     assert "PR|CURITIBA" not in p1["lookup_keys"]
 
     alias_route = {
@@ -1840,9 +1811,8 @@ def test_route_with_higher_weight_bands_is_not_weight_100_only():
     alias_table = _comp01b_sulcarga_table()
     alias_table["freight_routes"] = [alias_route]
     alias_contract = build_pricing_contract(alias_table)
-    alias_city = next(rule for rule in alias_contract["rules"] if rule["region"] == "Curitiba/PR")
+    assert "Curitiba/PR" not in {rule["region"] for rule in alias_contract["rules"]}
     alias_p1 = next(rule for rule in alias_contract["rules"] if rule["region"] == "P1")
-    assert [bracket["max_kg"] for bracket in alias_city["brackets"]] == [100.0, 200.0, 500.0]
     assert "PR|CURITIBA" not in alias_p1["lookup_keys"]
 
 
@@ -1856,9 +1826,9 @@ def test_other_executable_component_blocks_weight_100_only():
     table = _comp01b_sulcarga_table()
     table["freight_routes"] = [toll_route]
     contract = build_pricing_contract(table)
-    curitiba = next(rule for rule in contract["rules"] if rule["region"] == "Curitiba/PR")
+    assert "Curitiba/PR" not in {rule["region"] for rule in contract["rules"]}
     p1 = next(rule for rule in contract["rules"] if rule["region"] == "P1")
-    assert curitiba["route_toll"]["rate_per_fraction"] == 5.0
+    assert p1["excess"]["rate_per_kg"] == 0.56
     assert "PR|CURITIBA" not in p1["lookup_keys"]
 
 
@@ -1872,7 +1842,7 @@ def test_blank_extra_weight_key_still_yields_to_unique_table():
     contract = build_pricing_contract(table)
     assert "Curitiba/PR" not in {rule["region"] for rule in contract["rules"]}
     p1 = next(rule for rule in contract["rules"] if rule["region"] == "P1")
-    assert "PR|CURITIBA" in p1["lookup_keys"]
+    assert "PR|CURITIBA" not in p1["lookup_keys"]
 
 
 def test_explicit_zone_note_yields_when_weight_100_matches():
@@ -1889,17 +1859,18 @@ def test_explicit_zone_note_yields_when_weight_100_matches():
     assert "PR|CURITIBA" in p1["lookup_keys"]
     assert "PR|CURITIBA" not in p2["lookup_keys"]
     assert not any(item.get("kind") == "ambiguous_complete_table_match" for item in findings)
+    coverage = _coverage_rows(("PR", "Curitiba", "P1"))
     calculated = _calculate(
         table,
         [_row(destination_city="Curitiba", destination_uf="PR", weight=6, invoice_value=None)],
-        {"rows": []},
+        coverage,
     )
     assert calculated["results"][0]["calculated_freight"] == 35.0
     assert calculated["results"][0]["status"] == "calculated"
     heavy = _calculate(
         table,
         [_row(destination_city="Curitiba", destination_uf="PR", weight=620, invoice_value=None)],
-        {"rows": []},
+        coverage,
     )
     assert heavy["results"][0]["calculated_freight"] == 355.20
 
@@ -1922,5 +1893,7 @@ def test_explicit_zone_note_does_not_yield_when_weight_100_disagrees():
         {"min_kg": 0.0, "max_kg": 100.0, "value": 70.0, "label": "Até 100 kg"}
     ]
     assert not any(item.get("kind") == "ambiguous_complete_table_match" for item in findings)
-    validation = validate_pricing_contract_for_confirmation(table, contract)
+    executable = build_pricing_contract(table)
+    assert "Curitiba/PR" not in {rule["region"] for rule in executable["rules"]}
+    validation = validate_pricing_contract_for_confirmation(table, executable)
     assert validation["can_confirm"] is True, validation["blocking_issues"]

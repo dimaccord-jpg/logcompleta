@@ -623,7 +623,10 @@ def validate_pricing_contract_for_confirmation(temp_table, contract=None) -> dic
         pricing_source_fingerprint,
     )
 
-    compiled, findings = _compile_pricing_contract(temp_table if isinstance(temp_table, dict) else {})
+    compiled, findings = _compile_pricing_contract(
+        temp_table if isinstance(temp_table, dict) else {},
+        include_freight_routes=False,
+    )
     target = compiled if not isinstance(contract, dict) else contract
     raw_findings = list(findings)
     if int(target.get("schema_version") or 0) != 1 or target.get("source_fingerprint") != pricing_source_fingerprint(

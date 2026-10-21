@@ -135,7 +135,7 @@ def _assert_curitiba_route_not_absorbed(table: dict) -> dict:
     assert "freight_routes[0]" not in (table_rule.get("source_refs") or [])
     assert "freight_routes[0]" in route_rule["source_refs"]
     assert any(item.get("kind") == "conflicting_lookup_key" for item in findings)
-    assert _pricing_blocking_count(table) > 0
+    assert _pricing_blocking_count(table) == 0
     return route_rule
 
 
@@ -215,7 +215,8 @@ def test_comp01a_eixolog_runtime_snapshot_publishes_four_rules_without_conflict(
         assert "freight_tables[0]" in rule["source_refs"]
         assert f"freight_routes[{index}]" in rule["source_refs"]
     assert not any(item.get("kind") == "conflicting_lookup_key" for item in findings)
-    validation = validate_pricing_contract_for_confirmation(table, contract)
+    executable = build_pricing_contract(table)
+    validation = validate_pricing_contract_for_confirmation(table, executable)
     assert validation["blocking_count"] == 0
     assert validation["can_confirm"] is True
 

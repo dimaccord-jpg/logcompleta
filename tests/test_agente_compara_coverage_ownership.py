@@ -1,6 +1,7 @@
 """SCRUM-146: coverage pertence à tabela, não à temp_table ativa da sessão."""
 from __future__ import annotations
 
+import copy
 import io
 from uuid import uuid4
 
@@ -15,6 +16,10 @@ from app.agente_compara_comparison_state import (
     get_comparison_state,
     get_table_by_slot,
 )
+from app.agente_compara_coverage_ownership import (
+    blocking_coverage_message,
+    evaluate_table_coverage,
+)
 from app.agente_compara_doc_service import (
     AGENTE_COMPARA_TEMP_TABLE_ID_SESSION_KEY,
     ERROR_COVERAGE_TABLE_REQUIRED,
@@ -22,11 +27,13 @@ from app.agente_compara_doc_service import (
     FIELD_SLOT_NUMBER,
     FIELD_TABLE_ID,
     TEMP_TABLE_STATUS_NEEDS_REVIEW,
+    _compile_pricing_contract,
     _temp_table_path,
     _write_temp_table_atomic,
     build_pricing_contract,
     get_temp_table_id,
     load_temp_table_record,
+    pricing_source_fingerprint,
 )
 from tests.cleiton_doc_fixtures import make_csv
 from tests.test_agente_compara_comparison_journey import (
@@ -404,3 +411,57 @@ def test_legacy_upload_without_comparison_still_uses_session_temp_table(web_clie
     assert resp.status_code == 200, resp.get_json()
     assert _cities(_rows_of(web_client, tt_a)) == ["Campinas"]
     assert _rows_of(web_client, boot["records"][2]["temp_table_id"]) == []
+
+
+def test_historical_waived_contract_keeps_recognized_coverage_without_coverage_file():
+    table = _comp01b_sulcarga_table()
+    historical, _findings = _compile_pricing_contract(table, include_freight_routes=True)
+    record = copy.deepcopy(table)
+    record["pricing_contract"] = historical
+    record.pop("coverage_table", None)
+    fingerprint = historical["source_fingerprint"]
+    rules_before = copy.deepcopy(historical["rules"])
+    assert fingerprint == pricing_source_fingerprint(record)
+
+    entry = {
+        "table_id": "hist-sulcarga",
+        "slot_number": 1,
+        "carrier_name": "SulCarga Beta",
+        "coverage_disposition": "waived",
+    }
+    situation = evaluate_table_coverage(entry, record)
+    assert situation["coverage_required"] is False
+    assert situation["coverage_ready"] is True
+    assert situation["coverage_status"] == "waived"
+    assert blocking_coverage_message([situation]) is None
+    assert record["pricing_contract"]["rules"] == rules_before
+    assert record["pricing_contract"]["source_fingerprint"] == fingerprint
+
+    calculated = calculate_single_table(
+        _make_context(
+            record=record,
+            coverage={"rows": []},
+            rows=[
+                _row(
+                    destination_city="Curitiba",
+                    destination_uf="PR",
+                    weight=620,
+                    invoice_value=None,
+                )
+            ],
+            carrier_name="SulCarga Beta",
+        )
+    )
+    assert calculated["results"][0]["status"] == "calculated"
+    assert calculated["results"][0]["calculated_freight"] == 355.20
+    assert record["pricing_contract"]["source_fingerprint"] == fingerprint
+
+    current = copy.deepcopy(table)
+    current["pricing_contract"] = build_pricing_contract(current)
+    current.pop("coverage_table", None)
+    current_situation = evaluate_table_coverage(entry, current)
+    assert current_situation["coverage_required"] is True
+    assert current_situation["coverage_ready"] is False
+    assert current_situation["coverage_status"] == "pending"
+    executable_p1 = next(rule for rule in current["pricing_contract"]["rules"] if rule["region"] == "P1")
+    assert "PR|CURITIBA" not in (executable_p1.get("lookup_keys") or [])

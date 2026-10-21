@@ -6884,7 +6884,7 @@ def _drop_shared_aliases_distinguished_by_uf(rules: list[dict], findings: list[d
     ]
 
 
-def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
+def _compile_pricing_contract(temp_table, *, include_freight_routes: bool = True) -> tuple[dict, list[dict]]:
     findings: list[dict] = []
     seen: set = set()
     rules: list[dict] = []
@@ -6894,6 +6894,9 @@ def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
     if not isinstance(tables, list):
         tables = []
     if not isinstance(routes, list):
+        routes = []
+    if not include_freight_routes:
+        # SCRUM-146: desativação experimental de freight_routes como fonte tarifária executável no AgenteCompara. Estrutura preservada para avaliação futura de sua necessidade.
         routes = []
 
     for table_index, table in enumerate(tables):
@@ -7153,12 +7156,12 @@ def _compile_pricing_contract(temp_table) -> tuple[dict, list[dict]]:
 
 def build_pricing_contract(temp_table) -> dict:
     """Contrato tarifário canônico v1 a partir do snapshot já revisado."""
-    contract, _findings = _compile_pricing_contract(temp_table)
+    contract, _findings = _compile_pricing_contract(temp_table, include_freight_routes=False)
     return contract
 
 
 def pricing_contract_confirmation_findings(temp_table) -> list[dict]:
-    _contract, findings = _compile_pricing_contract(temp_table)
+    _contract, findings = _compile_pricing_contract(temp_table, include_freight_routes=False)
     return findings
 
 
@@ -7256,7 +7259,9 @@ def _build_freight_pricing_index_legacy(temp_table) -> dict:
                 _make_unsupported_rule(region, table.get("table_title"), "Tabela sem modelo de peso/faixa reconhecido."),
             )
 
-    for route in temp_table.get("freight_routes") or []:
+    # SCRUM-146: desativação experimental de freight_routes como fonte tarifária executável no AgenteCompara. Estrutura preservada para avaliação futura de sua necessidade.
+    executable_freight_routes: list = []
+    for route in executable_freight_routes:
         if not isinstance(route, dict):
             continue
         route_rule = _build_rule_from_freight_route(route)
