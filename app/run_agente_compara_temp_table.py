@@ -857,7 +857,7 @@ def run_agente_compara_temp_table_extraction(
                     _persistir_aviso_consumo_incerto(record)
                 return _devolver(record, preservar_entrega_confirmada=True)
             else:
-                confirmada = desfecho in {"debitada", "ja_faturada"}
+                confirmada = desfecho in {"debitada", "ja_faturada", "dispensada"}
         return _devolver(record, preservar_entrega_confirmada=confirmada)
 
     def _somar_consumo(origem: Any) -> bool:

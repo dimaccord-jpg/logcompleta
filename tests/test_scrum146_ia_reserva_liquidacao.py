@@ -329,7 +329,9 @@ def test_fallback_reavalia_depois_que_a_primeira_consome_saldo(app, monkeypatch)
         out = chat_agente_compara_reply("ola", [])
         assert out.get("answer") == ""
         assert calls == ["modelo-a"]
-        assert IaChamadaTentativa.query.filter_by(status="blocked").count() == 1
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoEvento.query.filter_by(model="modelo-a").count() == 1
+        assert IaConsumoEvento.query.filter_by(model="modelo-b").count() == 0
 
 
 def test_resposta_vazia_nao_autoriza_segundo_modelo(app, monkeypatch):
@@ -361,7 +363,8 @@ def test_resposta_vazia_nao_autoriza_segundo_modelo(app, monkeypatch):
 
         chat_agente_compara_reply("ola", [])
         assert calls == ["modelo-a"]
-        assert IaChamadaTentativa.query.filter_by(model="modelo-b", status="blocked").count() == 1
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoEvento.query.filter_by(model="modelo-b").count() == 0
 
 
 def _race_app(path):
@@ -957,10 +960,13 @@ def test_falha_pos_debito_nao_avanca_fallback(app, monkeypatch):
         usuario_id = usuario.id
         from app.models import User
 
-        def boom():
-            raise RuntimeError("depois do debito")
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("abatimento")
 
-        monkeypatch.setattr("app.services.cleiton_billable_ai_call._checkpoint_pos_debito", boom)
+        monkeypatch.setattr(
+            "app.services.cleiton_franquia_operacional_service.aplicar_motor_apos_ia_consumo_evento",
+            boom,
+        )
         monkeypatch.setattr("app.run_agente_compara_chat._get_client", lambda: client)
         monkeypatch.setattr(
             "app.run_agente_compara_chat._get_model_candidates",
@@ -975,8 +981,9 @@ def test_falha_pos_debito_nao_avanca_fallback(app, monkeypatch):
         out = chat_agente_compara_reply("ola", [])
         assert out.get("answer") == ""
         assert calls == ["modelo-a"]
-        assert IaChamadaTentativa.query.filter_by(model="modelo-b").count() == 0
-        assert IaChamadaTentativa.query.one().status == "uncertain"
+        assert IaChamadaTentativa.query.count() == 0
+        assert IaConsumoAbatimento.query.count() == 0
+        assert IaConsumoEvento.query.filter_by(model="modelo-b").count() == 0
 
 
 def test_falha_de_vinculo_evento_fica_incerta_sem_sucesso(app, monkeypatch):

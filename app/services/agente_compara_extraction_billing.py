@@ -437,6 +437,8 @@ def _reverter_sessao_do_abatimento() -> None:
 def abater_entrega_confirmada(evento_id: int, digest: str) -> str:
     """Abate o consumo observado uma vez. Entrega já faturada não debita de novo.
 
+    A dispensa ``franquia_reservada_sistema`` conclui a entrega sem abatimento.
+    As demais ausências de débito continuam consumo incerto.
     Falha ao gravar o abatimento não confirma o débito e segue como consumo incerto.
     """
     from sqlalchemy.exc import SQLAlchemyError
@@ -499,6 +501,9 @@ def abater_entrega_confirmada(evento_id: int, digest: str) -> str:
         if resultado.motivo_nao_abateu == "creditos_zero":
             db.session.commit()
             return "sem_debito"
+        if resultado.motivo_nao_abateu == "franquia_reservada_sistema":
+            db.session.commit()
+            return "dispensada"
         db.session.rollback()
         raise ExtracaoConsumoIncerto(resultado.motivo_nao_abateu or "debito_nao_confirmado")
     except ExtracaoConsumoIncerto:

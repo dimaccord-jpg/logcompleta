@@ -19,15 +19,45 @@ from app.cleiton_doc_escopo import (
     operational_cache_payload_is_current,
     stamp_operational_cache_payload,
 )
+from app.run_cleiton_gemini_governance import (
+    PERSIST_OK,
+    STATUS_FAILURE,
+    STATUS_SUCCESS,
+    STATUS_SUCCESS_NO_METRICS,
+    cleiton_governed_generate_content_observed,
+)
+from app.services.cleiton_ai_data_governance import CleitonAiGovernanceBlockedError
 from app.services.cleiton_billable_ai_call import (
-    BillableAiCallError,
-    cleiton_governed_generate_content,
+    SDK_RETRY_ATTEMPTS,
     gemini_http_options,
+    tentativas_retry_sdk,
     usuario_operacional_da_chamada,
 )
 from app.services.agente_compara_config_service import get_agente_compara_config
 
 logger = logging.getLogger(__name__)
+
+_MOTIVOS_CONCLUSAO_FINANCEIRA = frozenset(
+    {
+        "ja_apropriado",
+        "creditos_zero",
+        "origem_sistema",
+        "sem_usuario_id",
+        "sem_franquia_id",
+        "http_anonimo",
+        "franquia_reservada_sistema",
+        "competencia_ciclo_anterior",
+        "custo_assumido_plataforma",
+    }
+)
+
+
+class _GeracaoFinanceiraInterrompida(Exception):
+    """A geração não tem conclusão financeira confirmada. O fallback para."""
+
+    def __init__(self, mensagem_usuario: str | None = None) -> None:
+        super().__init__(mensagem_usuario or "geracao_financeira_interrompida")
+        self.mensagem_usuario = mensagem_usuario
 
 CHAT_IDEMPOTENCY_CACHE_SESSION_KEY = "agente_compara_chat_idempotency_cache"
 DEFAULT_AGENTE_COMPARA_CHAT_MAX_HISTORY = 10
@@ -262,6 +292,187 @@ def cache_chat_response(session_obj, request_id: str, payload: dict) -> None:
     session_obj.modified = True
 
 
+def _identidade_do_operador(usuario: Any) -> dict | None:
+    """Conta, franquia e usuário reais. Não promove a chamada a origem de sistema."""
+    if usuario is None or getattr(usuario, "is_authenticated", False) is not True:
+        return None
+    from app.consumo_identidade import TIPO_ORIGEM_HTTP_USUARIO, identidade_de_usuario
+    from app.models import User
+
+    if isinstance(usuario, User):
+        try:
+            ident = identidade_de_usuario(usuario, TIPO_ORIGEM_HTTP_USUARIO)
+        except Exception:
+            logger.info("Agente Compara chat identidade do operador indisponivel")
+            return None
+    else:
+        from app.agente_compara_chat_semantic_selection import operational_identity
+
+        tripla = operational_identity(usuario)
+        if tripla is None or not has_app_context():
+            return None
+        conta_id, usuario_id, franquia_id = tripla
+        ident = {
+            "conta_id": conta_id,
+            "franquia_id": franquia_id,
+            "usuario_id": usuario_id,
+            "tipo_origem": TIPO_ORIGEM_HTTP_USUARIO,
+            "origem_sistema": False,
+        }
+    if ident.get("origem_sistema") is True:
+        return None
+    if ident.get("conta_id") is None or ident.get("franquia_id") is None or ident.get("usuario_id") is None:
+        return None
+    return ident
+
+
+def _recusar_operacao(usuario: Any) -> str | None:
+    """None quando a autorização operacional da Home permite a geração."""
+    from app.services.cleiton_operacao_autorizacao_service import (
+        avaliar_autorizacao_operacao_por_franquia,
+    )
+
+    if _identidade_do_operador(usuario) is None:
+        return ""
+    try:
+        authz = avaliar_autorizacao_operacao_por_franquia(usuario)
+    except Exception:
+        logger.info("Agente Compara chat autorizacao operacional indisponivel")
+        return ""
+    if not isinstance(authz, dict) or authz.get("permitido") is not True:
+        mensagem = authz.get("mensagem_usuario") if isinstance(authz, dict) else None
+        return mensagem if isinstance(mensagem, str) else ""
+    return None
+
+
+def _config_tecnica_atual():
+    """Mesmos tetos de saída, candidatos e thinking já aplicados neste chat."""
+    from app.services.cleiton_billable_ai_call import (
+        _preparar_config_limitada,
+        resolver_limites_config,
+    )
+
+    saida, candidatos, thinking, erro = resolver_limites_config(None)
+    if erro:
+        return None
+    config, ok, _motivo = _preparar_config_limitada(
+        None,
+        saida=saida,
+        candidatos=candidatos,
+        thinking=thinking,
+    )
+    if not ok:
+        return None
+    return config
+
+
+def _metricas_observadas(observation: Any) -> bool:
+    return not (
+        observation.input_tokens is None
+        and observation.output_tokens is None
+        and observation.total_tokens is None
+    )
+
+
+def _conclusao_financeira_confirmada(resultado: Any) -> bool:
+    if getattr(resultado, "abateu_franquia", False) is True:
+        return True
+    motivo = getattr(resultado, "motivo_nao_abateu", None)
+    return motivo in _MOTIVOS_CONCLUSAO_FINANCEIRA
+
+
+def _aplicar_motor_compartilhado(evento_id: int) -> None:
+    from app.extensions import db
+    from app.services.cleiton_franquia_operacional_service import (
+        aplicar_motor_apos_ia_consumo_evento,
+    )
+
+    try:
+        resultado = aplicar_motor_apos_ia_consumo_evento(int(evento_id))
+    except Exception:
+        logger.info("Agente Compara chat abatimento nao confirmado evento_id=%s", evento_id)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        raise _GeracaoFinanceiraInterrompida() from None
+    if not _conclusao_financeira_confirmada(resultado):
+        logger.info(
+            "Agente Compara chat conclusao financeira ausente evento_id=%s motivo=%s",
+            evento_id,
+            getattr(resultado, "motivo_nao_abateu", None),
+        )
+        raise _GeracaoFinanceiraInterrompida()
+
+
+def cleiton_governed_generate_content(
+    client: Any,
+    *,
+    model: str,
+    contents: Any,
+    agent: str,
+    flow_type: str,
+    api_key_label: str,
+    **_ignorado: Any,
+) -> Any:
+    """Autoriza como a Home, registra o evento e abate o consumo observado.
+
+    Não reserva crédito e não grava tentativa de chamada. Consumo sem métrica
+    não entra no motor e não libera outra geração.
+    """
+    from app.consumo_identidade import (
+        clear_consumo_identidade,
+        get_consumo_identidade,
+        set_consumo_identidade,
+    )
+
+    usuario = usuario_operacional_da_chamada()
+    recusa = _recusar_operacao(usuario)
+    if recusa is not None:
+        raise _GeracaoFinanceiraInterrompida(recusa or None)
+    if tentativas_retry_sdk(client) != SDK_RETRY_ATTEMPTS:
+        raise _GeracaoFinanceiraInterrompida()
+    config = _config_tecnica_atual()
+    if config is None:
+        raise _GeracaoFinanceiraInterrompida()
+    ident = _identidade_do_operador(usuario)
+    if ident is None:
+        raise _GeracaoFinanceiraInterrompida()
+
+    anterior = get_consumo_identidade()
+    set_consumo_identidade(ident)
+    try:
+        observation = cleiton_governed_generate_content_observed(
+            client,
+            model=model,
+            contents=contents,
+            config=config,
+            agent=agent,
+            flow_type=flow_type,
+            api_key_label=api_key_label,
+            identidade=ident,
+            apply_motor=False,
+        )
+    finally:
+        if anterior is None:
+            clear_consumo_identidade()
+        else:
+            set_consumo_identidade(anterior)
+
+    if observation.persist_status != PERSIST_OK or observation.evento_id is None:
+        raise _GeracaoFinanceiraInterrompida()
+    if observation.status == STATUS_SUCCESS_NO_METRICS or not _metricas_observadas(observation):
+        raise _GeracaoFinanceiraInterrompida()
+    if observation.status not in (STATUS_SUCCESS, STATUS_FAILURE):
+        raise _GeracaoFinanceiraInterrompida()
+    _aplicar_motor_compartilhado(int(observation.evento_id))
+    if observation.provider_exception is not None:
+        raise observation.provider_exception
+    if observation.response is None:
+        raise _GeracaoFinanceiraInterrompida()
+    return observation.response
+
+
 def chat_agente_compara_reply(
     user_message: str,
     history: list,
@@ -400,8 +611,6 @@ def chat_agente_compara_reply(
                 agent="agente_compara",
                 flow_type=AGENTE_COMPARA_CHAT_FLOW_TYPE,
                 api_key_label=_api_key_label(),
-                usuario=usuario_operacional_da_chamada(),
-                attempt_key=f"{AGENTE_COMPARA_CHAT_FLOW_TYPE}:{model}:{uuid4().hex}",
             )
             text = (getattr(response, "text", None) or "").strip()
             if text:
@@ -412,9 +621,7 @@ def chat_agente_compara_reply(
                     "documents_used": documents_used,
                 }
             last_error = ValueError("Resposta vazia do modelo")
-        except BillableAiCallError as exc:
-            if not exc.terminal:
-                raise
+        except (_GeracaoFinanceiraInterrompida, CleitonAiGovernanceBlockedError) as exc:
             last_error = exc
             break
         except Exception as exc:
@@ -430,8 +637,11 @@ def chat_agente_compara_reply(
         logger.exception("Agente Compara chat falhou após fallbacks: %s", last_error)
     _growth_fail("agente_compara_chat_processing_failed", task_stage="llm_generation")
     mensagem = processing_message
-    if getattr(last_error, "mensagem_usuario", None):
-        mensagem = last_error.mensagem_usuario
+    mensagem_operacao = getattr(last_error, "mensagem_usuario", None) or getattr(
+        last_error, "user_message", None
+    )
+    if isinstance(mensagem_operacao, str) and mensagem_operacao.strip():
+        mensagem = mensagem_operacao
     return {
         "answer": "",
         "flow_type": AGENTE_COMPARA_CHAT_FLOW_TYPE,
