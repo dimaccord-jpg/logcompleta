@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, render_template, request, send_file, session, url_for
+from flask import Blueprint, current_app, jsonify, make_response, render_template, request, send_file, session, url_for
 from flask_login import current_user
 
 from app.services.cleiton_operacao_autorizacao_service import (
@@ -108,6 +108,64 @@ def auditoria_frete():
         agente_bi_limite_graficos=limite,
         agente_bi_dashboard=dashboard,
     )
+
+
+def _pagina_indisponivel(status: int):
+    resposta = make_response("Recurso indisponível.", status)
+    resposta.headers["Cache-Control"] = "no-store"
+    resposta.headers["Content-Type"] = "text/plain; charset=utf-8"
+    return resposta
+
+
+@cleide_bp.route(
+    "/cleide-bi-frete/dashboards/<int:dashboard_id>/revisoes/<int:revisao>/calculos/<int:calculo_id>/graficos/<ref>",
+    methods=["GET"],
+)
+def dashboard_detalhe(dashboard_id: int, revisao: int, calculo_id: int, ref: str):
+    """Abre só o quadro do gráfico. A série vem da API e não entra nesta página."""
+    from app.agente_bi_flags import agente_bi_api_habilitada
+    from app.services.agente_bi_persistencia_service import AgenteBiErro, _REF_GRAFICO_RE, escopo_do_usuario
+
+    if not agente_bi_api_habilitada():
+        return _pagina_indisponivel(404)
+    if not getattr(current_user, "is_authenticated", False):
+        return _pagina_indisponivel(401)
+    autorizacao = avaliar_autorizacao_operacao_por_franquia(current_user)
+    if not autorizacao.get("permitido"):
+        resposta = make_response(
+            render_template(
+                "feature_under_construction.html",
+                origem="AgenteBI",
+                mensagem_bloqueio=autorizacao.get("mensagem_usuario"),
+            ),
+            403,
+        )
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+    if dashboard_id < 1 or revisao < 1 or calculo_id < 1 or _REF_GRAFICO_RE.fullmatch(ref) is None:
+        return _pagina_indisponivel(404)
+    try:
+        escopo_do_usuario(current_user)
+    except AgenteBiErro:
+        return _pagina_indisponivel(403)
+    resposta = make_response(
+        render_template(
+            "agente_bi_detalhe.html",
+            dashboard_id=dashboard_id,
+            revisao=revisao,
+            calculo_id=calculo_id,
+            ref=ref,
+            consulta_url=url_for(
+                "agente_bi_api.get_dashboard_grafico_detalhe",
+                dashboard_id=dashboard_id,
+                revisao=revisao,
+                calculo_id=calculo_id,
+                ref=ref,
+            ),
+        )
+    )
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
 
 
 @cleide_bp.route("/auditoria-frete", methods=["GET"])

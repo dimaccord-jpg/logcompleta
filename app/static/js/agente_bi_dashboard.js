@@ -1,6 +1,7 @@
 (function () {
+  var detalhe = document.getElementById("agente-bi-dashboard-detalhe");
   var raiz = document.getElementById("agente-bi-dashboard");
-  if (!raiz) return;
+  if (!detalhe && !raiz) return;
 
   var status = document.getElementById("agente-bi-dashboard-status");
   var erro = document.getElementById("agente-bi-dashboard-erro");
@@ -181,7 +182,7 @@
   function desenharChart(destino, grafico) {
     if (grafico.tipo === "tabela" || grafico.status !== "calculado" || typeof window.Chart !== "function") {
       if (grafico.tipo !== "tabela" && grafico.status === "calculado" && typeof window.Chart !== "function") {
-        destino.appendChild(el("p", "agente-bi-dashboard-nota", "Chart.js indisponível nesta página. Os valores permanecem na tabela."));
+        destino.appendChild(el("p", "agente-bi-dashboard-nota", "Chart.js indisponível nesta página. Os valores permanecem em Ver dados."));
       }
       return;
     }
@@ -216,7 +217,7 @@
     var plot = el("div", "agente-bi-dashboard-plot");
     var canvas = document.createElement("canvas");
     canvas.setAttribute("role", "img");
-    canvas.setAttribute("aria-label", nomeVisivel(grafico) + ". Os valores exatos estão na tabela.");
+    canvas.setAttribute("aria-label", nomeVisivel(grafico) + ". Os valores exatos estão em Ver dados.");
     plot.appendChild(canvas);
     destino.appendChild(plot);
     var paleta = cores();
@@ -260,6 +261,22 @@
     graficosAtivos.push(chart);
   }
 
+  function ligacaoDados(consulta, grafico) {
+    var base = raiz ? raiz.getAttribute("data-detalhe-base") : "";
+    if (!base || !consulta || !grafico || !grafico.ref) return null;
+    var ancora = document.createElement("a");
+    ancora.className = "agente-bi-dashboard-acao";
+    ancora.textContent = "Ver dados";
+    ancora.href = base + "/" + consulta.dashboard_id
+      + "/revisoes/" + consulta.revisao
+      + "/calculos/" + consulta.calculo_id
+      + "/graficos/" + encodeURIComponent(grafico.ref);
+    ancora.target = "_blank";
+    ancora.rel = "noopener noreferrer";
+    ancora.setAttribute("aria-label", "Ver dados de " + nomeVisivel(grafico));
+    return ancora;
+  }
+
   function desenharGraficos(consulta) {
     limparGraficos();
     if (!grade) return;
@@ -283,8 +300,9 @@
       if (grafico.total !== null && grafico.total !== undefined) {
         card.appendChild(el("p", "agente-bi-dashboard-meta", "Total do cálculo: " + grafico.total));
       }
-      if (grafico.status !== "bloqueado") card.appendChild(tabela(grafico));
       desenharChart(card, grafico);
+      var dados = ligacaoDados(consulta, grafico);
+      if (dados) card.appendChild(dados);
       var avisos = Array.isArray(grafico.avisos) ? grafico.avisos : [];
       if (avisos.length) {
         var ul = el("ul", "agente-bi-dashboard-avisos");
@@ -766,6 +784,57 @@
       return null;
     });
   }
+
+  function iniciarDetalhe(raizDetalhe) {
+    var statusDetalhe = document.getElementById("agente-bi-detalhe-status");
+    var erroDetalhe = document.getElementById("agente-bi-detalhe-erro");
+    var identidade = document.getElementById("agente-bi-detalhe-identidade");
+    var conteudo = document.getElementById("agente-bi-detalhe-conteudo");
+    var url = raizDetalhe.getAttribute("data-consulta-url");
+    raizDetalhe.setAttribute("aria-busy", "true");
+    if (statusDetalhe) statusDetalhe.textContent = "Carregando os dados do gráfico.";
+    pedir(url, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" }
+    }).then(function (resposta) {
+      var corpo = resposta.corpo;
+      var grafico = corpo && corpo.detalhe && corpo.detalhe.grafico;
+      if (!corpo || corpo.ok !== true || !grafico || !corpo.detalhe) {
+        if (erroDetalhe) {
+          erroDetalhe.hidden = false;
+          erroDetalhe.textContent = ERROS[corpo && corpo.codigo] || "Não foi possível consultar o dashboard.";
+        }
+        if (statusDetalhe) statusDetalhe.textContent = "Não foi possível abrir os dados do gráfico.";
+        return;
+      }
+      if (identidade) {
+        identidade.textContent = "Revisão " + corpo.detalhe.revisao + " de " + corpo.detalhe.chave + ". " + nomeVisivel(grafico) + ".";
+      }
+      if (conteudo) {
+        conteudo.textContent = "";
+        if (grafico.status === "bloqueado") {
+          conteudo.appendChild(el("p", "agente-bi-dashboard-bloqueado", "Definição bloqueada. Motivo: " + (grafico.motivo || "indisponivel") + "."));
+        }
+        conteudo.appendChild(tabela(grafico));
+      }
+      if (statusDetalhe) statusDetalhe.textContent = "Dados do gráfico " + nomeVisivel(grafico) + ".";
+    }).catch(function () {
+      if (erroDetalhe) {
+        erroDetalhe.hidden = false;
+        erroDetalhe.textContent = "Não foi possível consultar o dashboard.";
+      }
+      if (statusDetalhe) statusDetalhe.textContent = "Não foi possível abrir os dados do gráfico.";
+    }).then(function () {
+      raizDetalhe.setAttribute("aria-busy", "false");
+    });
+  }
+
+  if (detalhe) {
+    iniciarDetalhe(detalhe);
+    return;
+  }
+  if (!raiz) return;
 
   if (window.MutationObserver) {
     new MutationObserver(function () {

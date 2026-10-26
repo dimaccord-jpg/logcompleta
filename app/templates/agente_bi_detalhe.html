@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Dados do gráfico | AgenteBI{% endblock %}
+
+{% block meta_description %}Tabela analítica de um gráfico do AgenteBI.{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/agente_bi.css') }}">
+{% endblock %}
+
+{% block content %}
+{% include 'partials/app_global_header.html' %}
+
+<div class="container-fluid agente-bi-layout mb-5">
+  <div class="agente-bi-page-shell">
+    <section class="agente-bi-dashboard"
+             id="agente-bi-dashboard-detalhe"
+             aria-labelledby="agente-bi-detalhe-titulo"
+             data-consulta-url="{{ consulta_url }}">
+      <h2 class="agente-bi-dashboard-titulo" id="agente-bi-detalhe-titulo">Dados do gráfico</h2>
+      <p class="agente-bi-dashboard-status" id="agente-bi-detalhe-status" role="status" aria-live="polite" aria-atomic="true">
+        Carregando os dados do gráfico.
+      </p>
+      <p class="agente-bi-dashboard-erro" id="agente-bi-detalhe-erro" role="alert" hidden></p>
+      <p class="agente-bi-dashboard-nota" id="agente-bi-detalhe-identidade"></p>
+      <div id="agente-bi-detalhe-conteudo"></div>
+    </section>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='js/agente_bi_dashboard.js') }}"></script>
+{% endblock %}

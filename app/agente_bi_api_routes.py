@@ -7,7 +7,8 @@ A descoberta visível reutiliza o contrato analisar.v1 com o provedor simulado.
 A definição analítica reutiliza a seleção aprovada, sem chamada faturável.
 O cálculo dos indicadores é local, determinístico e também sem chamada faturável.
 A consulta e o filtro do dashboard releem essa memória, ou repetem o mesmo executor,
-sem chamada faturável. A atualização compatível também repete esse executor
+sem chamada faturável. O detalhe de um gráfico relê só a série já gravada do cálculo
+exibido, também sem chamada faturável. A atualização compatível também repete esse executor
 sobre a versão nova do dataset e não chama modelo. A evolução por texto reutiliza
 `definir.v1`: o que já é determinístico não chama modelo; paráfrase usa o adaptador
 Anthropic governado.
@@ -222,6 +223,31 @@ def get_dashboard_consulta(escopo: EscopoAgenteBi, dashboard_id: int):
     from app.services.agente_bi_dashboard_service import consultar_dashboard
 
     return jsonify(consultar_dashboard(escopo, dashboard_id))
+
+
+def _sem_cache(resposta):
+    if isinstance(resposta, tuple):
+        corpo = resposta[0]
+        corpo.headers["Cache-Control"] = "no-store"
+        return corpo, resposta[1]
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+@agente_bi_api_bp.get(
+    "/dashboards/<int:dashboard_id>/revisoes/<int:revisao>/calculos/<int:calculo_id>/graficos/<ref>"
+)
+def get_dashboard_grafico_detalhe(dashboard_id: int, revisao: int, calculo_id: int, ref: str):
+    from app.services.agente_bi_dashboard_service import consultar_detalhe_grafico
+
+    escopo, erro = _abrir()
+    if erro is not None:
+        return _sem_cache(erro)
+    try:
+        corpo = consultar_detalhe_grafico(escopo, dashboard_id, revisao, calculo_id, ref)
+    except AgenteBiErro as exc:
+        return _sem_cache(_erro(exc.codigo, exc.status))
+    return _sem_cache(jsonify(corpo))
 
 
 @agente_bi_api_bp.post("/dashboards/<int:dashboard_id>/filtros")

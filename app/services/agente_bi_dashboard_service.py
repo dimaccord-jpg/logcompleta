@@ -3,6 +3,7 @@
 Monta, reabre e filtra painéis a partir da memória `calculo.v1`.
 Não chama modelo, não recalcula na consulta e não cria tabela nova.
 O filtro só repete o executor determinístico já validado.
+O detalhe de um gráfico só relê a série já gravada do cálculo exibido.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from app.services.agente_bi_persistencia_service import (
     LIMITE_GRAFICOS,
     TIPOS_GRAFICO,
     AgenteBiErro,
+    _REF_GRAFICO_RE,
     criar_dashboard,
     obter_analise,
     obter_dashboard,
@@ -114,6 +116,83 @@ def filtrar_dashboard(escopo, dashboard_id: int, corpo: dict) -> dict:
         novo_id,
     )
     return {"ok": True, "persistido": False, "dashboard": painel, "consulta": consulta}
+
+
+def consultar_detalhe_grafico(escopo, dashboard_id: int, revisao: int, calculo_id: int, ref: str) -> dict:
+    """Relê um gráfico da memória já gravada. Não recalcula, não filtra e não grava revisão."""
+    if isinstance(revisao, bool) or not isinstance(revisao, int) or revisao < 1:
+        raise AgenteBiErro("nao_encontrado", 404)
+    if isinstance(calculo_id, bool) or not isinstance(calculo_id, int) or calculo_id < 1:
+        raise AgenteBiErro("nao_encontrado", 404)
+    if not isinstance(ref, str) or _REF_GRAFICO_RE.fullmatch(ref) is None:
+        raise AgenteBiErro("nao_encontrado", 404)
+    painel, ancora, ancora_memoria, indicadores_ancora = _painel_com_memoria(escopo, dashboard_id)
+    if painel.get("revisao") != revisao:
+        raise AgenteBiErro("identidade_invalida", 409)
+    if calculo_id == ancora["id"]:
+        analise, memoria, indicadores = ancora, ancora_memoria, indicadores_ancora
+    else:
+        analise, memoria = _memoria_autorizada(escopo, calculo_id)
+        _definicao_compativel(escopo, analise, memoria)
+        _calculo_corresponde(painel, ancora, ancora_memoria, analise, memoria)
+        indicadores = _indicadores_autorizados(analise, memoria)
+        _refs_presentes(painel, indicadores)
+    grafico = _grafico_selecionado(painel, indicadores, ref)
+    logger.info(
+        "evento=agente_bi_dashboard_detalhe_consultado usuario_id=%s dashboard_id=%s revisao=%s calculo_id=%s",
+        escopo.usuario_id,
+        painel["id"],
+        painel["revisao"],
+        analise["id"],
+    )
+    return {
+        "ok": True,
+        "detalhe": {
+            "contrato": CONTRATO_DASHBOARD,
+            "chamada_anthropic": False,
+            "ia_calculo": False,
+            "executor": EXECUTOR,
+            "dashboard_id": painel["id"],
+            "revisao": painel["revisao"],
+            "chave": painel["chave"],
+            "calculo_id": analise["id"],
+            "definicao_id": memoria.get("origem_definicao_id"),
+            "dataset_id": analise["dataset_id"],
+            "versao": analise["versao"],
+            "impressao": analise["impressao"],
+            "grafico": grafico,
+        },
+    }
+
+
+def _calculo_corresponde(painel, ancora, ancora_memoria, analise, memoria) -> None:
+    if memoria.get("origem_definicao_id") != ancora_memoria.get("origem_definicao_id"):
+        raise AgenteBiErro("identidade_invalida", 409)
+    if memoria.get("origem_contrato") != ancora_memoria.get("origem_contrato"):
+        raise AgenteBiErro("identidade_invalida", 409)
+    if (
+        analise["dataset_id"] != ancora["dataset_id"]
+        or analise["versao"] != ancora["versao"]
+        or analise["impressao"] != ancora["impressao"]
+    ):
+        raise AgenteBiErro("identidade_invalida", 409)
+    _vinculo_dataset(painel, analise)
+
+
+def _grafico_selecionado(painel, indicadores, ref: str) -> dict:
+    definicoes = painel.get("definicoes_graficos")
+    if not isinstance(definicoes, list):
+        raise AgenteBiErro("analise_indisponivel", 422)
+    definicao = next(
+        (item for item in definicoes if isinstance(item, dict) and item.get("ref") == ref),
+        None,
+    )
+    if definicao is None:
+        raise AgenteBiErro("nao_encontrado", 404)
+    indicador = {item["id"]: item for item in indicadores}.get(ref)
+    if indicador is None or definicao.get("tipo") != indicador.get("grafico"):
+        raise AgenteBiErro("analise_indisponivel", 422)
+    return _grafico(definicao, indicador)
 
 
 def _painel_com_memoria(escopo, dashboard_id: int):

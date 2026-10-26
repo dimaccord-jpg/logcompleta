@@ -115,6 +115,7 @@
                data-analises-url="{{ url_for('agente_bi_api.get_analises') }}"
                data-definicao-url="{{ url_for('agente_bi_api.post_definicao') }}"
                data-calculo-url="{{ url_for('agente_bi_api.post_calculo') }}"
+               data-detalhe-base="{{ url_for('cleide.auditoria_frete') }}/dashboards"
                data-atualizacao="{{ '1' if agente_bi_descoberta else '0' }}">
         <h3 class="agente-bi-dashboard-titulo" id="agente-bi-dashboard-titulo-secao">Dashboards</h3>
         <p class="agente-bi-dashboard-status" id="agente-bi-dashboard-status" role="status" aria-live="polite" aria-atomic="true">

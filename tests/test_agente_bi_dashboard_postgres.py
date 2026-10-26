@@ -10,7 +10,12 @@ from app.extensions import db
 from app.models import AgenteBiAnalise, AgenteBiDashboard, AgenteBiDashboardDataset, AgenteBiDataset, IaChamadaTentativa, IaConsumoEvento
 from app.services.agente_bi_analisar_service import analisar_dataset
 from app.services.agente_bi_calculo_service import calcular_definicao
-from app.services.agente_bi_dashboard_service import consultar_dashboard, filtrar_dashboard, montar_dashboard
+from app.services.agente_bi_dashboard_service import (
+    consultar_dashboard,
+    consultar_detalhe_grafico,
+    filtrar_dashboard,
+    montar_dashboard,
+)
 from app.services.agente_bi_definir_service import definir_selecao
 from app.services.agente_bi_descoberta_service import aprovar_selecao
 from app.services.agente_bi_persistencia_service import AgenteBiErro, escopo_do_usuario, obter_analise
@@ -93,3 +98,36 @@ def test_dashboard_reabre_filtra_e_isola_no_postgres(pg_app, monkeypatch):
         assert IaChamadaTentativa.query.count() == antes_tentativas
         assert IaConsumoEvento.query.count() == antes_consumo
         assert AgenteBiAnalise.query.filter_by(id=calculo["calculo"]["id"]).count() == 1
+        ref = reaberto["consulta"]["graficos"][0]["ref"]
+        antes_analises = AgenteBiAnalise.query.count()
+        antes_dashboards = AgenteBiDashboard.query.count()
+        detalhe = consultar_detalhe_grafico(
+            escopo,
+            identificador,
+            reaberto["dashboard"]["revisao"],
+            reaberto["consulta"]["calculo_id"],
+            ref,
+        )
+        assert detalhe["detalhe"]["grafico"]["resultado"] == reaberto["consulta"]["graficos"][0]["resultado"]
+        assert detalhe["detalhe"]["grafico"]["serie"] == reaberto["consulta"]["graficos"][0]["serie"]
+        assert "graficos" not in detalhe["detalhe"]
+        assert AgenteBiAnalise.query.count() == antes_analises
+        assert AgenteBiDashboard.query.count() == antes_dashboards
+        with pytest.raises(AgenteBiErro) as detalhe_alheio:
+            consultar_detalhe_grafico(
+                outro_escopo,
+                identificador,
+                reaberto["dashboard"]["revisao"],
+                reaberto["consulta"]["calculo_id"],
+                ref,
+            )
+        assert detalhe_alheio.value.status == 404
+        with pytest.raises(AgenteBiErro) as detalhe_colega:
+            consultar_detalhe_grafico(
+                colega_escopo,
+                identificador,
+                reaberto["dashboard"]["revisao"],
+                reaberto["consulta"]["calculo_id"],
+                ref,
+            )
+        assert detalhe_colega.value.status == 404

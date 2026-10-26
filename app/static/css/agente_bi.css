@@ -708,6 +708,14 @@
   white-space: normal;
 }
 
+a.agente-bi-dashboard-acao {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  margin-top: 0.55rem;
+  text-decoration: none;
+}
+
 .agente-bi-dashboard-acao:focus-visible,
 .agente-bi-dashboard-filtros button:focus-visible,
 .agente-bi-dashboard-filtros input:focus-visible,
