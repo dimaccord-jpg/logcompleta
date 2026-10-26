@@ -13,7 +13,7 @@ from app.extensions import db, login_manager
 from app.infra import get_user_by_id
 from app.models import AgenteBiAnalise, AgenteBiDashboard, AgenteBiExecucao, IaChamadaTentativa
 from app.services.agente_bi_analisar_service import CONTRATO_ANALISAR
-from app.services.agente_bi_descoberta_service import CONTRATO_SELECAO
+from app.services.agente_bi_descoberta_service import CONTRATO_SELECAO, DescobertaErro, _confirmacoes
 from tests.agente_bi_fonte import fonte_sem_docstring_de_modulo
 from tests.conftest import seed_usuario
 from tests.test_agente_bi_analisar import FORMULA_SOMA, INJECAO, SENTINELA, _movimento
@@ -218,7 +218,7 @@ def test_jornada_a_b_c_limite_persistencia_e_isolamento(app, monkeypatch):
         },
     )
     assert sem_pergunta.status_code == 422
-    assert sem_pergunta.get_json()["codigo"] == "perguntas_pendentes"
+    assert sem_pergunta.get_json()["codigo"] == "selecao_invalida"
 
     sem_confirmacao = _aprovar(client, modalidade_a["analise_id"], viaveis[:1], resultado_a, confirmacao=False)
     assert sem_confirmacao.status_code == 422
@@ -329,6 +329,172 @@ def test_condicional_e_lacuna_nao_sao_aprovadas(app, monkeypatch):
     assert recusa_condicional.status_code == 422
     assert recusa_condicional.get_json()["codigo"] == "sugestao_nao_executavel"
     assert "evolução" not in json.dumps(descoberta_condicional["resultado"])
+
+
+_CHAVES_DOCUMENTO_SELECAO = {
+    "contrato",
+    "origem_analise_id",
+    "origem_contrato",
+    "vinculo_preparacao",
+    "dataset_id",
+    "dataset_versao",
+    "dataset_impressao",
+    "modalidades",
+    "limite_graficos",
+    "graficos",
+    "perguntas_confirmadas",
+    "executavel",
+    "juncao",
+    "chamada_anthropic",
+    "apto_anthropic",
+}
+
+
+def _marcar(resultado, *, confirmar_primeira=False):
+    perguntas = resultado["perguntas"]
+    return [
+        {"id": item["id"], "confirmada": confirmar_primeira and indice == 0 and len(perguntas) > 1}
+        for indice, item in enumerate(perguntas)
+    ]
+
+
+def test_viavel_aprova_com_pergunta_nao_relacionada_pendente(app, monkeypatch):
+    client = _cliente_ingestao(app, monkeypatch)
+    with app.app_context():
+        _conta, _franquia, usuario = _par("descoberta-pendente", "descoberta.pendente@test.com")
+        usuario_id = usuario.id
+    _entrar(client, usuario_id)
+
+    preparacao = _postar(client, _movimento(), "movimento.xlsx")
+    assert preparacao.status_code == 201
+    dataset_id = preparacao.get_json()["dataset"]["id"]
+    descoberta = _descobrir(client, dataset_id, {"modalidades": ["A"]})
+    resultado = descoberta["resultado"]
+    viaveis = _viaveis(resultado)
+    assert viaveis
+    assert all(item["perguntas"] == [] for item in resultado["sugestoes"] if item["status"] == "viavel")
+    identificadores = [item["id"] for item in resultado["perguntas"]]
+    assert identificadores
+
+    def selecionar(perguntas, sugestoes=None, *, confirmacao=True):
+        return _json(
+            client,
+            "/api/agente-bi/descoberta/selecao",
+            {
+                "analise_id": descoberta["analise_id"],
+                "sugestoes": viaveis[:1] if sugestoes is None else sugestoes,
+                "perguntas": perguntas,
+                "confirmacao": confirmacao,
+            },
+        )
+
+    with app.app_context():
+        antes = AgenteBiAnalise.query.filter_by(usuario_id=usuario_id).count()
+
+    incompleta = selecionar(
+        [{"id": item, "confirmada": False} for item in identificadores[:-1]] if len(identificadores) > 1 else []
+    )
+    assert incompleta.status_code == 422
+    assert incompleta.get_json()["codigo"] == "selecao_invalida"
+
+    if len(identificadores) > 1:
+        duplicada = [{"id": identificadores[0], "confirmada": False}, {"id": identificadores[0], "confirmada": True}]
+        duplicada.extend({"id": item, "confirmada": False} for item in identificadores[2:])
+    else:
+        duplicada = [
+            {"id": identificadores[0], "confirmada": False},
+            {"id": identificadores[0], "confirmada": False},
+        ]
+    assert selecionar(duplicada).status_code == 422
+    assert selecionar(duplicada).get_json()["codigo"] == "selecao_invalida"
+
+    desconhecida = [{"id": item, "confirmada": False} for item in identificadores]
+    desconhecida[0] = {"id": "p999", "confirmada": False}
+    assert selecionar(desconhecida).status_code == 422
+    assert selecionar(desconhecida).get_json()["codigo"] == "selecao_invalida"
+
+    nao_booleana = [{"id": item, "confirmada": False} for item in identificadores]
+    nao_booleana[0] = {"id": identificadores[0], "confirmada": 1}
+    assert selecionar(nao_booleana).status_code == 422
+    assert selecionar(nao_booleana).get_json()["codigo"] == "selecao_invalida"
+
+    sem_confirmacao = selecionar(_marcar(resultado), confirmacao=False)
+    assert sem_confirmacao.status_code == 422
+    assert sem_confirmacao.get_json()["codigo"] == "confirmacao_ausente"
+
+    excedente = selecionar(_marcar(resultado), [f"s{indice}" for indice in range(1, 8)])
+    assert excedente.status_code == 422
+    assert excedente.get_json()["codigo"] == "limite_graficos"
+
+    with app.app_context():
+        assert AgenteBiAnalise.query.filter_by(usuario_id=usuario_id).count() == antes
+
+    marcadas = _marcar(resultado, confirmar_primeira=True)
+    aprovada = selecionar(marcadas, viaveis[:1])
+    assert aprovada.status_code == 201, aprovada.get_data(as_text=True)
+    selecao = aprovada.get_json()["selecao"]
+    confirmadas = [item["id"] for item in marcadas if item["confirmada"] is True]
+    pendentes = [item["id"] for item in marcadas if item["confirmada"] is False]
+    assert selecao["rodada"] == descoberta["rodada"] + 1
+    assert selecao["resultado"]["perguntas_confirmadas"] == confirmadas
+    assert set(selecao["resultado"]) == _CHAVES_DOCUMENTO_SELECAO
+    assert "pendentes" not in selecao["resultado"]
+    assert all(item["status"] == "viavel" for item in selecao["resultado"]["graficos"])
+
+    leitura = client.get(f"/api/agente-bi/analises/{selecao['id']}")
+    assert leitura.status_code == 200
+    esclarecimentos = leitura.get_json()["analise"]["esclarecimentos"]
+    assert esclarecimentos == {
+        "perguntas": confirmadas,
+        "pendentes": pendentes,
+        "confirmadas": not pendentes,
+    }
+    assert pendentes
+    assert set(confirmadas).isdisjoint(pendentes)
+
+    definicao = _json(client, "/api/agente-bi/definicao", {"analise_id": selecao["id"]})
+    assert definicao.status_code == 201, definicao.get_data(as_text=True)
+    publicada = definicao.get_json()["definicao"]
+    assert publicada["contrato_versao"] == "definir.v1"
+    assert publicada["rodada"] == selecao["rodada"] + 1
+    assert publicada["resultado"]["contrato"] == "definir.v1"
+    assert publicada["resultado"]["perguntas_confirmadas"] == confirmadas
+    assert publicada["resultado"]["origem_selecao_id"] == selecao["id"]
+
+
+def test_pergunta_obrigatoria_da_sugestao_nao_confirmada_bloqueia():
+    resultado = {
+        "perguntas": [{"id": "p1"}, {"id": "p2"}],
+        "sugestoes": [
+            {"id": "s1", "status": "viavel", "perguntas": []},
+            {"id": "s2", "status": "condicional", "perguntas": ["p1"]},
+        ],
+    }
+    bruto = [{"id": "p1", "confirmada": False}, {"id": "p2", "confirmada": False}]
+    liberada = _confirmacoes(resultado, ["s1"], bruto)
+    assert liberada == {"confirmadas": [], "pendentes": ["p1", "p2"]}
+
+    with pytest.raises(DescobertaErro) as erro:
+        _confirmacoes(resultado, ["s2"], bruto)
+    assert erro.value.codigo == "perguntas_pendentes"
+
+    confirmada = _confirmacoes(
+        resultado,
+        ["s2"],
+        [{"id": "p1", "confirmada": True}, {"id": "p2", "confirmada": False}],
+    )
+    assert confirmada == {"confirmadas": ["p1"], "pendentes": ["p2"]}
+
+    with pytest.raises(DescobertaErro) as garantia:
+        _confirmacoes(
+            {
+                "perguntas": [{"id": "p1"}],
+                "sugestoes": [{"id": "s1", "status": "viavel", "perguntas": ["p1"]}],
+            },
+            ["s1"],
+            [{"id": "p1", "confirmada": True}],
+        )
+    assert garantia.value.codigo == "analise_indisponivel"
 
 
 def test_portas_auth_flag_e_contrato_local(app, monkeypatch):
@@ -779,6 +945,13 @@ def test_jornada_visual_seleciona_seis_e_mantem_o_chat_bloqueado(monkeypatch):
             caixas.nth(indice).check()
         assert caixas.nth(6).is_disabled()
         assert "6 de 6" in page.locator("#agente-bi-selecao-contagem").inner_text()
+        assert page.locator("#agente-bi-aprovar").is_disabled()
+        assert page.locator("#agente-bi-perguntas h4").inner_text() == "Esclarecimentos pendentes"
+        assert page.locator(".agente-bi-pergunta").get_attribute("aria-required") is None
+        assert page.locator(".agente-bi-pergunta").is_checked() is False
+        page.locator("#agente-bi-confirmacao").check()
+        assert page.locator("#agente-bi-aprovar").is_enabled()
+        page.locator("#agente-bi-confirmacao").uncheck()
         assert page.locator("#agente-bi-aprovar").is_disabled()
         page.locator(".agente-bi-pergunta").check()
         assert page.locator("#agente-bi-aprovar").is_disabled()

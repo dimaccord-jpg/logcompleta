@@ -163,7 +163,7 @@ def aprovar_selecao(escopo, corpo: dict) -> dict:
     origem = obter_analise(escopo, analise_id)
     resultado = _resultado_de_descoberta(origem)
     escolhidas = _graficos_viaveis(resultado, identifcadores)
-    confirmadas = _confirmacoes(resultado.get("perguntas"), corpo.get("perguntas"))
+    registro = _confirmacoes(resultado, identifcadores, corpo.get("perguntas"))
     _conferir_trilha(origem, resultado)
     documento = {
         "contrato": CONTRATO_SELECAO,
@@ -176,7 +176,7 @@ def aprovar_selecao(escopo, corpo: dict) -> dict:
         "modalidades": list(resultado["modalidades"]),
         "limite_graficos": LIMITE_GRAFICOS,
         "graficos": escolhidas,
-        "perguntas_confirmadas": confirmadas,
+        "perguntas_confirmadas": registro["confirmadas"],
         "executavel": "somente_viavel",
         "juncao": _JUNCAO,
         "chamada_anthropic": False,
@@ -206,7 +206,11 @@ def aprovar_selecao(escopo, corpo: dict) -> dict:
                     "limite_graficos": LIMITE_GRAFICOS,
                     "executavel": "somente_viavel",
                 },
-                "esclarecimentos": {"perguntas": confirmadas, "confirmadas": True},
+                "esclarecimentos": {
+                    "perguntas": registro["confirmadas"],
+                    "pendentes": registro["pendentes"],
+                    "confirmadas": not registro["pendentes"],
+                },
                 "contrato_versao": CONTRATO_SELECAO,
                 "resultado": documento,
             },
@@ -341,9 +345,11 @@ def _graficos_viaveis(resultado: dict, identificadores: list[str]) -> list[dict]
     return escolhidas
 
 
-def _confirmacoes(perguntas, bruto) -> list[str]:
+def _confirmacoes(resultado, identificadores, bruto) -> dict:
+    """Espelha as perguntas da rodada e só cobra as que a seleção depende."""
+    perguntas = resultado.get("perguntas") if isinstance(resultado, dict) else None
     if not isinstance(perguntas, list) or not isinstance(bruto, list):
-        raise DescobertaErro("perguntas_pendentes")
+        raise DescobertaErro("selecao_invalida")
     esperadas = []
     for item in perguntas:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str) or _ID_PERGUNTA.fullmatch(item["id"]) is None:
@@ -352,17 +358,56 @@ def _confirmacoes(perguntas, bruto) -> list[str]:
     if len(set(esperadas)) != len(esperadas):
         raise DescobertaErro("analise_indisponivel")
     if len(bruto) != len(esperadas):
-        raise DescobertaErro("perguntas_pendentes")
-    vistas = []
+        raise DescobertaErro("selecao_invalida")
+    estados = {}
     for item in bruto:
         if not isinstance(item, dict) or set(item) != _CHAVES_CONFIRMACAO:
-            raise DescobertaErro("perguntas_pendentes")
-        if item.get("confirmada") is not True or not isinstance(item.get("id"), str):
-            raise DescobertaErro("perguntas_pendentes")
-        vistas.append(item["id"])
-    if len(set(vistas)) != len(vistas) or set(vistas) != set(esperadas):
+            raise DescobertaErro("selecao_invalida")
+        identificador = item.get("id")
+        confirmada = item.get("confirmada")
+        if not isinstance(identificador, str) or not isinstance(confirmada, bool):
+            raise DescobertaErro("selecao_invalida")
+        if identificador in estados:
+            raise DescobertaErro("selecao_invalida")
+        estados[identificador] = confirmada
+    if set(estados) != set(esperadas):
+        raise DescobertaErro("selecao_invalida")
+    obrigatorias = _perguntas_obrigatorias(resultado, identificadores, set(esperadas))
+    if any(estados[identificador] is not True for identificador in obrigatorias):
         raise DescobertaErro("perguntas_pendentes")
-    return esperadas
+    return {
+        "confirmadas": [identificador for identificador in esperadas if estados[identificador] is True],
+        "pendentes": [identificador for identificador in esperadas if estados[identificador] is False],
+    }
+
+
+def _perguntas_obrigatorias(resultado, identificadores, conhecidas: set[str]) -> list[str]:
+    """Perguntas ligadas às sugestões escolhidas. Viável não carrega pergunta."""
+    sugestoes = resultado.get("sugestoes")
+    if not isinstance(sugestoes, list):
+        raise DescobertaErro("analise_indisponivel")
+    por_id = {}
+    for item in sugestoes:
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            por_id[item["id"]] = item
+    obrigatorias = []
+    for identificador in identificadores:
+        item = por_id.get(identificador)
+        if item is None:
+            raise DescobertaErro("sugestao_inexistente")
+        vinculadas = item.get("perguntas")
+        if not isinstance(vinculadas, list) or any(not isinstance(valor, str) for valor in vinculadas):
+            raise DescobertaErro("analise_indisponivel")
+        if len(set(vinculadas)) != len(vinculadas) or any(valor not in conhecidas for valor in vinculadas):
+            raise DescobertaErro("analise_indisponivel")
+        if item.get("status") == "viavel":
+            if vinculadas:
+                raise DescobertaErro("analise_indisponivel")
+            continue
+        for valor in vinculadas:
+            if valor not in obrigatorias:
+                obrigatorias.append(valor)
+    return obrigatorias
 
 
 def _publicar_descoberta(analise: dict, resultado: dict) -> dict:

@@ -489,14 +489,13 @@
   function renderPerguntas(itens) {
     limpar(perguntas);
     if (!itens || !itens.length) return;
-    perguntas.appendChild(el("h4", null, "Esclarecimentos obrigatórios"));
+    perguntas.appendChild(el("h4", null, "Esclarecimentos pendentes"));
     itens.forEach(function (item) {
       var rotulo = el("label", { class: "agente-bi-check" });
       var caixa = el("input");
       caixa.type = "checkbox";
       caixa.className = "agente-bi-pergunta";
       caixa.setAttribute("data-pergunta", item.id);
-      caixa.setAttribute("aria-required", "true");
       rotulo.appendChild(caixa);
       var complemento = descreverReferencia(item);
       rotulo.appendChild(el("span", null, (PERGUNTAS[item.codigo] || legivel(item.codigo)) + (complemento ? " " + complemento + "." : "")));
@@ -532,14 +531,6 @@
     return saida;
   }
 
-  function perguntasConfirmadas() {
-    var caixas = raiz.querySelectorAll(".agente-bi-pergunta");
-    for (var i = 0; i < caixas.length; i += 1) {
-      if (!caixas[i].checked) return false;
-    }
-    return true;
-  }
-
   function sincronizarAprovacao() {
     if (!contagem || !aprovar) return;
     if (!raiz.querySelector(".agente-bi-grafico")) {
@@ -554,7 +545,7 @@
     }
     contagem.textContent = ids.length + " de " + limite + " gráficos viáveis.";
     if (limite && ids.length >= limite) contagem.textContent += " O limite inicial foi atingido.";
-    aprovar.disabled = estado.ocupado || estado.aprovado || !limite || !ids.length || ids.length > limite || !perguntasConfirmadas() || !(confirmacao && confirmacao.checked);
+    aprovar.disabled = estado.ocupado || estado.aprovado || !limite || !ids.length || ids.length > limite || !(confirmacao && confirmacao.checked);
   }
 
   function escolherArquivo() {
