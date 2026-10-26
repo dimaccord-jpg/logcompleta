@@ -66,11 +66,11 @@ def test_html_cleide_sem_ativacao_funcional_real(monkeypatch):
     assert "/api/roberto/" not in html
     assert "/api/chat_roberto" not in html
     assert "chat_roberto_fretes.js" not in html
-    assert "Chat operacional da Cleide" in html
-    assert "id=\"cleideChatFloating\"" in html
-    assert "id=\"cleideChatToggle\"" in html
-    assert "id=\"cleideChatPanel\"" in html
-    assert "id=\"cleideChatClose\"" in html
+    assert "cleide_auditoria_frete.js" not in html
+    assert "cleide_auditoria_frete.css" not in html
+    assert "id=\"cleideChatFloating\"" not in html
+    assert "id=\"agente-bi-input\"" in html
+    assert "id=\"agente-bi-send\"" in html
 
 
 def test_roberto_endpoints_seguem_importaveis():

@@ -105,6 +105,19 @@ SHELL_NAV_CATALOG: tuple[ShellNavEntry, ...] = (
         home_summary="Comparação entre tabelas de frete.",
     ),
     ShellNavEntry(
+        id="agente_bi",
+        label="AgenteBI",
+        group="habilidades",
+        icon="bi-pie-chart",
+        endpoint="cleide.auditoria_frete",
+        destination_id="cleide_audit",
+        fallback_path="/cleide-bi-frete",
+        # O GET existente é público. O bloqueio de franquia permanece na rota.
+        requires_login=False,
+        active_prefixes=("/cleide-bi-frete",),
+        home_summary="Painel operacional e gerencial de fretes.",
+    ),
+    ShellNavEntry(
         id="feed",
         label="Feed",
         group="feed",

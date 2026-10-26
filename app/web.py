@@ -44,6 +44,7 @@ from app.cleide_routes import cleide_bp
 from app.julia_documents_routes import julia_documents_bp
 from app.conta_multiuser_convite_routes import convite_bp
 from app.conta_multiuser_painel_routes import painel_bp
+from app.agente_bi_api_routes import agente_bi_api_bp
 from app.growth_routes import growth_bp
 from app.funnel_event_service import (
     SIGNUP_METHOD_GOOGLE,
@@ -314,6 +315,7 @@ app.register_blueprint(julia_documents_bp)
 app.register_blueprint(convite_bp)
 app.register_blueprint(painel_bp)
 app.register_blueprint(growth_bp)
+app.register_blueprint(agente_bi_api_bp)
 
 @app.context_processor
 def inject_facebook_pixel_context():

@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-import flask_login.utils
+from flask import render_template
 
 
 def _load_web_module():
@@ -13,35 +13,20 @@ def _load_web_module():
     return importlib.import_module("app.web")
 
 
-def _set_current_user(monkeypatch, *, user_id="1"):
-    fake_user = SimpleNamespace(
-        is_authenticated=True,
-        is_active=True,
-        is_anonymous=False,
-        get_id=lambda: user_id,
-        conta_id=1,
-        franquia_id=1,
-        categoria="pro",
-        full_name="Teste Cleide",
-        email="cleide@example.com",
-        franquia=None,
-    )
-    monkeypatch.setattr(flask_login.utils, "_get_user", lambda: fake_user)
-    return fake_user
-
-
 def _get_cleide_html(monkeypatch) -> str:
+    # A rota passou a renderizar o AgenteBI. Este helper só confere o template legado.
+    del monkeypatch
     web = _load_web_module()
-    monkeypatch.setattr(web, "current_user", _set_current_user(monkeypatch))
-    monkeypatch.setattr(
-        "app.cleide_routes.avaliar_autorizacao_operacao_por_franquia",
-        lambda _u: {"permitido": True, "modo_operacao": "normal"},
-    )
-    monkeypatch.setattr("app.cleide_routes.get_cleide_config", lambda: SimpleNamespace(layout_version=2))
-    client = web.app.test_client()
-    resp = client.get("/cleide-bi-frete")
-    assert resp.status_code == 200
-    return resp.get_data(as_text=True)
+    with web.app.test_request_context("/cleide-bi-frete"):
+        return render_template(
+            "cleide_auditoria_frete.html",
+            cleide_cfg=SimpleNamespace(chat_max_history=10, layout_version=2),
+            cleide_upload_tmp_dir="",
+            cleide_public_page=True,
+            cleide_is_authenticated=True,
+            cleide_login_url="/login",
+            cleide_upload_authorization={"permitido": True, "modo_operacao": "normal"},
+        )
 
 
 def test_cleide_bi_semantic_copy(monkeypatch):

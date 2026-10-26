@@ -18,6 +18,7 @@ VISIBLE_LABELS = (
     "Analisar fretes",
     "Auditar cobranças de frete",
     "Comparar tabelas",
+    "AgenteBI",
     "Feed",
 )
 
@@ -62,6 +63,11 @@ def test_catalog_uses_real_destinations_and_keeps_internal_ids():
     assert by_id["analisar_fretes"].destination_id == "roberto_bi"
     assert by_id["auditar_cobrancas"].destination_id == "cleide_freight_audit"
     assert by_id["comparar_tabelas"].destination_id == "agente_compara"
+    assert by_id["agente_bi"].destination_id == "cleide_audit"
+    assert by_id["agente_bi"].endpoint == "cleide.auditoria_frete"
+    assert by_id["agente_bi"].label == "AgenteBI"
+    assert by_id["agente_bi"].requires_login is False
+    assert by_id["agente_bi"].fallback_path == "/cleide-bi-frete"
     assert by_id["feed"].destination_id == "feed"
     assert DESTINATIONS["julia_operational"].url == "/chat_julia?mode=operational"
     assert DESTINATIONS["roberto_bi"].url == "/fretes"
@@ -69,7 +75,6 @@ def test_catalog_uses_real_destinations_and_keeps_internal_ids():
     assert DESTINATIONS["agente_compara"].url == "/agente-compara"
     assert DESTINATIONS["feed"].url == "/feed"
     assert DESTINATIONS["cleide_audit"].url == "/cleide-bi-frete"
-    assert "cleide_audit" not in {entry.destination_id for entry in SHELL_NAV_CATALOG}
     assert by_id["analisar_fretes"].requires_login is None
     assert DESTINATIONS["roberto_bi"].requires_login is True
 
@@ -104,15 +109,16 @@ def test_guest_and_authenticated_hrefs_follow_existing_login_rules():
     assert guest_hrefs["feed"] == "/feed"
     assert guest_hrefs["auditar_cobrancas"] == "/login?next=/auditoria-frete"
     assert guest_hrefs["comparar_tabelas"] == "/login?next=/agente-compara"
+    assert guest_hrefs["agente_bi"] == "/cleide-bi-frete"
     assert guest_hrefs["consultar_agentefrete"] == "/login?next=%2Fchat_julia%3Fmode%3Doperational"
 
     assert auth_hrefs["consultar_agentefrete"] == "/chat_julia?mode=operational"
     assert auth_hrefs["analisar_fretes"] == "/fretes"
     assert auth_hrefs["auditar_cobrancas"] == "/auditoria-frete"
     assert auth_hrefs["comparar_tabelas"] == "/agente-compara"
+    assert auth_hrefs["agente_bi"] == "/cleide-bi-frete"
     assert auth_hrefs["feed"] == "/feed"
     assert "/acesso-desktop" not in auth_hrefs.values()
-    assert "/cleide-bi-frete" not in auth_hrefs.values()
 
     feed_active = [
         item["id"]
@@ -140,11 +146,13 @@ def test_home_skills_follow_catalog_order_and_shell_login_rules():
         "analisar_fretes",
         "auditar_cobrancas",
         "comparar_tabelas",
+        "agente_bi",
     ]
     assert [item["label"] for item in guest] == [
         "Analisar fretes",
         "Auditar cobranças de frete",
         "Comparar tabelas",
+        "AgenteBI",
     ]
     assert guest[0]["href"] == "/login?next=/fretes"
     assert guest[0]["requires_login"] is True
@@ -152,9 +160,12 @@ def test_home_skills_follow_catalog_order_and_shell_login_rules():
     assert guest[1]["requires_login"] is True
     assert guest[2]["href"] == "/login?next=/agente-compara"
     assert guest[2]["requires_login"] is True
+    assert guest[3]["href"] == "/cleide-bi-frete"
+    assert guest[3]["requires_login"] is False
     assert auth[0]["href"] == "/fretes"
     assert auth[1]["href"] == "/auditoria-frete"
     assert auth[2]["href"] == "/agente-compara"
+    assert auth[3]["href"] == "/cleide-bi-frete"
     assert "consultar_agentefrete" not in {item["id"] for item in guest}
     assert "feed" not in {item["id"] for item in guest}
 
@@ -190,7 +201,10 @@ def test_home_shell_repeats_the_same_destinations_on_desktop_and_mobile(monkeypa
     assert 'href="/feed"' in mobile
     assert "/acesso-desktop" not in desktop
     assert "/acesso-desktop" not in mobile
-    assert "/cleide-bi-frete" not in desktop
+    assert 'href="/cleide-bi-frete"' in desktop
+    assert 'href="/cleide-bi-frete"' in mobile
+    assert 'data-home-skill="agente_bi"' in html
+    assert 'class="home-skill-label">AgenteBI</span>' in html
     assert 'aria-label="Expandir menu lateral"' in html
     assert 'aria-label="Abrir menu de navegação"' in html
     assert 'aria-label="Fechar menu"' in html
@@ -233,6 +247,8 @@ def test_authenticated_shell_keeps_direct_skill_links_and_profile(monkeypatch):
     assert 'href="/fretes"' in mobile
     assert 'href="/auditoria-frete"' in desktop
     assert 'href="/agente-compara"' in mobile
+    assert 'href="/cleide-bi-frete"' in desktop
+    assert 'href="/cleide-bi-frete"' in mobile
     assert 'href="/login?next=/fretes"' not in desktop
     assert 'href="/login?next=/auditoria-frete"' not in desktop
     assert 'href="/login?next=/agente-compara"' not in mobile

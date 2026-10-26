@@ -1,6 +1,10 @@
-from app.extensions import db
-from flask_login import UserMixin
 from datetime import datetime, timezone
+
+from flask_login import UserMixin
+from sqlalchemy import event as sa_event
+
+from app.agente_bi_integridade import INTEIRO_COLUNA_MAX, faixa_inteira, instalar_protecao_agente_bi
+from app.extensions import db
 
 
 def utcnow_naive() -> datetime:
@@ -4406,3 +4410,584 @@ class SemanticAiJobBudget(db.Model):
     version = db.Column(db.Integer, nullable=False, default=0, server_default="0")
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+def _agente_bi_sql_in(coluna: str, valores: tuple[str, ...]) -> str:
+    lista = ", ".join("'" + valor + "'" for valor in valores)
+    return coluna + " IN (" + lista + ")"
+
+
+# Fundação SCRUM-252. Complementa IaChamadaTentativa; não substitui a trilha financeira.
+AGENTE_BI_ORIGENS = ("sintetica", "preparada", "referencia")
+AGENTE_BI_ESTADOS_ANALISE = (
+    "preparada",
+    "aguardando_execucao",
+    "em_execucao",
+    "concluida",
+    "falha_validacao",
+    "incerta",
+    "bloqueada",
+)
+# Estados que esta etapa persiste. Os demais ficam reservados à execução durável.
+AGENTE_BI_ESTADOS_ANALISE_API = ("preparada", "concluida", "falha_validacao")
+AGENTE_BI_ETAPAS = ("dados", "descoberta", "selecao", "definicao", "execucao", "dashboard")
+AGENTE_BI_ESTADOS_PUBLICACAO = ("rascunho", "publicado", "arquivado")
+
+
+class AgenteBiDataset(db.Model):
+    """Versão imutável de dataset preparado.
+
+    A versão nova é outra linha. Não há persistência em diretório temporário.
+    """
+
+    __tablename__ = "agente_bi_dataset"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "usuario_id",
+            "chave",
+            "versao",
+            name="uq_agente_bi_dataset_usuario_chave_versao",
+        ),
+        db.CheckConstraint(faixa_inteira("versao"), name="ck_agente_bi_dataset_versao"),
+        db.CheckConstraint(
+            _agente_bi_sql_in("origem", AGENTE_BI_ORIGENS),
+            name="ck_agente_bi_dataset_origem",
+        ),
+        db.UniqueConstraint(
+            "id",
+            "usuario_id",
+            "conta_id",
+            "franquia_id",
+            name="uq_agente_bi_dataset_id_escopo",
+        ),
+        db.UniqueConstraint(
+            "id",
+            "usuario_id",
+            "conta_id",
+            "franquia_id",
+            "versao",
+            "impressao",
+            name="uq_agente_bi_dataset_id_escopo_versao",
+        ),
+        db.ForeignKeyConstraint(
+            ["versao_anterior_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_dataset.id",
+                "agente_bi_dataset.usuario_id",
+                "agente_bi_dataset.conta_id",
+                "agente_bi_dataset.franquia_id",
+            ],
+            name="fk_agente_bi_dataset_versao_anterior_escopo",
+            ondelete="RESTRICT",
+        ),
+        db.Index("ix_agente_bi_dataset_escopo", "conta_id", "franquia_id", "usuario_id"),
+        db.Index("ix_agente_bi_dataset_impressao", "impressao"),
+        db.Index("ix_agente_bi_dataset_versao_anterior", "versao_anterior_id"),
+    )
+
+    ORIGENS = AGENTE_BI_ORIGENS
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(
+        db.Integer,
+        db.ForeignKey("conta.id", name="fk_agente_bi_dataset_conta", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    franquia_id = db.Column(
+        db.Integer,
+        db.ForeignKey("franquia.id", name="fk_agente_bi_dataset_franquia", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", name="fk_agente_bi_dataset_usuario", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    chave = db.Column(db.String(80), nullable=False)
+    origem = db.Column(db.String(40), nullable=False)
+    origem_ref = db.Column(db.String(160), nullable=False)
+    versao = db.Column(db.Integer, nullable=False)
+    impressao = db.Column(db.String(64), nullable=False)
+    estrutura_json = db.Column(db.Text, nullable=False)
+    perfil_json = db.Column(db.Text, nullable=False)
+    dados_tipados_json = db.Column(db.Text, nullable=False)
+    metadados_preparacao_json = db.Column(db.Text, nullable=False)
+    versao_anterior_id = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class AgenteBiAnalise(db.Model):
+    """Rodada de análise presa à versão exata do dataset.
+
+    Nova rodada é outra linha. Claim, lease e consumidor ficam fora desta etapa.
+    A referência financeira aponta para IaChamadaTentativa e não a substitui.
+
+    O histórico (identidade, vínculo do dataset, contexto e resultado já gravado)
+    não muda. O estado operacional pode evoluir para a execução durável.
+    """
+
+    __tablename__ = "agente_bi_analise"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "usuario_id",
+            "chave",
+            "rodada",
+            name="uq_agente_bi_analise_usuario_chave_rodada",
+        ),
+        db.CheckConstraint(faixa_inteira("rodada"), name="ck_agente_bi_analise_rodada"),
+        db.CheckConstraint(faixa_inteira("dataset_versao"), name="ck_agente_bi_analise_dataset_versao"),
+        db.UniqueConstraint(
+            "id",
+            "usuario_id",
+            "conta_id",
+            "franquia_id",
+            name="uq_agente_bi_analise_id_escopo",
+        ),
+        db.ForeignKeyConstraint(
+            [
+                "dataset_id",
+                "usuario_id",
+                "conta_id",
+                "franquia_id",
+                "dataset_versao",
+                "dataset_impressao",
+            ],
+            [
+                "agente_bi_dataset.id",
+                "agente_bi_dataset.usuario_id",
+                "agente_bi_dataset.conta_id",
+                "agente_bi_dataset.franquia_id",
+                "agente_bi_dataset.versao",
+                "agente_bi_dataset.impressao",
+            ],
+            name="fk_agente_bi_analise_dataset_escopo",
+            ondelete="RESTRICT",
+        ),
+        db.CheckConstraint(
+            _agente_bi_sql_in("estado", AGENTE_BI_ESTADOS_ANALISE),
+            name="ck_agente_bi_analise_estado",
+        ),
+        db.CheckConstraint(
+            _agente_bi_sql_in("etapa_jornada", AGENTE_BI_ETAPAS),
+            name="ck_agente_bi_analise_etapa",
+        ),
+        db.Index("ix_agente_bi_analise_escopo", "conta_id", "franquia_id", "usuario_id"),
+        db.Index("ix_agente_bi_analise_dataset_id", "dataset_id"),
+        db.Index("ix_agente_bi_analise_tentativa", "ia_chamada_tentativa_id"),
+        db.Index("ix_agente_bi_analise_estado", "estado"),
+        db.Index(
+            "uq_agente_bi_analise_recuperacao",
+            "usuario_id",
+            "chave_recuperacao",
+            unique=True,
+            sqlite_where=db.text("chave_recuperacao IS NOT NULL"),
+            postgresql_where=db.text("chave_recuperacao IS NOT NULL"),
+        ),
+    )
+
+    ESTADOS = AGENTE_BI_ESTADOS_ANALISE
+    ESTADOS_API = AGENTE_BI_ESTADOS_ANALISE_API
+    ETAPAS = AGENTE_BI_ETAPAS
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(
+        db.Integer,
+        db.ForeignKey("conta.id", name="fk_agente_bi_analise_conta", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    franquia_id = db.Column(
+        db.Integer,
+        db.ForeignKey("franquia.id", name="fk_agente_bi_analise_franquia", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", name="fk_agente_bi_analise_usuario", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    chave = db.Column(db.String(80), nullable=False)
+    rodada = db.Column(db.Integer, nullable=False)
+    dataset_id = db.Column(db.Integer, nullable=False)
+    dataset_versao = db.Column(db.Integer, nullable=False)
+    dataset_impressao = db.Column(db.String(64), nullable=False)
+    estado = db.Column(db.String(40), nullable=False)
+    etapa_jornada = db.Column(db.String(40), nullable=False)
+    contexto_json = db.Column(db.Text, nullable=False)
+    regras_negocio_json = db.Column(db.Text, nullable=False)
+    esclarecimentos_json = db.Column(db.Text, nullable=False)
+    resultado_json = db.Column(db.Text, nullable=True)
+    contrato_versao = db.Column(db.String(40), nullable=False)
+    ia_chamada_tentativa_id = db.Column(
+        db.Integer,
+        db.ForeignKey(
+            "ia_chamada_tentativa.id",
+            name="fk_agente_bi_analise_tentativa",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    chave_recuperacao = db.Column(db.String(80), nullable=True)
+    iniciado_em = db.Column(db.DateTime, nullable=True)
+    concluido_em = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class AgenteBiDashboard(db.Model):
+    """Revisão imutável de dashboard. Publicar de outro jeito exige nova revisão.
+
+    `datasets_json` é só a cópia do contrato devolvido pela API. A integridade
+    da referência vive em AgenteBiDashboardDataset.
+    """
+
+    __tablename__ = "agente_bi_dashboard"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "usuario_id",
+            "chave",
+            "revisao",
+            name="uq_agente_bi_dashboard_usuario_chave_revisao",
+        ),
+        db.CheckConstraint(faixa_inteira("revisao"), name="ck_agente_bi_dashboard_revisao"),
+        db.UniqueConstraint(
+            "id",
+            "usuario_id",
+            "conta_id",
+            "franquia_id",
+            name="uq_agente_bi_dashboard_id_escopo",
+        ),
+        db.ForeignKeyConstraint(
+            ["analise_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_analise.id",
+                "agente_bi_analise.usuario_id",
+                "agente_bi_analise.conta_id",
+                "agente_bi_analise.franquia_id",
+            ],
+            name="fk_agente_bi_dashboard_analise_escopo",
+            ondelete="RESTRICT",
+        ),
+        db.CheckConstraint(
+            _agente_bi_sql_in("estado_publicacao", AGENTE_BI_ESTADOS_PUBLICACAO),
+            name="ck_agente_bi_dashboard_publicacao",
+        ),
+        db.Index("ix_agente_bi_dashboard_escopo", "conta_id", "franquia_id", "usuario_id"),
+        db.Index("ix_agente_bi_dashboard_analise", "analise_id"),
+        db.Index("ix_agente_bi_dashboard_publicacao", "estado_publicacao"),
+    )
+
+    ESTADOS_PUBLICACAO = AGENTE_BI_ESTADOS_PUBLICACAO
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(
+        db.Integer,
+        db.ForeignKey("conta.id", name="fk_agente_bi_dashboard_conta", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    franquia_id = db.Column(
+        db.Integer,
+        db.ForeignKey("franquia.id", name="fk_agente_bi_dashboard_franquia", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", name="fk_agente_bi_dashboard_usuario", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    chave = db.Column(db.String(80), nullable=False)
+    revisao = db.Column(db.Integer, nullable=False)
+    estado_publicacao = db.Column(db.String(20), nullable=False)
+    contrato_versao = db.Column(db.String(40), nullable=False)
+    executor_versao = db.Column(db.String(40), nullable=False)
+    definicoes_json = db.Column(db.Text, nullable=False)
+    datasets_json = db.Column(db.Text, nullable=False)
+    analise_id = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class AgenteBiDashboardDataset(db.Model):
+    """Vínculo normalizado entre uma revisão de dashboard e a versão do dataset.
+
+    JSON não impede apagar o dataset nem garante usuário, conta, franquia,
+    versão e impressão. Esta tabela é a referência que o banco consegue
+    restringir. A linha nasce com a revisão e não é reescrita.
+    """
+
+    __tablename__ = "agente_bi_dashboard_dataset"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "dashboard_id",
+            "dataset_id",
+            name="uq_agente_bi_dashboard_dataset",
+        ),
+        db.CheckConstraint(faixa_inteira("dataset_versao"), name="ck_agente_bi_dashboard_dataset_versao"),
+        db.ForeignKeyConstraint(
+            ["dashboard_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_dashboard.id",
+                "agente_bi_dashboard.usuario_id",
+                "agente_bi_dashboard.conta_id",
+                "agente_bi_dashboard.franquia_id",
+            ],
+            name="fk_agente_bi_dashboard_dataset_dashboard",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            [
+                "dataset_id",
+                "usuario_id",
+                "conta_id",
+                "franquia_id",
+                "dataset_versao",
+                "dataset_impressao",
+            ],
+            [
+                "agente_bi_dataset.id",
+                "agente_bi_dataset.usuario_id",
+                "agente_bi_dataset.conta_id",
+                "agente_bi_dataset.franquia_id",
+                "agente_bi_dataset.versao",
+                "agente_bi_dataset.impressao",
+            ],
+            name="fk_agente_bi_dashboard_dataset_dataset",
+            ondelete="RESTRICT",
+        ),
+        db.Index("ix_agente_bi_dashboard_dataset_dataset", "dataset_id"),
+        db.Index("ix_agente_bi_dashboard_dataset_dashboard", "dashboard_id"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    dashboard_id = db.Column(db.Integer, nullable=False)
+    dataset_id = db.Column(db.Integer, nullable=False)
+    conta_id = db.Column(db.Integer, nullable=False)
+    franquia_id = db.Column(db.Integer, nullable=False)
+    usuario_id = db.Column(db.Integer, nullable=False)
+    dataset_versao = db.Column(db.Integer, nullable=False)
+    dataset_impressao = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class AgenteBiDatasetBloco(db.Model):
+    """Bloco imutável de um único dataset preparado.
+
+    Não é versão. O manifesto fica em `dados_tipados_json` e o conjunto
+    dos blocos reconstrói o dataset completo. Some junto com o dataset.
+    """
+
+    __tablename__ = "agente_bi_dataset_bloco"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "dataset_id",
+            "indice",
+            name="uq_agente_bi_dataset_bloco_indice",
+        ),
+        db.CheckConstraint(
+            f"indice >= 0 AND indice <= {INTEIRO_COLUNA_MAX}",
+            name="ck_agente_bi_dataset_bloco_indice",
+        ),
+        db.CheckConstraint(faixa_inteira("registros"), name="ck_agente_bi_dataset_bloco_registros"),
+        db.ForeignKeyConstraint(
+            ["dataset_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_dataset.id",
+                "agente_bi_dataset.usuario_id",
+                "agente_bi_dataset.conta_id",
+                "agente_bi_dataset.franquia_id",
+            ],
+            name="fk_agente_bi_dataset_bloco_dataset",
+            ondelete="CASCADE",
+        ),
+        db.Index(
+            "ix_agente_bi_dataset_bloco_escopo",
+            "conta_id",
+            "franquia_id",
+            "usuario_id",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    dataset_id = db.Column(db.Integer, nullable=False)
+    conta_id = db.Column(db.Integer, nullable=False)
+    franquia_id = db.Column(db.Integer, nullable=False)
+    usuario_id = db.Column(db.Integer, nullable=False)
+    indice = db.Column(db.Integer, nullable=False)
+    registros = db.Column(db.Integer, nullable=False)
+    sha256 = db.Column(db.String(64), nullable=False)
+    conteudo_json = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+# Fila durável da SCRUM-253. A análise continua sendo o histórico.
+# Claim, lease, fencing e recuperação não cabem na linha imutável da rodada.
+AGENTE_BI_ESTADOS_EXECUCAO = (
+    "criada",
+    "aguardando",
+    "adquirida",
+    "concluida",
+    "falha_recuperavel",
+    "falha_definitiva",
+    "incerta",
+    "cancelada",
+)
+AGENTE_BI_EFEITOS_EXECUCAO = ("nenhum", "simulado", "incerto")
+AGENTE_BI_DESFECHOS_EXECUCAO = (
+    "ausente",
+    "reservado",
+    "liquidado",
+    "dispensado",
+    "incerto",
+    "dispensar_pendente",
+)
+
+
+class AgenteBiExecucao(db.Model):
+    """Operação durável de uma rodada de análise.
+
+    Uma análise tem no máximo uma execução. Repetir a chave de idempotência
+    devolve a mesma linha. O resultado analítico continua em AgenteBiAnalise
+    e não é copiado para cá. Não há conteúdo bruto de dataset.
+    """
+
+    __tablename__ = "agente_bi_execucao"
+    __table_args__ = (
+        db.UniqueConstraint("operacao_id", name="uq_agente_bi_execucao_operacao"),
+        db.UniqueConstraint("analise_id", name="uq_agente_bi_execucao_analise"),
+        db.UniqueConstraint("chave_idempotencia", name="uq_agente_bi_execucao_idempotencia"),
+        db.CheckConstraint(
+            _agente_bi_sql_in("estado", AGENTE_BI_ESTADOS_EXECUCAO),
+            name="ck_agente_bi_execucao_estado",
+        ),
+        db.CheckConstraint(
+            _agente_bi_sql_in("efeito_externo", AGENTE_BI_EFEITOS_EXECUCAO),
+            name="ck_agente_bi_execucao_efeito",
+        ),
+        db.CheckConstraint(
+            "desfecho_financeiro IS NULL OR "
+            + _agente_bi_sql_in("desfecho_financeiro", AGENTE_BI_DESFECHOS_EXECUCAO),
+            name="ck_agente_bi_execucao_desfecho",
+        ),
+        db.CheckConstraint("fencing >= 0", name="ck_agente_bi_execucao_fencing"),
+        db.CheckConstraint("tentativas >= 0", name="ck_agente_bi_execucao_tentativas"),
+        db.CheckConstraint("recuperacoes >= 0", name="ck_agente_bi_execucao_recuperacoes"),
+        db.ForeignKeyConstraint(
+            ["analise_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_analise.id",
+                "agente_bi_analise.usuario_id",
+                "agente_bi_analise.conta_id",
+                "agente_bi_analise.franquia_id",
+            ],
+            name="fk_agente_bi_execucao_analise_escopo",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["ia_chamada_tentativa_id"],
+            ["ia_chamada_tentativa.id"],
+            name="fk_agente_bi_execucao_tentativa",
+            ondelete="RESTRICT",
+        ),
+        db.Index(
+            "uq_agente_bi_execucao_tentativa",
+            "ia_chamada_tentativa_id",
+            unique=True,
+            sqlite_where=db.text("ia_chamada_tentativa_id IS NOT NULL"),
+            postgresql_where=db.text("ia_chamada_tentativa_id IS NOT NULL"),
+        ),
+        db.Index("ix_agente_bi_execucao_fila", "estado", "id"),
+        db.Index("ix_agente_bi_execucao_escopo", "conta_id", "franquia_id", "usuario_id"),
+    )
+
+    ESTADOS = AGENTE_BI_ESTADOS_EXECUCAO
+    EFEITOS = AGENTE_BI_EFEITOS_EXECUCAO
+
+    id = db.Column(db.Integer, primary_key=True)
+    operacao_id = db.Column(db.String(36), nullable=False)
+    analise_id = db.Column(db.Integer, nullable=False)
+    conta_id = db.Column(db.Integer, nullable=False)
+    franquia_id = db.Column(db.Integer, nullable=False)
+    usuario_id = db.Column(db.Integer, nullable=False)
+    ia_chamada_tentativa_id = db.Column(db.Integer, nullable=True)
+    estado = db.Column(db.String(32), nullable=False)
+    tentativas = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    recuperacoes = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    chave_idempotencia = db.Column(db.String(80), nullable=False)
+    fencing = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    lease_worker = db.Column(db.String(64), nullable=True)
+    lease_ate = db.Column(db.DateTime, nullable=True)
+    efeito_externo = db.Column(db.String(16), nullable=False, default="nenhum", server_default="nenhum")
+    ultimo_erro = db.Column(db.String(40), nullable=True)
+    codigo_resultado = db.Column(db.String(40), nullable=True)
+    # Sem uso operacional: a fila não reserva nem dispensa créditos. As colunas
+    # continuam no schema até uma migration própria removê-las.
+    desfecho_financeiro = db.Column(db.String(24), nullable=True)
+    financeiro_encerrado = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    reserva_em_andamento = db.Column(
+        db.Boolean, nullable=False, default=False, server_default=db.false()
+    )
+    adquirida_em = db.Column(db.DateTime, nullable=True)
+    concluida_em = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+class AgenteBiExecucaoEvento(db.Model):
+    """Diário append-only das transições. Não carrega dataset nem prompt."""
+
+    __tablename__ = "agente_bi_execucao_evento"
+    __table_args__ = (
+        db.CheckConstraint(
+            _agente_bi_sql_in("estado_novo", AGENTE_BI_ESTADOS_EXECUCAO),
+            name="ck_agente_bi_execucao_evento_destino",
+        ),
+        db.CheckConstraint(
+            "estado_anterior IS NULL OR " + _agente_bi_sql_in("estado_anterior", AGENTE_BI_ESTADOS_EXECUCAO),
+            name="ck_agente_bi_execucao_evento_origem",
+        ),
+        db.CheckConstraint("fencing >= 0", name="ck_agente_bi_execucao_evento_fencing"),
+        db.ForeignKeyConstraint(
+            ["execucao_id"],
+            ["agente_bi_execucao.id"],
+            name="fk_agente_bi_execucao_evento_execucao",
+            ondelete="RESTRICT",
+        ),
+        db.Index("ix_agente_bi_execucao_evento_execucao", "execucao_id"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    execucao_id = db.Column(db.Integer, nullable=False)
+    estado_anterior = db.Column(db.String(32), nullable=True)
+    estado_novo = db.Column(db.String(32), nullable=False)
+    fencing = db.Column(db.Integer, nullable=False)
+    codigo = db.Column(db.String(40), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
+def _agente_bi_recusar_atualizacao(mapper, connection, target):
+    """Falha cedo no ORM. Query.update() e SQL direto dependem do gatilho."""
+    raise ValueError("registro preparado do AgenteBI e imutavel")
+
+
+def _agente_bi_recusar_evento(mapper, connection, target):
+    raise ValueError("registro preparado do AgenteBI e imutavel")
+
+
+def _agente_bi_apos_criar_tabelas(target, connection, **kwargs):
+    instalar_protecao_agente_bi(connection)
+
+
+def _agente_bi_apos_criar_execucao(target, connection, **kwargs):
+    from app.agente_bi_execucao_integridade import instalar_protecao_execucao
+
+    instalar_protecao_execucao(connection)
+
+
+sa_event.listen(AgenteBiDataset, "before_update", _agente_bi_recusar_atualizacao)
+sa_event.listen(AgenteBiDatasetBloco, "before_update", _agente_bi_recusar_atualizacao)
+sa_event.listen(AgenteBiDashboard, "before_update", _agente_bi_recusar_atualizacao)
+sa_event.listen(AgenteBiDashboardDataset, "before_update", _agente_bi_recusar_atualizacao)
+sa_event.listen(AgenteBiExecucaoEvento, "before_update", _agente_bi_recusar_evento)
+sa_event.listen(AgenteBiExecucaoEvento, "before_delete", _agente_bi_recusar_evento)
+sa_event.listen(AgenteBiDataset.metadata, "after_create", _agente_bi_apos_criar_tabelas)
+sa_event.listen(AgenteBiExecucaoEvento.__table__, "after_create", _agente_bi_apos_criar_execucao)

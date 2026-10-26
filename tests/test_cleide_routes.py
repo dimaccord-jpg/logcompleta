@@ -51,19 +51,13 @@ def test_auditoria_frete_retornar_200_quando_autorizado(monkeypatch):
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     assert '<span class="af-text-gradient">AgenteFrete</span>' in html
-    assert "Agente Cleide" in html
-    assert "BI Cleide" in html
+    assert "AgenteBI" in html
+    assert "Assistente de inteligência de dados logísticos." in html
+    assert 'id="agente-bi-input"' in html
+    assert "cleide_auditoria_frete.css" not in html
+    assert "cleide_auditoria_frete.js" not in html
+    assert "id=\"cleideUploadForm\"" not in html
     assert "Auditoria de Frete Operacional" not in html
-    assert 'data-testid="cleide-upload-placeholder"' in html
-    assert "id=\"cleideUploadForm\"" in html
-    assert "id=\"cleideUploadInput\"" in html
-    assert 'data-testid="cleide-dashboard-filter-top"' in html
-    assert 'data-testid="cleide-filters-placeholder"' not in html
-    assert "id=\"cleideStructuralFeedback\"" in html
-    assert "id=\"cleideStructuralDetails\"" in html
-    assert 'data-testid="cleide-kpis-placeholder"' not in html
-    assert 'data-testid="cleide-dashboard-placeholder"' not in html
-    assert 'data-testid="cleide-chat-placeholder"' not in html
 
 
 def test_auditoria_frete_publica_quando_nao_autenticado(monkeypatch):
@@ -87,11 +81,10 @@ def test_auditoria_frete_publica_quando_nao_autenticado(monkeypatch):
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     assert html.count('<span class="af-text-gradient">AgenteFrete</span>') == 1
-    assert "BI Cleide" in html
-    assert "Auditoria de Frete Operacional" not in html
-    assert "Faca login para enviar planilhas" in html
-    assert 'data-testid="cleide-template-download"' in html
-    assert 'href="/api/cleide/template"' in html
+    assert "AgenteBI" in html
+    assert "Faca login para enviar planilhas" not in html
+    assert 'href="/api/cleide/template"' not in html
+    assert "cleide_auditoria_frete.js" not in html
     assert calls["authz"] == 0
 
 
@@ -130,9 +123,9 @@ def test_auditoria_frete_nao_depende_da_flag_de_ia(monkeypatch):
     resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
-    assert "BI Cleide" in html
-    assert "Auditoria de Frete Operacional" not in html
-    assert "IA contextual e insights automáticos ainda inativos" in html
+    assert "AgenteBI" in html
+    assert "/api/chat_cleide" not in html
+    assert "cleide_auditoria_frete.js" not in html
 
 
 def test_cleide_auditoria_rota_retorna_nova_tela(monkeypatch):
@@ -141,8 +134,8 @@ def test_cleide_auditoria_rota_retorna_nova_tela(monkeypatch):
     resp = client.get("/auditoria-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
-    assert "Cleide, Auditora Virtual de AgenteFrete" in html
-    assert "Atenção: a Cleide é uma IA e pode cometer erros." in html
+    assert "AgenteAudita" in html
+    assert "Atenção: o AgenteAudita é uma IA e pode cometer erros." in html
     assert "Faça o upload da tabela de frete." in html
     assert 'id="cleideAuditoriaAttachBtn"' in html
     assert "cleide_auditoria.js" in html

@@ -349,8 +349,10 @@ def test_cleide_bi_continua_separado(monkeypatch):
     )
     monkeypatch.setattr("app.cleide_routes.get_cleide_config", lambda: SimpleNamespace(layout_version=1))
     bi_html = web.app.test_client().get("/cleide-bi-frete").get_data(as_text=True)
-    assert "BI Cleide" in bi_html
+    assert "AgenteBI" in bi_html
+    assert 'id="agente-bi-shell"' in bi_html
     assert "Cleide, Auditora Virtual de AgenteFrete" not in bi_html
+    assert "cleide_auditoria.js" not in bi_html
 
 
 def test_cleide_auditoria_js_needs_review_message_atualizada():

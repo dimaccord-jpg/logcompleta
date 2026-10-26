@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flask import Blueprint, current_app, g, jsonify, render_template, request, send_file, session, url_for
-from flask_login import current_user, login_required
+from flask import Blueprint, current_app, jsonify, render_template, request, send_file, session, url_for
+from flask_login import current_user
 
 from app.services.cleiton_operacao_autorizacao_service import (
     avaliar_autorizacao_operacao_por_franquia,
 )
+# Mantidos para o monkeypatch dos testes dos endpoints legados. O GET do AgenteBI não os chama.
 from app.services.cleide_config_service import get_cleide_config
 from app.cleide_upload_store import get_cleide_upload_tmp_dir
 from app.cleide_controlled_chat import run_cleide_controlled_chat
@@ -33,34 +34,79 @@ def _authorize_cleide_upload_api():
     return None
 
 
+_AGENTE_BI_MENU = (
+    ("inicio", "Home"),
+    ("consultar_agentefrete", "Consultar o AgenteFrete"),
+    ("auditar_cobrancas", "Auditar cobranças de frete"),
+    ("comparar_tabelas", "Comparar tabelas"),
+    ("feed", "Feed"),
+)
+
+
+def _agente_bi_menu_links() -> list[dict[str, str]]:
+    """Links do menu + a partir da navegação oficial, com a mesma regra de login."""
+    from app.shell_navigation import build_shell_navigation
+
+    authenticated = bool(getattr(current_user, "is_authenticated", False))
+    navigation = build_shell_navigation(
+        authenticated=authenticated,
+        request_path=request.path or "/",
+        url_for=url_for,
+        has_endpoint=lambda endpoint_name: endpoint_name in current_app.view_functions,
+    )
+    by_id = {
+        item["id"]: item
+        for section in navigation["sections"]
+        for item in section["links"]
+    }
+    links: list[dict[str, str]] = []
+    for entry_id, label in _AGENTE_BI_MENU:
+        item = by_id[entry_id]
+        links.append({
+            "id": entry_id,
+            "label": label,
+            "icon": item["icon"],
+            "href": item["href"],
+        })
+    return links
+
+
 @cleide_bp.route("/cleide-bi-frete", methods=["GET"])
 def auditoria_frete():
     is_authenticated = bool(getattr(current_user, "is_authenticated", False))
-    autorizacao = None
     if is_authenticated:
         autorizacao = avaliar_autorizacao_operacao_por_franquia(current_user)
-    if is_authenticated and not autorizacao.get("permitido"):
-        return render_template(
-            "feature_under_construction.html",
-            origem="BI Cleide",
-            mensagem_bloqueio=autorizacao.get("mensagem_usuario"),
-        ), 403
+        if not autorizacao.get("permitido"):
+            return render_template(
+                "feature_under_construction.html",
+                origem="BI Cleide",
+                mensagem_bloqueio=autorizacao.get("mensagem_usuario"),
+            ), 403
 
-    g.cleide_allow_config_fallback = bool(getattr(current_app, "testing", False))
-    cfg = get_cleide_config()
-    upload_tmp_dir = get_cleide_upload_tmp_dir()
+    descoberta = False
+    catalogo = None
+    limite = 6
+    dashboard = False
+    if is_authenticated:
+        from app.agente_bi_flags import agente_bi_api_habilitada, agente_bi_ingestao_habilitada
+
+        if agente_bi_api_habilitada():
+            dashboard = True
+            if agente_bi_ingestao_habilitada():
+                from app.services.agente_bi_analisar_service import descrever_catalogo
+                from app.services.agente_bi_persistencia_service import LIMITE_GRAFICOS
+
+                descoberta = True
+                catalogo = descrever_catalogo()
+                limite = LIMITE_GRAFICOS
+
     return render_template(
-        "cleide_auditoria_frete.html",
-        cleide_cfg=cfg,
-        cleide_upload_tmp_dir=upload_tmp_dir,
-        cleide_public_page=True,
-        cleide_is_authenticated=is_authenticated,
-        cleide_login_url=url_for("login"),
-        cleide_upload_authorization=autorizacao or {
-            "permitido": False,
-            "modo_operacao": "login_required",
-            "mensagem_usuario": "Faca login para enviar planilhas e usar recursos privados da Cleide.",
-        },
+        "agente_bi.html",
+        agente_bi_menu=_agente_bi_menu_links(),
+        agente_bi_descoberta=descoberta,
+        agente_bi_catalogo=catalogo,
+        agente_bi_limite_graficos=limite,
+        agente_bi_dashboard=dashboard,
     )
 
 

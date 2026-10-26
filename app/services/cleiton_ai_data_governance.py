@@ -42,6 +42,7 @@ PURPOSE_REDACAO = "redacao_editorial"
 PURPOSE_IMAGEM = "geracao_imagem"
 PURPOSE_BUSCA_WEB = "busca_web"
 PURPOSE_SEMANTIC_MUNICIPALITY_DISAMBIGUATION = "semantic_municipality_disambiguation"
+PURPOSE_BI_LOGISTICO = "bi_logistico"
 
 USER_SAFE_PREPARATION_FAILED = (
     "Não foi possível preparar este conteúdo com segurança para análise por IA. "
@@ -191,6 +192,8 @@ def purpose_from_flow_type(flow_type: str | None, agent: str | None = None) -> s
     ag = (agent or "").strip().lower()
     if ft == PURPOSE_SEMANTIC_MUNICIPALITY_DISAMBIGUATION:
         return PURPOSE_SEMANTIC_MUNICIPALITY_DISAMBIGUATION
+    if ft == PURPOSE_BI_LOGISTICO or ag == "agente_bi":
+        return PURPOSE_BI_LOGISTICO
     if "discovery" in ft or "onboarding" in ft:
         return PURPOSE_DISCOVERY
     if "imagem" in ft or "imagen" in ft:

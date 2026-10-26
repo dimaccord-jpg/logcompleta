@@ -51,6 +51,7 @@ SUPPORTED_PURPOSES = (
     "geracao_imagem",
     "busca_web",
     "semantic_municipality_disambiguation",
+    "bi_logistico",
 )
 
 # Análise logística: entidades operacionais (transportadora, rota, peso, taxas) são necessárias.
@@ -64,6 +65,7 @@ _OPERATIONAL_PURPOSES = frozenset(
         "comparacao_fretes",
         "insights_auditoria",
         "busca_web",
+        "bi_logistico",
     }
 )
 
