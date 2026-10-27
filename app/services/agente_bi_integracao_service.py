@@ -8,8 +8,12 @@ SDK quando nenhum transporte é injetado. Este módulo não altera teto,
 lease nem preço.
 
 `apto_anthropic=False` permanece um invariante do contexto bloqueado.
-A liberação só ocorre depois que a governança local devolve `allowed`
-com o mesmo conteúdo estrutural. A fila continua dona dos estados. O
+A liberação usa a representação aprovada. `allowed` entrega esse conteúdo.
+`minimized` só segue se a referência técnica continuar íntegra depois da
+revalidação. Bloqueio técnico, governança indisponível ou resultado
+incoerente impedem a transferência sem nova tentativa. Bloqueio por
+conteúdo pode repetir uma vez, só sem as anotações opcionais; a segunda
+decisão vale. A fila continua dona dos estados. O
 processador entrega à confirmação o código e o documento `analisar.v1`
 já validado, gravado na mesma transação. Quem devolve só o código
 continua em `execucao_simulada.v1`. O coordenador devolve o documento
@@ -30,12 +34,16 @@ from app.services.agente_bi_analisar_service import (
     CATALOGO_CONTRATO,
     PROVEDOR_ANTHROPIC,
     AnalisarErro,
+    TransferenciaRecusada,
     analisar,
     contexto_de_transferencia,
     esquema_rascunho_analisar,
+    governar_representacao,
     instrucao_de_rascunho,
     montar_contexto,
     provedor_simulado,
+    referencias_da_representacao,
+    representacao_semantica,
     validar_saida,
 )
 from app.services.agente_bi_anthropic_service import (
@@ -62,12 +70,12 @@ from app.services.agente_bi_persistencia_service import (
     AgenteBiErro,
     EscopoAgenteBi,
     criar_analise,
+    obter_dataset,
 )
 from app.services.cleiton_ai_data_governance import (
-    CONTENT_TYPE_DOCUMENT,
     DECISION_ALLOW,
+    DECISION_MINIMIZE,
     govern_outbound_content,
-    governance_result_is_coherent,
 )
 from app.services.cleiton_ai_privacy_classifier import SUPPORTED_PURPOSES
 
@@ -120,44 +128,59 @@ def validar_resposta_simulada(contexto: dict, documento: dict) -> dict:
     return validar_saida(contexto, documento)
 
 
-def autorizar_transferencia(perfil: dict, contexto: dict) -> dict:
-    """Libera a cópia minimizada só com verificação explícita do contexto.
+def autorizar_transferencia(perfil: dict, contexto: dict, *, estrutura=None) -> dict:
+    """Libera a representação semântica que a governança devolver.
 
-    O flag `apto_anthropic=False` é conferido como invariante e não encerra
-    a decisão. Sem governança `allowed` e conteúdo idêntico, a transferência
-    não ocorre.
+    O flag `apto_anthropic=False` continua invariante. `allowed` usa o
+    conteúdo aprovado. `minimized` passa só depois da revalidação das
+    referências. Bloqueio técnico, falha ou resultado incoerente não
+    transferem. Se a intenção foi removida na representação reduzida, a
+    liberação não a trata como entregue.
     """
     if not isinstance(perfil, dict):
         raise IntegracaoErro("contexto_nao_autorizado")
     _governanca_explicita(perfil.get("governanca"))
     try:
-        payload = contexto_de_transferencia(contexto)
+        estrutural = contexto_de_transferencia(contexto)
+        representacao = representacao_semantica(contexto, estrutura)
     except AnalisarErro as exc:
         raise IntegracaoErro(_codigo(exc.codigo)) from exc
-    _estrutura_fechada(payload)
-    resultado = govern_outbound_content(
-        payload,
-        purpose=FINALIDADE_TRANSFERENCIA,
-        content_type=CONTENT_TYPE_DOCUMENT,
-        agent="agente_bi",
-        provider="simulado",
-    )
-    if not resultado.issued_by_cleiton or not governance_result_is_coherent(resultado, original=payload):
+    _estrutura_fechada(estrutural)
+    if referencias_da_representacao(estrutural) != referencias_da_representacao(representacao):
         raise IntegracaoErro("contexto_nao_autorizado")
-    if resultado.decision != DECISION_ALLOW or resultado.safe_content != payload:
+    _pertence_ao_perfil(perfil, representacao)
+    try:
+        autorizado = governar_representacao(representacao, governar=govern_outbound_content)
+    except TransferenciaRecusada as exc:
+        raise IntegracaoErro("contexto_nao_autorizado") from exc
+    verificacoes = [
+        "varredura_comprovada",
+        "finalidade_nao_basta",
+        "estrutura_fechada",
+        "governanca_emitida",
+        "referencias_preservadas",
+    ]
+    removidas = bool(autorizado.get("anotacoes_removidas"))
+    if removidas:
+        verificacoes.append("anotacoes_opcionais_removidas")
+    intencao_original = representacao.get("intencao")
+    intencao_final = autorizado["payload"].get("intencao") if isinstance(autorizado.get("payload"), dict) else None
+    intencao_ausente = isinstance(intencao_original, str) and bool(intencao_original) and not isinstance(intencao_final, str)
+    if intencao_ausente:
+        verificacoes.append("intencao_nao_transportada")
+    if autorizado["decisao"] == DECISION_ALLOW:
+        verificacoes.append("decisao_allowed")
+        if not removidas and not intencao_ausente:
+            verificacoes.append("conteudo_identico")
+    elif autorizado["decisao"] == DECISION_MINIMIZE:
+        verificacoes.append("conteudo_minimizado_revalidado")
+    else:
         raise IntegracaoErro("contexto_nao_autorizado")
     return {
         "liberado": True,
         "motivo": MOTIVO_LIBERACAO,
-        "payload": resultado.safe_content,
-        "verificacoes": [
-            "varredura_comprovada",
-            "decisao_allowed",
-            "finalidade_nao_basta",
-            "estrutura_fechada",
-            "governanca_emitida",
-            "conteudo_identico",
-        ],
+        "payload": autorizado["payload"],
+        "verificacoes": verificacoes,
     }
 
 
@@ -171,11 +194,12 @@ def abrir_operacao(
 ) -> dict:
     """Perfila, autoriza e enfileira uma rodada sem resultado analítico."""
     perfil = _perfil_ou_erro(escopo, dataset_id)
+    estrutura = _estrutura_do_dataset(escopo, dataset_id)
     try:
         contexto = montar_contexto(perfil, pedido)
     except AnalisarErro as exc:
         raise IntegracaoErro(_codigo(exc.codigo)) from exc
-    autorizar_transferencia(perfil, contexto)
+    autorizar_transferencia(perfil, contexto, estrutura=estrutura)
     dataset = perfil.get("dataset") if isinstance(perfil.get("dataset"), dict) else {}
     if dataset.get("id") != int(dataset_id):
         raise IntegracaoErro("identidade_inconsistente")
@@ -249,7 +273,8 @@ def processar_transporte_simulado(
     try:
         perfil = _perfil_ou_erro(escopo, int(referencias["dataset_id"]))
         contexto = montar_contexto(perfil, pedido)
-        liberacao = autorizar_transferencia(perfil, contexto)
+        estrutura = _estrutura_do_dataset(escopo, int(referencias["dataset_id"]))
+        liberacao = autorizar_transferencia(perfil, contexto, estrutura=estrutura)
     except IntegracaoErro as exc:
         raise ExecucaoErro(_codigo(exc.codigo)) from exc
     except AnalisarErro as exc:
@@ -510,6 +535,46 @@ def _proposta_do_texto(texto) -> dict:
     if not isinstance(resposta, dict) or set(resposta) != {"descobertas", "sugestoes"}:
         raise AnalisarErro("contrato_saida_invalido")
     return resposta
+
+
+def _estrutura_do_dataset(escopo: EscopoAgenteBi, dataset_id: int):
+    try:
+        corpo = obter_dataset(escopo, int(dataset_id))
+    except AgenteBiErro as exc:
+        raise IntegracaoErro(_codigo(exc.codigo)) from exc
+    estrutura = corpo.get("estrutura") if isinstance(corpo, dict) else None
+    if not isinstance(estrutura, dict):
+        raise IntegracaoErro("contexto_nao_autorizado")
+    return estrutura
+
+
+def _pertence_ao_perfil(perfil: dict, representacao: dict) -> None:
+    if representacao.get("vinculo_preparacao") != perfil.get("vinculo_preparacao"):
+        raise IntegracaoErro("contexto_nao_autorizado")
+    dataset = perfil.get("dataset") if isinstance(perfil.get("dataset"), dict) else {}
+    obtido = representacao.get("dataset") if isinstance(representacao.get("dataset"), dict) else {}
+    for chave in ("id", "versao", "impressao"):
+        if chave in dataset and obtido.get(chave) != dataset.get(chave):
+            raise IntegracaoErro("contexto_nao_autorizado")
+    colunas = set()
+    for item in perfil.get("colunas") or []:
+        if isinstance(item, dict):
+            colunas.add((item.get("arquivo"), item.get("aba"), item.get("regiao"), item.get("indice")))
+    if any(coord not in colunas for coord in referencias_da_representacao(representacao)):
+        raise IntegracaoErro("contexto_nao_autorizado")
+    regioes = {
+        (item.get("arquivo"), item.get("aba"), item.get("regiao"))
+        for item in perfil.get("regioes") or []
+        if isinstance(item, dict)
+    }
+    for item in representacao.get("regioes") or []:
+        if not isinstance(item, dict):
+            raise IntegracaoErro("contexto_nao_autorizado")
+        if (item.get("arquivo"), item.get("aba"), item.get("regiao")) not in regioes:
+            raise IntegracaoErro("contexto_nao_autorizado")
+    for chave in ("usuario_id", "conta_id", "franquia_id", "escopo"):
+        if chave in representacao:
+            raise IntegracaoErro("contexto_nao_autorizado")
 
 
 def _perfil_ou_erro(escopo: EscopoAgenteBi, dataset_id: int) -> dict:

@@ -131,6 +131,23 @@ def _sem_vazamento(texto: str):
     assert "sul" not in texto
 
 
+def _linguagem_preservada_sem_dsl(bruto: str):
+    """A frase do usuário permanece texto. Célula e fórmula não viram execução."""
+    assert MARCADOR not in bruto
+    assert "sul" not in bruto
+    corpo = json.loads(bruto)
+    if isinstance(corpo, dict) and "messages" in corpo:
+        corpo = json.loads(corpo["messages"][0]["content"])
+    assert corpo["intencao"] == _pedido()["texto"]
+    resto = dict(corpo)
+    resto.pop("intencao")
+    restante = json.dumps(resto, ensure_ascii=False)
+    assert FORMULA not in restante
+    assert SENTINELA not in restante
+    assert "formulas" not in corpo
+    assert corpo.get("intencoes") == ["soma"]
+
+
 def test_limites_de_lease_e_timeout_permanecem():
     assert LEASE_PADRAO_SEGUNDOS == 30
     assert LEASE_MAX_SEGUNDOS == 120
@@ -246,7 +263,7 @@ def test_fluxo_prepara_perfil_contexto_analise_e_fila(app, monkeypatch, caplog):
         assert liberacao["liberado"] is True
         assert liberacao["motivo"] == "contexto_verificado"
         assert "finalidade_nao_basta" in liberacao["verificacoes"]
-        _sem_vazamento(json.dumps(liberacao["payload"], ensure_ascii=False))
+        _linguagem_preservada_sem_dsl(json.dumps(liberacao["payload"], ensure_ascii=False))
         resultado = executar_operacao(
             escopo,
             dataset_id,
@@ -263,7 +280,7 @@ def test_fluxo_prepara_perfil_contexto_analise_e_fila(app, monkeypatch, caplog):
         assert saida["apto_anthropic"] is False
         assert saida["contrato_saida_validado"] is True
         _sem_vazamento(json.dumps(saida, ensure_ascii=False))
-        _sem_vazamento(json.dumps(estado["pedido"], ensure_ascii=False))
+        _linguagem_preservada_sem_dsl(json.dumps(estado["pedido"], ensure_ascii=False))
         assert estado["pedido"]["max_tokens"] == MAX_TOKENS_SIMULADO
         assert estado["pedido"]["model"] == "claude-sonnet-simulado"
         assert estado["chamadas"] == 1
@@ -344,7 +361,7 @@ def test_resposta_invalida_falha_sem_segunda_chamada_nem_cobranca(app, monkeypat
         tentativa = db.session.get(IaChamadaTentativa, linha.ia_chamada_tentativa_id)
         assert tentativa.status == IaChamadaTentativa.STATUS_SETTLED
         assert tentativa.ia_consumo_evento_id is not None
-        _sem_vazamento(json.dumps(estado["pedido"], ensure_ascii=False))
+        _linguagem_preservada_sem_dsl(json.dumps(estado["pedido"], ensure_ascii=False))
         de_novo = executar_um_ciclo(
             worker_id="worker-ruim-2",
             processador=lambda refs: processar_transporte_simulado(refs, transporte=enviar),

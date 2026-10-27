@@ -23,7 +23,13 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models import AgenteBiAnalise
-from app.services.agente_bi_analisar_service import PROVEDOR_ANTHROPIC, PROVEDOR_SIMULADO
+from app.services.agente_bi_analisar_service import (
+    PROVEDOR_ANTHROPIC,
+    PROVEDOR_SIMULADO,
+    TransferenciaRecusada,
+    governar_representacao,
+    texto_de_cabecalho_transferivel,
+)
 from app.services.agente_bi_calculo_service import CalculoErro, _coagir, calcular_definicao
 from app.services.agente_bi_dashboard_service import consultar_dashboard, filtrar_dashboard, montar_dashboard
 from app.services.agente_bi_definir_service import (
@@ -43,6 +49,7 @@ from app.services.agente_bi_definir_service import (
     _unidade,
 )
 from app.services.agente_bi_perfil_semantico_service import perfilar_dataset
+from app.services.cleiton_ai_data_governance import govern_outbound_content
 from app.services.agente_bi_persistencia_service import (
     AgenteBiErro,
     criar_analise,
@@ -477,15 +484,38 @@ def _reescrever_indicador(definicao, patch, perfil) -> str:
     return "ok"
 
 
+def preparar_contexto_semantico(carregado, texto) -> dict | None:
+    """Representação autorizada da evolução. Não chama o provedor nem altera a rota."""
+    try:
+        candidato = _contexto_minimizado(carregado, texto)
+        autorizado = governar_representacao(
+            candidato,
+            governar=govern_outbound_content,
+            limpeza=frozenset({"nome", "intencao", "nome_arquivo", "nome_aba", "pedido"}),
+            nulas=frozenset({"descricao", "unidade"}),
+        )
+    except (TransferenciaRecusada, KeyError, TypeError):
+        return None
+    payload = autorizado["payload"]
+    original = candidato.get("intencao")
+    obtida = payload.get("intencao") if isinstance(payload, dict) else None
+    if isinstance(original, str) and original.strip() and not (isinstance(obtida, str) and obtida.strip()):
+        return None
+    return payload
+
+
 def _patch_do_modelo(escopo, carregado, texto, transporte):
     from app.services.agente_bi_anthropic_service import chamar_anthropic_governado, preparar_saida_estruturada
 
     from os import getenv
 
-    modelo = (getenv("AGENTE_BI_ANTHROPIC_MODEL") or "").strip()
-    mensagem = json.dumps(_contexto_minimizado(carregado, texto), ensure_ascii=True, sort_keys=True)
-    if _vaza_rotulo(mensagem, carregado["rotulos"]):
+    if _vaza_rotulo(texto, carregado["rotulos"]):
         return None, False, False
+    governado = preparar_contexto_semantico(carregado, texto)
+    if not isinstance(governado, dict) or not (governado.get("pedido") or governado.get("intencao")):
+        return None, False, False
+    modelo = (getenv("AGENTE_BI_ANTHROPIC_MODEL") or "").strip()
+    mensagem = json.dumps(governado, ensure_ascii=True, sort_keys=True)
     esquema = {
         "type": "object",
         "additionalProperties": False,
@@ -529,13 +559,27 @@ def _patch_do_modelo(escopo, carregado, texto, transporte):
 
 
 def _contexto_minimizado(carregado, texto) -> dict:
+    dataset = carregado.get("dataset") if isinstance(carregado.get("dataset"), dict) else {}
+    perfil = carregado.get("perfil") if isinstance(carregado.get("perfil"), dict) else {}
     colunas = []
     for indice, coluna in enumerate(carregado["autorizadas"]):
         colunas.append(
             {
                 "indice": indice,
+                "referencia": {
+                    "arquivo": coluna.get("arquivo"),
+                    "aba": coluna.get("aba"),
+                    "regiao": coluna.get("regiao"),
+                    "indice": coluna.get("indice"),
+                },
                 "papel": coluna.get("dimensao_principal"),
                 "tipos": list(coluna.get("tipos") or []),
+                "evidencias": list(coluna.get("evidencias") or []),
+                "nome": texto_de_cabecalho_transferivel(),
+                "nome_arquivo": None,
+                "nome_aba": None,
+                "descricao": None,
+                "unidade": None,
             }
         )
     indicadores = []
@@ -543,12 +587,23 @@ def _contexto_minimizado(carregado, texto) -> dict:
         if not isinstance(item, dict):
             continue
         medida = item.get("metrica") if isinstance(item.get("metrica"), dict) else {}
+        coluna_definida = medida.get("coluna") if isinstance(medida.get("coluna"), dict) else None
+        unidade = medida.get("unidade") if isinstance(medida.get("unidade"), str) else None
         indicadores.append(
             {
                 "id": item.get("id"),
                 "operacao": medida.get("operacao"),
                 "grafico": item.get("grafico"),
                 "coluna": _indice_autorizado(carregado["autorizadas"], medida.get("coluna")),
+                "referencia": None
+                if coluna_definida is None
+                else {
+                    "arquivo": coluna_definida.get("arquivo"),
+                    "aba": coluna_definida.get("aba"),
+                    "regiao": coluna_definida.get("regiao"),
+                    "indice": coluna_definida.get("indice"),
+                },
+                "unidade_registrada": unidade,
             }
         )
     return {
@@ -556,7 +611,17 @@ def _contexto_minimizado(carregado, texto) -> dict:
         "rotulos": False,
         "valores_de_celula": False,
         "amostras": False,
+        "apto_anthropic": False,
+        "autorizado_para_provedor": False,
+        "transferencia": "bloqueada",
         "pedido": _norm(texto),
+        "intencao": texto if isinstance(texto, str) and texto.strip() else None,
+        "dataset": {
+            "id": dataset.get("id"),
+            "versao": dataset.get("versao"),
+            "impressao": dataset.get("impressao"),
+        },
+        "vinculo_preparacao": perfil.get("vinculo_preparacao"),
         "operacoes": sorted(OPERACOES_EXECUCAO),
         "filtros": sorted(_FILTROS),
         "colunas": colunas,
@@ -747,6 +812,7 @@ def _instrucao() -> str:
             "Acoes: definir_filtro, alterar_periodo, alterar_agrupamento, alterar_indicador, esclarecer.",
             "Nao produza SQL, Python, formula ou codigo.",
             "Use apenas o indice de coluna recebido. Nao invente coluna, metrica, unidade ou relacao.",
+            "Nome e anotacao. A identidade da coluna e a referencia tecnica, nao o nome.",
             "Se a metrica, a unidade, o periodo ou a relacao nao estiver identificada, a acao e esclarecer.",
         ]
     )
@@ -873,6 +939,7 @@ def _por_rotulo(colunas, rotulos, consulta):
 
 
 def _mapa_rotulos(estrutura, colunas) -> dict:
+    """Rótulo local da classificação. A fronteira governada usa outro mapa."""
     mapa = {}
     if not isinstance(estrutura, dict):
         return mapa

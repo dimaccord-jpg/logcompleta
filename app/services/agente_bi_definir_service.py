@@ -11,6 +11,7 @@ e contexto minimizado. Esta etapa não chama o SDK e não abre cobrança.
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 
@@ -28,7 +29,11 @@ from app.services.agente_bi_analisar_service import (
     PROVEDOR_ANTHROPIC,
     PROVEDOR_SIMULADO,
     AnalisarErro,
+    TransferenciaRecusada,
+    governar_representacao,
     montar_contexto,
+    referencias_da_representacao,
+    texto_de_cabecalho_transferivel,
 )
 from app.services.agente_bi_anthropic_service import preparar_saida_estruturada
 from app.services.agente_bi_descoberta_service import CONTRATO_SELECAO
@@ -40,10 +45,8 @@ from app.services.agente_bi_persistencia_service import (
     obter_analise,
 )
 from app.services.cleiton_ai_data_governance import (
-    CONTENT_TYPE_DOCUMENT,
     DECISION_ALLOW,
     govern_outbound_content,
-    governance_result_is_coherent,
 )
 from app.services.cleiton_ai_privacy_classifier import SUPPORTED_PURPOSES
 
@@ -254,6 +257,7 @@ def instrucao_de_rascunho() -> str:
             "Defina os graficos ja selecionados somente com a DSL fechada.",
             "Responda apenas com JSON de uma chave, definicoes, sem texto ao redor e sem markdown.",
             "Nao invente coluna, metrica, unidade, relacao ou significado de negocio.",
+            "Nome de coluna, quando presente, e anotacao. A identidade executavel e arquivo, aba, regiao e indice.",
             "Nao devolva SQL, Python, formula ou qualquer expressao executavel.",
             "Agregacoes: " + ", ".join(catalogo["agregacoes"]) + ".",
             "Par numerico: " + OPERACAO_PAR + ". Graficos: " + ", ".join(catalogo["graficos"]) + ".",
@@ -605,28 +609,25 @@ def definir_selecao(escopo, corpo: dict) -> dict:
     return _publicar(gravada, documento)
 
 
-def preparar_fronteira(perfil: dict, selecao: dict, *, modelo: str = "") -> dict:
+def preparar_fronteira(perfil: dict, selecao: dict, *, modelo: str = "", estrutura=None) -> dict:
     """Prepara instrução, schema e contexto para o adaptador já existente.
 
-    Não cria tentativa, não reserva franquia e não chama o SDK.
+    Não cria tentativa, não reserva franquia e não chama o SDK. A mensagem
+    é a representação aprovada pela governança, não o rascunho anterior a ela.
     """
     contexto = montar_contexto_definir(perfil, selecao)
     _governanca_do_perfil(perfil.get("governanca"))
-    payload = contexto_de_transferencia(contexto)
-    _recusar_sujo(payload)
+    estrutural = contexto_de_transferencia(contexto)
+    _recusar_sujo(estrutural)
+    representacao = _representacao_semantica(contexto, estrutura)
+    if referencias_da_representacao(estrutural) != referencias_da_representacao(representacao):
+        raise DefinirErro("contexto_nao_autorizado")
     if FINALIDADE_TRANSFERENCIA not in SUPPORTED_PURPOSES:
         raise DefinirErro("contexto_nao_autorizado")
-    resultado = govern_outbound_content(
-        payload,
-        purpose=FINALIDADE_TRANSFERENCIA,
-        content_type=CONTENT_TYPE_DOCUMENT,
-        agent="agente_bi",
-        provider="simulado",
-    )
-    if not resultado.issued_by_cleiton or not governance_result_is_coherent(resultado, original=payload):
-        raise DefinirErro("contexto_nao_autorizado")
-    if resultado.decision != DECISION_ALLOW or resultado.safe_content != payload:
-        raise DefinirErro("contexto_nao_autorizado")
+    try:
+        autorizado = governar_representacao(representacao, governar=govern_outbound_content)
+    except TransferenciaRecusada as exc:
+        raise DefinirErro("contexto_nao_autorizado") from exc
     esquema = esquema_rascunho_definir()
     return {
         "liberado": True,
@@ -634,8 +635,34 @@ def preparar_fronteira(perfil: dict, selecao: dict, *, modelo: str = "") -> dict
         "instrucao": instrucao_de_rascunho(),
         "esquema": esquema,
         "saida_estruturada": preparar_saida_estruturada(modelo, esquema),
-        "mensagem": _canonico(payload),
+        "mensagem": _canonico(autorizado["payload"]),
     }
+
+
+def _representacao_semantica(contexto: dict, estrutura) -> dict:
+    """Acrescenta vínculo e anotação sem mudar a cópia persistida da definição.
+
+    Nome de arquivo e de aba permanecem na estrutura local. A representação
+    de transporte conserva as chaves com valor nulo.
+    """
+    del estrutura
+    payload = copy.deepcopy(contexto_de_transferencia(contexto))
+    for coluna in payload["colunas"]:
+        coluna["nome"] = texto_de_cabecalho_transferivel()
+        coluna["descricao"] = None
+        coluna["unidade"] = None
+    for regiao in payload["regioes"]:
+        regiao["nome_arquivo"] = None
+        regiao["nome_aba"] = None
+    dataset = contexto.get("dataset") if isinstance(contexto.get("dataset"), dict) else {}
+    payload["dataset"] = {
+        "id": dataset.get("id"),
+        "versao": dataset.get("versao"),
+        "impressao": dataset.get("impressao"),
+    }
+    payload["vinculo_preparacao"] = contexto.get("vinculo_preparacao")
+    payload["intencao"] = None
+    return payload
 
 
 def argumentos_do_adaptador(fronteira: dict, escopo, *, chave_idempotencia: str) -> dict:
