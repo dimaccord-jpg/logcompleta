@@ -123,6 +123,43 @@ class IntegracaoErro(Exception):
         super().__init__(codigo)
 
 
+def execucao_real_habilitada() -> bool:
+    """Lê a flag já existente do adaptador. Não altera ambiente nem credencial."""
+    from app.services.agente_bi_anthropic_service import _habilitada
+
+    return _habilitada()
+
+
+def intencao_c_ausente(pedido: dict) -> bool:
+    """C está presente e o texto não sobra depois do strip.
+
+    Não lê o significado da frase. Texto curto ou com símbolos continua válido.
+    """
+    if not isinstance(pedido, dict) or "C" not in (pedido.get("modalidades") or []):
+        return False
+    texto = pedido.get("texto")
+    return not isinstance(texto, str) or not texto.strip()
+
+
+def intencao_c_removida(pedido: dict, liberacao: dict) -> bool:
+    """Modalidade C ficou sem a intenção indispensável depois da governança.
+
+    Uma versão minimizada que ainda contém texto segue utilizável. A ausência
+    de texto na modalidade C não é, por si, remoção: isso é pedido inválido.
+    """
+    if not isinstance(pedido, dict) or "C" not in (pedido.get("modalidades") or []):
+        return False
+    texto = pedido.get("texto")
+    if not isinstance(texto, str) or not texto.strip():
+        return False
+    verificacoes = liberacao.get("verificacoes") if isinstance(liberacao, dict) else None
+    if isinstance(verificacoes, list) and "intencao_nao_transportada" in verificacoes:
+        return True
+    payload = liberacao.get("payload") if isinstance(liberacao, dict) else None
+    final = payload.get("intencao") if isinstance(payload, dict) else None
+    return not isinstance(final, str) or not final.strip()
+
+
 def validar_resposta_simulada(contexto: dict, documento: dict) -> dict:
     """Reusa o contrato fechado. Não corrige a proposta e não chama provedor."""
     return validar_saida(contexto, documento)
@@ -176,6 +213,8 @@ def autorizar_transferencia(perfil: dict, contexto: dict, *, estrutura=None) -> 
         verificacoes.append("conteudo_minimizado_revalidado")
     else:
         raise IntegracaoErro("contexto_nao_autorizado")
+    if _referencia_minimizada(contexto, autorizado["payload"]):
+        verificacoes.append("referencia_minimizada")
     return {
         "liberado": True,
         "motivo": MOTIVO_LIBERACAO,
@@ -191,8 +230,14 @@ def abrir_operacao(
     *,
     chave_analise: str,
     rodada: int = 1,
+    chave_idempotencia: str | None = None,
+    chave_recuperacao: str | None = None,
 ) -> dict:
-    """Perfila, autoriza e enfileira uma rodada sem resultado analítico."""
+    """Perfila, autoriza e enfileira uma rodada sem resultado analítico.
+
+    `chave_recuperacao` reencontra o mesmo pedido canônico. O índice único
+    é quem exclui a corrida; o hash sozinho não.
+    """
     perfil = _perfil_ou_erro(escopo, dataset_id)
     estrutura = _estrutura_do_dataset(escopo, dataset_id)
     try:
@@ -203,6 +248,26 @@ def abrir_operacao(
     dataset = perfil.get("dataset") if isinstance(perfil.get("dataset"), dict) else {}
     if dataset.get("id") != int(dataset_id):
         raise IntegracaoErro("identidade_inconsistente")
+    if chave_recuperacao is not None:
+        por_pedido = (
+            AgenteBiAnalise.query.filter_by(
+                usuario_id=escopo.usuario_id,
+                conta_id=escopo.conta_id,
+                franquia_id=escopo.franquia_id,
+                chave_recuperacao=chave_recuperacao,
+            ).one_or_none()
+        )
+        if por_pedido is not None:
+            _exigir_mesmo_pedido(por_pedido, dataset_id, dataset, pedido)
+            return {
+                "analise_id": int(por_pedido.id),
+                "execucao": enfileirar(
+                    escopo,
+                    int(por_pedido.id),
+                    chave_idempotencia=chave_idempotencia,
+                ),
+                "reusada": True,
+            }
     existente = (
         AgenteBiAnalise.query.filter_by(
             usuario_id=escopo.usuario_id,
@@ -215,37 +280,53 @@ def abrir_operacao(
     if existente is not None:
         if int(existente.dataset_id) != int(dataset_id):
             raise IntegracaoErro("identidade_inconsistente")
+        if chave_recuperacao is not None:
+            _exigir_rodada_do_mesmo_pedido(
+                existente,
+                dataset_id,
+                dataset,
+                pedido,
+                chave_recuperacao,
+            )
         return {
             "analise_id": int(existente.id),
-            "execucao": enfileirar(escopo, int(existente.id)),
+            "execucao": enfileirar(
+                escopo,
+                int(existente.id),
+                chave_idempotencia=chave_idempotencia,
+            ),
             "reusada": True,
         }
+    gravacao = {
+        "chave": chave_analise,
+        "rodada": int(rodada),
+        "dataset_id": int(dataset_id),
+        "versao": dataset["versao"],
+        "impressao": dataset["impressao"],
+        "etapa": "descoberta",
+        "estado": "preparada",
+        "contexto": {
+            "contrato": CONTRATO_CONTEXTO_ANALISAR,
+            "vinculo_preparacao": contexto["vinculo_preparacao"],
+            "dataset_id": int(dataset_id),
+        },
+        "regras_negocio": {"catalogo": CATALOGO_CONTRATO, "pedido": pedido},
+        "esclarecimentos": {},
+        "contrato_versao": CONTRATO_ANALISAR,
+    }
+    if chave_recuperacao is not None:
+        gravacao["chave_recuperacao"] = chave_recuperacao
     try:
-        analise = criar_analise(
-            escopo,
-            {
-                "chave": chave_analise,
-                "rodada": int(rodada),
-                "dataset_id": int(dataset_id),
-                "versao": dataset["versao"],
-                "impressao": dataset["impressao"],
-                "etapa": "descoberta",
-                "estado": "preparada",
-                "contexto": {
-                    "contrato": CONTRATO_CONTEXTO_ANALISAR,
-                    "vinculo_preparacao": contexto["vinculo_preparacao"],
-                    "dataset_id": int(dataset_id),
-                },
-                "regras_negocio": {"catalogo": CATALOGO_CONTRATO, "pedido": pedido},
-                "esclarecimentos": {},
-                "contrato_versao": CONTRATO_ANALISAR,
-            },
-        )
+        analise = criar_analise(escopo, gravacao)
     except AgenteBiErro as exc:
         raise IntegracaoErro(_codigo(exc.codigo)) from exc
     return {
         "analise_id": int(analise["id"]),
-        "execucao": enfileirar(escopo, int(analise["id"])),
+        "execucao": enfileirar(
+            escopo,
+            int(analise["id"]),
+            chave_idempotencia=chave_idempotencia,
+        ),
         "reusada": False,
     }
 
@@ -270,6 +351,8 @@ def processar_transporte_simulado(
     if int(referencias.get("dataset_id")) != _dataset_da_analise(linha):
         raise ExecucaoErro("identidade_inconsistente")
     pedido = _pedido_gravado(linha)
+    if autorizado and intencao_c_ausente(pedido):
+        raise ExecucaoErro("pedido_invalido")
     try:
         perfil = _perfil_ou_erro(escopo, int(referencias["dataset_id"]))
         contexto = montar_contexto(perfil, pedido)
@@ -279,7 +362,11 @@ def processar_transporte_simulado(
         raise ExecucaoErro(_codigo(exc.codigo)) from exc
     except AnalisarErro as exc:
         raise ExecucaoErro(_codigo(exc.codigo)) from exc
+    if autorizado and intencao_c_removida(pedido, liberacao):
+        raise ExecucaoErro("intencao_nao_transportada")
     payload = copy.deepcopy(liberacao["payload"])
+    if autorizado:
+        payload["intencoes"] = []
     mensagem = _canonico(payload)
     if autorizado:
         if transporte is not None and not callable(transporte):
@@ -354,6 +441,8 @@ def executar_operacao(
     rodada: int = 1,
     autorizado: bool = False,
     lease_segundos: int | None = None,
+    chave_idempotencia: str | None = None,
+    chave_recuperacao: str | None = None,
 ) -> dict:
     """Abre a rodada e processa somente essa execução.
 
@@ -368,6 +457,8 @@ def executar_operacao(
         pedido,
         chave_analise=chave_analise,
         rodada=rodada,
+        chave_idempotencia=chave_idempotencia,
+        chave_recuperacao=chave_recuperacao,
     )
     execucao_id = int(abertura["execucao"]["id"])
     analise_id = int(abertura["analise_id"])
@@ -612,6 +703,71 @@ def _dataset_da_analise(linha: AgenteBiExecucao) -> int:
     if analise is None or analise.dataset_id is None:
         raise ExecucaoErro("identidade_inconsistente")
     return int(analise.dataset_id)
+
+
+def _referencia_minimizada(contexto: dict, payload: dict) -> bool:
+    """Texto ou fórmula da referência B não saiu íntegro. Coordenada não entra aqui."""
+    if not isinstance(contexto, dict) or "B" not in (contexto.get("modalidades") or []):
+        return False
+    original = contexto.get("referencia_pedida")
+    obtido = payload.get("referencia") if isinstance(payload, dict) else None
+    if not isinstance(original, dict):
+        return obtido is not None
+    if not isinstance(obtido, dict):
+        return True
+    textos_originais = []
+    for item in original.get("afirmacoes") or []:
+        textos_originais.append(item.get("texto") if isinstance(item, dict) else None)
+    textos_originais.extend(original.get("formulas") or [])
+    textos_obtidos = []
+    for item in obtido.get("afirmacoes") or []:
+        textos_obtidos.append(item.get("texto") if isinstance(item, dict) else None)
+    for item in obtido.get("formulas") or []:
+        textos_obtidos.append(item.get("texto") if isinstance(item, dict) else None)
+    return textos_originais != textos_obtidos
+
+
+def _exigir_rodada_do_mesmo_pedido(
+    linha: AgenteBiAnalise,
+    dataset_id: int,
+    dataset: dict,
+    pedido: dict,
+    chave_recuperacao: str,
+) -> None:
+    """Recusa enfileirar a rodada quando ela pertence a outro pedido.
+
+    Sem `chave_recuperacao` o chamador legado segue o reuso anterior.
+    A comparação é a identidade canônica já usada na recuperação.
+    """
+    if linha.chave_recuperacao != chave_recuperacao:
+        raise IntegracaoErro("rodada_existente")
+    try:
+        _exigir_mesmo_pedido(linha, dataset_id, dataset, pedido)
+    except IntegracaoErro as exc:
+        if exc.codigo == "identidade_inconsistente":
+            raise IntegracaoErro("rodada_existente") from exc
+        raise
+
+
+def _exigir_mesmo_pedido(linha: AgenteBiAnalise, dataset_id: int, dataset: dict, pedido: dict) -> None:
+    if int(linha.dataset_id) != int(dataset_id):
+        raise IntegracaoErro("identidade_inconsistente")
+    versao = dataset.get("versao")
+    impressao = dataset.get("impressao")
+    if int(linha.dataset_versao) != int(versao) or linha.dataset_impressao != impressao:
+        raise IntegracaoErro("identidade_inconsistente")
+    gravado = _pedido_da_analise(linha)
+    if gravado is None or _canonico(gravado) != _canonico(pedido):
+        raise IntegracaoErro("identidade_inconsistente")
+
+
+def _pedido_da_analise(linha: AgenteBiAnalise) -> dict | None:
+    try:
+        regras = json.loads(linha.regras_negocio_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    pedido = regras.get("pedido") if isinstance(regras, dict) else None
+    return pedido if isinstance(pedido, dict) else None
 
 
 def _pedido_gravado(linha: AgenteBiExecucao) -> dict:

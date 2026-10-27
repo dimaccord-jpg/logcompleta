@@ -1,14 +1,20 @@
-"""Jornada visível de descoberta do AgenteBI (SCRUM-258).
+"""Jornada visível de descoberta do AgenteBI (SCRUM-258, SCRUM-268).
 
-Reutiliza o contrato `analisar.v1` e o provedor simulado. Não recalcula
-viabilidade, não chama Anthropic, não abre worker e não grava dashboard.
+Reutiliza o contrato `analisar.v1`. Sem execução real habilitada, o provedor
+simulado permanece. Com a execução real, a rodada usa a operação durável já
+existente e só publica o documento persistido e validado. Não recalcula
+viabilidade, não abre worker de infraestrutura e não grava dashboard.
 A seleção aprovada é uma rodada nova, presa ao usuário e à versão do dataset.
 Só entra gráfico que a rodada de descoberta já marcou como viável.
+A seleção local não herda a proveniência da descoberta de origem.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
+from uuid import uuid4
 
 from sqlalchemy import func
 
@@ -17,8 +23,22 @@ from app.models import AgenteBiAnalise, AgenteBiDataset
 from app.services.agente_bi_analisar_service import (
     CATALOGO_CONTRATO,
     CONTRATO_ANALISAR,
+    PROVEDOR_ANTHROPIC,
+    PROVEDOR_SIMULADO,
+    AnalisarErro,
+    _validar_pedido,
     analisar_dataset,
+    montar_contexto,
     provedor_simulado,
+)
+from app.services.agente_bi_execucao_service import LEASE_MAX_SEGUNDOS, ExecucaoErro
+from app.services.agente_bi_integracao_service import (
+    IntegracaoErro,
+    autorizar_transferencia,
+    execucao_real_habilitada,
+    executar_operacao,
+    intencao_c_ausente,
+    intencao_c_removida,
 )
 from app.services.agente_bi_ingestao_service import ingerir_requisicao
 from app.services.agente_bi_perfil_semantico_service import PerfilErro, perfilar_dataset
@@ -28,6 +48,7 @@ from app.services.agente_bi_persistencia_service import (
     AgenteBiErro,
     criar_analise,
     obter_analise,
+    obter_dataset,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,10 +77,17 @@ _TOTAIS = (
 )
 
 
+_REUSO_OPERACAO = frozenset({"conflito_versao", "rodada_existente", "chave_recuperacao_existente"})
+_TENTATIVAS_RODADA = 2
+_CODIGO_PUBLICO = re.compile(r"^[a-z0-9_]{1,40}$")
+_VERIFICACAO_PUBLICA = re.compile(r"^[a-z0-9_]{1,40}$")
+
+
 class DescobertaErro(Exception):
-    def __init__(self, codigo: str, status: int = 422):
+    def __init__(self, codigo: str, status: int = 422, evidencias: list | None = None):
         self.codigo = codigo
         self.status = status
+        self.evidencias = list(evidencias) if evidencias else None
         super().__init__(codigo)
 
 
@@ -114,14 +142,25 @@ def resumir_preparacao(escopo, bruto: dict) -> dict:
     }
 
 
-def descobrir(escopo, corpo: dict) -> dict:
-    """Uma rodada A, B, C ou combinada. O provedor é sempre o simulado local."""
+def descobrir(escopo, corpo: dict, *, transporte=None) -> dict:
+    """Uma rodada A, B, C ou combinada.
+
+    A flag desligada preserva o simulador. A flag ligada usa a operação
+    durável e o adaptador governado, com transporte injetável nos testes.
+    """
     if not isinstance(corpo, dict) or set(corpo) != _CHAVES_PEDIDO:
         raise DescobertaErro("pedido_invalido")
     dataset_id = _identificador(corpo.get("dataset_id"))
     pedido = corpo.get("pedido")
     if dataset_id is None or not isinstance(pedido, dict):
         raise DescobertaErro("pedido_invalido")
+    if not execucao_real_habilitada():
+        return _descobrir_simulado(escopo, dataset_id, pedido)
+    return _descobrir_real(escopo, dataset_id, pedido, transporte=transporte)
+
+
+def _descobrir_simulado(escopo, dataset_id: int, pedido: dict) -> dict:
+    """Rodada local. Não enfileira e não consulta o adaptador."""
     linha = _dataset_no_escopo(escopo, dataset_id)
     gravado = _com_rodada(
         escopo,
@@ -148,6 +187,169 @@ def descobrir(escopo, corpo: dict) -> dict:
         len(resultado.get("sugestoes") or []),
     )
     return _publicar_descoberta(analise, resultado)
+
+
+def _descobrir_real(escopo, dataset_id: int, pedido: dict, *, transporte=None) -> dict:
+    """Opera dentro da requisição pelo coordenador já existente.
+
+    O ciclo adquire lease, confirma o documento na mesma transação e, se a
+    requisição cair no meio, a recuperação da fila não reabre chamada já
+    contabilizada. Pendência não é publicada como análise concluída.
+    """
+    linha = _dataset_no_escopo(escopo, dataset_id)
+    try:
+        pedido_ok = _validar_pedido(pedido)
+    except AnalisarErro as exc:
+        raise DescobertaErro(_codigo_publico(exc.codigo)) from exc
+    if intencao_c_ausente(pedido_ok):
+        raise DescobertaErro("pedido_invalido", 422)
+    try:
+        perfil = perfilar_dataset(escopo, dataset_id)
+        contexto = montar_contexto(perfil, pedido_ok)
+        estrutura = obter_dataset(escopo, dataset_id).get("estrutura")
+        liberacao = autorizar_transferencia(perfil, contexto, estrutura=estrutura)
+    except (IntegracaoErro, AnalisarErro, PerfilErro) as exc:
+        raise DescobertaErro(_codigo_publico(getattr(exc, "codigo", "")), _status_codigo(getattr(exc, "codigo", ""))) from exc
+    if intencao_c_removida(pedido_ok, liberacao):
+        evidencias = _evidencias_publicas(liberacao.get("verificacoes"))
+        if "intencao_nao_transportada" not in evidencias:
+            evidencias.append("intencao_nao_transportada")
+        raise DescobertaErro("intencao_nao_transportada", 422, evidencias=evidencias)
+    identidade = _identidade_operacao(escopo, linha, pedido_ok)
+    try:
+        resultado = _operacao_duravel(
+            escopo,
+            dataset_id,
+            pedido_ok,
+            chave_analise=linha.chave,
+            transporte=transporte,
+            identidade=identidade,
+        )
+    except IntegracaoErro as exc:
+        raise DescobertaErro(_codigo_publico(exc.codigo), _status_codigo(exc.codigo)) from exc
+    except ExecucaoErro as exc:
+        raise DescobertaErro(_codigo_publico(exc.codigo), _status_codigo(exc.codigo)) from exc
+    return _publicar_ciclo(escopo, resultado)
+
+
+def _operacao_duravel(escopo, dataset_id, pedido, *, chave_analise, transporte, identidade):
+    """Tenta a próxima rodada de novo quando outra requisição ocupou o número.
+
+    O limite é o mesmo de `_com_rodada`. Esgotado, o conflito sobe sem
+    devolver a análise do outro pedido.
+    """
+    ultimo = None
+    for _ in range(_TENTATIVAS_RODADA):
+        try:
+            return executar_operacao(
+                escopo,
+                dataset_id,
+                pedido,
+                worker_id=f"descoberta-{escopo.usuario_id}-{uuid4().hex[:12]}",
+                chave_analise=chave_analise,
+                transporte=transporte,
+                rodada=_proxima_rodada(escopo, chave_analise),
+                autorizado=True,
+                lease_segundos=LEASE_MAX_SEGUNDOS,
+                chave_idempotencia=identidade,
+                chave_recuperacao=identidade,
+            )
+        except IntegracaoErro as exc:
+            ultimo = exc
+            if exc.codigo not in _REUSO_OPERACAO:
+                raise
+    raise ultimo
+
+
+def _publicar_ciclo(escopo, resultado: dict) -> dict:
+    ciclo = resultado.get("ciclo") if isinstance(resultado, dict) else None
+    if not isinstance(ciclo, dict):
+        raise DescobertaErro("provedor_indisponivel")
+    if ciclo.get("em_andamento"):
+        raise DescobertaErro("operacao_em_andamento", 409)
+    saida = resultado.get("saida")
+    abertura = resultado.get("abertura") if isinstance(resultado.get("abertura"), dict) else {}
+    if not isinstance(saida, dict):
+        execucao = ciclo.get("execucao") if isinstance(ciclo.get("execucao"), dict) else {}
+        if not execucao and isinstance(abertura.get("execucao"), dict):
+            execucao = abertura["execucao"]
+        codigo = _codigo_publico(execucao.get("ultimo_erro") or "provedor_indisponivel")
+        raise DescobertaErro(codigo, _status_operacao(codigo, execucao.get("estado")))
+    analise_id = abertura.get("analise_id")
+    if isinstance(analise_id, bool) or not isinstance(analise_id, int):
+        raise DescobertaErro("provedor_indisponivel")
+    analise = obter_analise(escopo, int(analise_id))
+    if analise.get("estado") != "concluida":
+        raise DescobertaErro("operacao_em_andamento", 409)
+    if (
+        saida.get("contrato") != CONTRATO_ANALISAR
+        or saida.get("provedor") != PROVEDOR_ANTHROPIC
+        or saida.get("chamada_anthropic") is not True
+        or saida.get("apto_anthropic") is not False
+        or saida.get("contrato_saida_validado") is not True
+    ):
+        raise DescobertaErro("autorizacao_indevida", 403)
+    logger.info(
+        "evento=agente_bi_descoberta usuario_id=%s analise_id=%s dataset_id=%s versao=%s sugestoes=%s provedor=%s",
+        escopo.usuario_id,
+        analise["id"],
+        analise["dataset_id"],
+        analise["versao"],
+        len(saida.get("sugestoes") or []),
+        PROVEDOR_ANTHROPIC,
+    )
+    return _publicar_descoberta(analise, saida)
+
+
+def _identidade_operacao(escopo, dataset: AgenteBiDataset, pedido: dict) -> str:
+    corpo = {
+        "conta_id": int(escopo.conta_id),
+        "franquia_id": int(escopo.franquia_id),
+        "usuario_id": int(escopo.usuario_id),
+        "dataset_id": int(dataset.id),
+        "versao": int(dataset.versao),
+        "impressao": dataset.impressao,
+        "pedido": pedido,
+    }
+    digest = hashlib.sha256(
+        json.dumps(corpo, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    ).hexdigest()
+    return "bi." + digest
+
+
+def _codigo_publico(codigo) -> str:
+    if isinstance(codigo, str) and _CODIGO_PUBLICO.fullmatch(codigo):
+        return codigo
+    return "provedor_indisponivel"
+
+
+def _status_codigo(codigo: str) -> int:
+    publico = _codigo_publico(codigo)
+    if publico in {"autorizacao_indevida", "provedor_nao_autorizado", "admissao_recusada", "isolamento"}:
+        return 403
+    if publico == "nao_encontrado":
+        return 404
+    if publico in _REUSO_OPERACAO:
+        return 409
+    return 422
+
+
+def _status_operacao(codigo: str, estado) -> int:
+    if estado in {"incerta", "adquirida"} or codigo in {"operacao_em_andamento", "efeito_incerto"}:
+        return 409
+    return _status_codigo(codigo)
+
+
+def _evidencias_publicas(valor) -> list[str]:
+    if not isinstance(valor, list):
+        return []
+    saida = []
+    for item in valor:
+        if isinstance(item, str) and _VERIFICACAO_PUBLICA.fullmatch(item) and item not in saida:
+            saida.append(item)
+        if len(saida) >= 16:
+            break
+    return saida
 
 
 def aprovar_selecao(escopo, corpo: dict) -> dict:
@@ -229,7 +431,7 @@ def aprovar_selecao(escopo, corpo: dict) -> dict:
 
 def _com_rodada(escopo, chave: str, montar):
     erro = None
-    for _ in range(2):
+    for _ in range(_TENTATIVAS_RODADA):
         try:
             return montar(_proxima_rodada(escopo, chave))
         except AgenteBiErro as exc:
@@ -269,16 +471,36 @@ def _dataset_no_escopo(escopo, dataset_id: int) -> AgenteBiDataset:
     return linha
 
 
+def _proveniencia_de_descoberta(resultado: dict) -> None:
+    """Aceita descoberta simulada ou Anthropic já validada. Recusa o restante."""
+    if resultado.get("apto_anthropic") is not False or resultado.get("contrato_saida_validado") is not True:
+        raise DescobertaErro("autorizacao_indevida", 403)
+    provedor = resultado.get("provedor")
+    chamada = resultado.get("chamada_anthropic")
+    if provedor == PROVEDOR_SIMULADO and chamada is False:
+        return
+    if provedor == PROVEDOR_ANTHROPIC and chamada is True:
+        return
+    raise DescobertaErro("autorizacao_indevida", 403)
+
+
 def _resultado_de_descoberta(analise: dict) -> dict:
-    if analise.get("etapa") != "descoberta" or analise.get("contrato_versao") != CONTRATO_ANALISAR:
+    """Lê uma descoberta concluída.
+
+    O simulador permanece na etapa descoberta. A fila durável marca a mesma
+    análise como execucao ao adquirir o lease. O contrato gravado continua
+    sendo analisar.v1; cálculo e definição usam outro contrato.
+    """
+    if analise.get("contrato_versao") != CONTRATO_ANALISAR:
+        raise DescobertaErro("analise_indisponivel")
+    if analise.get("etapa") not in {"descoberta", "execucao"}:
         raise DescobertaErro("analise_indisponivel")
     if analise.get("estado") != "concluida":
         raise DescobertaErro("analise_indisponivel")
     resultado = analise.get("resultado")
     if not isinstance(resultado, dict) or resultado.get("contrato") != CONTRATO_ANALISAR:
         raise DescobertaErro("analise_indisponivel")
-    if resultado.get("chamada_anthropic") is not False or resultado.get("apto_anthropic") is not False:
-        raise DescobertaErro("autorizacao_indevida", 403)
+    _proveniencia_de_descoberta(resultado)
     if not isinstance(resultado.get("sugestoes"), list) or not isinstance(resultado.get("perguntas"), list):
         raise DescobertaErro("analise_indisponivel")
     if not isinstance(resultado.get("modalidades"), list) or not isinstance(resultado.get("vinculo_preparacao"), str):

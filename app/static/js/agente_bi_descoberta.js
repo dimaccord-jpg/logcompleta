@@ -91,7 +91,7 @@
     limite_processamento: "A preparação excedeu o limite de processamento.",
     limite_contrato_persistencia: "Os dados preparados não couberam na persistência.",
     conteudo_nao_permitido: "O conteúdo não pode ser armazenado.",
-    pedido_invalido: "A combinação de modalidades não foi aceita.",
+    pedido_invalido: "O pedido não foi aceito. Na modalidade C, escreva a intenção.",
     limite_graficos: "A seleção passa de seis gráficos.",
     sugestao_nao_executavel: "Só gráficos viáveis entram na seleção aprovada.",
     sugestao_inexistente: "Uma sugestão escolhida não pertence a esta rodada.",
@@ -100,7 +100,10 @@
     analise_indisponivel: "A rodada de descoberta não pode ser aprovada.",
     selecao_invalida: "A seleção não foi aceita.",
     provedor_indisponivel: "A descoberta não pôde ser concluída.",
-    contexto_nao_autorizado: "O contexto desta versão não autoriza a descoberta."
+    contexto_nao_autorizado: "O contexto desta versão não autoriza a descoberta.",
+    intencao_nao_transportada: "A intenção não pôde ser enviada. Reformule o pedido.",
+    operacao_em_andamento: "A descoberta ainda está em processamento. Envie de novo para recuperar a mesma operação.",
+    efeito_incerto: "A descoberta não foi confirmada. Envie de novo para recuperar a mesma operação."
   };
 
   arquivo.type = "file";

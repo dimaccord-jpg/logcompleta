@@ -3,7 +3,9 @@
 Endpoints autenticados e isolados por conta, franquia e usuário dono.
 A flag desligada responde como recurso inexistente. A ingestão de XLSX/CSV
 exige uma segunda flag, desligada por padrão, e não chama IA.
-A descoberta visível reutiliza o contrato analisar.v1 com o provedor simulado.
+A descoberta visível reutiliza o contrato analisar.v1. Sem execução real
+habilitada, o provedor continua simulado. Com ela, a operação durável
+publica só o resultado persistido.
 A definição analítica reutiliza a seleção aprovada, sem chamada faturável.
 O cálculo dos indicadores é local, determinístico e também sem chamada faturável.
 A consulta e o filtro do dashboard releem essa memória, ou repetem o mesmo executor,
@@ -16,6 +18,7 @@ Anthropic governado.
 from __future__ import annotations
 
 import logging
+import re
 from functools import wraps
 
 from flask import Blueprint, jsonify, request
@@ -44,11 +47,24 @@ from app.services.cleiton_operacao_autorizacao_service import (
 agente_bi_api_bp = Blueprint("agente_bi_api", __name__, url_prefix="/api/agente-bi")
 logger = logging.getLogger(__name__)
 _MAX_CORPO_BYTES = MAX_JSON_BYTES * 3
+_CODIGO_PUBLICO_ERRO = re.compile(r"^[a-z0-9_]{1,40}$")
 _BLOCOS_CONTRATO = ("contexto", "resultado", "regras_negocio", "esclarecimentos")
 
 
 def _erro(codigo: str, status: int):
     return jsonify({"ok": False, "codigo": codigo}), status
+
+
+def _erro_descoberta(exc):
+    corpo = {"ok": False, "codigo": exc.codigo}
+    evidencias = getattr(exc, "evidencias", None)
+    if (
+        isinstance(evidencias, list)
+        and evidencias
+        and all(isinstance(item, str) and _CODIGO_PUBLICO_ERRO.fullmatch(item) for item in evidencias)
+    ):
+        corpo["verificacoes"] = list(evidencias)
+    return jsonify(corpo), exc.status
 
 
 def _abrir():
@@ -357,7 +373,7 @@ def post_descoberta(escopo: EscopoAgenteBi):
     try:
         return jsonify(descobrir(escopo, _corpo_json())), 201
     except DescobertaErro as exc:
-        return _erro(exc.codigo, exc.status)
+        return _erro_descoberta(exc)
     except AnalisarErro as exc:
         return _erro(exc.codigo, _status_analisar(exc.codigo))
     except PerfilErro as exc:
