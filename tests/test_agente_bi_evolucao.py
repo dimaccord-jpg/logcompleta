@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal
 
 import pytest
@@ -19,7 +19,7 @@ from tests.test_agente_bi_analisar import SENTINELA
 from tests.test_agente_bi_calculo import _calcular, _coluna, _gravar, _indicador, _ref
 from tests.test_agente_bi_definir import _jornada
 from tests.test_agente_bi_ingestao import _cliente as _cliente_ingestao
-from tests.test_agente_bi_ingestao import _entrar
+from tests.test_agente_bi_ingestao import _entrar, _xlsx
 
 PRECISAO = Context(prec=28, rounding=ROUND_HALF_EVEN)
 
@@ -717,3 +717,90 @@ def test_api_continuidade_e_tipos_invalidos(app, monkeypatch):
     assert invalido.status_code == 422, invalido.get_data(as_text=True)
     assert invalido.get_json()["codigo"] == "alteracao_invalida"
     assert adaptador.chamadas == 1
+
+
+_PEDIDO_SEMANTICO_COM_CABECALHO = "quero ver a tendencia de beta"
+
+
+def test_pedido_semantico_com_cabecalho_esclarece_interpretacao_indisponivel(ctx):
+    _franquia, escopo, painel = _painel("evolucao.cabecalho@test.com", "evolucao-cabecalho")
+    quantidade = AgenteBiDashboard.query.count()
+    analises = AgenteBiAnalise.query.count()
+
+    resposta = _evoluir(escopo, painel, _PEDIDO_SEMANTICO_COM_CABECALHO)
+
+    assert resposta["situacao"] == "esclarecimento"
+    assert resposta["esclarecimento"]["motivo"] == "interpretacao_indisponivel"
+    assert resposta["esclarecimento"]["pergunta"] == (
+        "Esse pedido precisa de interpretação e o adaptador governado não está disponível. Cite a coluna e a operação."
+    )
+    assert resposta["chamada_anthropic"] is False
+    assert resposta["cobranca"] is False
+    assert resposta["via"] == "nenhuma"
+    assert resposta["patch"] is None
+    assert resposta["dashboard"]["id"] == painel["dashboard"]["id"]
+    assert AgenteBiDashboard.query.count() == quantidade
+    assert AgenteBiAnalise.query.count() == analises
+    assert consultar_dashboard(escopo, painel["dashboard"]["id"])["consulta"]["graficos"][0]["resultado"] == "25.25"
+
+
+def test_pedido_semantico_com_cabecalho_nao_aciona_transporte_anthropic(ctx):
+    _franquia, escopo, painel = _painel("evolucao.transporte@test.com", "evolucao-transporte")
+    chamadas = {"n": 0}
+
+    def transporte(_pedido):
+        chamadas["n"] += 1
+        raise AssertionError("transporte")
+
+    antes_tentativas = IaChamadaTentativa.query.count()
+    antes_consumo = IaConsumoEvento.query.count()
+    resposta = _evoluir(escopo, painel, _PEDIDO_SEMANTICO_COM_CABECALHO, transporte=transporte)
+
+    assert chamadas["n"] == 0
+    assert resposta["chamada_anthropic"] is False
+    assert resposta["cobranca"] is False
+    assert resposta["esclarecimento"]["motivo"] == "interpretacao_indisponivel"
+    assert IaChamadaTentativa.query.count() == antes_tentativas
+    assert IaConsumoEvento.query.count() == antes_consumo
+
+
+def test_agrupamento_fora_da_regiao_autorizada_permanece_403(ctx):
+    conteudo = _xlsx(
+        {
+            "movimento": [
+                ["alfa", "beta", "quando", "qtd", "valor"],
+                [SENTINELA, "norte", date(2024, 3, 1), 10, 10.5],
+                ["K200", "sul", date(2024, 3, 2), 4, 4.25],
+                [SENTINELA, "norte", date(2024, 3, 3), 10, 10.5],
+            ],
+            "externa": [
+                ["destino", "peso"],
+                ["leste", 1],
+                ["oeste", 2],
+                ["norte", 3],
+            ],
+        }
+    )
+    _usuario, _franquia, escopo, perfil, pacote, _aprovada = _jornada(
+        "evolucao.regiao@test.com",
+        "evolucao-regiao",
+        conteudo,
+    )
+    valor = _coluna(perfil, dimensao_principal="valor", aba=0)
+    pacote_um = _indicador(pacote, "soma", leitura="indicador_de_medida")
+    pacote_um["graficos"][0]["medida"] = _ref(valor)
+    documento = definir(perfil, pacote_um)
+    salva = _gravar(escopo, pacote["id"], documento)
+    calculo = _calcular(escopo, salva["id"])
+    painel = montar_dashboard(escopo, {"analise_id": calculo["calculo"]["id"]})
+    quantidade = AgenteBiDashboard.query.count()
+    analises = AgenteBiAnalise.query.count()
+
+    with pytest.raises(EvolucaoErro) as erro:
+        _evoluir(escopo, painel, "agrupe por destino")
+
+    assert erro.value.codigo == "nao_autorizada"
+    assert erro.value.status == 403
+    assert AgenteBiDashboard.query.count() == quantidade
+    assert AgenteBiAnalise.query.count() == analises
+    assert consultar_dashboard(escopo, painel["dashboard"]["id"])["consulta"]["graficos"][0]["resultado"] == "25.25"

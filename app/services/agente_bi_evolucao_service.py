@@ -485,7 +485,7 @@ def _patch_do_modelo(escopo, carregado, texto, transporte):
     modelo = (getenv("AGENTE_BI_ANTHROPIC_MODEL") or "").strip()
     mensagem = json.dumps(_contexto_minimizado(carregado, texto), ensure_ascii=True, sort_keys=True)
     if _vaza_rotulo(mensagem, carregado["rotulos"]):
-        raise EvolucaoErro("nao_autorizada", 403)
+        return None, False, False
     esquema = {
         "type": "object",
         "additionalProperties": False,
