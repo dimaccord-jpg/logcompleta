@@ -17,6 +17,7 @@ o versionamento já existente.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 
 from flask import request
@@ -24,7 +25,13 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models import AgenteBiAnalise
-from app.services.agente_bi_calculo_service import CalculoErro, calcular_definicao
+from app.services.agente_bi_calculo_service import (
+    CalculoErro,
+    _coagir,
+    _conferir_parametros,
+    _resolver_parametros,
+    calcular_definicao,
+)
 from app.services.agente_bi_dashboard_service import consultar_dashboard, montar_dashboard
 from app.services.agente_bi_definir_service import CONTRATO_DEFINIR, _granularidade_temporal, _unidade
 from app.services.agente_bi_leitura_service import LeituraErro, reconhecer_definicao_v2
@@ -89,17 +96,18 @@ def atualizar_requisicao(escopo, dashboard_id: int) -> dict:
     """Lê o envio já aceito pela ingestão e atualiza o dashboard do escopo."""
     from app.services.agente_bi_ingestao_service import _ler_requisicao
 
-    arquivos, _chave, limites = _ler_requisicao(campos_form=frozenset({"chave", "modo"}))
+    arquivos, _chave, limites = _ler_requisicao(campos_form=frozenset({"chave", "modo", "parametros"}))
     return atualizar_dashboard(
         escopo,
         dashboard_id,
         modo=request.form.get("modo"),
         arquivos=arquivos,
         limites=limites,
+        parametros=_parametros_do_formulario(request.form.get("parametros")),
     )
 
 
-def atualizar_dashboard(escopo, dashboard_id: int, *, modo, arquivos, limites=None) -> dict:
+def atualizar_dashboard(escopo, dashboard_id: int, *, modo, arquivos, limites=None, parametros=None) -> dict:
     """Recalcula o dashboard se, e somente se, o dado novo permanece compatível."""
     if modo not in _MODOS:
         raise AtualizacaoErro("payload_invalido")
@@ -137,6 +145,7 @@ def atualizar_dashboard(escopo, dashboard_id: int, *, modo, arquivos, limites=No
     perfil_candidato = perfilar_preparacao(candidata)
     _exigir_semantica(perfil_base, perfil_candidato, colunas, regioes, relacoes, metricas)
     _exigir_rotulos(dataset["estrutura"], preparacao.get("estrutura"), regioes)
+    efetivos = _parametros_da_visao(definicoes, parametros)
 
     gravado = persistir_preparacao(escopo, dataset["chave"], candidata)
     novo = gravado["dataset"]
@@ -167,10 +176,16 @@ def atualizar_dashboard(escopo, dashboard_id: int, *, modo, arquivos, limites=No
     try:
         calculado = calcular_definicao(
             escopo,
-            {"analise_id": definicao_nova["id"], "relacoes_autorizadas": sorted(relacoes)},
+            {
+                "analise_id": definicao_nova["id"],
+                "relacoes_autorizadas": sorted(relacoes),
+                "parametros": efetivos,
+            },
         )
     except CalculoErro as exc:
         raise AtualizacaoErro(exc.codigo, exc.status) from exc
+    if _grafico_obrigatorio_bloqueado(definicoes, calculado):
+        raise AtualizacaoErro("informar_parametro")
     montado = montar_dashboard(escopo, {"analise_id": calculado["calculo"]["id"]})
     logger.info(
         "evento=agente_bi_dataset_atualizado usuario_id=%s dashboard_id=%s modo=%s recalculado=1 versao=%s",
@@ -212,6 +227,101 @@ def _resposta(*, modo, recalculado, reutilizado, definicao_origem_id, definicao_
         "dashboard": painel,
         "consulta": consulta,
     }
+
+
+def _parametros_do_formulario(bruto):
+    """Lê o JSON já estruturado da visão corrente. Ausência não inventa valor."""
+    if bruto is None:
+        return None
+    if not isinstance(bruto, str) or not bruto.strip() or len(bruto) > 4_000:
+        raise AtualizacaoErro("parametro_inconsistente")
+    try:
+        valor = json.loads(bruto)
+    except (json.JSONDecodeError, ValueError):
+        raise AtualizacaoErro("parametro_inconsistente") from None
+    if not isinstance(valor, dict):
+        raise AtualizacaoErro("parametro_inconsistente")
+    return valor
+
+
+def _parametros_da_visao(definicoes, informados) -> dict:
+    """Encaminha só parâmetros declarados e coeríveis. Não remove filtro nem inventa valor."""
+    if informados is None:
+        informados = {}
+    if not isinstance(informados, dict) or any(not isinstance(nome, str) or not nome for nome in informados):
+        raise AtualizacaoErro("parametro_inconsistente")
+    try:
+        _conferir_parametros(definicoes, informados)
+    except CalculoErro as exc:
+        raise AtualizacaoErro(exc.codigo, exc.status) from exc
+    declarados = _tipos_declarados(definicoes)
+    efetivos = {}
+    for nome, valor in informados.items():
+        try:
+            _coagir(declarados[nome], valor)
+        except (ArithmeticError, TypeError, ValueError):
+            raise AtualizacaoErro("parametro_inconsistente") from None
+        efetivos[nome] = valor
+    if any(nome not in efetivos for nome in _parametros_exigidos(definicoes)):
+        raise AtualizacaoErro("informar_parametro")
+    for item in definicoes:
+        if not isinstance(item, dict):
+            continue
+        try:
+            _resolver_parametros(item, efetivos)
+        except CalculoErro as exc:
+            raise AtualizacaoErro(exc.codigo, exc.status) from exc
+    return efetivos
+
+
+def _tipos_declarados(definicoes) -> dict:
+    tipos = {}
+    for item in definicoes:
+        if not isinstance(item, dict):
+            continue
+        for parametro in item.get("parametros") or []:
+            if isinstance(parametro, dict) and isinstance(parametro.get("nome"), str):
+                tipos[parametro["nome"]] = parametro.get("tipo")
+    return tipos
+
+
+def _parametros_exigidos(definicoes) -> set:
+    nomes = set()
+    for item in definicoes:
+        if not isinstance(item, dict):
+            continue
+        for parametro in item.get("parametros") or []:
+            if (
+                isinstance(parametro, dict)
+                and parametro.get("obrigatorio") is True
+                and isinstance(parametro.get("nome"), str)
+            ):
+                nomes.add(parametro["nome"])
+        for filtro in item.get("filtros") or []:
+            if not isinstance(filtro, dict):
+                continue
+            for chave in ("parametro", "parametro_fim"):
+                nome = filtro.get(chave)
+                if isinstance(nome, str) and nome:
+                    nomes.add(nome)
+    return nomes
+
+
+def _grafico_obrigatorio_bloqueado(definicoes, calculado) -> bool:
+    memoria = calculado.get("calculo", {}).get("resultado") if isinstance(calculado, dict) else None
+    indicadores = memoria.get("indicadores") if isinstance(memoria, dict) else None
+    if not isinstance(indicadores, list):
+        return True
+    por_id = {item.get("id"): item for item in indicadores if isinstance(item, dict)}
+    for definicao in definicoes:
+        if not isinstance(definicao, dict) or not _parametros_exigidos([definicao]):
+            continue
+        indicador = por_id.get(definicao.get("id"))
+        if not isinstance(indicador, dict):
+            return True
+        if indicador.get("status") == "bloqueado" and indicador.get("motivo") == "informar_parametro":
+            return True
+    return False
 
 
 def _calculo_do_painel(escopo, painel) -> dict:

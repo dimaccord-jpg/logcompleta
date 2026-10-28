@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -521,12 +523,179 @@ def test_rota_permanece_fechada_sem_a_flag_de_ingestao(app, monkeypatch):
     assert resposta.status_code == 404
 
 
+def _painel_filtrado(email, slug):
+    from app.services.agente_bi_definir_service import definir
+    from app.services.agente_bi_evolucao_service import evoluir_dashboard
+    from tests.test_agente_bi_calculo import _coluna, _gravar, _indicador, _ref
+    from tests.test_agente_bi_definir import _jornada
+
+    _usuario, _franquia, escopo, perfil, pacote, _aprovada = _jornada(email, slug)
+    valor = _coluna(perfil, dimensao_principal="valor", aba=0)
+    pacote_um = _indicador(pacote, "soma", leitura="indicador_de_medida")
+    pacote_um["graficos"][0]["medida"] = _ref(valor)
+    documento = definir(perfil, pacote_um)
+    salva = _gravar(escopo, pacote["id"], documento)
+    calculo = _calcular(escopo, salva["id"])
+    painel = montar_dashboard(escopo, {"analise_id": calculo["calculo"]["id"]})
+    assert _soma(painel["consulta"]) == "25.25"
+    filtrado = evoluir_dashboard(escopo, painel["dashboard"]["id"], {"texto": "filtre beta igual a sul"})
+    assert filtrado["situacao"] == "aplicada", filtrado.get("esclarecimento")
+    assert filtrado["chamada_anthropic"] is False
+    assert set(filtrado["parametros"].values()) == {"sul"}
+    assert _soma(filtrado["consulta"]) == "4.25"
+    return escopo, painel, filtrado
+
+
+def test_atualizacao_filtrada_encaminha_parametros_e_preserva_revisoes(ctx, caplog):
+    escopo, painel, filtrado = _painel_filtrado("atualizacao.filtro@test.com", "atualizacao-filtro")
+    caplog.set_level(logging.INFO)
+    antes_tentativas = IaChamadaTentativa.query.count()
+    antes_consumo = IaConsumoEvento.query.count()
+    antes = _contagens(escopo)
+    antigo_id = painel["dashboard"]["id"]
+    filtrado_id = filtrado["dashboard"]["id"]
+    parametros = filtrado["parametros"]
+
+    resultado = atualizar_dashboard(
+        escopo,
+        filtrado_id,
+        modo="substituir",
+        arquivos=_arquivos(_compativel()),
+        parametros=parametros,
+    )
+
+    assert resultado["contrato"] == "atualizacao.v1"
+    assert resultado["recalculado"] is True
+    assert resultado["chamada_anthropic"] is False
+    assert resultado["ia_calculo"] is False
+    assert "parametros" not in resultado
+    assert _soma(resultado["consulta"]) == "4.25"
+    assert _painel_soma(resultado["consulta"]["graficos"])["elegiveis"] == 1
+    assert all(item.get("motivo") != "informar_parametro" for item in resultado["consulta"]["graficos"])
+    assert resultado["versao"] == painel["consulta"]["versao"] + 1
+    nova = obter_analise(escopo, resultado["definicao_id"])["resultado"]
+    assert any(item.get("filtros") for item in nova["definicoes"])
+    assert "sul" not in json.dumps(nova, ensure_ascii=False)
+    assert "sul" not in db.session.get(AgenteBiDashboard, resultado["dashboard"]["id"]).definicoes_json
+    assert "sul" not in "\n".join(
+        registro.getMessage()
+        for registro in caplog.records
+        if registro.name.startswith("app.services.agente_bi_")
+    )
+    datasets, _analises, paineis = _contagens(escopo)
+    assert datasets == antes[0] + 1
+    assert paineis == antes[2] + 1
+    db.session.remove()
+    assert _soma(consultar_dashboard(escopo, antigo_id)["consulta"]) == "25.25"
+    assert _soma(consultar_dashboard(escopo, filtrado_id)["consulta"]) == "4.25"
+    assert consultar_dashboard(escopo, resultado["dashboard"]["id"])["consulta"]["versao"] == resultado["versao"]
+    assert IaChamadaTentativa.query.count() == antes_tentativas
+    assert IaConsumoEvento.query.count() == antes_consumo
+
+
+def test_atualizacao_filtrada_sem_parametros_recusa_publicacao(ctx):
+    escopo, painel, filtrado = _painel_filtrado("atualizacao.sem.param@test.com", "atualizacao-sem-param")
+    antes_tentativas = IaChamadaTentativa.query.count()
+    antes = _contagens(escopo)
+    filtrado_id = filtrado["dashboard"]["id"]
+
+    with pytest.raises(AtualizacaoErro) as ausente:
+        _atualizar(escopo, filtrado_id, _compativel(), "substituir")
+    assert ausente.value.codigo == "informar_parametro"
+    assert ausente.value.status == 422
+
+    with pytest.raises(AtualizacaoErro) as estranho:
+        atualizar_dashboard(
+            escopo,
+            filtrado_id,
+            modo="substituir",
+            arquivos=_arquivos(_compativel()),
+            parametros={"nao_declarado": "sul"},
+        )
+    assert estranho.value.codigo == "parametro_inconsistente"
+
+    assert _contagens(escopo) == antes
+    assert _soma(consultar_dashboard(escopo, filtrado_id)["consulta"]) == "4.25"
+    assert _soma(consultar_dashboard(escopo, painel["dashboard"]["id"])["consulta"]) == "25.25"
+    assert IaChamadaTentativa.query.count() == antes_tentativas
+    publicados = [
+        item
+        for item in consultar_dashboard(escopo, filtrado_id)["consulta"]["graficos"]
+        if item.get("motivo") == "informar_parametro" and item.get("status") == "bloqueado"
+    ]
+    assert publicados == []
+
+
+def test_api_atualizacao_filtrada_falha_fechada_e_recalcula_com_parametro(app, monkeypatch):
+    client = _cliente_ingestao(app, monkeypatch)
+    with app.app_context():
+        escopo, _painel, filtrado = _painel_filtrado("atualizacao.api.filtro@test.com", "atualizacao-api-filtro")
+        usuario_id = escopo.usuario_id
+        filtrado_id = filtrado["dashboard"]["id"]
+        parametros = filtrado["parametros"]
+        antes = _contagens(escopo)
+        antes_tentativas = IaChamadaTentativa.query.count()
+    _entrar(client, usuario_id)
+
+    def envio(parametros=None):
+        dados = {
+            "modo": "substituir",
+            "arquivos": (
+                io.BytesIO(_compativel()),
+                "movimento.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        }
+        if parametros is not None:
+            dados["parametros"] = parametros
+        return dados
+
+    recusa = client.post(
+        f"/api/agente-bi/dashboards/{filtrado_id}/atualizacao",
+        data=envio(),
+        content_type="multipart/form-data",
+    )
+    assert recusa.status_code == 422
+    assert recusa.get_json()["codigo"] == "informar_parametro"
+    assert "sul" not in recusa.get_data(as_text=True)
+    invalido = client.post(
+        f"/api/agente-bi/dashboards/{filtrado_id}/atualizacao",
+        data=envio("{"),
+        content_type="multipart/form-data",
+    )
+    assert invalido.status_code == 422
+    assert invalido.get_json()["codigo"] == "parametro_inconsistente"
+    with app.app_context():
+        assert _contagens(escopo) == antes
+        assert _soma(consultar_dashboard(escopo, filtrado_id)["consulta"]) == "4.25"
+    resposta = client.post(
+        f"/api/agente-bi/dashboards/{filtrado_id}/atualizacao",
+        data=envio(json.dumps(parametros)),
+        content_type="multipart/form-data",
+    )
+    assert resposta.status_code == 201
+    corpo = resposta.get_json()
+    assert corpo["contrato"] == "atualizacao.v1"
+    assert corpo["recalculado"] is True
+    assert corpo["chamada_anthropic"] is False
+    assert "parametros" not in corpo
+    assert _soma(corpo["consulta"]) == "4.25"
+    assert '"sul"' not in resposta.get_data(as_text=True)
+    with app.app_context():
+        assert _soma(consultar_dashboard(escopo, filtrado_id)["consulta"]) == "4.25"
+        assert IaChamadaTentativa.query.count() == antes_tentativas
+
+
 def test_fontes_nao_chamam_modelo_nem_leem_imagem():
     servico = (ROOT / "app" / "services" / "agente_bi_atualizacao_service.py").read_text(encoding="utf-8")
     ingestao = (ROOT / "app" / "services" / "agente_bi_ingestao_service.py").read_text(encoding="utf-8")
     script = (ROOT / "app" / "static" / "js" / "agente_bi_dashboard.js").read_text(encoding="utf-8")
     assert "chamar_anthropic" not in servico
     assert "chamar_anthropic" not in script
+    assert "def _classificar(" not in servico
+    assert "def _classificar(" not in script
+    assert not any(linha.strip() == "import re" for linha in servico.splitlines())
+    assert not any(linha.strip() == "import re" for linha in script.splitlines())
     assert "PIL" not in servico
     assert "ocr" not in servico.lower()
     assert "persistir: bool = True" in ingestao

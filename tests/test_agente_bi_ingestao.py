@@ -586,6 +586,15 @@ def test_modulos_nao_chamam_ia_rede_nem_cobranca():
     ):
         fonte = fonte_sem_docstring_de_modulo(ROOT / relativo)
         assert "import " in fonte
+        assert "def _classificar(" not in fonte
+        assert not any(
+            linha.strip().startswith("_classificar(") or " _classificar(" in f" {linha}"
+            for linha in fonte.splitlines()
+        )
+        if relativo == "app/agente_bi_api_routes.py":
+            _assert_re_so_valida_codigo_interno(fonte)
+        else:
+            assert not any(linha.strip() == "import re" for linha in fonte.splitlines())
         fonte = fonte.lower()
         for termo in (
             "anthropic",
@@ -598,10 +607,27 @@ def test_modulos_nao_chamam_ia_rede_nem_cobranca():
             "cleide_upload",
         ):
             assert termo not in fonte
-        assert not any(linha.strip() == "import re" for linha in fonte.splitlines())
     fonte_ingestao = (ROOT / "app" / "services" / "agente_bi_ingestao_service.py").read_text(encoding="utf-8").lower()
     assert "cpf" not in fonte_ingestao
     assert "criar_dataset" in fonte_ingestao
+
+
+def _assert_re_so_valida_codigo_interno(fonte: str) -> None:
+    """`import re` nas rotas só valida código interno. Não classifica intenção humana."""
+    linhas = [linha.strip() for linha in fonte.splitlines()]
+    assert "import re" in linhas
+    compilacoes = [
+        linha
+        for linha in linhas
+        if "re.compile" in linha
+        or "re.search" in linha
+        or "re.match" in linha
+        or "re.findall" in linha
+        or "re.sub" in linha
+        or "re.fullmatch(" in linha
+    ]
+    assert compilacoes == ['_CODIGO_PUBLICO_ERRO = re.compile(r"^[a-z0-9_]{1,40}$")']
+    assert any("_CODIGO_PUBLICO_ERRO.fullmatch(" in linha for linha in linhas)
 
 
 def test_preparacao_reutiliza_dataset_sem_releitura_obrigatoria(ctx):

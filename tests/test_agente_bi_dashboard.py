@@ -402,6 +402,7 @@ def _documento_browser(html):
           this.destroy = function () {};
         };
         window.__evolucaoPosts = [];
+        window.__atualizacaoPosts = [];
         window.fetch = function (input, opcoes) {
           var url = String(input);
           var metodo = (opcoes && opcoes.method) || "GET";
@@ -436,6 +437,23 @@ def _documento_browser(html):
                 situacao: "aplicada",
                 parametros: { faixa: "sul" },
                 dashboard: { id: 8, analise_id: 10, chave: "painel-fretes", revisao: 2 },
+                consulta: consultaFiltrada()
+              };
+            }
+          } else if (metodo === "POST" && url.indexOf("/atualizacao") !== -1) {
+            var informados = null;
+            if (opcoes && opcoes.body && typeof opcoes.body.get === "function") {
+              informados = opcoes.body.get("parametros");
+            }
+            window.__atualizacaoPosts.push(informados);
+            if (!informados) {
+              corpo = { ok: false, codigo: "informar_parametro" };
+            } else {
+              corpo = {
+                ok: true,
+                recalculado: true,
+                chamada_anthropic: false,
+                dashboard: { id: 8, analise_id: 10, chave: "painel-fretes", revisao: 4 },
                 consulta: consultaFiltrada()
               };
             }
@@ -1089,4 +1107,402 @@ def test_pagina_de_detalhe_abre_so_a_tabela_do_grafico(monkeypatch):
         assert not any(item["metodo"] == "POST" for item in nossas)
         relevantes = [erro for erro in erros if "$ is not defined" not in erro]
         assert relevantes == []
+        browser.close()
+
+
+def _documento_selecao(html, selecao_inicial=None):
+    css = (ROOT / "app" / "static" / "css" / "agente_bi.css").read_text(encoding="utf-8")
+    tema = (ROOT / "app" / "static" / "css" / "agentefrete-theme.css").read_text(encoding="utf-8")
+    menu = (ROOT / "app" / "static" / "js" / "agente_bi.js").read_text(encoding="utf-8")
+    descoberta = (ROOT / "app" / "static" / "js" / "agente_bi_descoberta.js").read_text(encoding="utf-8")
+    painel = (ROOT / "app" / "static" / "js" / "agente_bi_dashboard.js").read_text(encoding="utf-8")
+    html = re.sub(r"<link\b[^>]*>", "", html, flags=re.I)
+    html = re.sub(r"<script\b[^>]*\bsrc\s*=[^>]*>\s*</script>", "", html, flags=re.I)
+    html = html.replace("</head>", f"<style>{tema}\n{css}</style></head>", 1)
+    html = html.replace(
+        "<head>",
+        """<head><script>
+        window.__bi = [];
+        window.__publicarSelecao = false;
+        window.__selecaoId = 16;
+        window.__selecaoInicial = __SELECAO_INICIAL__;
+        window.__segurarAnalises = false;
+        window.__liberarAnalises = [];
+        window.Chart = function (canvas, config) {
+          canvas.setAttribute("data-chart-type", config.type);
+          this.destroy = function () {};
+        };
+        window.fetch = function (input, opcoes) {
+          var url = String(input);
+          var metodo = (opcoes && opcoes.method) || "GET";
+          var registro = { url: url, metodo: metodo };
+          if (opcoes && typeof opcoes.body === "string") registro.corpo = opcoes.body;
+          window.__bi.push(registro);
+          var corpo;
+          if (url.indexOf("/analises") !== -1) {
+            var id = window.__publicarSelecao ? window.__selecaoId : window.__selecaoInicial;
+            corpo = id
+              ? { ok: true, analises: [{ id: id, etapa: "selecao", estado: "concluida", contrato_versao: "selecao.descoberta.v1" }] }
+              : { ok: true, analises: [] };
+            var resposta = { ok: true, status: 200, json: function () { return Promise.resolve(corpo); } };
+            if (window.__segurarAnalises) {
+              return new Promise(function (resolve) {
+                window.__liberarAnalises.push(function () { resolve(resposta); });
+              });
+            }
+            return Promise.resolve(resposta);
+          } else if (url.indexOf("/definicao") !== -1) {
+            corpo = { ok: true, definicao: { id: 21 } };
+          } else if (url.indexOf("/calculo") !== -1) {
+            corpo = { ok: true, calculo: { id: 22 } };
+          } else if (url.indexOf("/montar") !== -1) {
+            corpo = {
+              ok: true,
+              dashboard: { id: 30, analise_id: 22, chave: "painel", revisao: 1 },
+              consulta: {
+                contrato: "dashboard.v1",
+                chamada_anthropic: false,
+                ia_calculo: false,
+                dashboard_id: 30,
+                revisao: 1,
+                chave: "painel",
+                calculo_id: 22,
+                definicao_id: 21,
+                dataset_id: 4,
+                versao: 1,
+                impressao: "a",
+                filtros: [],
+                graficos: [{
+                  ref: "g1", titulo: "indicador-soma", tipo: "indicador", status: "calculado",
+                  motivo: null, operacao: "soma", unidade: "valor", resultado: "25.25",
+                  total: "25.25", serie: [], avisos: [], elegiveis: 1, grupos: 0
+                }]
+              }
+            };
+          } else {
+            corpo = { ok: true, dashboards: [] };
+          }
+          return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(corpo); } });
+        };
+        </script>""",
+        1,
+    )
+    html = html.replace("</body>", f"<script>{menu}\n{descoberta}\n{painel}</script></body>", 1)
+    html = html.replace("__SELECAO_INICIAL__", "null" if selecao_inicial is None else str(int(selecao_inicial)))
+    return html
+
+
+def test_selecao_aprovada_aparece_e_monta_sem_recarregar(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    web = _client(monkeypatch, authenticated=True, permitido=True)
+    monkeypatch.setenv("AGENTE_BI_API_ENABLED", "1")
+    monkeypatch.setenv("AGENTE_BI_INGESTAO_ENABLED", "1")
+    documento = _documento_selecao(web.app.test_client().get("/cleide-bi-frete").get_data(as_text=True))
+    erros = []
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        pagina = browser.new_page(viewport={"width": 1280, "height": 900})
+        pagina.on("pageerror", lambda erro: erros.append(str(erro)))
+        pagina.set_content(documento, wait_until="domcontentloaded")
+        pagina.wait_for_function(
+            """() => {
+              const status = document.getElementById('agente-bi-dashboard-status');
+              const origens = document.getElementById('agente-bi-dashboard-origens');
+              const leituras = window.__bi.filter(item => item.url.indexOf('/analises') !== -1).length;
+              return status && status.textContent.indexOf('Nenhum dashboard salvo') !== -1
+                && origens && origens.childElementCount === 0
+                && leituras >= 2;
+            }"""
+        )
+        pagina.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+        assert pagina.get_by_role("button", name="Montar dashboard da seleção").count() == 0
+        antes = pagina.evaluate("() => window.__bi.filter(item => item.url.indexOf('/analises') !== -1).length")
+        pagina.evaluate("() => { window.__marca = 1; window.__publicarSelecao = true; }")
+        pagina.locator("#agente-bi-aprovada").evaluate("el => el.setAttribute('data-versao', '2')")
+        pagina.get_by_role("button", name="Montar dashboard da seleção").wait_for()
+        depois = pagina.evaluate("() => window.__bi.filter(item => item.url.indexOf('/analises') !== -1).length")
+        assert depois == antes + 1
+        pagina.get_by_role("button", name="Montar dashboard da seleção").click()
+        pagina.wait_for_selector("[data-resultado='25.25']")
+        assert pagina.locator("[data-resultado='25.25']").inner_text() == "25.25"
+        assert pagina.evaluate("() => window.__marca") == 1
+        chamadas = pagina.evaluate("() => window.__bi")
+        posts = [item["url"] for item in chamadas if item["metodo"] == "POST"]
+        assert any("/definicao" in url for url in posts)
+        assert any("/calculo" in url for url in posts)
+        assert any("/montar" in url for url in posts)
+        assert not any("anthropic" in item["url"] for item in chamadas)
+        finais = pagina.evaluate("() => window.__bi.filter(item => item.url.indexOf('/analises') !== -1).length")
+        assert finais == depois
+        relevantes = [erro for erro in erros if "$ is not defined" not in erro]
+        assert relevantes == []
+        browser.close()
+
+
+def test_atualizacao_envia_parametros_da_visao_e_nao_publica_sem_eles(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    web = _client(monkeypatch, authenticated=True, permitido=True)
+    monkeypatch.setenv("AGENTE_BI_API_ENABLED", "1")
+    documento = _documento_browser(web.app.test_client().get("/cleide-bi-frete").get_data(as_text=True))
+    erros = []
+    arquivo = [{
+        "name": "movimento.xlsx",
+        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "buffer": b"PK",
+    }]
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        pagina = browser.new_page(viewport={"width": 1280, "height": 900})
+        pagina.on("pageerror", lambda erro: erros.append(str(erro)))
+        pagina.set_content(documento, wait_until="domcontentloaded")
+        pagina.evaluate("() => document.getElementById('agente-bi-dashboard').setAttribute('data-atualizacao', '1')")
+        pagina.get_by_role("button", name="Abrir revisão 1 de painel-fretes").click()
+        pagina.wait_for_selector("[data-resultado='25.25']")
+        pagina.locator("#agente-bi-dashboard-atualizacao input[type='file']").set_input_files(files=arquivo)
+        pagina.get_by_role("button", name="Atualizar dados").click()
+        pagina.wait_for_selector("#agente-bi-dashboard-erro:not([hidden])")
+        assert "Informe os filtros exigidos pela definição." in pagina.locator("#agente-bi-dashboard-erro").inner_text()
+        assert pagina.locator("[data-ref='g1'] [data-resultado]").inner_text() == "25.25"
+        assert pagina.evaluate("() => window.__atualizacaoPosts") == [None]
+
+        pagina.get_by_role("textbox", name="Pedido para alterar o dashboard").fill("filtre beta igual a sul")
+        pagina.get_by_role("button", name="Aplicar pedido").click()
+        pagina.wait_for_selector("[data-resultado='4.25']")
+        pagina.locator("#agente-bi-dashboard-atualizacao input[type='file']").set_input_files(files=arquivo)
+        pagina.get_by_role("button", name="Atualizar dados").click()
+        pagina.wait_for_function("() => window.__atualizacaoPosts.length === 2")
+        enviado = pagina.evaluate("() => JSON.parse(window.__atualizacaoPosts[1])")
+        assert enviado == {"faixa": "sul"}
+        assert pagina.locator("[data-ref='g1'] [data-resultado]").inner_text() == "4.25"
+        assert pagina.locator("#agente-bi-dashboard-erro").is_hidden()
+        chamadas = pagina.evaluate("() => window.__evolucaoPosts.concat(window.__atualizacaoPosts)")
+        assert all("anthropic" not in json.dumps(item) for item in chamadas)
+        relevantes = [erro for erro in erros if "$ is not defined" not in erro]
+        assert relevantes == []
+        browser.close()
+
+
+def _consultas_analise(pagina):
+    return pagina.evaluate(
+        "() => window.__bi.filter(function (item) { return item.url.indexOf('/analises') !== -1; }).length"
+    )
+
+
+def _id_enviado_na_definicao(pagina):
+    return pagina.evaluate(
+        """() => {
+          var posts = window.__bi.filter(function (item) {
+            return item.metodo === 'POST' && item.url.indexOf('/definicao') !== -1;
+          });
+          return posts.length ? JSON.parse(posts[posts.length - 1].corpo).analise_id : null;
+        }"""
+    )
+
+
+def _erros_de_pagina(erros):
+    return [erro for erro in erros if "$ is not defined" not in erro]
+
+
+def _esperar_sem_selecao(pagina):
+    pagina.wait_for_function(
+        """() => {
+          const status = document.getElementById('agente-bi-dashboard-status');
+          const origens = document.getElementById('agente-bi-dashboard-origens');
+          const leituras = window.__bi.filter(item => item.url.indexOf('/analises') !== -1).length;
+          return status && status.textContent.indexOf('Nenhum dashboard salvo') !== -1
+            && origens && origens.childElementCount === 0
+            && leituras >= 2;
+        }"""
+    )
+
+
+def _publicar_selecao(pagina, selecao_id):
+    pagina.evaluate(
+        "(id) => { window.__publicarSelecao = true; window.__selecaoId = id; }",
+        selecao_id,
+    )
+
+
+def _definir_versao(pagina, versao):
+    pagina.locator("#agente-bi-aprovada").evaluate(
+        "(el, versao) => el.setAttribute('data-versao', versao)",
+        versao,
+    )
+
+
+def _esperar_origem(pagina, consultas):
+    pagina.wait_for_function(
+        """(total) => {
+          const leituras = window.__bi.filter(item => item.url.indexOf('/analises') !== -1).length;
+          const botoes = document.querySelectorAll('#agente-bi-dashboard-origens button');
+          return leituras === total && botoes.length === 1
+            && botoes[0].textContent.indexOf('Montar dashboard da seleção') !== -1;
+        }""",
+        arg=consultas,
+    )
+
+
+def _montar_e_ler_id(pagina):
+    pagina.get_by_role("button", name="Montar dashboard da seleção").click()
+    pagina.wait_for_selector("[data-resultado='25.25']")
+    return _id_enviado_na_definicao(pagina)
+
+
+def _abrir_selecao(monkeypatch, selecao_inicial=None):
+    web = _client(monkeypatch, authenticated=True, permitido=True)
+    monkeypatch.setenv("AGENTE_BI_API_ENABLED", "1")
+    monkeypatch.setenv("AGENTE_BI_INGESTAO_ENABLED", "1")
+    return _documento_selecao(
+        web.app.test_client().get("/cleide-bi-frete").get_data(as_text=True),
+        selecao_inicial=selecao_inicial,
+    )
+
+
+def test_aprovacoes_consecutivas_montam_a_ultima_selecao(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _abrir_selecao(monkeypatch)
+    erros = []
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        pagina = browser.new_page(viewport={"width": 1280, "height": 900})
+        pagina.on("pageerror", lambda erro: erros.append(str(erro)))
+        pagina.set_content(documento, wait_until="domcontentloaded")
+        _esperar_sem_selecao(pagina)
+        base = _consultas_analise(pagina)
+
+        _publicar_selecao(pagina, 16)
+        _definir_versao(pagina, "2")
+        _esperar_origem(pagina, base + 1)
+
+        _publicar_selecao(pagina, 17)
+        _definir_versao(pagina, "3")
+        _esperar_origem(pagina, base + 2)
+        assert _montar_e_ler_id(pagina) == 17
+        assert _consultas_analise(pagina) == base + 2
+        assert _erros_de_pagina(erros) == []
+        browser.close()
+
+
+def test_selecao_restaurada_nao_duplica_consulta_e_monta_a_nova(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _abrir_selecao(monkeypatch, selecao_inicial=15)
+    erros = []
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        pagina = browser.new_page(viewport={"width": 1280, "height": 900})
+        pagina.on("pageerror", lambda erro: erros.append(str(erro)))
+        pagina.set_content(documento, wait_until="domcontentloaded")
+        _esperar_origem(pagina, 2)
+        pagina.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+        assert _consultas_analise(pagina) == 2
+
+        _publicar_selecao(pagina, 17)
+        _definir_versao(pagina, "4")
+        _esperar_origem(pagina, 3)
+        assert _montar_e_ler_id(pagina) == 17
+        assert _consultas_analise(pagina) == 3
+        assert _erros_de_pagina(erros) == []
+        browser.close()
+
+
+def test_mesma_versao_de_dataset_atualiza_a_origem(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _abrir_selecao(monkeypatch)
+    erros = []
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        pagina = browser.new_page(viewport={"width": 1280, "height": 900})
+        pagina.on("pageerror", lambda erro: erros.append(str(erro)))
+        pagina.set_content(documento, wait_until="domcontentloaded")
+        _esperar_sem_selecao(pagina)
+        base = _consultas_analise(pagina)
+
+        _publicar_selecao(pagina, 16)
+        _definir_versao(pagina, "2")
+        _esperar_origem(pagina, base + 1)
+        assert pagina.locator("#agente-bi-aprovada").get_attribute("data-versao") == "2"
+
+        _publicar_selecao(pagina, 18)
+        _definir_versao(pagina, "2")
+        _esperar_origem(pagina, base + 2)
+        assert pagina.locator("#agente-bi-aprovada").get_attribute("data-versao") == "2"
+        assert _montar_e_ler_id(pagina) == 18
+        assert _consultas_analise(pagina) == base + 2
+        assert _erros_de_pagina(erros) == []
+        browser.close()
+
+
+def test_consulta_pendente_oculta_botao_da_selecao_anterior(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _abrir_selecao(monkeypatch, selecao_inicial=15)
+    erros = []
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        pagina = browser.new_page(viewport={"width": 1280, "height": 900})
+        pagina.on("pageerror", lambda erro: erros.append(str(erro)))
+        pagina.set_content(documento, wait_until="domcontentloaded")
+        _esperar_origem(pagina, 2)
+        base = _consultas_analise(pagina)
+
+        pagina.evaluate("() => { window.__segurarAnalises = true; }")
+        _publicar_selecao(pagina, 17)
+        _definir_versao(pagina, "5")
+        assert pagina.locator("#agente-bi-dashboard-origens").evaluate("el => el.childElementCount") == 0
+        assert pagina.get_by_role("button", name="Montar dashboard da seleção").count() == 0
+        assert _consultas_analise(pagina) == base + 1
+
+        pagina.evaluate(
+            "() => { window.__liberarAnalises.splice(0).forEach(function (liberar) { liberar(); }); }"
+        )
+        _esperar_origem(pagina, base + 1)
+        assert _montar_e_ler_id(pagina) == 17
+        assert _consultas_analise(pagina) == base + 1
+        assert _erros_de_pagina(erros) == []
+        browser.close()
+
+
+def test_remover_data_versao_nao_dispara_consulta(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _abrir_selecao(monkeypatch)
+    erros = []
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        pagina = browser.new_page(viewport={"width": 1280, "height": 900})
+        pagina.on("pageerror", lambda erro: erros.append(str(erro)))
+        pagina.set_content(documento, wait_until="domcontentloaded")
+        _esperar_sem_selecao(pagina)
+        base = _consultas_analise(pagina)
+
+        _publicar_selecao(pagina, 16)
+        _definir_versao(pagina, "2")
+        _esperar_origem(pagina, base + 1)
+        depois = _consultas_analise(pagina)
+
+        pagina.locator("#agente-bi-aprovada").evaluate("el => el.removeAttribute('data-versao')")
+        pagina.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+        assert pagina.locator("#agente-bi-aprovada").get_attribute("data-versao") is None
+        assert _consultas_analise(pagina) == depois
+        assert pagina.get_by_role("button", name="Montar dashboard da seleção").count() == 1
+        assert _erros_de_pagina(erros) == []
         browser.close()

@@ -479,6 +479,8 @@
       var dados = new FormData();
       dados.append("modo", selecao.value);
       dados.append("arquivos", campo.files[0]);
+      var vigentes = parametrosVigentes();
+      if (vigentes) dados.append("parametros", JSON.stringify(vigentes));
       ocupar(true);
       limparErro();
       anunciar("Conferindo compatibilidade e recalculando sem IA.");
@@ -494,6 +496,9 @@
           return;
         }
         mostrarConsulta(resposta.corpo);
+        if (vigentes && resposta.corpo.dashboard) {
+          parametrosEmMemoria[chaveRevisao(resposta.corpo.dashboard)] = JSON.parse(JSON.stringify(vigentes));
+        }
         return carregarLista();
       }).catch(function () {
         mostrarErro("");
@@ -575,6 +580,25 @@
     if (!salvos || typeof salvos !== "object" || Array.isArray(salvos)) return null;
     if (!Object.keys(salvos).length) return null;
     return salvos;
+  }
+
+  function parametrosVigentes() {
+    var saida = {};
+    var memoria = parametrosDaRevisao(painelAtual);
+    if (memoria) {
+      Object.keys(memoria).forEach(function (nome) {
+        saida[nome] = memoria[nome];
+      });
+    }
+    if (formulario) {
+      var campos = formulario.querySelectorAll("input, select");
+      for (var i = 0; i < campos.length; i += 1) {
+        var campo = campos[i];
+        if (!campo.name || !campo.value) continue;
+        saida[campo.name] = valorFiltro(campo, campo.getAttribute("data-tipo"));
+      }
+    }
+    return Object.keys(saida).length ? saida : null;
   }
 
   function guardarParametros(corpo) {
@@ -778,11 +802,27 @@
       headers: { Accept: "application/json" }
     }).then(function (resposta) {
       var analises = resposta.corpo && resposta.corpo.analises;
-      if (!resposta.corpo || resposta.corpo.ok !== true || !Array.isArray(analises)) return;
+      if (!resposta.corpo || resposta.corpo.ok !== true || !Array.isArray(analises)) return false;
       desenharOrigens(analises);
+      return !!maisRecente(analises, "selecao", "selecao.descoberta.v1");
     }).catch(function () {
-      return null;
+      return false;
     });
+  }
+
+  function observarAprovacao(jaDisponivel) {
+    var painel = document.getElementById("agente-bi-aprovada");
+    if (!painel || !window.MutationObserver) return;
+    if (!jaDisponivel && painel.getAttribute("data-versao")) {
+      carregarOrigens();
+      return;
+    }
+    var observador = new MutationObserver(function () {
+      if (!painel.getAttribute("data-versao")) return;
+      desenharOrigens([]);
+      carregarOrigens();
+    });
+    observador.observe(painel, { attributes: true, attributeFilter: ["data-versao"] });
   }
 
   function iniciarDetalhe(raizDetalhe) {
@@ -843,7 +883,11 @@
   }
 
   anunciar("Carregando dashboards salvos.");
-  carregarLista().then(carregarOrigens).catch(function () {
+  carregarLista().then(function () {
+    return carregarOrigens();
+  }).then(function (jaDisponivel) {
+    observarAprovacao(jaDisponivel === true);
+  }).catch(function () {
     mostrarErro("");
     anunciar("Não foi possível ler os dashboards salvos.");
   });
