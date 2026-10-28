@@ -3,6 +3,21 @@ from datetime import datetime, timezone
 from flask_login import UserMixin
 from sqlalchemy import event as sa_event
 
+from app.agente_bi_aplicacao_integridade import (
+    CONTRATO_CALCULO_APLICACAO as AGENTE_BI_CONTRATO_CALCULO_APLICACAO,
+    CONTRATO_DEFINICAO_APLICACAO as AGENTE_BI_CONTRATO_DEFINICAO_APLICACAO,
+    CONTRATO_PLANO_APLICACAO as AGENTE_BI_CONTRATO_PLANO_APLICACAO,
+    CONTRATOS_DEFINICAO_ANTERIOR_APLICACAO as AGENTE_BI_CONTRATOS_DEFINICAO_ANTERIOR,
+    ESTADOS_APLICACAO as AGENTE_BI_ESTADOS_APLICACAO,
+    instalar_protecao_aplicacao,
+    recusar_exclusao_aplicacao,
+    recusar_mutacao_aplicacao,
+    sql_anterior_contrato_aplicacao,
+    sql_artefatos_aplicacao,
+    sql_estado_aplicacao,
+    sql_papeis_aplicacao,
+    sql_plano_contrato_aplicacao,
+)
 from app.agente_bi_integridade import INTEIRO_COLUNA_MAX, faixa_inteira, instalar_protecao_agente_bi
 from app.extensions import db
 
@@ -4769,6 +4784,171 @@ class AgenteBiDashboardDataset(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
 
 
+class AgenteBiAplicacao(db.Model):
+    """Identidade durável da aplicação de um plano `patch.definir.v2`.
+
+    Um plano tem uma aplicação. O dashboard publicado continua imutável e a
+    fila de execução continua sendo a operação da análise. Esta linha só
+    guarda a identidade e, quando a publicação termina, as referências.
+    Não armazena filtro, texto livre nem memória de cálculo.
+    """
+
+    __tablename__ = "agente_bi_aplicacao"
+    __table_args__ = (
+        db.UniqueConstraint("plano_id", name="uq_agente_bi_aplicacao_plano"),
+        db.CheckConstraint(sql_estado_aplicacao(), name="ck_agente_bi_aplicacao_estado"),
+        db.CheckConstraint(sql_plano_contrato_aplicacao(), name="ck_agente_bi_aplicacao_plano_contrato"),
+        db.CheckConstraint(
+            sql_anterior_contrato_aplicacao(),
+            name="ck_agente_bi_aplicacao_anterior_contrato",
+        ),
+        db.CheckConstraint(faixa_inteira("revisao_base"), name="ck_agente_bi_aplicacao_revisao_base"),
+        db.CheckConstraint(
+            "revisao_publicada IS NULL OR (" + faixa_inteira("revisao_publicada") + ")",
+            name="ck_agente_bi_aplicacao_revisao_publicada",
+        ),
+        db.CheckConstraint(sql_artefatos_aplicacao(), name="ck_agente_bi_aplicacao_artefatos"),
+        db.CheckConstraint(sql_papeis_aplicacao(), name="ck_agente_bi_aplicacao_papeis"),
+        db.ForeignKeyConstraint(
+            ["plano_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_analise.id",
+                "agente_bi_analise.usuario_id",
+                "agente_bi_analise.conta_id",
+                "agente_bi_analise.franquia_id",
+            ],
+            name="fk_agente_bi_aplicacao_plano",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["definicao_anterior_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_analise.id",
+                "agente_bi_analise.usuario_id",
+                "agente_bi_analise.conta_id",
+                "agente_bi_analise.franquia_id",
+            ],
+            name="fk_agente_bi_aplicacao_anterior",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["definicao_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_analise.id",
+                "agente_bi_analise.usuario_id",
+                "agente_bi_analise.conta_id",
+                "agente_bi_analise.franquia_id",
+            ],
+            name="fk_agente_bi_aplicacao_definicao",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["calculo_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_analise.id",
+                "agente_bi_analise.usuario_id",
+                "agente_bi_analise.conta_id",
+                "agente_bi_analise.franquia_id",
+            ],
+            name="fk_agente_bi_aplicacao_calculo",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            [
+                "dataset_id",
+                "usuario_id",
+                "conta_id",
+                "franquia_id",
+                "dataset_versao",
+                "dataset_impressao",
+            ],
+            [
+                "agente_bi_dataset.id",
+                "agente_bi_dataset.usuario_id",
+                "agente_bi_dataset.conta_id",
+                "agente_bi_dataset.franquia_id",
+                "agente_bi_dataset.versao",
+                "agente_bi_dataset.impressao",
+            ],
+            name="fk_agente_bi_aplicacao_dataset",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["dashboard_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_dashboard.id",
+                "agente_bi_dashboard.usuario_id",
+                "agente_bi_dashboard.conta_id",
+                "agente_bi_dashboard.franquia_id",
+            ],
+            name="fk_agente_bi_aplicacao_painel",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["dashboard_publicado_id", "usuario_id", "conta_id", "franquia_id"],
+            [
+                "agente_bi_dashboard.id",
+                "agente_bi_dashboard.usuario_id",
+                "agente_bi_dashboard.conta_id",
+                "agente_bi_dashboard.franquia_id",
+            ],
+            name="fk_agente_bi_aplicacao_publicado",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["conta_id"],
+            ["conta.id"],
+            name="fk_agente_bi_aplicacao_conta",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["franquia_id"],
+            ["franquia.id"],
+            name="fk_agente_bi_aplicacao_franquia",
+            ondelete="RESTRICT",
+        ),
+        db.ForeignKeyConstraint(
+            ["usuario_id"],
+            ["user.id"],
+            name="fk_agente_bi_aplicacao_usuario",
+            ondelete="RESTRICT",
+        ),
+        db.Index("ix_agente_bi_aplicacao_escopo", "conta_id", "franquia_id", "usuario_id"),
+    )
+
+    ESTADOS = AGENTE_BI_ESTADOS_APLICACAO
+    CONTRATO_PLANO = AGENTE_BI_CONTRATO_PLANO_APLICACAO
+    CONTRATOS_DEFINICAO_ANTERIOR = AGENTE_BI_CONTRATOS_DEFINICAO_ANTERIOR
+    CONTRATO_DEFINICAO = AGENTE_BI_CONTRATO_DEFINICAO_APLICACAO
+    CONTRATO_CALCULO = AGENTE_BI_CONTRATO_CALCULO_APLICACAO
+
+    id = db.Column(db.Integer, primary_key=True)
+    conta_id = db.Column(db.Integer, nullable=False)
+    franquia_id = db.Column(db.Integer, nullable=False)
+    usuario_id = db.Column(db.Integer, nullable=False)
+    plano_id = db.Column(db.Integer, nullable=False)
+    plano_contrato = db.Column(db.String(40), nullable=False)
+    dataset_id = db.Column(db.Integer, nullable=False)
+    dataset_versao = db.Column(db.Integer, nullable=False)
+    dataset_impressao = db.Column(db.String(64), nullable=False)
+    dashboard_id = db.Column(db.Integer, nullable=False)
+    dashboard_chave = db.Column(db.String(80), nullable=False)
+    revisao_base = db.Column(db.Integer, nullable=False)
+    definicao_anterior_id = db.Column(db.Integer, nullable=False)
+    definicao_anterior_contrato = db.Column(db.String(40), nullable=False)
+    estado = db.Column(db.String(20), nullable=False)
+    definicao_id = db.Column(db.Integer, nullable=True)
+    definicao_contrato = db.Column(db.String(40), nullable=True)
+    calculo_id = db.Column(db.Integer, nullable=True)
+    calculo_contrato = db.Column(db.String(40), nullable=True)
+    dashboard_publicado_id = db.Column(db.Integer, nullable=True)
+    revisao_publicada = db.Column(db.Integer, nullable=True)
+    preparada_em = db.Column(db.DateTime, nullable=False)
+    concluida_em = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
+
+
 class AgenteBiDatasetBloco(db.Model):
     """Bloco imutável de um único dataset preparado.
 
@@ -4991,3 +5171,12 @@ sa_event.listen(AgenteBiExecucaoEvento, "before_update", _agente_bi_recusar_even
 sa_event.listen(AgenteBiExecucaoEvento, "before_delete", _agente_bi_recusar_evento)
 sa_event.listen(AgenteBiDataset.metadata, "after_create", _agente_bi_apos_criar_tabelas)
 sa_event.listen(AgenteBiExecucaoEvento.__table__, "after_create", _agente_bi_apos_criar_execucao)
+
+
+def _agente_bi_apos_criar_aplicacao(target, connection, **kwargs):
+    instalar_protecao_aplicacao(connection)
+
+
+sa_event.listen(AgenteBiAplicacao, "before_update", recusar_mutacao_aplicacao)
+sa_event.listen(AgenteBiAplicacao, "before_delete", recusar_exclusao_aplicacao)
+sa_event.listen(AgenteBiDataset.metadata, "after_create", _agente_bi_apos_criar_aplicacao)

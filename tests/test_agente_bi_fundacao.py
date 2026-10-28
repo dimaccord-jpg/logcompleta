@@ -194,7 +194,7 @@ def test_migration_e_head_unico_e_reversivel():
     revisao = script.get_revision("j8k9l0m1n2o3")
     assert revisao is not None
     assert revisao.down_revision == "i7j8k9l0m1n2"
-    assert script.get_heads() == ["m1n2o3p4q5r6"]
+    assert script.get_heads() == ["n2o3p4q5r6s7"]
 
     fonte = _MIGRATION.read_text(encoding="utf-8")
     assert fonte.count("op.create_table(") == 4

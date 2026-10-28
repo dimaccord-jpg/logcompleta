@@ -775,7 +775,7 @@ def test_migration_e_head_da_fila():
     intencao = script.get_revision("m1n2o3p4q5r6")
     assert intencao is not None
     assert intencao.down_revision == "l0m1n2o3p4q5"
-    assert script.get_heads() == ["m1n2o3p4q5r6"]
+    assert script.get_heads() == ["n2o3p4q5r6s7"]
     fonte = (
         __import__("pathlib").Path("migrations/versions/l0m1n2o3p4q5_agente_bi_execucao_duravel.py")
         .read_text(encoding="utf-8")
