@@ -1,11 +1,13 @@
-"""Executor determinístico do AgenteBI (SCRUM-261).
+"""Executor determinístico do AgenteBI (SCRUM-261, SCRUM-269 etapa 3.3).
 
-Calcula definições já validadas em `definir.v1`. Não chama modelo, não
-interpreta SQL ou Python e não grava fila, cobrança ou dashboard.
-A memória de cálculo reutiliza `criar_analise` na etapa `execucao`.
+`calcular_definicao` calcula `definir.v1` e grava a memória na etapa
+`execucao`. `calcular_definicao_v2` é a entrada explícita de `definir.v2`:
+usa o mesmo agregador, não grava revisão e não publica dashboard.
+Não chama modelo e não interpreta SQL ou Python.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import math
 from datetime import date
@@ -14,10 +16,16 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal
 from sqlalchemy import func
 
 from app.extensions import db
-from app.models import AgenteBiAnalise
-from app.services.agente_bi_definir_service import CONTRATO_DEFINIR, DSL_CONTRATO
+from app.models import AgenteBiAnalise, AgenteBiDashboard, AgenteBiDashboardDataset
+from app.services.agente_bi_analisar_service import AnalisarErro, montar_contexto
+from app.services.agente_bi_contrato_v2_service import (
+    CONTRATO_DEFINIR_V2,
+    CONTRATO_PATCH_V2,
+    validar_definicao_evolutiva,
+)
+from app.services.agente_bi_definir_service import CONTRATO_DEFINIR, DSL_CONTRATO, DefinirErro
 from app.services.agente_bi_leitura_service import LeituraErro, reconhecer_definicao_v2
-from app.services.agente_bi_perfil_semantico_service import perfilar_dataset
+from app.services.agente_bi_perfil_semantico_service import PerfilErro, perfilar_dataset
 from app.services.agente_bi_persistencia_service import (
     AgenteBiErro,
     criar_analise,
@@ -28,6 +36,7 @@ from app.services.agente_bi_persistencia_service import (
 logger = logging.getLogger(__name__)
 
 CONTRATO_CALCULO = "calculo.v1"
+CONTRATO_CALCULO_V2 = "calculo.v2"
 CONTRATO_CONTEXTO_CALCULO = "contexto.calculo.v1"
 EXECUTOR = "executor.deterministico.v1"
 MAX_LINHAS = 200_000
@@ -50,6 +59,29 @@ _OPERACOES = frozenset(
 _NUMERICAS = frozenset({"maximo", "media", "minimo", "participacao", "razao", "soma"})
 _CONTAGENS = frozenset({"contagem", "contagem_distinta", "count_if", "par_numerico"})
 _CHAVES_PEDIDO = frozenset({"analise_id", "parametros", "relacoes_autorizadas"})
+_CHAVES_PEDIDO_V2 = frozenset({"definicao", "parametros", "relacoes_autorizadas", "alvos", "plano_id"})
+_CHAVES_IDENTIDADE_V2 = frozenset(
+    {
+        "usuario_id",
+        "conta_id",
+        "franquia_id",
+        "dashboard_id",
+        "dataset_id",
+        "dataset_versao",
+        "dataset_impressao",
+    }
+)
+_ACOES_OBRIGATORIAS = frozenset(
+    {
+        "criar_grafico",
+        "alterar_indicador",
+        "alterar_agrupamento",
+        "alterar_apresentacao",
+        "definir_filtro",
+        "alterar_periodo",
+    }
+)
+_PROJECOES_CONTEXTO = ("colunas", "regioes", "relacoes", "qualidade")
 _PROIBIDAS = frozenset(
     {"sql", "python", "codigo", "expressao", "formula", "script", "query", "exec", "eval", "select", "import"}
 )
@@ -178,6 +210,97 @@ def calcular_definicao(escopo, corpo: dict) -> dict:
     return _publicar(gravada, memoria)
 
 
+def calcular_definicao_v2(escopo, corpo: dict) -> dict:
+    """Calcula `definir.v2` no agregador já usado por `definir.v1`.
+
+    O dataset e a preparação saem do registro da definição anterior. O
+    plano executado é o da análise `patch.definir.v2` indicada por
+    `plano_id`, relida no escopo. O plano declarado no documento não
+    autoriza o cálculo. Não grava análise, revisão ou dashboard. Falha
+    de alvo obrigatório não devolve memória publicável.
+    """
+    pedido = _pedido_v2(corpo)
+    documento = copy.deepcopy(pedido["definicao"])
+    _recusar_executavel(documento)
+    anterior_id, revisao = _referencias_v2(documento)
+    origem = _definicao_no_servidor(escopo, anterior_id)
+    dataset = _dataset_da_definicao(escopo, origem)
+    perfil = _perfil_do_servidor(escopo, dataset, origem)
+    plano, vinculos = _plano_governado(escopo, pedido["plano_id"], documento, origem, dataset, revisao)
+    recomposta = _recompor_governada(plano, origem, perfil, vinculos, revisao)
+    if not _definicao_do_plano(recomposta, documento):
+        raise CalculoErro("proveniencia_inconsistente")
+    calculo_anterior = _memoria_da_revisao(escopo, revisao, dataset, anterior_id)
+    indicadores_anteriores = _indicadores_anteriores(calculo_anterior)
+    definicoes_anteriores = _definicoes_do_registro(origem)
+    contexto = _contexto_do_perfil(perfil)
+    try:
+        validado = validar_definicao_evolutiva(
+            documento,
+            _vinculo_servidor(origem, revisao, definicoes_anteriores, contexto, plano),
+        )
+    except DefinirErro as exc:
+        raise CalculoErro(exc.codigo, exc.status) from exc
+    if validado != documento or validado != recomposta:
+        raise CalculoErro("proveniencia_inconsistente")
+    alvos = _exigir_alvos(validado, pedido["alvos"])
+    _conferir_definicoes_preservadas(validado["definicoes"], definicoes_anteriores, alvos)
+    _conferir_parametros(validado["definicoes"], pedido["parametros"])
+    _conferir_relacoes(perfil.get("relacoes") or [], pedido["relacoes"])
+    faltas = _faltas_de_parametro(validado["definicoes"], alvos, indicadores_anteriores, pedido["parametros"])
+    if faltas:
+        return _esclarecimento_parametro(faltas)
+    _coagir_parametros_informados(validado["definicoes"], pedido["parametros"])
+    entrada_efetiva = {
+        item["id"]: []
+        for item in validado["definicoes"]
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    pares = []
+    for item in validado["definicoes"]:
+        if not isinstance(item, dict):
+            raise CalculoErro("analise_indisponivel")
+        pares.append(
+            (
+                item,
+                _calcular_um(
+                    item,
+                    perfil,
+                    dataset.get("dados_tipados") or [],
+                    dataset.get("estrutura") or {},
+                    pedido["parametros"],
+                    pedido["relacoes"],
+                    dataset,
+                    entrada_efetiva=entrada_efetiva,
+                ),
+            )
+        )
+    _conferir_alvos_calculados(alvos, pares, dataset)
+    _conferir_preservados_calculados(pares, indicadores_anteriores, alvos, dataset)
+    novos = {item["id"] for item in validado["proveniencia"]["graficos_novos"]}
+    indicadores = [
+        _embrulhar_v2(definicao, indicador, _papel_v2(definicao["id"], novos, alvos), pedido["parametros"])
+        for definicao, indicador in pares
+    ]
+    memoria = _memoria_v2(validado, dataset, perfil, pedido["parametros"], alvos, indicadores)
+    logger.info(
+        "evento=agente_bi_calculo_v2 usuario_id=%s definicao_anterior_id=%s dataset_id=%s versao=%s indicadores=%s alvos=%s",
+        escopo.usuario_id,
+        origem["id"],
+        dataset["id"],
+        dataset["versao"],
+        len(indicadores),
+        len(alvos),
+    )
+    return {
+        "ok": True,
+        "persistido": False,
+        "publicado": False,
+        "calculo": memoria,
+        "entrada_efetiva": entrada_efetiva,
+    }
+
+
 def _pedido(corpo) -> dict:
     if not isinstance(corpo, dict) or not set(corpo) <= _CHAVES_PEDIDO or "analise_id" not in corpo:
         raise CalculoErro("payload_invalido")
@@ -210,7 +333,17 @@ def _conferir_relacoes(relacoes, autorizadas) -> None:
         raise CalculoErro("referencia_inexistente")
 
 
-def _calcular_um(definicao, perfil, dados, estrutura, parametros, autorizadas, dataset) -> dict:
+def _calcular_um(
+    definicao,
+    perfil,
+    dados,
+    estrutura,
+    parametros,
+    autorizadas,
+    dataset,
+    *,
+    entrada_efetiva=None,
+) -> dict:
     identidade = _identidade(definicao, dataset)
     if identidade is None:
         return _bloqueado("g0", None, "contrato_invalido", dataset, {})
@@ -238,6 +371,8 @@ def _calcular_um(definicao, perfil, dados, estrutura, parametros, autorizadas, d
         resolvidos = _resolver_parametros(definicao, parametros)
     except CalculoErro as exc:
         return _bloqueado(identidade["id"], definicao, exc.codigo, dataset, censo, juncao=juncao)
+    if entrada_efetiva is not None:
+        entrada_efetiva[identidade["id"]] = _entrada_resolvida(resolvidos)
     linhas = _linhas(dados, definicao["metrica"]["coluna"])
     if len(linhas) > MAX_LINHAS:
         return _bloqueado(identidade["id"], definicao, "limite_volume", dataset, censo, juncao=juncao)
@@ -1106,3 +1241,526 @@ def _proxima_rodada(escopo, chave: str) -> int:
     if atual is None:
         return 1
     return int(atual) + 1
+
+
+def _pedido_v2(corpo) -> dict:
+    if not isinstance(corpo, dict) or not set(corpo) <= _CHAVES_PEDIDO_V2 or not {"definicao", "alvos", "plano_id"} <= set(corpo):
+        raise CalculoErro("payload_invalido")
+    definicao = corpo.get("definicao")
+    if not isinstance(definicao, dict):
+        raise CalculoErro("payload_invalido")
+    if _CHAVES_IDENTIDADE_V2 & set(definicao):
+        raise CalculoErro("autorizacao_indevida", 403)
+    alvos = corpo.get("alvos")
+    if (
+        not isinstance(alvos, list)
+        or any(not isinstance(item, str) or not item for item in alvos)
+        or len(alvos) != len(set(alvos))
+    ):
+        raise CalculoErro("payload_invalido")
+    parametros = corpo.get("parametros", {})
+    if not isinstance(parametros, dict):
+        raise CalculoErro("parametro_inconsistente")
+    relacoes = corpo.get("relacoes_autorizadas", [])
+    if not isinstance(relacoes, list) or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in relacoes):
+        raise CalculoErro("payload_invalido")
+    plano_id = corpo.get("plano_id")
+    if isinstance(plano_id, bool) or not isinstance(plano_id, int) or plano_id < 1:
+        raise CalculoErro("payload_invalido")
+    return {
+        "definicao": definicao,
+        "parametros": parametros,
+        "relacoes": set(relacoes),
+        "alvos": list(alvos),
+        "plano_id": int(plano_id),
+    }
+
+
+def _referencias_v2(documento: dict) -> tuple[int, int]:
+    anterior = documento.get("definicao_anterior_id")
+    revisao = documento.get("revisao_base")
+    if isinstance(anterior, bool) or not isinstance(anterior, int) or anterior < 1:
+        raise CalculoErro("contrato_saida_invalido")
+    if isinstance(revisao, bool) or not isinstance(revisao, int) or revisao < 1:
+        raise CalculoErro("contrato_saida_invalido")
+    return int(anterior), int(revisao)
+
+
+def _plano_governado(escopo, plano_id: int, documento: dict, origem: dict, dataset: dict, revisao: int):
+    """Relê o plano persistido. O plano do documento não prova autorização."""
+    from app.services.agente_bi_execucao_service import ExecucaoErro
+    from app.services.agente_bi_interpretacao_v2_service import (
+        InterpretacaoErro,
+        recuperar_contexto,
+        revalidar_plano_duravel,
+    )
+
+    try:
+        contexto = recuperar_contexto(escopo, int(plano_id))
+    except InterpretacaoErro as exc:
+        raise CalculoErro(exc.codigo, exc.status) from exc
+    linha = db.session.get(AgenteBiAnalise, int(plano_id))
+    if linha is None or not _analise_no_escopo(linha, escopo):
+        raise CalculoErro("nao_encontrado", 404)
+    db.session.refresh(linha)
+    try:
+        registro = obter_analise(escopo, int(plano_id))
+    except AgenteBiErro as exc:
+        raise CalculoErro(exc.codigo, exc.status) from exc
+    if registro.get("estado") != "concluida" or registro.get("contrato_versao") != CONTRATO_PATCH_V2:
+        raise CalculoErro("analise_indisponivel")
+    resultado = registro.get("resultado")
+    if not isinstance(resultado, dict) or resultado.get("situacao") != "proposto":
+        raise CalculoErro("analise_indisponivel")
+    try:
+        plano = revalidar_plano_duravel(linha, resultado)
+    except ExecucaoErro as exc:
+        raise CalculoErro(exc.codigo) from exc
+    if not isinstance(plano, dict) or plano.get("situacao") != "proposto":
+        raise CalculoErro("analise_indisponivel")
+    if (
+        int(origem["id"]) != int(contexto["definicao_anterior_id"])
+        or int(revisao) != int(contexto["revisao_base"])
+    ):
+        raise CalculoErro("proveniencia_inconsistente")
+    esperado = contexto.get("dataset") if isinstance(contexto.get("dataset"), dict) else {}
+    if (
+        int(dataset["id"]) != int(esperado.get("id") or 0)
+        or int(dataset["versao"]) != int(esperado.get("versao") or 0)
+        or dataset["impressao"] != esperado.get("impressao")
+    ):
+        raise CalculoErro("identidade_invalida", 409)
+    if documento.get("plano") != plano:
+        raise CalculoErro("proveniencia_inconsistente")
+    vinculos = contexto.get("parametros")
+    if not isinstance(vinculos, list):
+        raise CalculoErro("parametro_inconsistente")
+    return plano, [dict(item) for item in vinculos]
+
+
+def _analise_no_escopo(linha, escopo) -> bool:
+    return (
+        int(linha.usuario_id) == int(escopo.usuario_id)
+        and int(linha.conta_id) == int(escopo.conta_id)
+        and int(linha.franquia_id) == int(escopo.franquia_id)
+    )
+
+
+def _recompor_governada(plano: dict, origem: dict, perfil: dict, vinculos: list, revisao: int) -> dict:
+    from app.services.agente_bi_composicao_service import ComposicaoErro, compor_definicao
+
+    try:
+        return compor_definicao(
+            plano,
+            {
+                "contrato": origem.get("contrato_versao"),
+                "analise_id": int(origem["id"]),
+                "definicoes": _definicoes_do_registro(origem),
+            },
+            _contexto_do_perfil(perfil),
+            vinculos,
+            {
+                "definicao_anterior_id": int(origem["id"]),
+                "revisao_base": int(revisao),
+                "origem_contrato": origem.get("contrato_versao"),
+            },
+        )
+    except ComposicaoErro as exc:
+        raise CalculoErro(exc.codigo, exc.status) from exc
+
+
+def _definicao_do_plano(recomposta, recebida) -> bool:
+    if not isinstance(recomposta, dict) or not isinstance(recebida, dict):
+        return False
+    if recomposta.get("situacao") == "esclarecimento":
+        return False
+    if recomposta.get("contrato") != CONTRATO_DEFINIR_V2:
+        return False
+    return recomposta == recebida
+
+
+def _entrada_resolvida(resolvidos: dict) -> list:
+    saida = []
+    for nome, par in resolvidos.items():
+        if not isinstance(nome, str) or not isinstance(par, tuple) or len(par) != 2:
+            continue
+        saida.append({"nome": nome, "tipo": par[0], "valor": par[1]})
+    return saida
+
+
+def _definicao_no_servidor(escopo, analise_id: int) -> dict:
+    try:
+        origem = obter_analise(escopo, analise_id)
+    except AgenteBiErro as exc:
+        raise CalculoErro("analise_indisponivel", exc.status) from exc
+    if origem.get("etapa") != "definicao" or origem.get("estado") != "concluida":
+        raise CalculoErro("analise_indisponivel")
+    if origem.get("contrato_versao") not in {CONTRATO_DEFINIR, CONTRATO_DEFINIR_V2}:
+        raise CalculoErro("analise_indisponivel")
+    return origem
+
+
+def _dataset_da_definicao(escopo, origem: dict) -> dict:
+    try:
+        dataset = obter_dataset(escopo, int(origem["dataset_id"]))
+    except (AgenteBiErro, TypeError, ValueError) as exc:
+        raise CalculoErro("identidade_invalida", 409) from exc
+    if dataset["versao"] != origem["versao"] or dataset["impressao"] != origem["impressao"]:
+        raise CalculoErro("identidade_invalida", 409)
+    return dataset
+
+
+def _perfil_do_servidor(escopo, dataset: dict, origem: dict) -> dict:
+    try:
+        perfil = perfilar_dataset(escopo, int(dataset["id"]))
+    except (PerfilErro, AgenteBiErro, TypeError, ValueError) as exc:
+        raise CalculoErro("identidade_invalida", 409) from exc
+    if not isinstance(perfil, dict):
+        raise CalculoErro("identidade_invalida", 409)
+    vinculo = perfil.get("dataset") if isinstance(perfil.get("dataset"), dict) else {}
+    if (
+        vinculo.get("id") != dataset["id"]
+        or vinculo.get("versao") != dataset["versao"]
+        or vinculo.get("impressao") != dataset["impressao"]
+    ):
+        raise CalculoErro("identidade_invalida", 409)
+    _exigir_preparacao(origem, perfil, dataset)
+    return perfil
+
+
+def _exigir_preparacao(origem: dict, perfil: dict, dataset: dict) -> None:
+    preparacao = perfil.get("vinculo_preparacao")
+    if not isinstance(preparacao, str) or not preparacao:
+        raise CalculoErro("identidade_invalida", 409)
+    resultado = origem.get("resultado") if isinstance(origem.get("resultado"), dict) else {}
+    if origem.get("contrato_versao") == CONTRATO_DEFINIR:
+        if (
+            resultado.get("vinculo_preparacao") != preparacao
+            or resultado.get("dataset_id") != dataset["id"]
+            or resultado.get("dataset_versao") != dataset["versao"]
+            or resultado.get("dataset_impressao") != dataset["impressao"]
+        ):
+            raise CalculoErro("identidade_invalida", 409)
+        return
+    contexto = origem.get("contexto") if isinstance(origem.get("contexto"), dict) else {}
+    if contexto.get("vinculo_preparacao") != preparacao:
+        raise CalculoErro("identidade_invalida", 409)
+
+
+def _memoria_da_revisao(escopo, revisao: int, dataset: dict, definicao_anterior_id: int) -> dict:
+    """Lê o cálculo da revisão já publicada. Não cria revisão nem dashboard."""
+    paineis = AgenteBiDashboard.query.filter_by(
+        conta_id=escopo.conta_id,
+        franquia_id=escopo.franquia_id,
+        usuario_id=escopo.usuario_id,
+        revisao=int(revisao),
+    ).all()
+    encontrados = []
+    for painel in paineis:
+        if not _painel_no_dataset(painel, escopo, dataset):
+            continue
+        analise_id = painel.analise_id
+        if isinstance(analise_id, bool) or not isinstance(analise_id, int) or analise_id < 1:
+            continue
+        try:
+            calculo = obter_analise(escopo, int(analise_id))
+        except AgenteBiErro:
+            continue
+        if calculo.get("etapa") != "execucao" or calculo.get("estado") != "concluida":
+            continue
+        if calculo.get("contrato_versao") != CONTRATO_CALCULO:
+            continue
+        if (
+            int(calculo.get("dataset_id") or 0) != int(dataset["id"])
+            or int(calculo.get("versao") or 0) != int(dataset["versao"])
+            or calculo.get("impressao") != dataset["impressao"]
+        ):
+            continue
+        memoria = calculo.get("resultado")
+        origem = memoria.get("origem_definicao_id") if isinstance(memoria, dict) else None
+        if isinstance(origem, bool) or not isinstance(origem, int) or int(origem) != int(definicao_anterior_id):
+            continue
+        encontrados.append(calculo)
+    if len({item["id"] for item in encontrados}) != 1:
+        raise CalculoErro("proveniencia_inconsistente")
+    return encontrados[0]
+
+
+def _painel_no_dataset(painel, escopo, dataset: dict) -> bool:
+    vinculos = AgenteBiDashboardDataset.query.filter_by(dashboard_id=int(painel.id)).all()
+    for item in vinculos:
+        if (
+            int(item.conta_id) == int(escopo.conta_id)
+            and int(item.franquia_id) == int(escopo.franquia_id)
+            and int(item.usuario_id) == int(escopo.usuario_id)
+            and int(item.dataset_id) == int(dataset["id"])
+            and int(item.dataset_versao) == int(dataset["versao"])
+            and item.dataset_impressao == dataset["impressao"]
+        ):
+            return True
+    return False
+
+
+def _indicadores_anteriores(calculo: dict) -> dict:
+    memoria = calculo.get("resultado")
+    indicadores = memoria.get("indicadores") if isinstance(memoria, dict) else None
+    if not isinstance(indicadores, list) or not indicadores:
+        raise CalculoErro("proveniencia_inconsistente")
+    saida = {}
+    for item in indicadores:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item["id"] in saida:
+            raise CalculoErro("proveniencia_inconsistente")
+        saida[item["id"]] = item
+    return saida
+
+
+def _definicoes_do_registro(origem: dict) -> list:
+    resultado = origem.get("resultado")
+    definicoes = resultado.get("definicoes") if isinstance(resultado, dict) else None
+    if not isinstance(definicoes, list) or not definicoes:
+        raise CalculoErro("analise_indisponivel")
+    if any(not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in definicoes):
+        raise CalculoErro("analise_indisponivel")
+    return definicoes
+
+
+def _contexto_do_perfil(perfil: dict) -> dict:
+    try:
+        base = montar_contexto(perfil, {"modalidades": ["A"]})
+    except AnalisarErro as exc:
+        raise CalculoErro("identidade_invalida", 409) from exc
+    return {chave: copy.deepcopy(base[chave]) for chave in _PROJECOES_CONTEXTO}
+
+
+def _vinculo_servidor(origem: dict, revisao: int, definicoes: list, contexto: dict, plano) -> dict:
+    return {
+        "definicao_anterior_id": int(origem["id"]),
+        "revisao_base": int(revisao),
+        "origem_contrato": origem.get("contrato_versao"),
+        "definicoes": [
+            {"id": item["id"], "sugestao_id": item.get("sugestao_id"), "origem": item.get("origem")} for item in definicoes
+        ],
+        "contexto": contexto,
+        "plano": plano,
+    }
+
+
+def _exigir_alvos(documento: dict, recebidos: list) -> list:
+    esperados = _alvos_do_plano(documento)
+    if esperados == recebidos:
+        return list(esperados)
+    if set(esperados) - set(recebidos):
+        raise CalculoErro("alvo_ausente")
+    raise CalculoErro("alvo_substituido")
+
+
+def _alvos_do_plano(documento: dict) -> list:
+    novos = {}
+    for item in documento["proveniencia"]["graficos_novos"]:
+        if not isinstance(item, dict) or not isinstance(item.get("temporario"), str) or not isinstance(item.get("id"), str):
+            raise CalculoErro("proveniencia_inconsistente")
+        novos[item["temporario"]] = item["id"]
+    alvos = []
+    vistos = set()
+    ids = {item["id"] for item in documento["definicoes"] if isinstance(item, dict)}
+    for op in documento["plano"]["operacoes"]:
+        acao = op.get("acao")
+        if acao == "consultar":
+            continue
+        if acao not in _ACOES_OBRIGATORIAS:
+            raise CalculoErro("contrato_saida_invalido")
+        if acao == "criar_grafico":
+            identificador = novos.get(op.get("temporario"))
+        elif op.get("grafico") is not None:
+            identificador = op.get("grafico")
+        else:
+            identificador = novos.get(op.get("temporario"))
+        if not isinstance(identificador, str):
+            raise CalculoErro("alvo_ausente")
+        if identificador in vistos:
+            continue
+        if identificador not in ids:
+            raise CalculoErro("alvo_ausente")
+        vistos.add(identificador)
+        alvos.append(identificador)
+    return alvos
+
+
+def _conferir_definicoes_preservadas(definicoes: list, anteriores: list, alvos: list) -> None:
+    por_id = {item["id"]: item for item in anteriores}
+    obrigatorios = set(alvos)
+    for item in definicoes:
+        if item["id"] in obrigatorios:
+            continue
+        if por_id.get(item["id"]) != item:
+            raise CalculoErro("preservado_inconsistente")
+
+
+def _nomes_ausentes(definicao: dict, informados: dict) -> list:
+    faltam = []
+    for filtro in definicao.get("filtros") or []:
+        if not isinstance(filtro, dict):
+            continue
+        for nome in (filtro.get("parametro"), filtro.get("parametro_fim")):
+            if isinstance(nome, str) and nome not in informados and nome not in faltam:
+                faltam.append(nome)
+    return faltam
+
+
+def _faltas_de_parametro(definicoes: list, alvos: list, anteriores: dict, informados: dict) -> list:
+    obrigatorios = set(alvos)
+    faltas = []
+    for definicao in definicoes:
+        ausentes = _nomes_ausentes(definicao, informados)
+        if not ausentes:
+            continue
+        anterior = anteriores.get(definicao["id"]) or {}
+        if definicao["id"] not in obrigatorios and anterior.get("status") != "calculado":
+            continue
+        for nome in ausentes:
+            faltas.append({"id": definicao["id"], "motivo": "informar_parametro", "parametro": nome})
+    return faltas
+
+
+def _esclarecimento_parametro(faltas: list) -> dict:
+    return {
+        "ok": False,
+        "situacao": "esclarecimento",
+        "motivo": "informar_parametro",
+        "persistido": False,
+        "publicado": False,
+        "esclarecimentos": faltas,
+    }
+
+
+def _coagir_parametros_informados(definicoes: list, informados: dict) -> None:
+    for definicao in definicoes:
+        if _nomes_ausentes(definicao, informados):
+            continue
+        _resolver_parametros(definicao, informados)
+
+
+def _conferir_alvos_calculados(alvos: list, pares: list, dataset: dict) -> None:
+    ids = {definicao["id"] for definicao, _indicador in pares}
+    por_definicao = {definicao["id"]: indicador for definicao, indicador in pares}
+    for alvo in alvos:
+        indicador = por_definicao.get(alvo)
+        if indicador is None:
+            raise CalculoErro("alvo_ausente")
+        retornado = indicador.get("id")
+        if retornado != alvo or indicador.get("definicao_id") != alvo:
+            if isinstance(retornado, str) and retornado in ids and retornado != alvo:
+                raise CalculoErro("alvo_substituido")
+            raise CalculoErro("alvo_ausente")
+        definicao = next(item for item, _indicador in pares if item["id"] == alvo)
+        if indicador.get("operacao") != definicao["metrica"].get("operacao"):
+            raise CalculoErro("alvo_substituido")
+        if indicador.get("status") != "calculado":
+            raise CalculoErro("alvo_bloqueado")
+        if not _mesmo_dataset(indicador, dataset):
+            raise CalculoErro("identidade_invalida", 409)
+
+
+def _conferir_preservados_calculados(pares: list, anteriores: dict, alvos: list, dataset: dict) -> None:
+    obrigatorios = set(alvos)
+    for definicao, indicador in pares:
+        if definicao["id"] in obrigatorios:
+            continue
+        anterior = anteriores.get(definicao["id"])
+        if not isinstance(anterior, dict) or indicador.get("id") != definicao["id"]:
+            raise CalculoErro("preservado_inconsistente")
+        if not _mesmo_dataset(anterior, dataset) or not _mesmo_dataset(indicador, dataset):
+            raise CalculoErro("preservado_inconsistente")
+        if anterior.get("status") == "calculado":
+            if indicador.get("status") != "calculado":
+                raise CalculoErro("preservado_inconsistente")
+            if (
+                indicador.get("resultado") != anterior.get("resultado")
+                or indicador.get("total") != anterior.get("total")
+                or indicador.get("serie") != anterior.get("serie")
+                or indicador.get("operacao") != anterior.get("operacao")
+            ):
+                raise CalculoErro("preservado_inconsistente")
+            continue
+        if anterior.get("status") != "bloqueado":
+            raise CalculoErro("preservado_inconsistente")
+        if indicador.get("status") == "bloqueado":
+            if indicador.get("motivo") != anterior.get("motivo") or indicador.get("operacao") != anterior.get("operacao"):
+                raise CalculoErro("preservado_inconsistente")
+            continue
+        if indicador.get("status") != "calculado":
+            raise CalculoErro("preservado_inconsistente")
+
+
+def _mesmo_dataset(indicador: dict, dataset: dict) -> bool:
+    return (
+        indicador.get("dataset_id") == dataset["id"]
+        and indicador.get("dataset_versao") == dataset["versao"]
+        and indicador.get("dataset_impressao") == dataset["impressao"]
+    )
+
+
+def _papel_v2(identificador: str, novos: set, alvos: list) -> str:
+    if identificador in novos:
+        return "novo"
+    if identificador in set(alvos):
+        return "alterado"
+    return "preservado"
+
+
+def _parametros_do_grafico(definicao: dict, informados: dict) -> list:
+    saida = []
+    vistos = set()
+    for item in definicao.get("parametros") or []:
+        if not isinstance(item, dict):
+            continue
+        nome = item.get("nome")
+        if not isinstance(nome, str) or nome in vistos:
+            continue
+        vistos.add(nome)
+        saida.append({"nome": nome, "tipo": item.get("tipo"), "disponivel": nome in informados})
+    return saida
+
+
+def _parametros_disponiveis(definicoes: list, informados: dict) -> list:
+    saida = []
+    vistos = set()
+    for definicao in definicoes:
+        for item in _parametros_do_grafico(definicao, informados):
+            if not item["disponivel"] or item["nome"] in vistos:
+                continue
+            vistos.add(item["nome"])
+            saida.append({"nome": item["nome"], "tipo": item["tipo"]})
+    return saida
+
+
+def _embrulhar_v2(definicao: dict, indicador: dict, papel: str, informados: dict) -> dict:
+    saida = dict(indicador)
+    saida["definicao_aplicada"] = copy.deepcopy(definicao)
+    saida["dimensoes"] = copy.deepcopy(definicao.get("dimensoes") or [])
+    saida["papel"] = papel
+    saida["parametros_efetivos"] = _parametros_do_grafico(definicao, informados)
+    return saida
+
+
+def _memoria_v2(validado: dict, dataset: dict, perfil: dict, parametros: dict, alvos: list, indicadores: list) -> dict:
+    return {
+        "contrato": CONTRATO_CALCULO_V2,
+        "executor": EXECUTOR,
+        "ia_calculo": False,
+        "chamada_anthropic": False,
+        "persistido": False,
+        "publicado": False,
+        "origem_contrato": CONTRATO_DEFINIR_V2,
+        "definicao_anterior_id": validado["definicao_anterior_id"],
+        "revisao_base": validado["revisao_base"],
+        "ancestral_contrato": validado["origem_contrato"],
+        "dataset_id": dataset["id"],
+        "dataset_versao": dataset["versao"],
+        "dataset_impressao": dataset["impressao"],
+        "vinculo_preparacao": perfil.get("vinculo_preparacao"),
+        "proveniencia": copy.deepcopy(validado["proveniencia"]),
+        "parametros_efetivos": _parametros_disponiveis(validado["definicoes"], parametros),
+        "alvos_obrigatorios": list(alvos),
+        "indicadores": indicadores,
+    }
