@@ -1139,10 +1139,16 @@ def _resultado_confirmado(
 
     Documento ausente continua no contrato legado. Documento `analisar.v1`
     só segue depois da revalidação contra a análise e o dataset persistidos.
+    `patch.definir.v2` só entra quando a análise persistida é desse contrato
+    e o vínculo foi gravado pelo servidor. Qualquer outro documento continua
+    na revalidação de `analisar.v1`.
     """
     if documento is None:
         return _resultado_simulado(codigo, referencias)
-    validado = _documento_analisar_revalidado(analise, referencias, documento)
+    if _analise_de_plano_v2(analise):
+        validado = _documento_plano_v2_revalidado(analise, documento)
+    else:
+        validado = _documento_analisar_revalidado(analise, referencias, documento)
     return json.dumps(
         validado,
         ensure_ascii=False,
@@ -1150,6 +1156,19 @@ def _resultado_confirmado(
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _analise_de_plano_v2(analise: AgenteBiAnalise) -> bool:
+    from app.services.agente_bi_contrato_v2_service import CONTRATO_PATCH_V2
+
+    return analise.contrato_versao == CONTRATO_PATCH_V2
+
+
+def _documento_plano_v2_revalidado(analise: AgenteBiAnalise, documento) -> dict:
+    """Revalida o plano contra o vínculo gravado. Não usa o contrato de análise."""
+    from app.services.agente_bi_interpretacao_v2_service import revalidar_plano_duravel
+
+    return revalidar_plano_duravel(analise, documento)
 
 
 def _documento_analisar_revalidado(analise: AgenteBiAnalise, referencias: dict, documento) -> dict:
