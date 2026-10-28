@@ -48,12 +48,44 @@ from app.services.agente_bi_persistencia_service import (
     AgenteBiErro,
     criar_analise,
     obter_analise,
+    obter_dashboard,
+    obter_dataset,
 )
 from app.services.cleiton_ai_data_governance import govern_outbound_content
 
 logger = logging.getLogger(__name__)
 
 CONTRATO_CONTEXTO_PLANO = "contexto.plano.v2"
+_CHAVES_CANDIDATO = frozenset(
+    {
+        "contrato",
+        "rotulos",
+        "valores_de_celula",
+        "amostras",
+        "apto_anthropic",
+        "autorizado_para_provedor",
+        "transferencia",
+        "intencao",
+        "graficos",
+        "colunas",
+        "associacoes",
+        "parametros_opacos",
+    }
+)
+_CHAVES_PARAMETRO_PUBLICO = frozenset({"referencia", "tipo"})
+_CHAVES_PARAMETRO_INTERNO = frozenset({"referencia", "grafico", "nome", "tipo"})
+_CHAVES_INTERNO = frozenset(
+    {
+        "dashboard_id",
+        "revisao_base",
+        "definicao_anterior_id",
+        "dataset",
+        "identidade",
+        "graficos",
+        "parametros",
+    }
+)
+_CHAVES_DATASET_INTERNO = frozenset({"id", "versao", "impressao"})
 CODIGO_FILA = "plano_v2"
 DEPENDENCIA_POLITICA_PLACAS = (
     "O tratamento de placas em texto livre permanece na governança compartilhada "
@@ -86,7 +118,7 @@ def interpretar_plano(escopo, dashboard_id: int, corpo: dict, *, transporte=None
         raise InterpretacaoErro("interpretacao_indisponivel")
     if transporte is not None and not callable(transporte):
         raise InterpretacaoErro("transporte_real_bloqueado", 403)
-    identidade = _identidade(escopo, carregado, texto)
+    identidade = _identidade(escopo, carregado, pacote["texto"])
     abertura = _abrir(escopo, carregado, pacote, identidade)
     ciclo = _operar(
         escopo,
@@ -181,7 +213,8 @@ def _governar(candidato: dict):
 
 
 def _candidato(pacote: dict) -> dict:
-    return {
+    """Envelope enviado ao adaptador. O contexto interno não entra aqui."""
+    candidato = {
         "contrato": CONTRATO_CONTEXTO_PLANO,
         "rotulos": False,
         "valores_de_celula": False,
@@ -193,8 +226,20 @@ def _candidato(pacote: dict) -> dict:
         "graficos": [{"id": item} for item in pacote["vinculo"]["graficos"]],
         "colunas": [_coluna_publica(item) for item in pacote["vinculo"]["colunas"]],
         "associacoes": list(pacote["associacoes"]),
-        "parametros_opacos": list(pacote["parametros"]),
+        "parametros_opacos": [_parametro_publico(item) for item in pacote["parametros"]],
     }
+    if set(candidato) != _CHAVES_CANDIDATO:
+        raise InterpretacaoErro("contexto_nao_autorizado")
+    return candidato
+
+
+def _parametro_publico(item: dict) -> dict:
+    if not isinstance(item, dict):
+        raise InterpretacaoErro("parametro_inconsistente")
+    chaves = frozenset(item)
+    if chaves not in {_CHAVES_PARAMETRO_PUBLICO, _CHAVES_PARAMETRO_INTERNO}:
+        raise InterpretacaoErro("parametro_inconsistente")
+    return {"referencia": item["referencia"], "tipo": item["tipo"]}
 
 
 def _coluna_publica(coluna: dict) -> dict:
@@ -261,10 +306,18 @@ def _textos(valor):
 
 def _parametros_opacos(carregado) -> list:
     """Referência opaca só para parâmetro declarado na definição carregada."""
+    return [_parametro_publico(item) for item in _vinculos_parametro(carregado.get("definicoes"))]
+
+
+def _vinculos_parametro(definicoes) -> list:
+    """Vínculo tipado já gravado na definição. Não lê o texto e não completa lacuna."""
     saida = []
     numero = 1
-    for item in carregado.get("definicoes") or []:
+    for item in definicoes or []:
         if not isinstance(item, dict):
+            continue
+        grafico = item.get("id")
+        if not _id(grafico, "g"):
             continue
         for parametro in item.get("parametros") or []:
             if not isinstance(parametro, dict):
@@ -276,7 +329,7 @@ def _parametros_opacos(carregado) -> list:
             referencia = f"p{numero}"
             if not _id(referencia, "p"):
                 return saida
-            saida.append({"referencia": referencia, "tipo": tipo})
+            saida.append({"referencia": referencia, "grafico": grafico, "nome": nome, "tipo": tipo})
             numero += 1
     return saida
 
@@ -349,6 +402,167 @@ def _identidade(escopo, carregado, texto: str) -> str:
     return "plano." + digest
 
 
+def _contexto_interno(escopo, carregado, identidade: str) -> dict:
+    """Dados para revalidar revisão e permissão. Não segue ao provedor."""
+    dataset = carregado["dataset"]
+    painel = carregado["painel"]
+    definicao = carregado["definicao"]
+    if (
+        int(painel["usuario_id"]) != int(escopo.usuario_id)
+        or int(painel["conta_id"]) != int(escopo.conta_id)
+        or int(painel["franquia_id"]) != int(escopo.franquia_id)
+    ):
+        raise InterpretacaoErro("autorizacao_indevida", 403)
+    return {
+        "dashboard_id": int(painel["id"]),
+        "revisao_base": int(painel["revisao"]),
+        "definicao_anterior_id": int(definicao["id"]),
+        "dataset": {
+            "id": int(dataset["id"]),
+            "versao": int(dataset["versao"]),
+            "impressao": dataset["impressao"],
+        },
+        "identidade": identidade,
+        "graficos": _graficos(carregado),
+        "parametros": _vinculos_parametro(carregado.get("definicoes")),
+    }
+
+
+def recuperar_contexto(escopo, analise_id: int) -> dict:
+    """Relê o contexto interno e confere escopo, revisão e parâmetros. Não chama provedor."""
+    if isinstance(analise_id, bool) or not isinstance(analise_id, int) or analise_id < 1:
+        raise InterpretacaoErro("payload_invalido")
+    try:
+        registro = obter_analise(escopo, analise_id)
+    except AgenteBiErro as exc:
+        raise InterpretacaoErro(_codigo(exc.codigo), exc.status) from exc
+    if registro.get("contrato_versao") != CONTRATO_PATCH_V2:
+        raise InterpretacaoErro("contrato_saida_invalido")
+    contexto = registro.get("contexto")
+    regras = registro.get("regras_negocio")
+    if not isinstance(contexto, dict) or not isinstance(regras, dict):
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    interno = contexto.get("interno")
+    if not _interno_integro(interno):
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    if registro.get("chave_recuperacao") != interno["identidade"]:
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    painel = _painel_autorizado(escopo, int(interno["dashboard_id"]))
+    if int(painel["revisao"]) != int(interno["revisao_base"]):
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    if (
+        int(painel["usuario_id"]) != int(escopo.usuario_id)
+        or int(painel["conta_id"]) != int(escopo.conta_id)
+        or int(painel["franquia_id"]) != int(escopo.franquia_id)
+    ):
+        raise InterpretacaoErro("autorizacao_indevida", 403)
+    try:
+        definicao = obter_analise(escopo, int(interno["definicao_anterior_id"]))
+        dataset = obter_dataset(escopo, int(registro["dataset_id"]))
+        carregado = _carregar(escopo, int(painel["id"]))
+    except AgenteBiErro as exc:
+        raise InterpretacaoErro("identidade_inconsistente", 409) from exc
+    if int(definicao["id"]) != int(carregado["definicao"]["id"]):
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    if (
+        int(dataset["id"]) != int(interno["dataset"]["id"])
+        or int(dataset["versao"]) != int(interno["dataset"]["versao"])
+        or dataset["impressao"] != interno["dataset"]["impressao"]
+        or int(registro["dataset_id"]) != int(dataset["id"])
+        or int(registro["versao"]) != int(dataset["versao"])
+        or registro["impressao"] != dataset["impressao"]
+        or int(carregado["dataset"]["id"]) != int(dataset["id"])
+        or int(carregado["dataset"]["versao"]) != int(dataset["versao"])
+        or carregado["dataset"]["impressao"] != dataset["impressao"]
+    ):
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    perfil = carregado.get("perfil") if isinstance(carregado.get("perfil"), dict) else {}
+    if perfil.get("vinculo_preparacao") != contexto.get("vinculo_preparacao"):
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    texto = regras.get("texto")
+    if not isinstance(texto, str) or _identidade(escopo, carregado, texto) != interno["identidade"]:
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    graficos_regras = (regras.get("vinculo") or {}).get("graficos") if isinstance(regras.get("vinculo"), dict) else None
+    if graficos_regras != interno["graficos"] or _graficos(carregado) != interno["graficos"]:
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    _conferir_parametros_recuperados(interno["parametros"], carregado.get("definicoes"), regras.get("parametros"))
+    return {
+        "dashboard_id": int(interno["dashboard_id"]),
+        "revisao_base": int(interno["revisao_base"]),
+        "definicao_anterior_id": int(interno["definicao_anterior_id"]),
+        "dataset": {
+            "id": int(dataset["id"]),
+            "versao": int(dataset["versao"]),
+            "impressao": dataset["impressao"],
+        },
+        "identidade": interno["identidade"],
+        "graficos": list(interno["graficos"]),
+        "parametros": [dict(item) for item in interno["parametros"]],
+    }
+
+
+def _interno_integro(valor) -> bool:
+    if not isinstance(valor, dict) or set(valor) != _CHAVES_INTERNO:
+        return False
+    if isinstance(valor.get("dashboard_id"), bool) or not isinstance(valor.get("dashboard_id"), int):
+        return False
+    if isinstance(valor.get("revisao_base"), bool) or not isinstance(valor.get("revisao_base"), int):
+        return False
+    if isinstance(valor.get("definicao_anterior_id"), bool) or not isinstance(valor.get("definicao_anterior_id"), int):
+        return False
+    if not isinstance(valor.get("identidade"), str) or not valor["identidade"].startswith("plano."):
+        return False
+    dataset = valor.get("dataset")
+    if not isinstance(dataset, dict) or set(dataset) != _CHAVES_DATASET_INTERNO:
+        return False
+    if isinstance(dataset.get("id"), bool) or not isinstance(dataset.get("id"), int):
+        return False
+    if isinstance(dataset.get("versao"), bool) or not isinstance(dataset.get("versao"), int):
+        return False
+    if not isinstance(dataset.get("impressao"), str):
+        return False
+    graficos = valor.get("graficos")
+    if not isinstance(graficos, list) or any(not _id(item, "g") for item in graficos):
+        return False
+    parametros = valor.get("parametros")
+    if not isinstance(parametros, list):
+        return False
+    for item in parametros:
+        if not isinstance(item, dict) or set(item) != _CHAVES_PARAMETRO_INTERNO:
+            return False
+        if not _id(item.get("referencia"), "p") or not _id(item.get("grafico"), "g"):
+            return False
+        if not _nome_parametro(item.get("nome")) or item.get("tipo") not in _TIPOS_PARAMETRO:
+            return False
+    return True
+
+
+def _painel_autorizado(escopo, dashboard_id: int) -> dict:
+    try:
+        painel = obter_dashboard(escopo, dashboard_id)
+    except AgenteBiErro as exc:
+        raise InterpretacaoErro("identidade_inconsistente", 409) from exc
+    if (
+        int(painel["usuario_id"]) != int(escopo.usuario_id)
+        or int(painel["conta_id"]) != int(escopo.conta_id)
+        or int(painel["franquia_id"]) != int(escopo.franquia_id)
+    ):
+        raise InterpretacaoErro("autorizacao_indevida", 403)
+    return painel
+
+
+def _conferir_parametros_recuperados(gravados, definicoes, publicos) -> None:
+    atuais = _vinculos_parametro(definicoes)
+    if not isinstance(publicos, list):
+        raise InterpretacaoErro("parametro_inconsistente")
+    referencias = {item["referencia"] for item in atuais if isinstance(item, dict)}
+    for item in gravados:
+        if item.get("referencia") not in referencias:
+            raise InterpretacaoErro("referencia_inexistente")
+    if gravados != atuais or publicos != [_parametro_publico(item) for item in atuais]:
+        raise InterpretacaoErro("parametro_inconsistente")
+
+
 def _abrir(escopo, carregado, pacote: dict, identidade: str) -> dict:
     ultimo = None
     for _ in range(_TENTATIVAS):
@@ -371,7 +585,7 @@ def _abrir_uma(escopo, carregado, pacote: dict, identidade: str) -> dict:
         ).one_or_none()
     )
     if existente is not None:
-        _exigir_mesmo_pedido(existente, carregado, pacote)
+        _exigir_mesmo_pedido(escopo, existente, carregado, pacote)
         return {
             "analise_id": int(existente.id),
             "execucao": enfileirar(escopo, int(existente.id), chave_idempotencia=identidade),
@@ -393,6 +607,7 @@ def _abrir_uma(escopo, carregado, pacote: dict, identidade: str) -> dict:
                 "contexto": {
                     "contrato": CONTRATO_CONTEXTO_PLANO,
                     "vinculo_preparacao": perfil.get("vinculo_preparacao"),
+                    "interno": _contexto_interno(escopo, carregado, identidade),
                 },
                 "regras_negocio": {
                     "contrato": CONTRATO_PATCH_V2,
@@ -415,7 +630,7 @@ def _abrir_uma(escopo, carregado, pacote: dict, identidade: str) -> dict:
     }
 
 
-def _exigir_mesmo_pedido(linha: AgenteBiAnalise, carregado, pacote: dict) -> None:
+def _exigir_mesmo_pedido(escopo, linha: AgenteBiAnalise, carregado, pacote: dict) -> None:
     dataset = carregado["dataset"]
     if int(linha.dataset_id) != int(dataset["id"]) or int(linha.dataset_versao) != int(dataset["versao"]):
         raise InterpretacaoErro("identidade_inconsistente", 409)
@@ -428,6 +643,17 @@ def _exigir_mesmo_pedido(linha: AgenteBiAnalise, carregado, pacote: dict) -> Non
     if not isinstance(regras, dict) or regras.get("texto") != pacote["texto"]:
         raise InterpretacaoErro("identidade_inconsistente", 409)
     if regras.get("vinculo") != pacote["vinculo"]:
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    try:
+        contexto = json.loads(linha.contexto_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise InterpretacaoErro("identidade_inconsistente", 409) from exc
+    if not isinstance(contexto, dict):
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    esperado = _contexto_interno(escopo, carregado, _identidade(escopo, carregado, pacote["texto"]))
+    if contexto.get("interno") != esperado:
+        raise InterpretacaoErro("identidade_inconsistente", 409)
+    if contexto.get("vinculo_preparacao") != (carregado.get("perfil") or {}).get("vinculo_preparacao"):
         raise InterpretacaoErro("identidade_inconsistente", 409)
 
 

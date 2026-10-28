@@ -21,6 +21,7 @@ from app.services.agente_bi_calculo_service import (
     calcular_definicao,
 )
 from app.services.agente_bi_definir_service import CONTRATO_DEFINIR
+from app.services.agente_bi_leitura_service import CONTRATO_DEFINIR_V2, LeituraErro, reconhecer_definicao_v2
 from app.services.agente_bi_persistencia_service import (
     LIMITE_GRAFICOS,
     TIPOS_GRAFICO,
@@ -248,10 +249,16 @@ def _definicao_compativel(escopo, analise, memoria) -> None:
     definicao_id = memoria.get("origem_definicao_id")
     if isinstance(definicao_id, bool) or not isinstance(definicao_id, int) or definicao_id < 1:
         raise AgenteBiErro("analise_indisponivel", 422)
-    if memoria.get("origem_contrato") != CONTRATO_DEFINIR:
+    if memoria.get("origem_contrato") not in {CONTRATO_DEFINIR, CONTRATO_DEFINIR_V2}:
         raise AgenteBiErro("analise_indisponivel", 422)
     origem = obter_analise(escopo, definicao_id)
     if origem.get("etapa") != "definicao" or origem.get("estado") != "concluida":
+        raise AgenteBiErro("analise_indisponivel", 422)
+    try:
+        reconhecer_definicao_v2(escopo, origem)
+    except LeituraErro as exc:
+        raise AgenteBiErro(exc.codigo, exc.status) from exc
+    if memoria.get("origem_contrato") != CONTRATO_DEFINIR:
         raise AgenteBiErro("analise_indisponivel", 422)
     if origem.get("contrato_versao") != CONTRATO_DEFINIR:
         raise AgenteBiErro("analise_indisponivel", 422)

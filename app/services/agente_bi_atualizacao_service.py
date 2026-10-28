@@ -27,6 +27,7 @@ from app.models import AgenteBiAnalise
 from app.services.agente_bi_calculo_service import CalculoErro, calcular_definicao
 from app.services.agente_bi_dashboard_service import consultar_dashboard, montar_dashboard
 from app.services.agente_bi_definir_service import CONTRATO_DEFINIR, _granularidade_temporal, _unidade
+from app.services.agente_bi_leitura_service import LeituraErro, reconhecer_definicao_v2
 from app.services.agente_bi_ingestao_service import IngestaoErro, _fora_do_contrato, ingerir, persistir_preparacao
 from app.services.agente_bi_perfil_semantico_service import perfilar_dataset, perfilar_preparacao
 from app.services.agente_bi_persistencia_service import (
@@ -230,6 +231,10 @@ def _definicao_aprovada(escopo, calculo) -> dict:
     definicao = obter_analise(escopo, definicao_id)
     if definicao.get("etapa") != "definicao" or definicao.get("estado") != "concluida":
         raise AgenteBiErro("analise_indisponivel", 422)
+    try:
+        reconhecer_definicao_v2(escopo, definicao)
+    except LeituraErro as exc:
+        raise AgenteBiErro(exc.codigo, exc.status) from exc
     if definicao.get("contrato_versao") != CONTRATO_DEFINIR:
         raise AgenteBiErro("analise_indisponivel", 422)
     documento = definicao.get("resultado")

@@ -32,6 +32,7 @@ from app.services.agente_bi_analisar_service import (
 )
 from app.services.agente_bi_calculo_service import CalculoErro, _coagir, calcular_definicao
 from app.services.agente_bi_dashboard_service import consultar_dashboard, filtrar_dashboard, montar_dashboard
+from app.services.agente_bi_leitura_service import LeituraErro, reconhecer_definicao_v2
 from app.services.agente_bi_definir_service import (
     CONTRATO_DEFINIR,
     OPERACOES_EXECUCAO,
@@ -235,6 +236,10 @@ def _carregar(escopo, dashboard_id: int) -> dict:
     if isinstance(definicao_id, bool) or not isinstance(definicao_id, int) or definicao_id < 1:
         raise AgenteBiErro("analise_indisponivel", 422)
     definicao = obter_analise(escopo, definicao_id)
+    try:
+        reconhecer_definicao_v2(escopo, definicao)
+    except LeituraErro as exc:
+        raise AgenteBiErro(exc.codigo, exc.status) from exc
     if definicao.get("contrato_versao") != CONTRATO_DEFINIR:
         raise AgenteBiErro("analise_indisponivel", 422)
     documento = definicao.get("resultado")

@@ -16,6 +16,7 @@ from sqlalchemy import func
 from app.extensions import db
 from app.models import AgenteBiAnalise
 from app.services.agente_bi_definir_service import CONTRATO_DEFINIR, DSL_CONTRATO
+from app.services.agente_bi_leitura_service import LeituraErro, reconhecer_definicao_v2
 from app.services.agente_bi_perfil_semantico_service import perfilar_dataset
 from app.services.agente_bi_persistencia_service import (
     AgenteBiErro,
@@ -69,6 +70,10 @@ def calcular_definicao(escopo, corpo: dict) -> dict:
     origem = obter_analise(escopo, pedido["analise_id"])
     if origem.get("etapa") != "definicao" or origem.get("estado") != "concluida":
         raise CalculoErro("analise_indisponivel")
+    try:
+        reconhecer_definicao_v2(escopo, origem)
+    except LeituraErro as exc:
+        raise CalculoErro(exc.codigo, exc.status) from exc
     if origem.get("contrato_versao") != CONTRATO_DEFINIR:
         raise CalculoErro("analise_indisponivel")
     documento = origem.get("resultado")
