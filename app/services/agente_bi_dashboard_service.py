@@ -15,13 +15,15 @@ from app.extensions import db
 from app.models import AgenteBiDashboard
 from app.services.agente_bi_calculo_service import (
     CONTRATO_CALCULO,
+    CONTRATO_CALCULO_V2,
     EXECUTOR,
     CalculoErro,
     _OPERACOES,
     calcular_definicao,
+    recalcular_definicao_v2,
 )
 from app.services.agente_bi_definir_service import CONTRATO_DEFINIR
-from app.services.agente_bi_leitura_service import CONTRATO_DEFINIR_V2, LeituraErro, reconhecer_definicao_v2
+from app.services.agente_bi_leitura_service import CONTRATO_DEFINIR_V2, LeituraErro, exigir_definicao_legivel
 from app.services.agente_bi_persistencia_service import (
     LIMITE_GRAFICOS,
     TIPOS_GRAFICO,
@@ -35,6 +37,7 @@ from app.services.agente_bi_persistencia_service import (
 logger = logging.getLogger(__name__)
 
 CONTRATO_DASHBOARD = "dashboard.v1"
+_CONTRATOS_CALCULO = frozenset({CONTRATO_CALCULO, CONTRATO_CALCULO_V2})
 _CHAVES_MONTAR = frozenset({"analise_id"})
 _CHAVES_FILTRO = frozenset({"parametros", "relacoes_autorizadas", "persistir"})
 _STATUS = frozenset({"bloqueado", "calculado"})
@@ -92,7 +95,10 @@ def filtrar_dashboard(escopo, dashboard_id: int, corpo: dict) -> dict:
     if "relacoes_autorizadas" in corpo:
         pedido["relacoes_autorizadas"] = corpo.get("relacoes_autorizadas")
     try:
-        calculado = calcular_definicao(escopo, pedido)
+        if _definicao_v2(escopo, definicao_id):
+            calculado = recalcular_definicao_v2(escopo, pedido)
+        else:
+            calculado = calcular_definicao(escopo, pedido)
     except CalculoErro as exc:
         raise AgenteBiErro(exc.codigo, exc.status) from exc
     novo_id = calculado["calculo"]["id"]
@@ -222,10 +228,10 @@ def _memoria_autorizada(escopo, analise_id: int):
     analise = obter_analise(escopo, analise_id)
     if analise.get("etapa") != "execucao" or analise.get("estado") != "concluida":
         raise AgenteBiErro("analise_indisponivel", 422)
-    if analise.get("contrato_versao") != CONTRATO_CALCULO:
+    if analise.get("contrato_versao") not in _CONTRATOS_CALCULO:
         raise AgenteBiErro("analise_indisponivel", 422)
     memoria = analise.get("resultado")
-    if not isinstance(memoria, dict) or memoria.get("contrato") != CONTRATO_CALCULO:
+    if not isinstance(memoria, dict) or memoria.get("contrato") != analise.get("contrato_versao"):
         raise AgenteBiErro("analise_indisponivel", 422)
     if memoria.get("executor") != EXECUTOR or memoria.get("ia_calculo") is not False:
         raise AgenteBiErro("analise_indisponivel", 422)
@@ -255,22 +261,38 @@ def _definicao_compativel(escopo, analise, memoria) -> None:
     if origem.get("etapa") != "definicao" or origem.get("estado") != "concluida":
         raise AgenteBiErro("analise_indisponivel", 422)
     try:
-        reconhecer_definicao_v2(escopo, origem)
+        exigir_definicao_legivel(escopo, origem)
     except LeituraErro as exc:
         raise AgenteBiErro(exc.codigo, exc.status) from exc
-    if memoria.get("origem_contrato") != CONTRATO_DEFINIR:
+    if memoria.get("origem_contrato") == CONTRATO_DEFINIR:
+        if origem.get("contrato_versao") != CONTRATO_DEFINIR:
+            raise AgenteBiErro("analise_indisponivel", 422)
+        if not _mesmo_dataset_analise(origem, analise):
+            raise AgenteBiErro("identidade_invalida", 409)
+        documento = origem.get("resultado")
+        if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR:
+            raise AgenteBiErro("analise_indisponivel", 422)
+        return
+    if memoria.get("origem_contrato") != CONTRATO_DEFINIR_V2 or origem.get("contrato_versao") != CONTRATO_DEFINIR_V2:
         raise AgenteBiErro("analise_indisponivel", 422)
-    if origem.get("contrato_versao") != CONTRATO_DEFINIR:
-        raise AgenteBiErro("analise_indisponivel", 422)
-    if (
-        origem["dataset_id"] != analise["dataset_id"]
-        or origem["versao"] != analise["versao"]
-        or origem["impressao"] != analise["impressao"]
-    ):
+    if not _mesmo_dataset_analise(origem, analise):
         raise AgenteBiErro("identidade_invalida", 409)
     documento = origem.get("resultado")
-    if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR:
+    if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR_V2:
         raise AgenteBiErro("analise_indisponivel", 422)
+
+
+def _mesmo_dataset_analise(origem: dict, analise: dict) -> bool:
+    return (
+        origem.get("dataset_id") == analise.get("dataset_id")
+        and origem.get("versao") == analise.get("versao")
+        and origem.get("impressao") == analise.get("impressao")
+    )
+
+
+def _definicao_v2(escopo, definicao_id: int) -> bool:
+    origem = obter_analise(escopo, definicao_id)
+    return origem.get("contrato_versao") == CONTRATO_DEFINIR_V2
 
 
 def _indicadores_autorizados(analise, memoria) -> list[dict]:

@@ -25,16 +25,23 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models import AgenteBiAnalise
+from app.services.agente_bi_analisar_service import AnalisarErro, montar_contexto
 from app.services.agente_bi_calculo_service import (
     CalculoErro,
     _coagir,
     _conferir_parametros,
     _resolver_parametros,
     calcular_definicao,
+    recalcular_definicao_v2,
 )
 from app.services.agente_bi_dashboard_service import consultar_dashboard, montar_dashboard
 from app.services.agente_bi_definir_service import CONTRATO_DEFINIR, _granularidade_temporal, _unidade
-from app.services.agente_bi_leitura_service import LeituraErro, reconhecer_definicao_v2
+from app.services.agente_bi_leitura_service import (
+    CONTRATO_CONTEXTO_DEFINICAO_V2,
+    CONTRATO_DEFINIR_V2,
+    LeituraErro,
+    exigir_definicao_legivel,
+)
 from app.services.agente_bi_ingestao_service import IngestaoErro, _fora_do_contrato, ingerir, persistir_preparacao
 from app.services.agente_bi_perfil_semantico_service import perfilar_dataset, perfilar_preparacao
 from app.services.agente_bi_persistencia_service import (
@@ -173,15 +180,16 @@ def atualizar_dashboard(escopo, dashboard_id: int, *, modo, arquivos, limites=No
     perfil_novo = perfilar_dataset(escopo, novo["id"])
     _exigir_semantica(perfil_base, perfil_novo, colunas, regioes, relacoes, metricas)
     definicao_nova = _regravar_definicao(escopo, definicao, perfil_novo)
+    pedido_calculo = {
+        "analise_id": definicao_nova["id"],
+        "relacoes_autorizadas": sorted(relacoes),
+        "parametros": efetivos,
+    }
     try:
-        calculado = calcular_definicao(
-            escopo,
-            {
-                "analise_id": definicao_nova["id"],
-                "relacoes_autorizadas": sorted(relacoes),
-                "parametros": efetivos,
-            },
-        )
+        if definicao_nova.get("contrato_versao") == CONTRATO_DEFINIR_V2:
+            calculado = recalcular_definicao_v2(escopo, pedido_calculo)
+        else:
+            calculado = calcular_definicao(escopo, pedido_calculo)
     except CalculoErro as exc:
         raise AtualizacaoErro(exc.codigo, exc.status) from exc
     if _grafico_obrigatorio_bloqueado(definicoes, calculado):
@@ -342,15 +350,20 @@ def _definicao_aprovada(escopo, calculo) -> dict:
     if definicao.get("etapa") != "definicao" or definicao.get("estado") != "concluida":
         raise AgenteBiErro("analise_indisponivel", 422)
     try:
-        reconhecer_definicao_v2(escopo, definicao)
+        exigir_definicao_legivel(escopo, definicao)
     except LeituraErro as exc:
         raise AgenteBiErro(exc.codigo, exc.status) from exc
-    if definicao.get("contrato_versao") != CONTRATO_DEFINIR:
-        raise AgenteBiErro("analise_indisponivel", 422)
     documento = definicao.get("resultado")
-    if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR:
-        raise AgenteBiErro("analise_indisponivel", 422)
-    return definicao
+    contrato = definicao.get("contrato_versao")
+    if contrato == CONTRATO_DEFINIR:
+        if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR:
+            raise AgenteBiErro("analise_indisponivel", 422)
+        return definicao
+    if contrato == CONTRATO_DEFINIR_V2:
+        if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR_V2:
+            raise AgenteBiErro("analise_indisponivel", 422)
+        return definicao
+    raise AgenteBiErro("analise_indisponivel", 422)
 
 
 def _exigir_vinculo(painel, calculo, definicao, dataset) -> None:
@@ -553,6 +566,8 @@ def _acrescentar(dataset, preparacao, shas: list[str]) -> dict:
 
 
 def _regravar_definicao(escopo, definicao, perfil) -> dict:
+    if definicao.get("contrato_versao") == CONTRATO_DEFINIR_V2:
+        return _regravar_definicao_v2(escopo, definicao, perfil)
     dataset = perfil.get("dataset") if isinstance(perfil.get("dataset"), dict) else {}
     documento = copy.deepcopy(definicao["resultado"])
     documento["dataset_id"] = dataset.get("id")
@@ -582,6 +597,46 @@ def _regravar_definicao(escopo, definicao, perfil) -> dict:
                 "regras_negocio": {"dsl": documento.get("dsl"), "execucao": "nao_executada"},
                 "esclarecimentos": {"bloqueios": []},
                 "contrato_versao": CONTRATO_DEFINIR,
+                "resultado": documento,
+            },
+        ),
+    )
+
+
+def _regravar_definicao_v2(escopo, definicao, perfil) -> dict:
+    """Copia a definição v2 para a versão nova. O documento analítico não muda."""
+    dataset = perfil.get("dataset") if isinstance(perfil.get("dataset"), dict) else {}
+    documento = copy.deepcopy(definicao["resultado"])
+    contexto = definicao.get("contexto") if isinstance(definicao.get("contexto"), dict) else {}
+    vinculo = copy.deepcopy(contexto.get("vinculo"))
+    if not isinstance(vinculo, dict):
+        raise AtualizacaoErro("atualizacao_incompativel")
+    try:
+        tecnico = montar_contexto(perfil, {"modalidades": ["A"]})
+    except AnalisarErro as exc:
+        raise AtualizacaoErro("atualizacao_incompativel") from exc
+    vinculo["contexto"] = {chave: tecnico[chave] for chave in ("colunas", "regioes", "relacoes", "qualidade")}
+    return _com_rodada(
+        escopo,
+        definicao["chave"],
+        lambda rodada: criar_analise(
+            escopo,
+            {
+                "chave": definicao["chave"],
+                "rodada": rodada,
+                "dataset_id": dataset.get("id"),
+                "versao": dataset.get("versao"),
+                "impressao": dataset.get("impressao"),
+                "etapa": "definicao",
+                "estado": "concluida",
+                "contexto": {
+                    "contrato": CONTRATO_CONTEXTO_DEFINICAO_V2,
+                    "vinculo_preparacao": perfil.get("vinculo_preparacao"),
+                    "vinculo": vinculo,
+                },
+                "regras_negocio": {"contrato": CONTRATO_DEFINIR_V2},
+                "esclarecimentos": {},
+                "contrato_versao": CONTRATO_DEFINIR_V2,
                 "resultado": documento,
             },
         ),

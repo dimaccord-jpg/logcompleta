@@ -544,6 +544,10 @@
       var corpoPedido = { texto: texto };
       var vigentes = parametrosDaRevisao(painelAtual);
       if (vigentes) corpoPedido.parametros = vigentes;
+      var informados = parametrosDoEsclarecimento();
+      if (informados) {
+        corpoPedido.parametros = Object.assign({}, corpoPedido.parametros || {}, informados);
+      }
       jsonPost(raiz.getAttribute("data-dashboards-url") + "/" + painelAtual.id + "/evolucao", corpoPedido).then(function (resposta) {
         if (!resposta.corpo || resposta.corpo.ok !== true) {
           mostrarErro(resposta.corpo && resposta.corpo.codigo);
@@ -608,12 +612,41 @@
     parametrosEmMemoria[chaveRevisao(painel)] = JSON.parse(JSON.stringify(valores));
   }
 
+  function parametrosDoEsclarecimento() {
+    if (!evolucao) return null;
+    var campos = evolucao.querySelectorAll("[data-parametro]");
+    var saida = {};
+    for (var i = 0; i < campos.length; i += 1) {
+      var campo = campos[i];
+      if (!campo.name || !campo.value) continue;
+      saida[campo.name] = campo.value;
+    }
+    return Object.keys(saida).length ? saida : null;
+  }
+
   function mostrarResposta(corpo) {
     var destino = document.getElementById("agente-bi-dashboard-evolucao-resposta");
     if (!destino) return;
     destino.textContent = "";
     if (corpo.situacao === "esclarecimento" && corpo.esclarecimento) {
       destino.appendChild(el("p", null, corpo.esclarecimento.pergunta));
+      var pedidos = corpo.esclarecimento.parametros;
+      if (Array.isArray(pedidos)) {
+        pedidos.forEach(function (nome) {
+          if (typeof nome !== "string" || !nome) return;
+          var campo = el("label", "agente-bi-dashboard-campo");
+          campo.appendChild(document.createTextNode(nome));
+          var entrada = el("input");
+          entrada.type = "text";
+          entrada.name = nome;
+          entrada.maxLength = 80;
+          entrada.autocomplete = "off";
+          entrada.setAttribute("data-parametro", nome);
+          entrada.setAttribute("aria-label", "Valor de " + nome);
+          campo.appendChild(entrada);
+          destino.appendChild(campo);
+        });
+      }
       anunciar(corpo.esclarecimento.pergunta);
       return;
     }

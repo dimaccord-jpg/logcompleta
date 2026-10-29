@@ -32,7 +32,7 @@ from app.services.agente_bi_analisar_service import (
 )
 from app.services.agente_bi_calculo_service import CalculoErro, _coagir, calcular_definicao
 from app.services.agente_bi_dashboard_service import consultar_dashboard, filtrar_dashboard, montar_dashboard
-from app.services.agente_bi_leitura_service import LeituraErro, reconhecer_definicao_v2
+from app.services.agente_bi_leitura_service import CONTRATO_DEFINIR_V2, LeituraErro, exigir_definicao_legivel
 from app.services.agente_bi_definir_service import (
     CONTRATO_DEFINIR,
     OPERACOES_EXECUCAO,
@@ -142,6 +142,8 @@ def evoluir_dashboard(escopo, dashboard_id: int, corpo: dict, *, transporte=None
     """Aplica um pedido textual ao dashboard do escopo, ou pede esclarecimento."""
     texto, informados = _pedido(corpo)
     carregado = _carregar(escopo, dashboard_id)
+    if carregado["definicao"].get("contrato_versao") != CONTRATO_DEFINIR:
+        raise EvolucaoErro("analise_indisponivel")
     herdados = _validar_parametros_informados(carregado["definicoes"], informados)
     classificacao = _classificar(texto, carregado)
     if classificacao["tipo"] == "invalido":
@@ -237,13 +239,18 @@ def _carregar(escopo, dashboard_id: int) -> dict:
         raise AgenteBiErro("analise_indisponivel", 422)
     definicao = obter_analise(escopo, definicao_id)
     try:
-        reconhecer_definicao_v2(escopo, definicao)
+        exigir_definicao_legivel(escopo, definicao)
     except LeituraErro as exc:
         raise AgenteBiErro(exc.codigo, exc.status) from exc
-    if definicao.get("contrato_versao") != CONTRATO_DEFINIR:
-        raise AgenteBiErro("analise_indisponivel", 422)
     documento = definicao.get("resultado")
-    if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR:
+    contrato = definicao.get("contrato_versao")
+    if contrato == CONTRATO_DEFINIR:
+        if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR:
+            raise AgenteBiErro("analise_indisponivel", 422)
+    elif contrato == CONTRATO_DEFINIR_V2:
+        if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR_V2:
+            raise AgenteBiErro("analise_indisponivel", 422)
+    else:
         raise AgenteBiErro("analise_indisponivel", 422)
     definicoes = documento.get("definicoes")
     if not isinstance(definicoes, list) or not definicoes:

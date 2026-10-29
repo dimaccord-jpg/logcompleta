@@ -24,7 +24,7 @@ from app.services.agente_bi_contrato_v2_service import (
     validar_definicao_evolutiva,
 )
 from app.services.agente_bi_definir_service import CONTRATO_DEFINIR, DSL_CONTRATO, DefinirErro
-from app.services.agente_bi_leitura_service import LeituraErro, reconhecer_definicao_v2
+from app.services.agente_bi_leitura_service import LeituraErro, exigir_definicao_legivel, reconhecer_definicao_v2
 from app.services.agente_bi_perfil_semantico_service import PerfilErro, perfilar_dataset
 from app.services.agente_bi_persistencia_service import (
     AgenteBiErro,
@@ -299,6 +299,104 @@ def calcular_definicao_v2(escopo, corpo: dict) -> dict:
         "calculo": memoria,
         "entrada_efetiva": entrada_efetiva,
     }
+
+
+def recalcular_definicao_v2(escopo, corpo: dict) -> dict:
+    """Recalcula uma `definir.v2` já validada e grava `calculo.v2`.
+
+    Não interpreta texto, não chama modelo e não abre revisão. Parâmetro
+    ausente não grava memória parcial.
+    """
+    if not isinstance(corpo, dict) or not set(corpo) <= _CHAVES_PEDIDO or "analise_id" not in corpo:
+        raise CalculoErro("payload_invalido")
+    pedido = _pedido(corpo)
+    origem = _definicao_no_servidor(escopo, pedido["analise_id"])
+    if origem.get("contrato_versao") != CONTRATO_DEFINIR_V2:
+        raise CalculoErro("analise_indisponivel")
+    try:
+        exigir_definicao_legivel(escopo, origem)
+    except LeituraErro as exc:
+        raise CalculoErro(exc.codigo, exc.status) from exc
+    documento = origem.get("resultado")
+    if not isinstance(documento, dict) or documento.get("contrato") != CONTRATO_DEFINIR_V2:
+        raise CalculoErro("analise_indisponivel")
+    definicoes = documento.get("definicoes")
+    if not isinstance(definicoes, list) or not definicoes:
+        raise CalculoErro("analise_indisponivel")
+    dataset = _dataset_da_definicao(escopo, origem)
+    perfil = _perfil_do_servidor(escopo, dataset, origem)
+    _conferir_parametros(definicoes, pedido["parametros"])
+    _conferir_relacoes(perfil.get("relacoes") or [], pedido["relacoes"])
+    indicadores = []
+    for item in definicoes:
+        if not isinstance(item, dict):
+            raise CalculoErro("analise_indisponivel")
+        indicadores.append(
+            _calcular_um(
+                item,
+                perfil,
+                dataset.get("dados_tipados") or [],
+                dataset.get("estrutura") or {},
+                pedido["parametros"],
+                pedido["relacoes"],
+                dataset,
+            )
+        )
+    if any(
+        item.get("status") == "bloqueado" and item.get("motivo") == "informar_parametro"
+        for item in indicadores
+    ):
+        raise CalculoErro("informar_parametro")
+    memoria = {
+        "contrato": CONTRATO_CALCULO_V2,
+        "executor": EXECUTOR,
+        "ia_calculo": False,
+        "chamada_anthropic": False,
+        "persistido": True,
+        "publicado": False,
+        "origem_definicao_id": origem["id"],
+        "origem_contrato": CONTRATO_DEFINIR_V2,
+        "dataset_id": dataset["id"],
+        "dataset_versao": dataset["versao"],
+        "dataset_impressao": dataset["impressao"],
+        "vinculo_preparacao": perfil.get("vinculo_preparacao"),
+        "indicadores": indicadores,
+    }
+    bloqueios = [{"id": item["id"], "motivo": item["motivo"]} for item in indicadores if item.get("status") == "bloqueado"]
+    gravada = _com_rodada(
+        escopo,
+        origem["chave"],
+        lambda rodada: criar_analise(
+            escopo,
+            {
+                "chave": origem["chave"],
+                "rodada": rodada,
+                "dataset_id": dataset["id"],
+                "versao": dataset["versao"],
+                "impressao": dataset["impressao"],
+                "etapa": "execucao",
+                "estado": "concluida",
+                "contexto": {
+                    "definicao_id": origem["id"],
+                    "dataset_id": dataset["id"],
+                    "versao": dataset["versao"],
+                    "impressao": dataset["impressao"],
+                },
+                "regras_negocio": {"executor": EXECUTOR, "ia_calculo": False},
+                "esclarecimentos": {"bloqueios": bloqueios},
+                "contrato_versao": CONTRATO_CALCULO_V2,
+                "resultado": memoria,
+            },
+        ),
+    )
+    logger.info(
+        "evento=agente_bi_calculo_v2_persistido usuario_id=%s definicao_id=%s calculo_id=%s dataset_id=%s",
+        escopo.usuario_id,
+        origem["id"],
+        gravada["id"],
+        dataset["id"],
+    )
+    return _publicar(gravada, memoria)
 
 
 def _pedido(corpo) -> dict:
@@ -1468,7 +1566,7 @@ def _memoria_da_revisao(escopo, revisao: int, dataset: dict, definicao_anterior_
             continue
         if calculo.get("etapa") != "execucao" or calculo.get("estado") != "concluida":
             continue
-        if calculo.get("contrato_versao") != CONTRATO_CALCULO:
+        if calculo.get("contrato_versao") not in {CONTRATO_CALCULO, CONTRATO_CALCULO_V2}:
             continue
         if (
             int(calculo.get("dataset_id") or 0) != int(dataset["id"])

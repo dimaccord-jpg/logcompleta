@@ -50,7 +50,7 @@ _PROIBIDAS = frozenset(
 )
 _PREFIXOS_EXECUTAVEIS = ("select ", "import ", "def ", "exec(", "eval(")
 _PROJECOES_CONTEXTO = ("colunas", "regioes", "relacoes", "qualidade")
-_CONTRATO_CALCULO = "calculo.v1"
+_CONTRATOS_CALCULO = frozenset({"calculo.v1", "calculo.v2"})
 
 
 class LeituraErro(Exception):
@@ -139,6 +139,18 @@ def reconhecer_definicao_v2(escopo, analise: dict) -> None:
     raise LeituraErro("analise_indisponivel")
 
 
+def exigir_definicao_legivel(escopo, analise: dict) -> None:
+    """Aceita a definição quando a cadeia persistida fecha. Não calcula."""
+    if not isinstance(analise, dict) or analise.get("contrato_versao") != CONTRATO_DEFINIR_V2:
+        return
+    identificador = analise.get("id")
+    if isinstance(identificador, bool) or not isinstance(identificador, int) or identificador < 1:
+        raise LeituraErro("analise_indisponivel")
+    lida = ler_definicao(escopo, identificador)
+    if lida.get("contrato") != CONTRATO_DEFINIR_V2:
+        raise LeituraErro("analise_indisponivel")
+
+
 def _ler_v1(escopo, origem: dict, perfis: dict) -> dict:
     if origem.get("etapa") != "definicao" or origem.get("estado") != "concluida":
         raise LeituraErro("analise_indisponivel")
@@ -209,7 +221,13 @@ def _ler_v2(escopo, origem: dict, perfis: dict, anterior: dict) -> dict:
     ):
         raise LeituraErro("identidade_inconsistente", 409)
     _exigir_contexto_tecnico(vinculo.get("contexto"), perfil)
-    _exigir_ancestral_validado(validado, vinculo, dataset, anterior)
+    _exigir_ancestral_validado(
+        validado,
+        vinculo,
+        dataset,
+        anterior,
+        mesma_serie=_mesma_serie(escopo, anterior, dataset),
+    )
     _exigir_revisao_da_linhagem(escopo, validado["revisao_base"], dataset, validado["definicao_anterior_id"])
     return {
         "contrato": CONTRATO_DEFINIR_V2,
@@ -320,13 +338,20 @@ def _validar_estrutura_v1(escopo, documento: dict, dataset: dict, perfil: dict) 
         raise LeituraErro(exc.codigo, exc.status) from exc
 
 
-def _exigir_ancestral_validado(validado: dict, vinculo: dict, dataset: dict, anterior: dict) -> None:
+def _exigir_ancestral_validado(
+    validado: dict,
+    vinculo: dict,
+    dataset: dict,
+    anterior: dict,
+    *,
+    mesma_serie: bool = False,
+) -> None:
     if not isinstance(anterior, dict) or int(anterior.get("analise_id") or 0) != int(validado["definicao_anterior_id"]):
         raise LeituraErro("proveniencia_inconsistente")
     if anterior.get("contrato") != validado["origem_contrato"]:
         raise LeituraErro("proveniencia_inconsistente")
     identidade = anterior.get("dataset") if isinstance(anterior.get("dataset"), dict) else {}
-    if (
+    if not mesma_serie and (
         identidade.get("id") != dataset["id"]
         or identidade.get("versao") != dataset["versao"]
         or identidade.get("impressao") != dataset["impressao"]
@@ -347,8 +372,47 @@ def _projecao_graficos(definicoes) -> tuple:
     return tuple(saida)
 
 
+def _mesma_serie(escopo, anterior: dict, dataset: dict) -> bool:
+    """Versões da mesma chave continuam a mesma série. Outra chave não entra."""
+    identidade = anterior.get("dataset") if isinstance(anterior, dict) else None
+    if not isinstance(identidade, dict):
+        return False
+    if (
+        identidade.get("id") == dataset.get("id")
+        and identidade.get("versao") == dataset.get("versao")
+        and identidade.get("impressao") == dataset.get("impressao")
+    ):
+        return False
+    try:
+        antigo = obter_dataset(escopo, int(identidade.get("id")))
+    except (AgenteBiErro, TypeError, ValueError):
+        return False
+    return isinstance(antigo.get("chave"), str) and antigo.get("chave") == dataset.get("chave")
+
+
 def _exigir_revisao_da_linhagem(escopo, revisao: int, dataset: dict, definicao_anterior_id: int) -> None:
     """A revisão vale quando o cálculo persistido daquele dashboard nasce desta definição."""
+    if _revisao_confirmada(escopo, revisao, dataset, definicao_anterior_id):
+        return
+    try:
+        ancestral = obter_analise(escopo, int(definicao_anterior_id))
+        anterior = obter_dataset(escopo, int(ancestral["dataset_id"]))
+    except (AgenteBiErro, TypeError, ValueError) as exc:
+        raise LeituraErro("proveniencia_inconsistente") from exc
+    if anterior.get("chave") != dataset.get("chave"):
+        raise LeituraErro("proveniencia_inconsistente")
+    if (
+        anterior.get("id") == dataset.get("id")
+        and anterior.get("versao") == dataset.get("versao")
+        and anterior.get("impressao") == dataset.get("impressao")
+    ):
+        raise LeituraErro("proveniencia_inconsistente")
+    if _revisao_confirmada(escopo, revisao, anterior, definicao_anterior_id):
+        return
+    raise LeituraErro("proveniencia_inconsistente")
+
+
+def _revisao_confirmada(escopo, revisao: int, dataset: dict, definicao_anterior_id: int) -> bool:
     paineis = (
         AgenteBiDashboard.query.filter_by(
             conta_id=escopo.conta_id,
@@ -374,7 +438,7 @@ def _exigir_revisao_da_linhagem(escopo, revisao: int, dataset: dict, definicao_a
             continue
         if calculo.get("etapa") != "execucao" or calculo.get("estado") != "concluida":
             continue
-        if calculo.get("contrato_versao") != _CONTRATO_CALCULO:
+        if calculo.get("contrato_versao") not in _CONTRATOS_CALCULO:
             continue
         if (
             int(calculo.get("dataset_id") or 0) != int(dataset["id"])
@@ -387,8 +451,8 @@ def _exigir_revisao_da_linhagem(escopo, revisao: int, dataset: dict, definicao_a
         if isinstance(origem, bool) or not isinstance(origem, int):
             continue
         if int(origem) == int(definicao_anterior_id):
-            return
-    raise LeituraErro("proveniencia_inconsistente")
+            return True
+    return False
 
 
 def _dashboard_no_dataset(painel, escopo, dataset: dict) -> bool:

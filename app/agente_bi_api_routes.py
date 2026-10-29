@@ -11,9 +11,9 @@ O cálculo dos indicadores é local, determinístico e também sem chamada fatur
 A consulta e o filtro do dashboard releem essa memória, ou repetem o mesmo executor,
 sem chamada faturável. O detalhe de um gráfico relê só a série já gravada do cálculo
 exibido, também sem chamada faturável. A atualização compatível também repete esse executor
-sobre a versão nova do dataset e não chama modelo. A evolução por texto reutiliza
-`definir.v1`: o que já é determinístico não chama modelo; paráfrase usa o adaptador
-Anthropic governado.
+sobre a versão nova do dataset e não chama modelo. O pedido em texto livre
+usa a interpretação governada `patch.definir.v2` e publica a revisão numa
+única transação. Reabrir, filtrar e atualizar dataset compatível não chamam modelo.
 """
 from __future__ import annotations
 
@@ -156,8 +156,11 @@ def _contratos_reservados() -> frozenset[str]:
     """Identidades que só os fluxos do servidor podem gravar."""
     from app.services.agente_bi_analisar_service import CONTRATO_ANALISAR, CONTRATO_CONTEXTO_ANALISAR
     from app.services.agente_bi_descoberta_service import CONTRATO_CONTEXTO_SELECAO, CONTRATO_SELECAO
-    from app.services.agente_bi_calculo_service import CONTRATO_CALCULO, CONTRATO_CONTEXTO_CALCULO
+    from app.services.agente_bi_calculo_service import CONTRATO_CALCULO, CONTRATO_CALCULO_V2, CONTRATO_CONTEXTO_CALCULO
     from app.services.agente_bi_definir_service import CONTRATO_CONTEXTO_DEFINIR, CONTRATO_DEFINIR
+    from app.services.agente_bi_contrato_v2_service import CONTRATO_DEFINIR_V2, CONTRATO_PATCH_V2
+    from app.services.agente_bi_interpretacao_v2_service import CONTRATO_CONTEXTO_PLANO
+    from app.services.agente_bi_leitura_service import CONTRATO_CONTEXTO_DEFINICAO_V2
 
     return frozenset({
         CONTRATO_ANALISAR,
@@ -168,6 +171,11 @@ def _contratos_reservados() -> frozenset[str]:
         CONTRATO_CONTEXTO_DEFINIR,
         CONTRATO_CALCULO,
         CONTRATO_CONTEXTO_CALCULO,
+        CONTRATO_CALCULO_V2,
+        CONTRATO_DEFINIR_V2,
+        CONTRATO_PATCH_V2,
+        CONTRATO_CONTEXTO_PLANO,
+        CONTRATO_CONTEXTO_DEFINICAO_V2,
     })
 
 
@@ -280,18 +288,30 @@ def post_dashboard_filtros(escopo: EscopoAgenteBi, dashboard_id: int):
 @_endpoint
 def post_dashboard_evolucao(escopo: EscopoAgenteBi, dashboard_id: int):
     from app.services.agente_bi_calculo_service import CalculoErro
+    from app.services.agente_bi_composicao_service import ComposicaoErro
     from app.services.agente_bi_definir_service import DefinirErro
-    from app.services.agente_bi_evolucao_service import EvolucaoErro, evoluir_dashboard
+    from app.services.agente_bi_execucao_service import ExecucaoErro
+    from app.services.agente_bi_interpretacao_v2_service import InterpretacaoErro
+    from app.services.agente_bi_persistencia_service import AgenteBiErro
+    from app.services.agente_bi_publicacao_v2_service import PublicacaoErro, aplicar_pedido
 
     try:
-        resultado = evoluir_dashboard(escopo, dashboard_id, _corpo_json())
-    except EvolucaoErro as exc:
+        resultado = aplicar_pedido(escopo, dashboard_id, _corpo_json())
+    except PublicacaoErro as exc:
         return _erro(exc.codigo, exc.status)
+    except InterpretacaoErro as exc:
+        return _erro(exc.codigo, exc.status)
+    except ExecucaoErro as exc:
+        return _erro(exc.codigo, 422)
     except CalculoErro as exc:
+        return _erro(exc.codigo, exc.status)
+    except ComposicaoErro as exc:
         return _erro(exc.codigo, exc.status)
     except DefinirErro as exc:
         return _erro(exc.codigo, exc.status)
-    status = 201 if resultado.get("situacao") == "aplicada" else 200
+    except AgenteBiErro as exc:
+        return _erro(exc.codigo, exc.status)
+    status = 201 if resultado.get("situacao") == "aplicada" and resultado.get("reusada") is not True else 200
     return jsonify(resultado), status
 
 

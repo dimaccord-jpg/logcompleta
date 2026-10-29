@@ -260,7 +260,7 @@ def listar_datasets(escopo: EscopoAgenteBi, chave: str | None = None) -> list[di
     ]
 
 
-def criar_analise(escopo: EscopoAgenteBi, payload: dict) -> dict:
+def criar_analise(escopo: EscopoAgenteBi, payload: dict, *, confirmar: bool = True) -> dict:
     dados = _exigir_objeto(
         payload,
         obrigatorias={
@@ -349,7 +349,7 @@ def criar_analise(escopo: EscopoAgenteBi, payload: dict) -> dict:
         created_at=agora,
         updated_at=agora,
     )
-    _inserir(linha)
+    _inserir(linha, confirmar=confirmar)
     logger.info(
         "evento=agente_bi_analise_criada usuario_id=%s analise_id=%s rodada=%s",
         escopo.usuario_id,
@@ -376,7 +376,7 @@ def listar_analises(escopo: EscopoAgenteBi, chave: str | None = None) -> list[di
     return [analise_para_dict(linha) for linha in linhas if _linha_no_escopo(linha, escopo)]
 
 
-def criar_dashboard(escopo: EscopoAgenteBi, payload: dict) -> dict:
+def criar_dashboard(escopo: EscopoAgenteBi, payload: dict, *, confirmar: bool = True) -> dict:
     dados = _exigir_objeto(
         payload,
         obrigatorias={
@@ -448,7 +448,10 @@ def criar_dashboard(escopo: EscopoAgenteBi, payload: dict) -> dict:
                     created_at=agora,
                 )
             )
-        db.session.commit()
+        if confirmar:
+            db.session.commit()
+        else:
+            db.session.flush()
     except IntegrityError as exc:
         db.session.rollback()
         raise AgenteBiErro("conflito_versao", 409) from exc
@@ -569,9 +572,23 @@ def _datasets_da_revisao(linha: AgenteBiDashboard) -> list[dict]:
     return json.loads(linha.datasets_json)
 
 
-def _inserir(linha) -> None:
+def _inserir(linha, *, confirmar: bool = True) -> None:
     db.session.add(linha)
-    _commit_ou_erro()
+    if confirmar:
+        _commit_ou_erro()
+        return
+    _flush_sem_commit()
+
+
+def _flush_sem_commit() -> None:
+    try:
+        db.session.flush()
+    except IntegrityError as exc:
+        db.session.rollback()
+        raise AgenteBiErro("conflito_versao", 409) from exc
+    except DataError as exc:
+        db.session.rollback()
+        raise AgenteBiErro("payload_invalido", 422) from exc
 
 
 def _commit_ou_erro() -> None:

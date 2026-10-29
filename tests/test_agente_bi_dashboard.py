@@ -416,7 +416,8 @@ def _documento_browser(html):
                 situacao: "esclarecimento",
                 esclarecimento: {
                   motivo: "informar_parametro",
-                  pergunta: "Ao recarregar a página, informe esses valores outra vez."
+                  pergunta: "Ao recarregar a página, informe esses valores outra vez.",
+                  parametros: ["faixa"]
                 },
                 dashboard: { id: 7, analise_id: 3, chave: "painel-fretes", revisao: 1 },
                 consulta: consultaAberta()
@@ -687,6 +688,12 @@ def test_evolucao_guarda_parametros_so_na_memoria_da_pagina(monkeypatch):
         recarga = pagina.evaluate("() => window.__evolucaoPosts")
         assert recarga == [{"texto": "troque para média"}]
         assert "parametros" not in recarga[0]
+        pagina.get_by_role("textbox", name="Valor de faixa").fill("norte")
+        pedir(pagina, "troque para média")
+        pagina.wait_for_selector("[data-resultado='4.25']")
+        informado = pagina.evaluate("() => window.__evolucaoPosts[1]")
+        assert informado["texto"] == "troque para média"
+        assert informado["parametros"]["faixa"] == "norte"
         relevantes = [erro for erro in erros if "$ is not defined" not in erro]
         assert relevantes == []
         browser.close()

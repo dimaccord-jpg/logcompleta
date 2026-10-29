@@ -359,10 +359,8 @@ def test_api_bloqueia_franquia_e_aplica_filtro(app, monkeypatch):
         lambda _usuario: {"permitido": True},
     )
     resposta = client.post(f"/api/agente-bi/dashboards/{identificador}/evolucao", json={"texto": "filtre beta igual a sul"})
-    assert resposta.status_code == 201, resposta.get_data(as_text=True)
-    corpo = resposta.get_json()
-    assert corpo["consulta"]["graficos"][0]["resultado"] == "4.25"
-    assert corpo["cobranca"] is False
+    assert resposta.status_code == 422, resposta.get_data(as_text=True)
+    assert resposta.get_json()["codigo"] == "interpretacao_indisponivel"
     anterior = client.get(f"/api/agente-bi/dashboards/{identificador}/consulta")
     assert anterior.status_code == 200
     assert anterior.get_json()["consulta"]["graficos"][0]["resultado"] == "25.25"
@@ -652,19 +650,12 @@ def test_repeticao_semantica_nao_chama_de_novo_nem_recupera_revisao(ctx, monkeyp
     assert consultar_dashboard(escopo, primeiro["dashboard"]["id"])["consulta"]["graficos"][0]["operacao"] == "media"
 
 
-def test_api_continuidade_e_tipos_invalidos(app, monkeypatch):
+def test_api_continua_sem_classificador_e_isola_outro_usuario(app, monkeypatch):
     client = _cliente_ingestao(app, monkeypatch)
 
     def adaptador(**_kwargs):
         adaptador.chamadas += 1
-        return {
-            "ok": True,
-            "codigo": "ok",
-            "texto": json.dumps(_PATCH_TIPOS_INVALIDOS),
-            "evento_id": None,
-            "repetida": False,
-            "incerto": False,
-        }
+        raise AssertionError("anthropic")
 
     adaptador.chamadas = 0
     with app.app_context():
@@ -680,48 +671,29 @@ def test_api_continuidade_e_tipos_invalidos(app, monkeypatch):
         "app.agente_bi_api_routes.avaliar_autorizacao_operacao_por_franquia",
         lambda _usuario: {"permitido": True},
     )
+    monkeypatch.setattr("app.services.agente_bi_anthropic_service.chamar_anthropic_governado", adaptador)
     filtro = client.post(
         f"/api/agente-bi/dashboards/{identificador}/evolucao",
         json={"texto": "filtre beta igual a sul"},
     )
-    assert filtro.status_code == 201, filtro.get_data(as_text=True)
-    corpo = filtro.get_json()
-    assert corpo["consulta"]["graficos"][0]["resultado"] == "4.25"
-    assert set(corpo["parametros"].values()) == {"sul"}
+    assert filtro.status_code == 422, filtro.get_data(as_text=True)
+    assert filtro.get_json()["codigo"] == "interpretacao_indisponivel"
     assert "sul" not in (filtro.headers.get("Set-Cookie") or "")
-    novo = corpo["dashboard"]["id"]
-    media = client.post(
-        f"/api/agente-bi/dashboards/{novo}/evolucao",
-        json={"texto": "troque para média", "parametros": corpo["parametros"]},
-    )
-    assert media.status_code == 201, media.get_data(as_text=True)
-    assert media.get_json()["consulta"]["graficos"][0]["operacao"] == "media"
-    assert media.get_json()["consulta"]["graficos"][0]["resultado"] == "4.25"
-    assert media.get_json()["consulta"]["graficos"][0]["elegiveis"] == 1
-    recarga = client.post(f"/api/agente-bi/dashboards/{novo}/evolucao", json={"texto": "troque para média"})
-    assert recarga.status_code == 200
-    assert recarga.get_json()["situacao"] == "esclarecimento"
-    assert recarga.get_json()["esclarecimento"]["motivo"] == "informar_parametro"
-    assert "recarregar" in recarga.get_json()["esclarecimento"]["pergunta"]
+    assert adaptador.chamadas == 0
+    with app.app_context():
+        from app.services.agente_bi_dashboard_service import consultar_dashboard
+
+        assert consultar_dashboard(escopo, identificador)["consulta"]["graficos"][0]["resultado"] == "25.25"
     _entrar(client, outro_id)
     alheio = client.post(
-        f"/api/agente-bi/dashboards/{novo}/evolucao",
-        json={"texto": "troque para média", "parametros": corpo["parametros"]},
+        f"/api/agente-bi/dashboards/{identificador}/evolucao",
+        json={"texto": "troque para média", "parametros": {"faixa": "sul"}},
     )
     assert alheio.status_code == 404
     assert alheio.get_json()["codigo"] == "nao_encontrado"
     assert "sul" not in alheio.get_data(as_text=True)
+    assert "25.25" not in alheio.get_data(as_text=True)
     assert "4.25" not in alheio.get_data(as_text=True)
-
-    _entrar(client, usuario_id)
-    monkeypatch.setattr("app.services.agente_bi_anthropic_service.chamar_anthropic_governado", adaptador)
-    invalido = client.post(
-        f"/api/agente-bi/dashboards/{identificador}/evolucao",
-        json={"texto": _PEDIDO_SEMANTICO},
-    )
-    assert invalido.status_code == 422, invalido.get_data(as_text=True)
-    assert invalido.get_json()["codigo"] == "alteracao_invalida"
-    assert adaptador.chamadas == 1
 
 
 _PEDIDO_SEMANTICO_COM_CABECALHO = "quero ver a tendencia de beta"
