@@ -55,6 +55,17 @@ def _erro(codigo: str, status: int):
     return jsonify({"ok": False, "codigo": codigo}), status
 
 
+def _erro_evolucao(exc):
+    """Erro do pedido livre. A projeção só entra quando a execução a produziu."""
+    corpo = {"ok": False, "codigo": exc.codigo}
+    indicadores = getattr(exc, "indicadores_ia", None)
+    if isinstance(indicadores, dict):
+        corpo["indicadores_ia"] = indicadores
+        corpo["chamada_anthropic"] = getattr(exc, "chamada_anthropic", None)
+        corpo["cobranca"] = getattr(exc, "cobranca", False) is True
+    return jsonify(corpo), exc.status
+
+
 def _erro_descoberta(exc):
     corpo = {"ok": False, "codigo": exc.codigo}
     evidencias = getattr(exc, "evidencias", None)
@@ -244,9 +255,12 @@ def post_dashboard_montar(escopo: EscopoAgenteBi):
 @agente_bi_api_bp.get("/dashboards/<int:dashboard_id>/consulta")
 @_endpoint
 def get_dashboard_consulta(escopo: EscopoAgenteBi, dashboard_id: int):
+    from app.services.agente_bi_continuidade_service import recuperar_continuidade
     from app.services.agente_bi_dashboard_service import consultar_dashboard
 
-    return jsonify(consultar_dashboard(escopo, dashboard_id))
+    corpo = consultar_dashboard(escopo, dashboard_id)
+    corpo["continuidade"] = recuperar_continuidade(escopo, dashboard_id, consulta=corpo)
+    return jsonify(corpo)
 
 
 def _sem_cache(resposta):
@@ -300,7 +314,7 @@ def post_dashboard_evolucao(escopo: EscopoAgenteBi, dashboard_id: int):
     except PublicacaoErro as exc:
         return _erro(exc.codigo, exc.status)
     except InterpretacaoErro as exc:
-        return _erro(exc.codigo, exc.status)
+        return _erro_evolucao(exc)
     except ExecucaoErro as exc:
         return _erro(exc.codigo, 422)
     except CalculoErro as exc:

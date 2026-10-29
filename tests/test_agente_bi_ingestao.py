@@ -596,6 +596,7 @@ def test_modulos_nao_chamam_ia_rede_nem_cobranca():
         else:
             assert not any(linha.strip() == "import re" for linha in fonte.splitlines())
         fonte = fonte.lower()
+        fonte_verificada = fonte.replace('"chamada_anthropic"', '""')
         for termo in (
             "anthropic",
             "openai",
@@ -606,7 +607,7 @@ def test_modulos_nao_chamam_ia_rede_nem_cobranca():
             "thread(",
             "cleide_upload",
         ):
-            assert termo not in fonte
+            assert termo not in fonte_verificada
     fonte_ingestao = (ROOT / "app" / "services" / "agente_bi_ingestao_service.py").read_text(encoding="utf-8").lower()
     assert "cpf" not in fonte_ingestao
     assert "criar_dataset" in fonte_ingestao

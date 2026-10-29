@@ -541,6 +541,7 @@ def test_modulos_novos_nao_chamam_ia_nem_fila_e_reusam_autorizacao():
         fonte = fonte_sem_docstring_de_modulo(ROOT / relativo)
         assert "import " in fonte
         fonte = fonte.lower()
+        fonte_verificada = fonte.replace('"chamada_anthropic"', '""')
         for termo in (
             "anthropic",
             "openai",
@@ -550,7 +551,7 @@ def test_modulos_novos_nao_chamam_ia_nem_fila_e_reusam_autorizacao():
             "thread(",
             "subprocess",
         ):
-            assert termo not in fonte
+            assert termo not in fonte_verificada
 
 
 def test_blueprint_esta_registrado_no_app_sem_alterar_rota_legada():

@@ -127,7 +127,12 @@ def interpretar_plano(escopo, dashboard_id: int, corpo: dict, *, transporte=None
         transporte=transporte,
         lease_segundos=LEASE_MAX_SEGUNDOS if lease_segundos is None else lease_segundos,
     )
-    plano, chamada = _fechar(escopo, abertura, ciclo)
+    plano, nova = _fechar(escopo, abertura, ciclo)
+    from app.services.agente_bi_anthropic_service import campos_publicos_ia, projetar_indicadores_da_execucao
+
+    indicadores = projetar_indicadores_da_execucao(int(abertura["execucao"]["id"]), repetida=not nova)
+    campos = campos_publicos_ia(indicadores)
+    chamada = campos["chamada_anthropic"] is True
     logger.info(
         "evento=agente_bi_plano_interpretado usuario_id=%s dashboard_id=%s situacao=%s chamada_anthropic=%s",
         escopo.usuario_id,
@@ -142,6 +147,8 @@ def interpretar_plano(escopo, dashboard_id: int, corpo: dict, *, transporte=None
         "plano": plano,
         "executado": False,
         "chamada_anthropic": chamada,
+        "cobranca": campos["cobranca"] is True,
+        "indicadores_ia": campos["indicadores_ia"],
         "analise_id": int(abertura["analise_id"]),
     }
 
@@ -820,7 +827,12 @@ def _fechar(escopo, abertura: dict, ciclo: dict) -> tuple[dict, bool]:
     if ciclo.get("adquirida"):
         if execucao.get("estado") != "concluida":
             codigo = execucao.get("ultimo_erro") or "provedor_indisponivel"
-            raise InterpretacaoErro(_codigo(str(codigo)), _status(str(codigo), execucao.get("estado")))
+            _falhar_com_indicadores(
+                str(codigo),
+                execucao.get("estado"),
+                execucao.get("id"),
+                repetida=_reentrada(execucao),
+            )
         return _plano_gravado(escopo, int(abertura["analise_id"])), True
     linha = AgenteBiExecucao.query.filter_by(
         id=int(abertura["execucao"]["id"]),
@@ -836,7 +848,7 @@ def _fechar(escopo, abertura: dict, ciclo: dict) -> tuple[dict, bool]:
         raise InterpretacaoErro("operacao_em_andamento", 409)
     if linha.estado == "concluida":
         return _plano_gravado(escopo, int(abertura["analise_id"])), False
-    raise InterpretacaoErro(_codigo(str(linha.ultimo_erro or "")), _status(str(linha.ultimo_erro or ""), linha.estado))
+    _falhar_com_indicadores(str(linha.ultimo_erro or ""), linha.estado, linha.id, repetida=True)
 
 
 def _plano_gravado(escopo, analise_id: int) -> dict:
@@ -853,6 +865,20 @@ def _plano_gravado(escopo, analise_id: int) -> dict:
         return revalidar_plano_duravel(linha, documento)
     except ExecucaoErro as exc:
         raise InterpretacaoErro(_codigo(exc.codigo)) from exc
+
+
+def _reentrada(execucao: dict) -> bool:
+    tentativas = execucao.get("tentativas") if isinstance(execucao, dict) else None
+    return isinstance(tentativas, int) and not isinstance(tentativas, bool) and tentativas > 1
+
+
+def _falhar_com_indicadores(codigo: str, estado, execucao_id, *, repetida: bool) -> None:
+    from app.services.agente_bi_anthropic_service import anexar_indicadores_ia, projetar_indicadores_da_execucao
+
+    exc = InterpretacaoErro(_codigo(codigo), _status(codigo, estado))
+    if isinstance(execucao_id, int) and not isinstance(execucao_id, bool):
+        anexar_indicadores_ia(exc, projetar_indicadores_da_execucao(int(execucao_id), repetida=repetida))
+    raise exc
 
 
 def _status(codigo: str, estado=None) -> int:
@@ -877,7 +903,9 @@ def _instrucao() -> str:
             "Tipo, evidencia e papel estrutural nao comprovam significado de negocio.",
             "Alias tecnico nao comprova significado de negocio.",
             "Sem associacao na lista recebida, nao atribua significado de negocio.",
-            "Se a intencao depender de significado ausente, a situacao e esclarecimento e o motivo e confirmar_rotulos.",
+            "Se a intencao depender de significado ausente para alterar o dashboard, a situacao e esclarecimento e o motivo e confirmar_rotulos.",
+            "Se a intencao pede para compreender resultados ja calculados, sem alterar o dashboard, a situacao e proposto e as acoes sao somente consultar nos graficos existentes pertinentes.",
+            "Pergunta sobre resultado, causa, limite ou significado nao vira criacao nem alteracao de grafico.",
             "Nao escreva valor de celula. Parametro opaco so com referencia recebida. Parametro tipado nao carrega valor.",
             "Referencia temporaria nasce em criar_grafico e so e usada por quem depende dessa criacao.",
             "Nao produza SQL, Python, formula ou codigo.",

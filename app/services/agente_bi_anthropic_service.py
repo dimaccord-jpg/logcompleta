@@ -34,6 +34,7 @@ from app.models import (
     AgenteBiExecucao,
     Franquia,
     IaChamadaTentativa,
+    IaConsumoAbatimento,
     IaConsumoEvento,
     User,
     utcnow_naive,
@@ -996,6 +997,279 @@ def chamada_externa_contabilizada(execucao_id: int) -> bool:
         IaChamadaTentativa.STATUS_UNCERTAIN,
         IaChamadaTentativa.STATUS_PROVIDER_FAILED,
     }
+
+
+# Status gravados só antes do envio. Não provam transporte.
+_STATUS_TRANSPORTE_AUSENTE = frozenset(
+    {
+        IaChamadaTentativa.STATUS_BLOCKED,
+        IaChamadaTentativa.STATUS_GOVERNANCE_BLOCKED,
+        IaChamadaTentativa.STATUS_RESERVED,
+    }
+)
+# Resposta recebida ou falha do envio. O transporte já ocorreu.
+_STATUS_TRANSPORTE_COMPROVADO = frozenset(
+    {
+        IaChamadaTentativa.STATUS_SETTLED,
+        IaChamadaTentativa.STATUS_PROVIDER_FAILED,
+    }
+)
+_CHAVES_INDICADOR_IA = (
+    "tentativa_registrada",
+    "chamada_externa",
+    "evento_consumo",
+    "abatimento_confirmado",
+    "repetida",
+    "tentativa_id",
+    "evento_id",
+    "abatimento_id",
+)
+
+
+def indicadores_ia_vazios(*, repetida: bool = False) -> dict:
+    """Nenhum dos quatro fatos. Não afirma transporte nem cobrança."""
+    return {
+        "tentativa_registrada": False,
+        "chamada_externa": False,
+        "evento_consumo": False,
+        "abatimento_confirmado": False,
+        "repetida": bool(repetida),
+        "tentativa_id": None,
+        "evento_id": None,
+        "abatimento_id": None,
+    }
+
+
+def projetar_indicadores_ia(
+    resultado: dict | None = None,
+    *,
+    tentativa: IaChamadaTentativa | None = None,
+    repetida: bool = False,
+) -> dict:
+    """Lê tentativa, transporte, evento e abatimento sem deduzir um do outro.
+
+    `chamada_externa` True só com transporte comprovado. False só quando o
+    registro mostra que o envio não ocorreu. None preserva a incerteza.
+    `abatimento_confirmado` exige a linha de `IaConsumoAbatimento`.
+    `repetida` impede que a mesma ocorrência seja contada de novo.
+    """
+    if isinstance(resultado, dict) and resultado.get("repetida") is True:
+        repetida = True
+    tentativa = _tentativa_da_projecao(resultado, tentativa)
+    evento = _evento_da_projecao(tentativa, resultado)
+    abatimento = _abatimento_da_projecao(evento)
+    return {
+        "tentativa_registrada": tentativa is not None,
+        "chamada_externa": _chamada_externa_da_projecao(tentativa, evento, resultado),
+        "evento_consumo": evento is not None,
+        "abatimento_confirmado": abatimento is not None,
+        "repetida": bool(repetida),
+        "tentativa_id": None if tentativa is None else int(tentativa.id),
+        "evento_id": None if evento is None else int(evento.id),
+        "abatimento_id": None if abatimento is None else int(abatimento.id),
+    }
+
+
+def projetar_indicadores_da_execucao(execucao_id: int, *, repetida: bool = False) -> dict:
+    """Projeção da execução já gravada. Não cria tentativa, evento nem abatimento."""
+    if isinstance(execucao_id, bool) or not isinstance(execucao_id, int):
+        return indicadores_ia_vazios(repetida=repetida)
+    linha = db.session.get(AgenteBiExecucao, int(execucao_id))
+    if linha is not None:
+        db.session.refresh(linha)
+    tentativa = None
+    if linha is not None and linha.ia_chamada_tentativa_id is not None:
+        tentativa = db.session.get(IaChamadaTentativa, int(linha.ia_chamada_tentativa_id))
+    if tentativa is not None:
+        return projetar_indicadores_ia(None, tentativa=tentativa, repetida=repetida)
+    if linha is not None and linha.efeito_externo == "incerto":
+        incerto = indicadores_ia_vazios(repetida=repetida)
+        incerto["chamada_externa"] = None
+        return incerto
+    return indicadores_ia_vazios(repetida=repetida)
+
+
+def combinar_indicadores_ia(partes: list) -> dict:
+    """Junta ocorrências distintas. O mesmo identificador não entra duas vezes."""
+    itens = []
+    vistos = set()
+    for parte in partes:
+        if not isinstance(parte, dict):
+            continue
+        ocorrencias = parte.get("ocorrencias")
+        candidatos = ocorrencias if isinstance(ocorrencias, list) and ocorrencias else [parte]
+        for item in candidatos:
+            if not isinstance(item, dict):
+                continue
+            chave = (
+                item.get("tentativa_id"),
+                item.get("evento_id"),
+                item.get("abatimento_id"),
+                item.get("chamada_externa"),
+                item.get("repetida"),
+            )
+            if item.get("tentativa_id") is not None and item.get("tentativa_id") in vistos:
+                continue
+            if item.get("tentativa_id") is not None:
+                vistos.add(item.get("tentativa_id"))
+            elif chave in vistos:
+                continue
+            else:
+                vistos.add(chave)
+            itens.append(item)
+    if not itens:
+        return indicadores_ia_vazios()
+    if len(itens) == 1:
+        return {chave: itens[0].get(chave) for chave in _CHAVES_INDICADOR_IA}
+    externa = False
+    incerteza = False
+    for item in itens:
+        valor = item.get("chamada_externa")
+        if valor is True:
+            externa = True
+        elif valor is None:
+            incerteza = True
+    if externa:
+        chamada = True
+    elif incerteza:
+        chamada = None
+    else:
+        chamada = False
+    combinado = {chave: None for chave in _CHAVES_INDICADOR_IA}
+    combinado.update(
+        {
+            "tentativa_registrada": any(bool(item.get("tentativa_registrada")) for item in itens),
+            "chamada_externa": chamada,
+            "evento_consumo": any(bool(item.get("evento_consumo")) for item in itens),
+            "abatimento_confirmado": any(bool(item.get("abatimento_confirmado")) for item in itens),
+            "repetida": all(bool(item.get("repetida")) for item in itens),
+            "ocorrencias": [{chave: item.get(chave) for chave in _CHAVES_INDICADOR_IA} for item in itens],
+        }
+    )
+    return combinado
+
+
+def campos_publicos_ia(indicadores: dict | None) -> dict:
+    """Contadores desta resposta e os quatro fatos. Repetição não conta de novo."""
+    base = indicadores if isinstance(indicadores, dict) else indicadores_ia_vazios()
+    return {
+        "chamada_anthropic": _chamada_desta_resposta(base),
+        "cobranca": _cobranca_desta_resposta(base),
+        "indicadores_ia": _recortar_indicadores_ia(base),
+    }
+
+
+def anexar_indicadores_ia(exc: BaseException, indicadores: dict | None) -> None:
+    """Guarda a projeção no erro do pedido. Não altera o código da falha."""
+    campos = campos_publicos_ia(indicadores)
+    exc.indicadores_ia = campos["indicadores_ia"]
+    exc.chamada_anthropic = campos["chamada_anthropic"]
+    exc.cobranca = campos["cobranca"]
+
+
+def _tentativa_da_projecao(resultado, tentativa: IaChamadaTentativa | None) -> IaChamadaTentativa | None:
+    if tentativa is None and isinstance(resultado, dict):
+        identificador = resultado.get("tentativa_id")
+        if isinstance(identificador, int) and not isinstance(identificador, bool):
+            tentativa = db.session.get(IaChamadaTentativa, int(identificador))
+    if tentativa is None:
+        return None
+    atual = db.session.get(IaChamadaTentativa, int(tentativa.id))
+    if atual is None:
+        return None
+    db.session.refresh(atual)
+    return atual
+
+
+def _evento_da_projecao(tentativa: IaChamadaTentativa | None, resultado) -> IaConsumoEvento | None:
+    identificador = None
+    if tentativa is not None and tentativa.ia_consumo_evento_id is not None:
+        identificador = int(tentativa.ia_consumo_evento_id)
+    elif isinstance(resultado, dict):
+        bruto = resultado.get("evento_id")
+        if isinstance(bruto, int) and not isinstance(bruto, bool):
+            identificador = int(bruto)
+    if identificador is None:
+        return None
+    evento = db.session.get(IaConsumoEvento, identificador)
+    if evento is not None:
+        db.session.refresh(evento)
+    return evento
+
+
+def _abatimento_da_projecao(evento: IaConsumoEvento | None) -> IaConsumoAbatimento | None:
+    if evento is None:
+        return None
+    return (
+        db.session.query(IaConsumoAbatimento)
+        .filter(IaConsumoAbatimento.ia_consumo_evento_id == int(evento.id))
+        .one_or_none()
+    )
+
+
+def _evento_registra_transporte(evento: IaConsumoEvento | None) -> bool:
+    """Evento anthropic/messages deste adaptador só é gravado depois do envio.
+
+    Evento interno de governança não é transporte e não prova abatimento.
+    """
+    if evento is None:
+        return False
+    return evento.provider == PROVIDER and evento.operation == OPERATION
+
+
+def _chamada_externa_da_projecao(tentativa, evento, resultado):
+    provedor = resultado.get("provedor_chamado") if isinstance(resultado, dict) else None
+    incerto = bool(isinstance(resultado, dict) and resultado.get("incerto"))
+    if tentativa is not None:
+        status = tentativa.status
+        if status in _STATUS_TRANSPORTE_COMPROVADO:
+            return True
+        if status in _STATUS_TRANSPORTE_AUSENTE:
+            return False
+        if status in {IaChamadaTentativa.STATUS_CALLING, IaChamadaTentativa.STATUS_UNCERTAIN, IaChamadaTentativa.STATUS_RELEASED}:
+            if _evento_registra_transporte(evento) or provedor is True:
+                return True
+            return None
+    if provedor is True:
+        return True
+    if incerto or (isinstance(resultado, dict) and resultado.get("repetida") is True):
+        return None
+    if provedor is False or tentativa is None:
+        return False
+    return None
+
+
+def _ocorrencias_indicador(indicadores: dict) -> list:
+    ocorrencias = indicadores.get("ocorrencias")
+    if isinstance(ocorrencias, list) and ocorrencias:
+        return [item for item in ocorrencias if isinstance(item, dict)]
+    return [indicadores]
+
+
+def _chamada_desta_resposta(indicadores: dict):
+    itens = _ocorrencias_indicador(indicadores)
+    if any(item.get("chamada_externa") is True and not item.get("repetida") for item in itens):
+        return True
+    if any(item.get("chamada_externa") is None and not item.get("repetida") for item in itens):
+        return None
+    return False
+
+
+def _cobranca_desta_resposta(indicadores: dict) -> bool:
+    itens = _ocorrencias_indicador(indicadores)
+    return any(bool(item.get("abatimento_confirmado")) and not item.get("repetida") for item in itens)
+
+
+def _recortar_indicadores_ia(indicadores: dict) -> dict:
+    saida = {chave: indicadores.get(chave) for chave in _CHAVES_INDICADOR_IA}
+    ocorrencias = indicadores.get("ocorrencias")
+    if isinstance(ocorrencias, list) and len(ocorrencias) > 1:
+        saida["ocorrencias"] = [
+            {chave: item.get(chave) for chave in _CHAVES_INDICADOR_IA}
+            for item in ocorrencias
+            if isinstance(item, dict)
+        ]
+    return saida
 
 
 def _conferir_posse_do_efeito(execucao_id: int, ident: dict[str, int], worker_id, fencing) -> bool:

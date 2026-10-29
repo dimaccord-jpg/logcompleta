@@ -18,6 +18,7 @@
   var consultaAtual = null;
   var painelAtual = null;
   var parametrosEmMemoria = {};
+  var continuidadeAtual = null;
   var ocupado = false;
 
   var ROTULOS = {
@@ -55,6 +56,8 @@
     parametro_inconsistente: "O filtro não combina com a definição autorizada.",
     informar_parametro: "Informe os filtros exigidos pela definição.",
     identidade_invalida: "O dashboard não corresponde à versão do dataset.",
+    conflito_versao: "A revisão mudou. O pedido anterior não foi aplicado.",
+    identidade_inconsistente: "O contexto recuperado não corresponde a esta revisão.",
     atualizacao_incompativel: "Os dados novos não são compatíveis com o dashboard. A atualização automática foi bloqueada e precisa de encaminhamento autorizado.",
     mudanca_significado: "O significado dos dados mudou. A atualização automática foi bloqueada e precisa de encaminhamento autorizado.",
     ambiguidade_relevante: "Há ambiguidade nos dados novos. A atualização automática foi bloqueada e precisa de encaminhamento autorizado.",
@@ -427,6 +430,7 @@
   function mostrarConsulta(corpo) {
     painelAtual = corpo.dashboard;
     consultaAtual = corpo.consulta;
+    continuidadeAtual = corpo && corpo.continuidade && typeof corpo.continuidade === "object" ? corpo.continuidade : null;
     if (aberto) aberto.hidden = false;
     if (tituloAberto) {
       tituloAberto.textContent = "Revisão " + consultaAtual.revisao + " de " + consultaAtual.chave;
@@ -440,6 +444,13 @@
     desenharGraficos(consultaAtual);
     anunciar("Dashboard aberto com " + (consultaAtual.graficos || []).length + " gráficos.");
     if (tituloAberto) tituloAberto.focus();
+    if (
+      continuidadeAtual &&
+      continuidadeAtual.situacao === "esclarecimento" &&
+      continuidadeAtual.esclarecimento
+    ) {
+      mostrarResposta({ situacao: "esclarecimento", esclarecimento: continuidadeAtual.esclarecimento });
+    }
   }
 
   function desenharAtualizacao() {
@@ -521,37 +532,46 @@
     }
     evolucao.hidden = false;
     var campo = el("label", "agente-bi-dashboard-campo");
-    campo.appendChild(document.createTextNode("Pedido em texto"));
+    campo.appendChild(document.createTextNode("Pedido ou pergunta"));
     var entrada = el("input");
     entrada.type = "text";
     entrada.name = "texto";
     entrada.maxLength = 500;
     entrada.autocomplete = "off";
-    entrada.setAttribute("aria-label", "Pedido para alterar o dashboard");
+    entrada.setAttribute("aria-label", "Pedido ou pergunta sobre o dashboard");
     campo.appendChild(entrada);
     var aplicar = el("button", null, "Aplicar pedido");
     aplicar.type = "button";
     aplicar.addEventListener("click", function () {
       if (ocupado || !painelAtual) return;
       var texto = entrada.value.trim();
-      if (!texto) {
-        anunciar("Escreva o que deseja alterar no dashboard.");
+      var informados = parametrosDoEsclarecimento();
+      var retomada = !texto
+        && continuidadeAtual
+        && continuidadeAtual.situacao === "esclarecimento"
+        && continuidadeAtual.plano_id
+        && informados;
+      if (!texto && !retomada) {
+        anunciar("Escreva o pedido ou a pergunta sobre o dashboard.");
         return;
       }
       ocupar(true);
       limparErro();
       anunciar("Interpretando o pedido.");
-      var corpoPedido = { texto: texto };
-      var vigentes = parametrosDaRevisao(painelAtual);
-      if (vigentes) corpoPedido.parametros = vigentes;
-      var informados = parametrosDoEsclarecimento();
-      if (informados) {
-        corpoPedido.parametros = Object.assign({}, corpoPedido.parametros || {}, informados);
+      var corpoPedido = retomada
+        ? { plano_id: continuidadeAtual.plano_id, parametros: informados }
+        : { texto: texto };
+      if (!retomada) {
+        var vigentes = parametrosDaRevisao(painelAtual);
+        if (vigentes) corpoPedido.parametros = vigentes;
+        if (informados) {
+          corpoPedido.parametros = Object.assign({}, corpoPedido.parametros || {}, informados);
+        }
       }
       jsonPost(raiz.getAttribute("data-dashboards-url") + "/" + painelAtual.id + "/evolucao", corpoPedido).then(function (resposta) {
         if (!resposta.corpo || resposta.corpo.ok !== true) {
           mostrarErro(resposta.corpo && resposta.corpo.codigo);
-          anunciar("Não foi possível alterar o dashboard.");
+          anunciar("Não foi possível concluir o pedido.");
           return;
         }
         if (resposta.corpo.situacao === "aplicada" && resposta.corpo.consulta) {
@@ -562,7 +582,7 @@
         mostrarResposta(resposta.corpo);
       }).catch(function () {
         mostrarErro("");
-        anunciar("Não foi possível alterar o dashboard.");
+        anunciar("Não foi possível concluir o pedido.");
       }).then(function () {
         ocupar(false);
       });
@@ -651,19 +671,38 @@
       return;
     }
     if (corpo.situacao === "explicacao" && corpo.explicacao) {
-      escreverBloco(destino, "Resultado comprovado", corpo.explicacao.comprovado);
+      var separado = separarFatoELeitura(corpo.explicacao.comprovado);
+      escreverBloco(destino, "Resultado comprovado", separado.fatos);
+      escreverBloco(destino, "Interpretação não certificada", separado.leituras);
       escreverBloco(destino, "Hipótese", corpo.explicacao.hipotese);
       escreverBloco(destino, "Informação não verificável", corpo.explicacao.nao_verificavel);
       anunciar("Explicação baseada nos agregados do dashboard.");
     }
   }
 
+  function separarFatoELeitura(itens) {
+    var fatos = [];
+    var leituras = [];
+    if (!Array.isArray(itens)) return { fatos: fatos, leituras: leituras };
+    itens.forEach(function (item) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return;
+      if (typeof item.fato !== "string" || !item.fato) return;
+      fatos.push(item.fato);
+      if (typeof item.leitura === "string" && item.leitura) leituras.push(item.leitura);
+    });
+    return { fatos: fatos, leituras: leituras };
+  }
+
   function escreverBloco(destino, titulo, linhas) {
     if (!Array.isArray(linhas) || !linhas.length) return;
-    destino.appendChild(el("p", null, titulo));
+    var bloco = el("div");
+    bloco.setAttribute("data-bloco", titulo);
+    bloco.appendChild(el("p", null, titulo));
     linhas.forEach(function (linha) {
-      destino.appendChild(el("p", null, linha));
+      if (typeof linha !== "string") return;
+      bloco.appendChild(el("p", null, linha));
     });
+    destino.appendChild(bloco);
   }
 
   function abrir(id) {

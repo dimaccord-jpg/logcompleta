@@ -410,7 +410,22 @@ def _documento_browser(html):
           if (metodo === "POST" && url.indexOf("/evolucao") !== -1) {
             var pedido = JSON.parse((opcoes && opcoes.body) || "{}");
             window.__evolucaoPosts.push(pedido);
-            if (pedido.texto && pedido.texto.indexOf("média") !== -1 && !pedido.parametros) {
+            if (pedido.texto && pedido.texto.indexOf("Explique") === 0) {
+              corpo = {
+                ok: true,
+                situacao: "explicacao",
+                explicacao: {
+                  comprovado: [{
+                    fato: "ref g1, operacao soma, papel quantidade, unidade quantidade, campo resultado, valor 25.25.",
+                    leitura: "O custo aumentou 5% por causa da rota Sul."
+                  }],
+                  hipotese: ["A causa nao esta demonstrada pelos agregados."],
+                  nao_verificavel: ["Falta comparabilidade para concluir produtividade."]
+                },
+                dashboard: { id: 7, analise_id: 3, chave: "painel-fretes", revisao: 1 },
+                consulta: consultaAberta()
+              };
+            } else if (pedido.texto && pedido.texto.indexOf("média") !== -1 && !pedido.parametros) {
               corpo = {
                 ok: true,
                 situacao: "esclarecimento",
@@ -650,7 +665,7 @@ def test_evolucao_guarda_parametros_so_na_memoria_da_pagina(monkeypatch):
         pagina.wait_for_selector("[data-resultado='25.25']")
 
     def pedir(pagina, texto):
-        pagina.get_by_role("textbox", name="Pedido para alterar o dashboard").fill(texto)
+        pagina.get_by_role("textbox", name="Pedido ou pergunta sobre o dashboard").fill(texto)
         pagina.get_by_role("button", name="Aplicar pedido").click()
 
     with sync_playwright() as playwright:
@@ -694,6 +709,26 @@ def test_evolucao_guarda_parametros_so_na_memoria_da_pagina(monkeypatch):
         informado = pagina.evaluate("() => window.__evolucaoPosts[1]")
         assert informado["texto"] == "troque para média"
         assert informado["parametros"]["faixa"] == "norte"
+        pedir(pagina, "Explique o resultado deste dashboard.")
+        pagina.wait_for_function(
+            "() => document.getElementById('agente-bi-dashboard-evolucao-resposta').innerText.indexOf('Resultado comprovado') !== -1"
+        )
+        explicacao = pagina.locator("#agente-bi-dashboard-evolucao-resposta").inner_text()
+        assert "Resultado comprovado" in explicacao
+        assert "25.25" in explicacao
+        assert "Hipótese" in explicacao
+        assert "Informação não verificável" in explicacao
+        comprovado = pagina.locator("[data-bloco='Resultado comprovado']").inner_text()
+        interpretacao = pagina.locator("[data-bloco='Interpretação não certificada']").inner_text()
+        assert "valor 25.25" in comprovado
+        assert "operacao soma" in comprovado
+        assert "aumentou" not in comprovado
+        assert "Sul" not in comprovado
+        assert "5%" not in comprovado
+        assert "Interpretação não certificada" in interpretacao
+        assert "rota Sul" in interpretacao
+        assert "Resultado comprovado" not in interpretacao
+        assert pagina.locator("[data-resultado='4.25']").inner_text() == "4.25"
         relevantes = [erro for erro in erros if "$ is not defined" not in erro]
         assert relevantes == []
         browser.close()
@@ -1278,7 +1313,7 @@ def test_atualizacao_envia_parametros_da_visao_e_nao_publica_sem_eles(monkeypatc
         assert pagina.locator("[data-ref='g1'] [data-resultado]").inner_text() == "25.25"
         assert pagina.evaluate("() => window.__atualizacaoPosts") == [None]
 
-        pagina.get_by_role("textbox", name="Pedido para alterar o dashboard").fill("filtre beta igual a sul")
+        pagina.get_by_role("textbox", name="Pedido ou pergunta sobre o dashboard").fill("filtre beta igual a sul")
         pagina.get_by_role("button", name="Aplicar pedido").click()
         pagina.wait_for_selector("[data-resultado='4.25']")
         pagina.locator("#agente-bi-dashboard-atualizacao input[type='file']").set_input_files(files=arquivo)

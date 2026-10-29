@@ -155,18 +155,37 @@ def evoluir_dashboard(escopo, dashboard_id: int, corpo: dict, *, transporte=None
     if classificacao["tipo"] == "esclarecer":
         return _responder_esclarecimento(carregado, classificacao["motivo"], chamada=False, cobranca=False)
     if classificacao["tipo"] == "semantico":
-        patch, chamada, cobranca = _patch_do_modelo(escopo, carregado, texto, transporte)
+        patch, chamada, cobranca, indicadores = _patch_do_modelo(escopo, carregado, texto, transporte)
         if patch == "pedido_repetido":
-            return _responder_esclarecimento(carregado, "pedido_repetido", chamada=False, cobranca=False)
+            return _responder_esclarecimento(
+                carregado,
+                "pedido_repetido",
+                chamada=False,
+                cobranca=False,
+                indicadores=indicadores,
+            )
         if patch is None:
-            return _responder_esclarecimento(carregado, "interpretacao_indisponivel", chamada=chamada, cobranca=cobranca)
+            return _responder_esclarecimento(
+                carregado,
+                "interpretacao_indisponivel",
+                chamada=chamada,
+                cobranca=cobranca,
+                indicadores=indicadores,
+            )
         if patch.get("acao") == "esclarecer":
-            return _responder_esclarecimento(carregado, "metrica_nao_identificada", chamada=chamada, cobranca=cobranca)
+            return _responder_esclarecimento(
+                carregado,
+                "metrica_nao_identificada",
+                chamada=chamada,
+                cobranca=cobranca,
+                indicadores=indicadores,
+            )
         via = "interpretacao"
     else:
         patch = classificacao["patch"]
         chamada = False
         cobranca = False
+        indicadores = None
         via = "deterministica"
     try:
         aplicado = _aplicar(escopo, carregado, patch, herdados)
@@ -175,7 +194,13 @@ def evoluir_dashboard(escopo, dashboard_id: int, corpo: dict, *, transporte=None
             raise EvolucaoErro("nao_autorizada", 403) from exc
         raise EvolucaoErro("alteracao_invalida") from exc
     if aplicado["tipo"] == "esclarecer":
-        return _responder_esclarecimento(carregado, aplicado["motivo"], chamada=chamada, cobranca=cobranca)
+        return _responder_esclarecimento(
+            carregado,
+            aplicado["motivo"],
+            chamada=chamada,
+            cobranca=cobranca,
+            indicadores=indicadores,
+        )
     if aplicado["tipo"] == "filtrar":
         salvo = filtrar_dashboard(
             escopo,
@@ -190,7 +215,7 @@ def evoluir_dashboard(escopo, dashboard_id: int, corpo: dict, *, transporte=None
             raise EvolucaoErro(exc.codigo, exc.status) from exc
         if _publicacao_vazia(calculado, aplicado["alvos"]):
             motivo = _motivo_bloqueio(calculado, aplicado["alvos"])
-            return _responder_esclarecimento(carregado, motivo, chamada=chamada, cobranca=cobranca)
+            return _responder_esclarecimento(carregado, motivo, chamada=chamada, cobranca=cobranca, indicadores=indicadores)
         salvo = montar_dashboard(escopo, {"analise_id": calculado["calculo"]["id"]})
     logger.info(
         "evento=agente_bi_dashboard_evoluido usuario_id=%s dashboard_id=%s via=%s chamada_anthropic=%s revisao=%s",
@@ -208,6 +233,7 @@ def evoluir_dashboard(escopo, dashboard_id: int, corpo: dict, *, transporte=None
         via=via,
         chamada=chamada,
         cobranca=cobranca,
+        indicadores=indicadores,
         parametros=aplicado.get("parametros") or {},
     )
 
@@ -517,15 +543,19 @@ def preparar_contexto_semantico(carregado, texto) -> dict | None:
 
 
 def _patch_do_modelo(escopo, carregado, texto, transporte):
-    from app.services.agente_bi_anthropic_service import chamar_anthropic_governado, preparar_saida_estruturada
+    from app.services.agente_bi_anthropic_service import (
+        chamar_anthropic_governado,
+        preparar_saida_estruturada,
+        projetar_indicadores_ia,
+    )
 
     from os import getenv
 
     if _vaza_rotulo(texto, carregado["rotulos"]):
-        return None, False, False
+        return None, False, False, None
     governado = preparar_contexto_semantico(carregado, texto)
     if not isinstance(governado, dict) or not (governado.get("pedido") or governado.get("intencao")):
-        return None, False, False
+        return None, False, False, None
     modelo = (getenv("AGENTE_BI_ANTHROPIC_MODEL") or "").strip()
     mensagem = json.dumps(governado, ensure_ascii=True, sort_keys=True)
     esquema = {
@@ -552,22 +582,24 @@ def _patch_do_modelo(escopo, carregado, texto, transporte):
         max_tokens=512,
         output_config=preparar_saida_estruturada(modelo, esquema) if modelo else None,
     )
+    indicadores = projetar_indicadores_ia(resultado)
     if resultado.get("codigo") in {"admissao_recusada", "isolamento", "identidade_incoerente"}:
         raise EvolucaoErro("nao_autorizada", 403)
-    if resultado.get("incerto"):
+    if resultado.get("incerto") or indicadores.get("chamada_externa") is None:
         raise EvolucaoErro("efeito_incerto", 503)
     if resultado.get("repetida") is True:
-        return "pedido_repetido", False, False
+        return "pedido_repetido", False, False, indicadores
+    chamada = indicadores.get("chamada_externa") is True
+    cobranca = bool(indicadores.get("abatimento_confirmado")) and not indicadores.get("repetida")
     if not resultado.get("ok"):
-        return None, False, False
-    cobranca = bool(resultado.get("evento_id"))
+        return None, chamada, cobranca, indicadores
     try:
         patch = _patch_interpretado(resultado.get("texto"), carregado)
     except TypeError:
         patch = None
     if patch is None:
         raise EvolucaoErro("alteracao_invalida")
-    return patch, True, cobranca
+    return patch, chamada, cobranca, indicadores
 
 
 def _contexto_minimizado(carregado, texto) -> dict:
@@ -732,8 +764,8 @@ def _persistir_definicao(escopo, carregado, documento, *, chamada: bool) -> dict
     )
 
 
-def _responder_aplicada(escopo, carregado, salvo, patch, *, via, chamada, cobranca, parametros) -> dict:
-    return {
+def _responder_aplicada(escopo, carregado, salvo, patch, *, via, chamada, cobranca, parametros, indicadores=None) -> dict:
+    corpo = {
         "ok": True,
         "contrato": CONTRATO_EVOLUCAO,
         "situacao": "aplicada",
@@ -749,11 +781,13 @@ def _responder_aplicada(escopo, carregado, salvo, patch, *, via, chamada, cobran
         "revisao_anterior_id": carregado["painel"]["id"],
         "revisoes": _revisoes(escopo, salvo["dashboard"]["chave"]),
     }
+    _incluir_indicadores(corpo, indicadores)
+    return corpo
 
 
-def _responder_esclarecimento(carregado, motivo, *, chamada, cobranca) -> dict:
+def _responder_esclarecimento(carregado, motivo, *, chamada, cobranca, indicadores=None) -> dict:
     codigo = motivo if motivo in _PERGUNTAS else "pedido_nao_identificado"
-    return {
+    corpo = {
         "ok": True,
         "contrato": CONTRATO_EVOLUCAO,
         "situacao": "esclarecimento",
@@ -768,6 +802,16 @@ def _responder_esclarecimento(carregado, motivo, *, chamada, cobranca) -> dict:
         "revisao_anterior_id": None,
         "revisoes": [{"id": carregado["painel"]["id"], "revisao": carregado["painel"]["revisao"]}],
     }
+    _incluir_indicadores(corpo, indicadores)
+    return corpo
+
+
+def _incluir_indicadores(corpo: dict, indicadores) -> None:
+    if not isinstance(indicadores, dict):
+        return
+    from app.services.agente_bi_anthropic_service import campos_publicos_ia
+
+    corpo["indicadores_ia"] = campos_publicos_ia(indicadores)["indicadores_ia"]
 
 
 def _responder_explicacao(carregado, texto) -> dict:
