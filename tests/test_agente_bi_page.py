@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WELCOME = "Envie seus dados logísticos para criar análises, indicadores e dashboards personalizados."
 UNAVAILABLE = "O envio e a análise de arquivos estarão disponíveis em uma próxima etapa."
 GUIDANCE = "Para começar, envie seus dados logísticos pelo botão +."
+AUTH_MESSAGE = "Autenticação necessária para utilizar o AgenteBI. Faça login para continuar."
+LOGIN_HREF = "/login?next=/cleide-bi-frete"
 MENU_ORDER = (
     "inicio",
     "consultar_agentefrete",
@@ -147,7 +149,11 @@ def test_visitante_recebe_200_com_identidade_e_chat_bloqueado(monkeypatch):
     assert resp.status_code == 200
     assert calls["authz"] == 0
     html = resp.get_data(as_text=True)
-    _assert_page_foundation(html)
+    _assert_page_foundation(html, authenticated=False)
+    with web.app.test_request_context():
+        from flask import url_for
+
+        assert url_for("login", next=url_for("cleide.auditoria_frete")) == LOGIN_HREF
     menu = _menu(html)
     assert [item.group(1) for item in re.finditer(r'data-agente-bi-action="([^"]+)"', menu)] == list(MENU_ORDER)
     _assert_menu_hrefs(menu, GUEST_MENU_HREFS)
@@ -160,10 +166,24 @@ def test_visitante_recebe_200_com_identidade_e_chat_bloqueado(monkeypatch):
 
 def test_usuario_autorizado_recebe_200_e_links_diretos(monkeypatch):
     web = _client(monkeypatch, authenticated=True, permitido=True)
-    resp = web.app.test_client().get("/cleide-bi-frete")
+    client = web.app.test_client()
+    resp = client.get("/cleide-bi-frete")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
-    _assert_page_foundation(html)
+    _assert_page_foundation(html, authenticated=True)
+    assert 'id="agente-bi-descoberta"' not in html
+    assert 'id="agente-bi-dashboard"' not in html
+    assert "agente_bi_descoberta.js" not in html
+    assert "agente_bi_dashboard.js" not in html
+    assert "chart.js" not in html
+    for caminho, metodo in (
+        ("/api/agente-bi/ingestao", "post"),
+        ("/api/agente-bi/descoberta", "post"),
+        ("/api/agente-bi/dashboards", "get"),
+    ):
+        bloqueio = getattr(client, metodo)(caminho)
+        assert bloqueio.status_code == 404
+        assert bloqueio.get_json()["codigo"] == "nao_encontrado"
     menu = _menu(html)
     _assert_menu_hrefs(menu, AUTH_MENU_HREFS)
     assert 'href="/login?next=' not in menu
@@ -224,6 +244,8 @@ def test_js_do_menu_nao_dispara_chamada_operacional():
         "new file(",
     ):
         assert token not in source
+    assert "data-authenticated" in source
+    assert AUTH_MESSAGE.lower() in source
     assert "escape" in source
     assert "returnfocus" in source or "returnfocus" in source.replace(" ", "")
     assert "trigger.focus" in source
@@ -277,20 +299,38 @@ def _textarea_tag(html):
     return match.group(0)
 
 
-def _assert_page_foundation(html):
+def _assert_page_foundation(html, *, authenticated):
     assert html.count('<span class="af-text-gradient">AgenteFrete</span>') == 1
     assert 'id="agente-bi-name">AgenteBI</h2>' in html
     assert "Assistente de inteligência de dados logísticos." in html
     assert "O AgenteBI utiliza inteligência artificial e pode cometer erros." in html
-    assert WELCOME in html
-    assert UNAVAILABLE in html
     textarea = _textarea_tag(html)
     assert "readonly" in textarea
     assert "disabled" not in textarea
     assert 'aria-readonly="true"' in textarea
     assert 'aria-label="Mensagem para o AgenteBI"' in textarea
     assert 'aria-describedby="agente-bi-composer-guidance"' in textarea
-    assert f'placeholder="{GUIDANCE}"' in textarea
+    if authenticated:
+        assert 'data-authenticated="true"' in html
+        assert WELCOME in html
+        assert UNAVAILABLE in html
+        assert "Envie uma planilha XLSX ou um CSV pelo botão +. O chat continua bloqueado." in html
+        assert f'placeholder="{GUIDANCE}"' in textarea
+        assert 'id="agente-bi-login"' not in html
+        assert AUTH_MESSAGE not in html
+    else:
+        assert 'data-authenticated="false"' in html
+        assert AUTH_MESSAGE in html
+        assert ">Fazer login</a>" in html
+        assert f'href="{LOGIN_HREF}"' in html
+        assert f'placeholder="{AUTH_MESSAGE}"' in textarea
+        assert WELCOME not in html
+        assert UNAVAILABLE not in html
+        assert GUIDANCE not in html
+        assert "Envie uma planilha" not in html
+        link = re.search(r'<a\b[^>]*\bid="agente-bi-login"[^>]*>', html, re.S)
+        assert link
+        assert "onclick" not in link.group(0)
     assert (
         '<p class="agente-bi-composer-guidance" id="agente-bi-composer-guidance" '
         'role="status" aria-live="polite" aria-atomic="true"></p>'
@@ -386,7 +426,15 @@ def test_compositor_bloqueado_orienta_sem_enviar_e_preserva_o_menu(monkeypatch):
         page.on("pageerror", lambda error: page_errors.append(str(error)))
         page.set_content(document, wait_until="domcontentloaded")
 
-        assert page.locator("#agente-bi-input").get_attribute("placeholder") == GUIDANCE
+        assert page.locator("#agente-bi-shell").get_attribute("data-authenticated") == "false"
+        assert page.locator("#agente-bi-input").get_attribute("placeholder") == AUTH_MESSAGE
+        assert page.locator("#agente-bi-welcome").inner_text() == AUTH_MESSAGE
+        assert page.locator("#agente-bi-login").inner_text() == "Fazer login"
+        assert page.locator("#agente-bi-login").get_attribute("href") == LOGIN_HREF
+        assert "Envie uma planilha" not in page.locator("#agente-bi-shell").inner_text()
+        assert GUIDANCE not in page.locator("#agente-bi-shell").inner_text()
+        assert page.locator("#agente-bi-descoberta").count() == 0
+        assert page.locator("#agente-bi-dashboard").count() == 0
         assert page.locator("#agente-bi-composer-guidance").inner_text() == ""
         assert page.locator("#agente-bi-input").get_attribute("aria-readonly") == "true"
         assert page.locator("#agente-bi-input").get_attribute("disabled") is None
@@ -414,7 +462,8 @@ def test_compositor_bloqueado_orienta_sem_enviar_e_preserva_o_menu(monkeypatch):
         page.locator("#agente-bi-actions-trigger").focus()
         page.keyboard.press("Tab")
         assert page.evaluate("() => document.activeElement.id") == "agente-bi-input"
-        assert page.locator("#agente-bi-composer-guidance").inner_text() == GUIDANCE
+        assert page.locator("#agente-bi-composer-guidance").inner_text() == AUTH_MESSAGE
+        assert page.locator("#agente-bi-login").get_attribute("href") == LOGIN_HREF
         assert page.locator("#agente-bi-composer-guidance").get_attribute("role") == "status"
         assert page.locator("#agente-bi-composer-guidance").get_attribute("aria-live") == "polite"
         assert page.locator("#agente-bi-composer-guidance").get_attribute("aria-atomic") == "true"
@@ -426,7 +475,8 @@ def test_compositor_bloqueado_orienta_sem_enviar_e_preserva_o_menu(monkeypatch):
         page.keyboard.type("mensagem que nao pode sair")
         page.keyboard.press("Enter")
         assert page.locator("#agente-bi-input").input_value() == ""
-        assert page.locator("#agente-bi-composer-guidance").inner_text() == GUIDANCE
+        assert page.locator("#agente-bi-composer-guidance").inner_text() == AUTH_MESSAGE
+        assert page.locator("#agente-bi-login").get_attribute("href") == LOGIN_HREF
         assert page.evaluate("() => window.__guidanceWrites()") == 1
 
         blocked = page.evaluate(
@@ -545,7 +595,8 @@ def test_compositor_bloqueado_orienta_sem_enviar_e_preserva_o_menu(monkeypatch):
         assert guidance_box["x"] >= 0
         assert fit["fitsItself"] is True
         assert fit["withinParent"] is True
-        assert page.locator("#agente-bi-composer-guidance").inner_text() == GUIDANCE
+        assert page.locator("#agente-bi-composer-guidance").inner_text() == AUTH_MESSAGE
+        assert page.locator("#agente-bi-login").get_attribute("href") == LOGIN_HREF
         input_box = page.locator("#agente-bi-input").bounding_box()
         assert input_box is not None and input_box["height"] >= 44
 
@@ -555,4 +606,88 @@ def test_compositor_bloqueado_orienta_sem_enviar_e_preserva_o_menu(monkeypatch):
         assert not any("/api/" in url or "chat_cleide" in url or "upload" in url for url in network)
         relevant_errors = [error for error in page_errors if "$ is not defined" not in error]
         assert relevant_errors == []
+        browser.close()
+
+
+def test_cta_de_login_funciona_sem_javascript(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    web = _client(monkeypatch, authenticated=False)
+    html = web.app.test_client().get("/cleide-bi-frete").get_data(as_text=True)
+    sem_script = re.sub(r"<script\b[^>]*>.*?</script>", "", html, flags=re.I | re.S)
+    assert AUTH_MESSAGE in sem_script
+    assert f'href="{LOGIN_HREF}"' in sem_script
+    assert ">Fazer login</a>" in sem_script
+    assert "<script" not in sem_script.lower()
+    documento = sem_script.replace("<head>", '<head><base href="http://agente-bi.test/">', 1)
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        context = browser.new_context(java_script_enabled=False, viewport={"width": 1280, "height": 900})
+        page = context.new_page()
+        page.route(
+            "**/*",
+            lambda route: route.fulfill(status=200, content_type="text/html", body="<p>login</p>"),
+        )
+        page.set_content(documento, wait_until="domcontentloaded")
+        assert page.locator("#agente-bi-login").inner_text() == "Fazer login"
+        with page.expect_navigation():
+            page.locator("#agente-bi-login").click()
+        assert page.url == "http://agente-bi.test/login?next=/cleide-bi-frete"
+        browser.close()
+
+
+def test_visitante_nao_executa_upload_descoberta_nem_dashboard(monkeypatch):
+    web = _client(monkeypatch, authenticated=False)
+    monkeypatch.setenv("AGENTE_BI_API_ENABLED", "1")
+    monkeypatch.setenv("AGENTE_BI_INGESTAO_ENABLED", "1")
+    client = web.app.test_client()
+    html = client.get("/cleide-bi-frete").get_data(as_text=True)
+    assert 'data-authenticated="false"' in html
+    assert AUTH_MESSAGE in html
+    assert f'href="{LOGIN_HREF}"' in html
+    assert 'id="agente-bi-descoberta"' not in html
+    assert 'id="agente-bi-dashboard"' not in html
+    assert "agente_bi_descoberta.js" not in html
+    assert "agente_bi_dashboard.js" not in html
+    assert "agente_bi_reinicio.js" not in html
+    assert "chart.js" not in html
+    assert 'type="file"' not in html
+    assert "Envie uma planilha" not in html
+    assert re.search(r'<button\b[^>]*\bid="agente-bi-upload-item"[^>]*\bdisabled\b', html, re.S)
+    for caminho, metodo in (
+        ("/api/agente-bi/ingestao", "post"),
+        ("/api/agente-bi/descoberta", "post"),
+        ("/api/agente-bi/descoberta/preparacao", "post"),
+        ("/api/agente-bi/descoberta/selecao", "post"),
+        ("/api/agente-bi/dashboards", "get"),
+        ("/api/agente-bi/dashboards/montar", "post"),
+    ):
+        recusa = getattr(client, metodo)(caminho)
+        assert recusa.status_code == 401
+        assert recusa.get_json()["codigo"] == "autenticacao_necessaria"
+
+
+def test_usuario_autenticado_mantem_orientacao_de_upload_no_compositor(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    web = _client(monkeypatch, authenticated=True, permitido=True)
+    rendered = web.app.test_client().get("/cleide-bi-frete").get_data(as_text=True)
+    assert 'data-authenticated="true"' in rendered
+    assert GUIDANCE in rendered
+    assert UNAVAILABLE in rendered
+    assert 'id="agente-bi-login"' not in rendered
+    document = _browser_document(rendered)
+
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.set_content(document, wait_until="domcontentloaded")
+        assert page.locator("#agente-bi-input").get_attribute("placeholder") == GUIDANCE
+        page.locator("#agente-bi-input").focus()
+        assert page.locator("#agente-bi-composer-guidance").inner_text() == GUIDANCE
+        assert page.locator("#agente-bi-login").count() == 0
+        assert page.locator('input[type="file"]').count() == 0
         browser.close()

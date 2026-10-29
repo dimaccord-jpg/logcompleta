@@ -91,6 +91,8 @@
         );
       }).then(function (resultado) {
         if (resultado.status >= 200 && resultado.status < 300 && resultado.corpo && resultado.corpo.ok === true) {
+          document.documentElement.setAttribute("data-agente-bi-reiniciado", "1");
+          botao.hidden = true;
           window.location.reload();
           return;
         }

@@ -83,6 +83,7 @@
 
   function mostrarErro(codigo) {
     if (!erro) return;
+    revelarPainel();
     erro.hidden = false;
     erro.textContent = ERROS[codigo] || "Não foi possível consultar o dashboard.";
   }
@@ -431,6 +432,8 @@
     painelAtual = corpo.dashboard;
     consultaAtual = corpo.consulta;
     continuidadeAtual = corpo && corpo.continuidade && typeof corpo.continuidade === "object" ? corpo.continuidade : null;
+    revelarPainel();
+    recolherFormulariosAnteriores();
     if (aberto) aberto.hidden = false;
     if (tituloAberto) {
       tituloAberto.textContent = "Revisão " + consultaAtual.revisao + " de " + consultaAtual.chave;
@@ -748,47 +751,195 @@
         abrir(item.id);
       }));
     });
+    revelarPainel();
   }
 
-  function maisRecente(analises, etapa, contrato) {
-    var escolhida = null;
-    analises.forEach(function (item) {
-      if (!item || item.etapa !== etapa || item.estado !== "concluida" || item.contrato_versao !== contrato) return;
-      if (!escolhida || item.id > escolhida.id) escolhida = item;
+  var presenca = { datasets: "pendente", analises: "pendente", dashboards: "pendente", sessao: false };
+  var passosMontagem = [];
+
+  function revelarPainel() {
+    if (raiz) raiz.hidden = false;
+  }
+
+  function recolherFormulariosAnteriores() {
+    var descoberta = document.getElementById("agente-bi-descoberta");
+    if (descoberta) descoberta.hidden = true;
+    var progresso = document.getElementById("agente-bi-montagem-progresso");
+    if (progresso) progresso.hidden = true;
+  }
+
+  function reinicioConfirmado() {
+    return document.documentElement.getAttribute("data-agente-bi-reiniciado") === "1";
+  }
+
+  function atualizarReinicio() {
+    var botao = document.getElementById("agente-bi-reinicio");
+    if (!botao) return;
+    if (reinicioConfirmado()) {
+      botao.hidden = true;
+      return;
+    }
+    var chaves = ["datasets", "analises", "dashboards"];
+    var pendente = chaves.some(function (chave) { return presenca[chave] === "pendente"; });
+    var haDados = presenca.sessao || chaves.some(function (chave) { return presenca[chave] === "sim"; });
+    if (pendente && !haDados) {
+      botao.hidden = true;
+      return;
+    }
+    botao.hidden = !haDados;
+  }
+
+  function concluirLeitura(chave, valor) {
+    if (valor === "falha" && (presenca[chave] === "sim" || presenca[chave] === "nao")) return;
+    presenca[chave] = valor;
+    atualizarReinicio();
+  }
+
+  function candidatas(analises, etapa, contrato) {
+    var saida = [];
+    (analises || []).forEach(function (item) {
+      if (item && item.etapa === etapa && item.estado === "concluida" && item.contrato_versao === contrato) saida.push(item);
     });
-    return escolhida;
+    return saida;
+  }
+
+  function unica(lista) {
+    return lista.length === 1 ? lista[0] : null;
+  }
+
+  function selecaoDaAprovacao(analises) {
+    var painel = document.getElementById("agente-bi-aprovada");
+    var lista = candidatas(analises, "selecao", "selecao.descoberta.v1");
+    var marcada = painel && painel.getAttribute("data-selecao");
+    if (marcada) {
+      var identificador = Number(marcada);
+      for (var i = 0; i < lista.length; i += 1) {
+        if (lista[i].id === identificador) return lista[i];
+      }
+      return null;
+    }
+    var versao = painel && painel.getAttribute("data-versao");
+    if (versao) {
+      var ligadas = lista.filter(function (item) {
+        var resultado = item.resultado;
+        if (!resultado || typeof resultado !== "object") return String(item.versao) === versao;
+        return String(resultado.dataset_versao) === versao && item.dataset_id === resultado.dataset_id;
+      });
+      if (ligadas.length === 1) return ligadas[0];
+      if (ligadas.length > 1) return null;
+    }
+    return unica(lista);
+  }
+
+  function definicaoDaSelecao(analises, selecao) {
+    var lista = candidatas(analises, "definicao", "definir.v1");
+    if (selecao) {
+      var ligadas = lista.filter(function (item) {
+        var resultado = item.resultado;
+        return resultado && resultado.origem_selecao_id === selecao.id && (resultado.dataset_id == null || resultado.dataset_id === item.dataset_id);
+      });
+      if (ligadas.length === 1) return ligadas[0];
+      if (ligadas.length > 1) return null;
+      if (lista.some(function (item) { return item.resultado && item.resultado.origem_selecao_id; })) return null;
+    }
+    return unica(lista);
+  }
+
+  function calculoDaDefinicao(analises, definicao) {
+    var lista = candidatas(analises, "execucao", "calculo.v1");
+    if (definicao) {
+      var ligadas = lista.filter(function (item) {
+        var resultado = item.resultado;
+        return resultado && resultado.origem_definicao_id === definicao.id && (resultado.dataset_id == null || resultado.dataset_id === item.dataset_id);
+      });
+      if (ligadas.length === 1) return ligadas[0];
+      if (ligadas.length > 1) return null;
+      if (lista.some(function (item) { return item.resultado && item.resultado.origem_definicao_id; })) return null;
+    }
+    return unica(lista);
+  }
+
+  function publicarProgresso() {
+    var progresso = document.getElementById("agente-bi-montagem-progresso");
+    if (!progresso) return;
+    progresso.hidden = false;
+    progresso.textContent = "";
+    passosMontagem.forEach(function (item) {
+      progresso.appendChild(el("li", "agente-bi-montagem-passo is-" + item.estado, item.texto));
+    });
+    revelarPainel();
+  }
+
+  function definirPasso(nome, estadoPasso, texto) {
+    var achou = false;
+    passosMontagem.forEach(function (item) {
+      if (item.nome !== nome) return;
+      item.estado = estadoPasso;
+      item.texto = texto;
+      achou = true;
+    });
+    if (!achou) passosMontagem.push({ nome: nome, estado: estadoPasso, texto: texto });
+    publicarProgresso();
+  }
+
+  function iniciarMontagem() {
+    passosMontagem = [];
+  }
+
+  function interromperPassoAtual() {
+    var ativo = null;
+    passosMontagem.forEach(function (item) {
+      if (item.estado === "andamento") ativo = item;
+    });
+    if (!ativo) return;
+    var textos = {
+      "Definição": "Definição interrompida.",
+      "Cálculo": "Cálculo interrompido.",
+      "Montagem": "Montagem interrompida."
+    };
+    definirPasso(ativo.nome, "interrompido", textos[ativo.nome] || "Etapa interrompida.");
   }
 
   function montarCalculo(analiseId) {
+    definirPasso("Montagem", "andamento", "Montagem em andamento.");
     return jsonPost(raiz.getAttribute("data-montar-url"), { analise_id: analiseId }).then(function (resposta) {
       if (!resposta.corpo || resposta.corpo.ok !== true) {
+        definirPasso("Montagem", "interrompido", "Montagem interrompida.");
         mostrarErro(resposta.corpo && resposta.corpo.codigo);
         anunciar("Não foi possível salvar o dashboard.");
         return null;
       }
+      var painelId = resposta.corpo.dashboard && resposta.corpo.dashboard.id;
+      definirPasso("Montagem", "concluido", painelId ? "Montagem " + painelId + " concluída." : "Montagem concluída.");
       mostrarConsulta(resposta.corpo);
       return carregarLista();
     });
   }
 
   function calcularEMontar(definicaoId) {
+    definirPasso("Cálculo", "andamento", "Cálculo em andamento.");
     return jsonPost(raiz.getAttribute("data-calculo-url"), { analise_id: definicaoId }).then(function (resposta) {
       if (!resposta.corpo || resposta.corpo.ok !== true || !resposta.corpo.calculo) {
+        definirPasso("Cálculo", "interrompido", "Cálculo interrompido.");
         mostrarErro(resposta.corpo && resposta.corpo.codigo);
         anunciar("Não foi possível calcular os indicadores.");
         return null;
       }
+      definirPasso("Cálculo", "concluido", "Cálculo " + resposta.corpo.calculo.id + " concluído.");
       return montarCalculo(resposta.corpo.calculo.id);
     });
   }
 
   function definirCalcularEMontar(selecaoId) {
+    definirPasso("Definição", "andamento", "Definição em andamento.");
     return jsonPost(raiz.getAttribute("data-definicao-url"), { analise_id: selecaoId }).then(function (resposta) {
       if (!resposta.corpo || resposta.corpo.ok !== true || !resposta.corpo.definicao) {
+        definirPasso("Definição", "interrompido", "Definição interrompida.");
         mostrarErro(resposta.corpo && resposta.corpo.codigo);
         anunciar("Não foi possível preparar as definições.");
         return null;
       }
+      definirPasso("Definição", "concluido", "Definição " + resposta.corpo.definicao.id + " concluída.");
       return calcularEMontar(resposta.corpo.definicao.id);
     });
   }
@@ -796,17 +947,24 @@
   function desenharOrigens(analises) {
     if (!origens) return;
     origens.textContent = "";
-    var calculo = maisRecente(analises, "execucao", "calculo.v1");
-    var definicao = maisRecente(analises, "definicao", "definir.v1");
-    var selecao = maisRecente(analises, "selecao", "selecao.descoberta.v1");
+    var selecao = selecaoDaAprovacao(analises);
+    var definicao = definicaoDaSelecao(analises, selecao);
+    var calculo = calculoDaDefinicao(analises, definicao);
+    // Seleção sem definição vinculada não recebe cálculo de outra rodada.
+    if (selecao && !definicao) calculo = null;
+    if (calculo || definicao || selecao) {
+      origens.appendChild(el("p", "agente-bi-dashboard-nota", "A montagem só começa quando você escolher uma destas ações."));
+    }
     if (calculo) {
       origens.appendChild(botao("Salvar dashboard do cálculo " + calculo.id, function () {
         if (ocupado) return;
         ocupar(true);
         limparErro();
         anunciar("Salvando dashboard.");
+        iniciarMontagem();
         montarCalculo(calculo.id).catch(function () {
           mostrarErro("");
+          interromperPassoAtual();
         }).then(function () {
           ocupar(false);
         });
@@ -818,8 +976,10 @@
         ocupar(true);
         limparErro();
         anunciar("Calculando indicadores já definidos.");
+        iniciarMontagem();
         calcularEMontar(definicao.id).catch(function () {
           mostrarErro("");
+          interromperPassoAtual();
         }).then(function () {
           ocupar(false);
         });
@@ -831,13 +991,16 @@
         ocupar(true);
         limparErro();
         anunciar("Preparando o dashboard da seleção aprovada.");
+        iniciarMontagem();
         definirCalcularEMontar(selecao.id).catch(function () {
           mostrarErro("");
+          interromperPassoAtual();
         }).then(function () {
           ocupar(false);
         });
       }));
     }
+    if (origens.querySelector("button")) revelarPainel();
   }
 
   function ocupar(ativo) {
@@ -856,10 +1019,12 @@
     }).then(function (resposta) {
       var dashboards = resposta.corpo && resposta.corpo.dashboards;
       if (!resposta.corpo || resposta.corpo.ok !== true || !Array.isArray(dashboards)) {
+        concluirLeitura("dashboards", "falha");
         mostrarErro(resposta.corpo && resposta.corpo.codigo);
         anunciar("Não foi possível ler os dashboards salvos.");
         return;
       }
+      concluirLeitura("dashboards", dashboards.length ? "sim" : "nao");
       desenharLista(dashboards);
       if (!consultaAtual) {
         anunciar(dashboards.length ? "Escolha um dashboard salvo para reabrir." : "Nenhum dashboard salvo nesta conta.");
@@ -874,11 +1039,38 @@
       headers: { Accept: "application/json" }
     }).then(function (resposta) {
       var analises = resposta.corpo && resposta.corpo.analises;
-      if (!resposta.corpo || resposta.corpo.ok !== true || !Array.isArray(analises)) return false;
+      if (!resposta.corpo || resposta.corpo.ok !== true || !Array.isArray(analises)) {
+        concluirLeitura("analises", "falha");
+        return false;
+      }
+      concluirLeitura("analises", analises.length ? "sim" : "nao");
       desenharOrigens(analises);
-      return !!maisRecente(analises, "selecao", "selecao.descoberta.v1");
+      return !!selecaoDaAprovacao(analises);
     }).catch(function () {
+      concluirLeitura("analises", "falha");
       return false;
+    });
+  }
+
+  function carregarDatasets() {
+    var url = raiz.getAttribute("data-datasets-url");
+    if (!url) {
+      concluirLeitura("datasets", "falha");
+      return Promise.resolve();
+    }
+    return pedir(url, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" }
+    }).then(function (resposta) {
+      var datasets = resposta.corpo && resposta.corpo.datasets;
+      if (!resposta.corpo || resposta.corpo.ok !== true || !Array.isArray(datasets)) {
+        concluirLeitura("datasets", "falha");
+        return;
+      }
+      concluirLeitura("datasets", datasets.length ? "sim" : "nao");
+    }).catch(function () {
+      concluirLeitura("datasets", "falha");
     });
   }
 
@@ -954,12 +1146,23 @@
     }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   }
 
+  document.addEventListener("agente-bi-processamento", function () {
+    if (reinicioConfirmado()) return;
+    presenca.sessao = true;
+    atualizarReinicio();
+  });
+
   anunciar("Carregando dashboards salvos.");
-  carregarLista().then(function () {
+  carregarDatasets().then(function () {
+    return carregarLista();
+  }).then(function () {
     return carregarOrigens();
   }).then(function (jaDisponivel) {
     observarAprovacao(jaDisponivel === true);
   }).catch(function () {
+    if (presenca.dashboards === "pendente") concluirLeitura("dashboards", "falha");
+    if (presenca.analises === "pendente") concluirLeitura("analises", "falha");
+    if (presenca.datasets === "pendente") concluirLeitura("datasets", "falha");
     mostrarErro("");
     anunciar("Não foi possível ler os dashboards salvos.");
   });

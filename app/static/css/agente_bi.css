@@ -59,6 +59,7 @@
 .agente-bi-role,
 .agente-bi-disclaimer,
 .agente-bi-welcome,
+.agente-bi-orientacao,
 .agente-bi-unavailable,
 .agente-bi-composer-guidance {
   margin: 0;
@@ -92,6 +93,14 @@
   color: var(--af-text-secondary);
   font-size: 0.98rem;
   line-height: 1.6;
+}
+
+.agente-bi-orientacao {
+  max-width: 880px;
+  margin-top: 0.55rem;
+  color: var(--af-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .agente-bi-composer-area {
@@ -469,9 +478,11 @@
 }
 
 .agente-bi-enviar,
+.agente-bi-prosseguir,
 .agente-bi-examinar,
 .agente-bi-aprovar,
-.agente-bi-secundario {
+.agente-bi-secundario,
+.agente-bi-login {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -487,10 +498,13 @@
 }
 
 .agente-bi-enviar,
+.agente-bi-prosseguir,
 .agente-bi-examinar,
-.agente-bi-aprovar {
+.agente-bi-aprovar,
+.agente-bi-login {
   background: var(--af-primary);
   color: var(--af-primary-text);
+  text-decoration: none;
 }
 
 .agente-bi-secundario {
@@ -499,10 +513,12 @@
 }
 
 .agente-bi-enviar:disabled,
+.agente-bi-prosseguir:disabled,
 .agente-bi-examinar:disabled,
 .agente-bi-aprovar:disabled,
 .agente-bi-secundario:disabled,
-.agente-bi-descoberta.is-ocupado .agente-bi-enviar {
+.agente-bi-descoberta.is-ocupado .agente-bi-enviar,
+.agente-bi-descoberta.is-ocupado .agente-bi-prosseguir {
   opacity: 0.55;
   cursor: not-allowed;
 }
@@ -628,13 +644,59 @@
   background: var(--af-primary-soft);
 }
 
+.agente-bi-descoberta[hidden],
+.agente-bi-dashboard[hidden],
+.agente-bi-descoberta-form[hidden],
+.agente-bi-prosseguir[hidden],
+.agente-bi-montagem[hidden],
+.agente-bi-actions-item[hidden] {
+  display: none;
+}
+
+.agente-bi-revisao {
+  margin-top: 0.85rem;
+  padding: 0.75rem;
+  border: 1px solid var(--af-border-strong);
+  border-radius: var(--af-radius-md);
+  background: var(--af-surface-muted);
+}
+
+.agente-bi-selecao {
+  margin-top: 1.15rem;
+  padding: 0.85rem;
+  border: 1px solid var(--af-border-strong);
+  border-radius: var(--af-radius-md);
+  background: var(--af-surface);
+}
+
+.agente-bi-montagem {
+  margin: 0.85rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--af-text);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.agente-bi-montagem-passo.is-interrompido {
+  color: var(--af-danger);
+  font-weight: 700;
+}
+
 .agente-bi-descoberta button:focus-visible,
 .agente-bi-descoberta select:focus-visible,
 .agente-bi-descoberta textarea:focus-visible,
 .agente-bi-descoberta input:focus-visible,
-.agente-bi-enviar:focus-visible {
+.agente-bi-enviar:focus-visible,
+.agente-bi-prosseguir:focus-visible,
+.agente-bi-login:focus-visible {
   outline: none;
   box-shadow: var(--af-focus-ring);
+}
+
+.agente-bi-login:hover,
+.agente-bi-login:focus-visible {
+  color: var(--af-primary-text);
+  text-decoration: none;
 }
 
 .agente-bi-afirmacao {
@@ -650,9 +712,11 @@
   }
 
   .agente-bi-enviar,
+  .agente-bi-prosseguir,
   .agente-bi-examinar,
   .agente-bi-aprovar,
-  .agente-bi-secundario {
+  .agente-bi-secundario,
+  .agente-bi-login {
     width: 100%;
     margin-right: 0;
   }

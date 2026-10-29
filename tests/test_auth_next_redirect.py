@@ -222,6 +222,95 @@ class TestPostLoginNextFlow:
             if "post_login_next" in sess:
                 assert sess["post_login_next"] == "/auditoria-frete"
 
+    def test_password_login_returns_to_agente_bi(self, web_mod, monkeypatch):
+        fake_user = _fake_user()
+        monkeypatch.setattr(web_mod, "authenticate_user", lambda e, p: (fake_user, None))
+        monkeypatch.setattr(web_mod, "login_user", lambda u: None)
+        monkeypatch.setattr(web_mod, "user_is_admin", lambda u: False)
+        monkeypatch.setattr(flask_login.utils, "_get_user", _anon_user)
+
+        client = web_mod.app.test_client()
+        client.get("/login?next=/cleide-bi-frete")
+        with client.session_transaction() as sess:
+            assert sess.get("post_login_next") == "/cleide-bi-frete"
+        resp = client.post(
+            "/login",
+            data={"email": "u@test.com", "password": "secret"},
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 303)
+        location = resp.headers.get("Location") or ""
+        assert location.endswith("/cleide-bi-frete")
+
+    def test_google_existing_user_returns_to_agente_bi(self, web_mod, monkeypatch):
+        fake_user = _fake_user(id=2, email="g@test.com")
+        monkeypatch.setattr(
+            web_mod,
+            "handle_google_oauth_callback",
+            lambda *a, **k: (fake_user, None, False, False),
+        )
+        monkeypatch.setattr(web_mod, "login_user", lambda u: None)
+        monkeypatch.setattr(web_mod, "user_is_admin", lambda u: False)
+        monkeypatch.setattr(flask_login.utils, "_get_user", _anon_user)
+
+        client = web_mod.app.test_client()
+        with client.session_transaction() as sess:
+            sess["post_login_next"] = "/cleide-bi-frete"
+            sess["oauth_state"] = "state-bi"
+            sess["oauth_states"] = ["state-bi"]
+
+        resp = client.get(
+            "/login/google/callback?code=abc&state=state-bi",
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 303)
+        assert (resp.headers.get("Location") or "").endswith("/cleide-bi-frete")
+
+    def test_google_new_user_returns_to_agente_bi_after_complete_profile(self, web_mod, monkeypatch):
+        fake_user = _fake_user(id=3, email="new-bi@test.com", job_role="", usage_purpose="")
+        monkeypatch.setattr(
+            web_mod,
+            "handle_google_oauth_callback",
+            lambda *a, **k: (fake_user, None, True, True),
+        )
+        monkeypatch.setattr(web_mod, "login_user", lambda u: None)
+        monkeypatch.setattr(web_mod, "user_is_admin", lambda u: False)
+        monkeypatch.setattr(
+            web_mod,
+            "auth_complete_user_profile",
+            lambda *a, **k: (True, "Perfil atualizado"),
+        )
+        monkeypatch.setattr(flask_login.utils, "_get_user", lambda: fake_user)
+        monkeypatch.setattr(web_mod, "current_user", fake_user)
+
+        client = web_mod.app.test_client()
+        with client.session_transaction() as sess:
+            sess["post_login_next"] = "/cleide-bi-frete"
+            sess["oauth_state"] = "state-bi-2"
+            sess["oauth_states"] = ["state-bi-2"]
+
+        cb = client.get(
+            "/login/google/callback?code=abc&state=state-bi-2",
+            follow_redirects=False,
+        )
+        assert cb.status_code in (302, 303)
+        assert "complete-profile" in (cb.headers.get("Location") or "")
+
+        with client.session_transaction() as sess:
+            assert sess.get("post_login_next") == "/cleide-bi-frete"
+
+        done = client.post(
+            "/complete-profile",
+            data={
+                "accept_terms": "1",
+                "job_role": "Analista",
+                "usage_purpose": "Auditoria",
+            },
+            follow_redirects=False,
+        )
+        assert done.status_code in (302, 303)
+        assert (done.headers.get("Location") or "").endswith("/cleide-bi-frete")
+
     def test_unauthorized_html_route_preserves_safe_next_for_fretes(self, web_mod, monkeypatch):
         monkeypatch.setattr(flask_login.utils, "_get_user", _anon_user)
         monkeypatch.setattr(web_mod, "current_user", _anon_user())

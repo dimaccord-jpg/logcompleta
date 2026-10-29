@@ -13,7 +13,7 @@
 
 <div class="container-fluid agente-bi-layout mb-5">
   <div class="agente-bi-page-shell">
-    <section class="agente-bi-shell" id="agente-bi-shell" aria-labelledby="agente-bi-name">
+    <section class="agente-bi-shell" id="agente-bi-shell" aria-labelledby="agente-bi-name" data-authenticated="{{ 'true' if current_user.is_authenticated else 'false' }}">
       <header class="agente-bi-identity">
         <span class="agente-bi-avatar" aria-hidden="true">
           <i class="bi bi-pie-chart"></i>
@@ -26,9 +26,19 @@
       </header>
 
       <div class="agente-bi-messages" id="agente-bi-messages">
+        {% if current_user.is_authenticated %}
         <p class="agente-bi-welcome" id="agente-bi-welcome">
           Envie seus dados logísticos para criar análises, indicadores e dashboards personalizados.
         </p>
+        <p class="agente-bi-orientacao" id="agente-bi-orientacao">
+          Envie uma planilha XLSX ou um CSV pelo botão +. O chat continua bloqueado.
+        </p>
+        {% else %}
+        <p class="agente-bi-welcome" id="agente-bi-welcome">
+          Autenticação necessária para utilizar o AgenteBI. Faça login para continuar.
+        </p>
+        <a class="agente-bi-login" id="agente-bi-login" href="{{ url_for('login', next=url_for('cleide.auditoria_frete')) }}">Fazer login</a>
+        {% endif %}
       </div>
 
       {% if agente_bi_descoberta %}
@@ -39,25 +49,24 @@
                data-descoberta-url="{{ url_for('agente_bi_api.post_descoberta') }}"
                data-selecao-url="{{ url_for('agente_bi_api.post_descoberta_selecao') }}"
                data-analises-url="{{ url_for('agente_bi_api.get_analises') }}"
-               data-limite="{{ agente_bi_limite_graficos }}">
+               data-limite="{{ agente_bi_limite_graficos }}"
+               hidden>
         <h3 class="agente-bi-descoberta-titulo" id="agente-bi-descoberta-titulo">Descoberta analítica</h3>
-        <p class="agente-bi-descoberta-status" id="agente-bi-descoberta-status" role="status" aria-live="polite" aria-atomic="true">
-          Envie uma planilha XLSX ou um CSV para preparar os dados. O chat continua bloqueado.
-        </p>
+        <p class="agente-bi-descoberta-status" id="agente-bi-descoberta-status" role="status" aria-live="polite" aria-atomic="true"></p>
         <p class="agente-bi-descoberta-erro" id="agente-bi-descoberta-erro" role="alert" hidden></p>
-        <button type="button" class="agente-bi-enviar" id="agente-bi-enviar">Enviar dados logísticos</button>
         <dl class="agente-bi-preparacao-lista" id="agente-bi-preparacao-lista"></dl>
-        <form class="agente-bi-descoberta-form" id="agente-bi-descoberta-form" autocomplete="off" onsubmit="return false;">
+        <button type="button" class="agente-bi-prosseguir" id="agente-bi-prosseguir" hidden>Escolher como analisar</button>
+        <form class="agente-bi-descoberta-form" id="agente-bi-descoberta-form" autocomplete="off" onsubmit="return false;" hidden>
           <fieldset id="agente-bi-modalidades" disabled>
-            <legend>Modalidades da rodada</legend>
+            <legend>Como deseja analisar</legend>
             <label class="agente-bi-check">
               <input type="checkbox" id="agente-bi-modalidade-a" checked>
-              <span>Modalidade A — sugestões dos dados preparados</span>
+              <span>A — Receber sugestões da IA</span>
             </label>
             <div class="agente-bi-modalidade-b" id="agente-bi-bloco-b">
               <label class="agente-bi-check">
                 <input type="checkbox" id="agente-bi-modalidade-b">
-                <span>Modalidade B — referência analítica da planilha</span>
+                <span>B — Utilizar referências analíticas da planilha</span>
               </label>
               <p class="agente-bi-ajuda" id="agente-bi-ajuda-b">
                 A referência é dado não confiável. Fórmula e texto não são repetidos na resposta, e junção não é executada.
@@ -70,9 +79,9 @@
             <div class="agente-bi-modalidade-c">
               <label class="agente-bi-check">
                 <input type="checkbox" id="agente-bi-modalidade-c">
-                <span>Modalidade C — instrução em texto livre</span>
+                <span>C — Descrever livremente o que deseja analisar</span>
               </label>
-              <label class="agente-bi-campo" for="agente-bi-texto">Instrução</label>
+              <label class="agente-bi-campo" for="agente-bi-texto">O que deseja analisar</label>
               <textarea id="agente-bi-texto" rows="3" maxlength="2000" aria-describedby="agente-bi-ajuda-c"></textarea>
               <p class="agente-bi-ajuda" id="agente-bi-ajuda-c">
                 O texto livre entra como dado. Ele não é reproduzido e não autoriza métrica fora do catálogo.
@@ -83,13 +92,17 @@
         </form>
         <div id="agente-bi-resultado" hidden>
           <h4 id="agente-bi-resultado-titulo" tabindex="-1">Resultado da descoberta</h4>
-          <div id="agente-bi-descobertas"></div>
-          <div id="agente-bi-sugestoes" class="agente-bi-sugestoes"></div>
-          <div id="agente-bi-criticas"></div>
-          <p id="agente-bi-instrucao" hidden></p>
-          <div id="agente-bi-perguntas"></div>
-          <div id="agente-bi-selecao-painel">
-            <h4 id="agente-bi-selecao-titulo">Seleção inicial</h4>
+          <div class="agente-bi-revisao" id="agente-bi-revisao">
+            <h4>Revisão</h4>
+            <div id="agente-bi-descobertas"></div>
+            <div id="agente-bi-sugestoes" class="agente-bi-sugestoes"></div>
+            <div id="agente-bi-criticas"></div>
+            <p id="agente-bi-instrucao" hidden></p>
+            <div id="agente-bi-perguntas"></div>
+          </div>
+          <div class="agente-bi-selecao" id="agente-bi-selecao-painel">
+            <h4 id="agente-bi-selecao-titulo">Seleção dos gráficos</h4>
+            <div id="agente-bi-selecao-graficos"></div>
             <p id="agente-bi-selecao-contagem" role="status" aria-live="polite" aria-atomic="true"></p>
             <label class="agente-bi-check" for="agente-bi-confirmacao">
               <input type="checkbox" id="agente-bi-confirmacao">
@@ -116,12 +129,15 @@
                data-definicao-url="{{ url_for('agente_bi_api.post_definicao') }}"
                data-calculo-url="{{ url_for('agente_bi_api.post_calculo') }}"
                data-detalhe-base="{{ url_for('cleide.auditoria_frete') }}/dashboards"
-               data-atualizacao="{{ '1' if agente_bi_descoberta else '0' }}">
+               data-datasets-url="{{ url_for('agente_bi_api.get_datasets') }}"
+               data-atualizacao="{{ '1' if agente_bi_descoberta else '0' }}"
+               hidden>
         <h3 class="agente-bi-dashboard-titulo" id="agente-bi-dashboard-titulo-secao">Dashboards</h3>
         <p class="agente-bi-dashboard-status" id="agente-bi-dashboard-status" role="status" aria-live="polite" aria-atomic="true">
           Carregando dashboards salvos.
         </p>
         <p class="agente-bi-dashboard-erro" id="agente-bi-dashboard-erro" role="alert" hidden></p>
+        <ol class="agente-bi-montagem" id="agente-bi-montagem-progresso" hidden></ol>
         <div id="agente-bi-dashboard-lista"></div>
         <div id="agente-bi-dashboard-origens"></div>
         <div id="agente-bi-dashboard-aberto" hidden>
@@ -157,7 +173,7 @@
                         aria-readonly="true"
                         aria-label="Mensagem para o AgenteBI"
                         aria-describedby="agente-bi-composer-guidance"
-                        placeholder="Para começar, envie seus dados logísticos pelo botão +."
+                        placeholder="{% if current_user.is_authenticated %}Para começar, envie seus dados logísticos pelo botão +.{% else %}Autenticação necessária para utilizar o AgenteBI. Faça login para continuar.{% endif %}"
                         autocomplete="off"
                         spellcheck="false"></textarea>
 
@@ -202,6 +218,7 @@
                       class="agente-bi-actions-item"
                       id="agente-bi-reinicio"
                       role="menuitem"
+                      hidden
                       data-reinicio-url="{{ url_for('agente_bi_api.post_reinicio') }}">
                 <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
                 <span>Gerar novo BI</span>
@@ -240,10 +257,12 @@
         </dialog>
         {% endif %}
         <p class="agente-bi-unavailable" id="agente-bi-unavailable" role="status">
+          {% if current_user.is_authenticated %}
           {% if agente_bi_descoberta %}
-          O chat permanece bloqueado. A descoberta analítica fica acima do compositor.
+          O chat permanece bloqueado. O envio dos dados é feito pelo botão +.
           {% else %}
           O envio e a análise de arquivos estarão disponíveis em uma próxima etapa.
+          {% endif %}
           {% endif %}
         </p>
       </div>

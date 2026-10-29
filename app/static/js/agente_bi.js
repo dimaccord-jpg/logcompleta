@@ -10,7 +10,10 @@
   var uploadItem = document.getElementById("agente-bi-upload-item");
   var guidance = document.getElementById("agente-bi-composer-guidance");
   var menuHome = menu ? menu.parentNode : null;
-  var GUIDANCE = "Para começar, envie seus dados logísticos pelo botão +.";
+  var autenticado = shell.getAttribute("data-authenticated") === "true";
+  var GUIDANCE = autenticado
+    ? "Para começar, envie seus dados logísticos pelo botão +."
+    : "Autenticação necessária para utilizar o AgenteBI. Faça login para continuar.";
   var guidanceAnnounced = false;
 
   function descobertaAtiva() {
@@ -70,7 +73,7 @@
     return Array.prototype.filter.call(
       menu.querySelectorAll('[role="menuitem"]'),
       function (item) {
-        return !item.disabled && item.getAttribute("aria-disabled") !== "true";
+        return !item.hidden && !item.disabled && item.getAttribute("aria-disabled") !== "true";
       }
     );
   }

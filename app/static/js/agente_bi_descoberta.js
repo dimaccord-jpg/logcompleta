@@ -7,6 +7,8 @@
   var enviar = document.getElementById("agente-bi-enviar");
   var upload = document.getElementById("agente-bi-upload-item");
   var lista = document.getElementById("agente-bi-preparacao-lista");
+  var formulario = document.getElementById("agente-bi-descoberta-form");
+  var prosseguir = document.getElementById("agente-bi-prosseguir");
   var modalidades = document.getElementById("agente-bi-modalidades");
   var modalidadeA = document.getElementById("agente-bi-modalidade-a");
   var modalidadeB = document.getElementById("agente-bi-modalidade-b");
@@ -23,6 +25,7 @@
   var criticas = document.getElementById("agente-bi-criticas");
   var instrucao = document.getElementById("agente-bi-instrucao");
   var perguntas = document.getElementById("agente-bi-perguntas");
+  var selecaoGraficos = document.getElementById("agente-bi-selecao-graficos");
   var contagem = document.getElementById("agente-bi-selecao-contagem");
   var confirmacao = document.getElementById("agente-bi-confirmacao");
   var aprovar = document.getElementById("agente-bi-aprovar");
@@ -113,7 +116,7 @@
   arquivo.multiple = true;
   arquivo.tabIndex = -1;
   arquivo.setAttribute("aria-hidden", "true");
-  raiz.appendChild(arquivo);
+  (document.body || raiz).appendChild(arquivo);
 
   function lerCatalogo() {
     var nodo = document.getElementById("agente-bi-descoberta-catalogo");
@@ -185,6 +188,20 @@
     });
   }
 
+  function revelarDescoberta() {
+    raiz.hidden = false;
+  }
+
+  function marcarProcessamento() {
+    raiz.setAttribute("data-processamento", "persistido");
+    document.dispatchEvent(new CustomEvent("agente-bi-processamento"));
+  }
+
+  function mostrarFormulario(visivel) {
+    if (formulario) formulario.hidden = !visivel;
+    if (prosseguir) prosseguir.hidden = visivel || !estado.datasetId || estado.aprovado;
+  }
+
   function ocupar(mensagem) {
     estado.ocupado = true;
     raiz.classList.add("is-ocupado");
@@ -192,6 +209,7 @@
     anunciar(mensagem);
     if (examinar) examinar.disabled = true;
     if (aprovar) aprovar.disabled = true;
+    if (prosseguir) prosseguir.disabled = true;
     if (enviar) enviar.disabled = true;
     if (upload) upload.disabled = true;
   }
@@ -200,6 +218,7 @@
     estado.ocupado = false;
     raiz.classList.remove("is-ocupado");
     raiz.removeAttribute("aria-busy");
+    if (prosseguir) prosseguir.disabled = false;
     if (enviar) enviar.disabled = false;
     if (upload) upload.disabled = false;
     if (examinar && modalidades && !modalidades.disabled) examinar.disabled = false;
@@ -241,8 +260,11 @@
       if (qualidade[chave]) pares.push([legivel(chave), String(qualidade[chave])]);
     });
     definirLista(pares);
+    revelarDescoberta();
     if (corpo.estado !== "preparado") {
       if (modalidades) modalidades.disabled = true;
+      mostrarFormulario(false);
+      if (prosseguir) prosseguir.hidden = true;
       mostrarErro(mensagemErro({ codigo: corpo.motivo }, "Os dados não ficaram preparados."));
       anunciar("A preparação não foi concluída.");
       return;
@@ -258,6 +280,9 @@
     }
     estado.aprovado = false;
     esconderResultado();
+    mostrarFormulario(false);
+    if (prosseguir) prosseguir.hidden = false;
+    marcarProcessamento();
     anunciar(
       (corpo.reutilizado ? "Esta versão já estava preparada. " : "Dados preparados. ") +
         "Versão " + dataset.versao + ". Escolha as modalidades da rodada. O chat continua bloqueado."
@@ -268,6 +293,7 @@
     if (resultadoPainel) resultadoPainel.hidden = true;
     if (aprovada) {
       aprovada.hidden = true;
+      aprovada.removeAttribute("data-selecao");
       aprovada.removeAttribute("data-versao");
       aprovada.removeAttribute("data-graficos");
     }
@@ -276,6 +302,7 @@
     raiz.removeAttribute("data-restaurada");
     limpar(descobertas);
     limpar(sugestoes);
+    limpar(selecaoGraficos);
     limpar(criticas);
     limpar(perguntas);
     if (instrucao) {
@@ -448,6 +475,7 @@
 
   function renderSugestoes(itens, leitura) {
     limpar(sugestoes);
+    limpar(selecaoGraficos);
     sugestoes.appendChild(el("h4", null, leitura ? "Gráficos aprovados" : "Sugestões"));
     (itens || []).forEach(function (item) {
       var card = el("article", { class: "agente-bi-card" });
@@ -464,14 +492,18 @@
       if (referencia) card.appendChild(el("p", null, referencia));
       if (item.lacuna) card.appendChild(el("p", null, "Lacuna: " + legivel(item.lacuna) + "."));
       if (!leitura && selecionavel(item)) {
+        var identificacao = nome;
+        if (item.id != null && item.id !== "") identificacao += " (" + item.id + ")";
+        var textoCaixa = "Incluir " + identificacao;
         var rotulo = el("label", { class: "agente-bi-check" });
         var caixa = el("input");
         caixa.type = "checkbox";
         caixa.className = "agente-bi-grafico";
         caixa.setAttribute("data-sugestao", item.id);
+        caixa.setAttribute("aria-label", textoCaixa);
         caixa.setAttribute("aria-describedby", "agente-bi-selecao-contagem");
         rotulo.appendChild(caixa);
-        rotulo.appendChild(el("span", null, "Incluir este gráfico na seleção"));
+        rotulo.appendChild(el("span", null, textoCaixa));
         card.appendChild(rotulo);
       }
       sugestoes.appendChild(card);
@@ -560,6 +592,9 @@
     var dados = new FormData();
     for (var i = 0; i < listaArquivos.length; i += 1) dados.append("arquivos", listaArquivos[i], listaArquivos[i].name);
     limparErro();
+    revelarDescoberta();
+    if (formulario) formulario.hidden = true;
+    if (prosseguir) prosseguir.hidden = true;
     ocupar("Preparando os dados…");
     pedir(raiz.getAttribute("data-preparacao-url"), {
       method: "POST",
@@ -569,6 +604,8 @@
     }).then(function (resposta) {
       if (!resposta.corpo || resposta.corpo.ok !== true) {
         liberar();
+        revelarDescoberta();
+        if (prosseguir) prosseguir.hidden = true;
         mostrarErro(mensagemErro(resposta.corpo, "A preparação não foi concluída."));
         anunciar("A preparação não foi concluída.");
         return;
@@ -644,9 +681,13 @@
       }
       if (aprovada) {
         aprovada.hidden = false;
+        if (selecao.id != null) aprovada.setAttribute("data-selecao", String(selecao.id));
         aprovada.setAttribute("data-versao", String(selecao.versao));
         aprovada.setAttribute("data-graficos", String(selecao.graficos));
       }
+      mostrarFormulario(false);
+      if (prosseguir) prosseguir.hidden = true;
+      marcarProcessamento();
       estado.aprovado = true;
       if (aprovadaTexto) {
         aprovadaTexto.textContent =
@@ -723,11 +764,16 @@
       ));
     }
     if (resultadoPainel) resultadoPainel.hidden = false;
+    revelarDescoberta();
+    mostrarFormulario(false);
+    if (prosseguir) prosseguir.hidden = true;
     if (aprovada) {
       aprovada.hidden = false;
+      if (item.id != null) aprovada.setAttribute("data-selecao", String(item.id));
       aprovada.setAttribute("data-versao", String(item.versao));
       aprovada.setAttribute("data-graficos", String(resultado.graficos.length));
     }
+    marcarProcessamento();
     if (aprovadaTexto) {
       aprovadaTexto.textContent =
         "A seleção de " + resultado.graficos.length +
@@ -745,6 +791,13 @@
     if (aprovadaTitulo) aprovadaTitulo.focus();
   }
 
+  function mostrarFalhaRecuperacao(corpo) {
+    if (estado.ocupado || estado.datasetId || estado.aprovado) return;
+    revelarDescoberta();
+    mostrarErro(mensagemErro(corpo, "Não foi possível ler a seleção já gravada."));
+    anunciar("Não foi possível ler a seleção já gravada. O chat continua bloqueado.");
+  }
+
   function recuperarSelecao() {
     var url = raiz.getAttribute("data-analises-url");
     if (!url) return;
@@ -755,7 +808,10 @@
     }).then(function (resposta) {
       if (estado.ocupado || estado.datasetId || estado.aprovado) return;
       var analises = resposta.corpo && resposta.corpo.analises;
-      if (!resposta.corpo || resposta.corpo.ok !== true || !Array.isArray(analises)) return;
+      if (!resposta.corpo || resposta.corpo.ok !== true || !Array.isArray(analises)) {
+        mostrarFalhaRecuperacao(resposta.corpo);
+        return;
+      }
       for (var i = 0; i < analises.length; i += 1) {
         if (selecaoConfiavel(analises[i])) {
           mostrarRestaurada(analises[i]);
@@ -763,9 +819,7 @@
         }
       }
     }).catch(function () {
-      if (!estado.ocupado && !estado.datasetId && !estado.aprovado) {
-        anunciar("Não foi possível ler a seleção já gravada. O chat continua bloqueado.");
-      }
+      mostrarFalhaRecuperacao(null);
     });
   }
 
@@ -782,6 +836,11 @@
   if (upload) upload.addEventListener("click", function (event) {
     event.preventDefault();
     escolherArquivo();
+  });
+  if (prosseguir) prosseguir.addEventListener("click", function () {
+    if (estado.ocupado || !estado.datasetId || estado.aprovado) return;
+    mostrarFormulario(true);
+    if (modalidadeA) modalidadeA.focus();
   });
   if (adicionar) adicionar.addEventListener("click", adicionarAfirmacao);
   if (examinar) examinar.addEventListener("click", examinarDescobertas);

@@ -559,7 +559,10 @@ def test_pagina_preserva_bloqueio_e_so_abre_descoberta_com_flags(monkeypatch):
     monkeypatch.setenv("AGENTE_BI_INGESTAO_ENABLED", "1")
     html_visitante = visitante.app.test_client().get("/cleide-bi-frete").get_data(as_text=True)
     assert 'id="agente-bi-descoberta"' not in html_visitante
-    assert "O envio e a análise de arquivos estarão disponíveis em uma próxima etapa." in html_visitante
+    assert "Autenticação necessária para utilizar o AgenteBI. Faça login para continuar." in html_visitante
+    assert 'href="/login?next=/cleide-bi-frete"' in html_visitante
+    assert "O envio e a análise de arquivos estarão disponíveis em uma próxima etapa." not in html_visitante
+    assert "Envie uma planilha" not in html_visitante
     assert re.search(r'<button\b[^>]*\bid="agente-bi-upload-item"[^>]*\bdisabled\b', html_visitante, re.S)
 
     bloqueado = _cliente_pagina(monkeypatch, authenticated=True, permitido=False)
@@ -910,6 +913,9 @@ def test_jornada_visual_seleciona_seis_e_mantem_o_chat_bloqueado(monkeypatch):
             files=[{"name": "fretes.csv", "mimeType": "text/csv", "buffer": b"alfa,valor\nA,10\n"}]
         )
         page.wait_for_function("() => document.getElementById('agente-bi-modalidades').disabled === false")
+        assert page.locator("#agente-bi-descoberta-form").is_hidden()
+        page.locator("#agente-bi-prosseguir").click()
+        page.wait_for_selector("#agente-bi-descoberta-form:not([hidden])")
         texto_lista = page.locator("#agente-bi-preparacao-lista").inner_text()
         assert "Versão do dataset" in texto_lista
         assert "2" in texto_lista
@@ -996,7 +1002,7 @@ def test_jornada_visual_seleciona_seis_e_mantem_o_chat_bloqueado(monkeypatch):
             }"""
         )
         assert ajuste is True
-        assert page.locator("#agente-bi-enviar").bounding_box()["height"] >= 44
+        assert page.locator("#agente-bi-aprovar").bounding_box()["height"] >= 44
         relevantes = [erro for erro in erros if "$ is not defined" not in erro]
         assert relevantes == []
         browser.close()
@@ -1125,7 +1131,7 @@ def test_recarga_recupera_selecao_sem_novo_upload(monkeypatch):
                   return el.scrollWidth <= el.clientWidth + 1;
                 }"""
             ) is True
-        assert page.locator("#agente-bi-enviar").bounding_box()["height"] >= 44
+        assert page.locator("#agente-bi-aprovar").bounding_box()["height"] >= 44
         relevantes = [erro for erro in erros if "$ is not defined" not in erro]
         assert relevantes == []
         browser.close()
