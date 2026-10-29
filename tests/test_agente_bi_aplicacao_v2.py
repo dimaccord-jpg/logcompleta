@@ -805,7 +805,7 @@ def test_migration_reversivel():
     revisao = script.get_revision("n2o3p4q5r6s7")
     assert revisao is not None
     assert revisao.down_revision == "m1n2o3p4q5r6"
-    assert script.get_heads() == ["n2o3p4q5r6s7"]
+    assert script.get_heads() == ["o3p4q5r6s7t8"]
     spec = importlib.util.spec_from_file_location("mig_aplicacao_v2", _MIGRATION)
     mig = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

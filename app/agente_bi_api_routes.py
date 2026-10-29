@@ -145,6 +145,16 @@ def _chave_consulta() -> str | None:
     return request.args.get("chave")
 
 
+@agente_bi_api_bp.post("/reinicio")
+@_endpoint
+def post_reinicio(escopo: EscopoAgenteBi):
+    from app.services.agente_bi_reinicio_service import reiniciar
+
+    _corpo_json()
+    reiniciar(escopo)
+    return jsonify({"ok": True})
+
+
 @agente_bi_api_bp.post("/datasets")
 @_endpoint
 def post_dataset(escopo: EscopoAgenteBi):

@@ -1184,7 +1184,7 @@ def test_migration_postgresql_compila_upgrade_e_downgrade():
     raiz = Path(__file__).resolve().parents[1]
     cfg = Config(str(raiz / "migrations" / "alembic.ini"))
     cfg.set_main_option("script_location", str(raiz / "migrations"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["n2o3p4q5r6s7"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["o3p4q5r6s7t8"]
 
     def _sql(fn) -> str:
         buf = StringIO()

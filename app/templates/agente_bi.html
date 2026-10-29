@@ -197,6 +197,16 @@
                 <span class="agente-bi-actions-state">Indisponível</span>
               </button>
               {% endif %}
+              {% if agente_bi_dashboard %}
+              <button type="button"
+                      class="agente-bi-actions-item"
+                      id="agente-bi-reinicio"
+                      role="menuitem"
+                      data-reinicio-url="{{ url_for('agente_bi_api.post_reinicio') }}">
+                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                <span>Gerar novo BI</span>
+              </button>
+              {% endif %}
               <div class="agente-bi-actions-divider" role="separator" aria-hidden="true"></div>
               {% for item in agente_bi_menu %}
               <a href="{{ item.href }}"
@@ -211,6 +221,24 @@
           </div>
         </form>
         <p class="agente-bi-composer-guidance" id="agente-bi-composer-guidance" role="status" aria-live="polite" aria-atomic="true"></p>
+        {% if agente_bi_dashboard %}
+        <dialog class="agente-bi-reinicio-dialogo"
+                id="agente-bi-reinicio-dialogo"
+                aria-labelledby="agente-bi-reinicio-titulo"
+                aria-describedby="agente-bi-reinicio-texto">
+          <h3 class="agente-bi-reinicio-titulo" id="agente-bi-reinicio-titulo">Gerar novo BI</h3>
+          <p id="agente-bi-reinicio-texto">
+            Todos os dados operacionais anteriores deste AgenteBI serão excluídos permanentemente.
+            Datasets, análises, seleções, definições, cálculos, dashboards e execuções deixam de existir.
+            Registros financeiros e permissões não são alterados. Esta ação não pode ser desfeita.
+          </p>
+          <p class="agente-bi-reinicio-erro" id="agente-bi-reinicio-erro" role="alert" hidden></p>
+          <div class="agente-bi-reinicio-acoes">
+            <button type="button" class="agente-bi-reinicio-cancelar" id="agente-bi-reinicio-cancelar">Cancelar</button>
+            <button type="button" class="agente-bi-reinicio-confirmar" id="agente-bi-reinicio-confirmar">Excluir e gerar novo BI</button>
+          </div>
+        </dialog>
+        {% endif %}
         <p class="agente-bi-unavailable" id="agente-bi-unavailable" role="status">
           {% if agente_bi_descoberta %}
           O chat permanece bloqueado. A descoberta analítica fica acima do compositor.
@@ -229,5 +257,6 @@
 {% if agente_bi_dashboard %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="{{ url_for('static', filename='js/agente_bi_dashboard.js') }}"></script>
+<script src="{{ url_for('static', filename='js/agente_bi_reinicio.js') }}"></script>
 {% endif %}
 {% endblock %}

@@ -321,6 +321,72 @@
   background: var(--af-surface-muted);
 }
 
+.agente-bi-reinicio-dialogo {
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 1.25rem;
+  border: 1px solid var(--af-border-strong);
+  border-radius: var(--af-radius-md);
+  background: var(--af-surface);
+  color: var(--af-text);
+  box-shadow: var(--af-shadow-md);
+}
+
+.agente-bi-reinicio-dialogo::backdrop {
+  background: var(--af-overlay);
+}
+
+.agente-bi-reinicio-titulo {
+  margin: 0 0 0.75rem;
+  color: var(--af-text);
+  font-size: 1.05rem;
+}
+
+.agente-bi-reinicio-dialogo p {
+  margin: 0;
+  color: var(--af-text);
+  line-height: 1.45;
+}
+
+.agente-bi-reinicio-erro {
+  margin-top: 0.75rem;
+  color: var(--af-danger);
+}
+
+.agente-bi-reinicio-acoes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.agente-bi-reinicio-cancelar,
+.agente-bi-reinicio-confirmar {
+  min-height: 44px;
+  padding: 0.55rem 0.9rem;
+  border-radius: var(--af-radius-sm);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.agente-bi-reinicio-cancelar {
+  border: 1px solid var(--af-border-strong);
+  background: transparent;
+  color: var(--af-text);
+}
+
+.agente-bi-reinicio-confirmar {
+  border: 1px solid var(--af-danger-border);
+  background: var(--af-danger);
+  color: var(--af-primary-text);
+}
+
+.agente-bi-reinicio-cancelar:disabled,
+.agente-bi-reinicio-confirmar:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 @media (max-width: 767.98px) {
   .agente-bi-layout {
     padding-left: 0.75rem;

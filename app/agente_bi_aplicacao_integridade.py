@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from sqlalchemy import inspect, text
 
-from app.agente_bi_integridade import MENSAGEM_ESCOPO
+from app.agente_bi_integridade import MENSAGEM_ESCOPO, sql_reinicio_do_escopo
 
 ESTADOS_APLICACAO = ("preparada", "concluida")
 CONTRATO_PLANO_APLICACAO = "patch.definir.v2"
@@ -106,16 +106,20 @@ def sql_papeis_aplicacao() -> str:
     )
 
 
-def instalar_protecao_aplicacao(connection) -> None:
+def instalar_protecao_aplicacao(connection, *, reinicio=None) -> None:
     nomes = set(inspect(connection).get_table_names())
     if not set(_TABELAS) <= nomes:
         return
+    if reinicio is None:
+        from app.agente_bi_integridade import _tabela_reinicio_presente
+
+        reinicio = _tabela_reinicio_presente(connection)
     dialeto = connection.dialect.name
     if dialeto == "postgresql":
-        _instalar_postgresql(connection)
+        _instalar_postgresql(connection, reinicio=reinicio)
         return
     if dialeto == "sqlite":
-        _instalar_sqlite(connection)
+        _instalar_sqlite(connection, reinicio=reinicio)
         return
     raise RuntimeError("dialeto sem protecao da aplicacao do AgenteBI: " + dialeto)
 
@@ -256,10 +260,30 @@ def _falha_identidade(*, postgres: bool) -> str:
     return " OR ".join(partes)
 
 
-def _instalar_postgresql(connection) -> None:
+def _ramo_delete_aplicacao(*, reinicio: bool) -> str:
+    if not reinicio:
+        return (
+            "IF TG_OP = 'DELETE' THEN\n"
+            "                RAISE EXCEPTION '" + MENSAGEM_APLICACAO
+            + "' USING ERRCODE = 'check_violation';\n"
+            "              END IF;"
+        )
+    return (
+        "IF TG_OP = 'DELETE' THEN\n"
+        "                IF NOT " + sql_reinicio_do_escopo() + " THEN\n"
+        "                  RAISE EXCEPTION '" + MENSAGEM_APLICACAO
+        + "' USING ERRCODE = 'check_violation';\n"
+        "                END IF;\n"
+        "                RETURN OLD;\n"
+        "              END IF;"
+    )
+
+
+def _instalar_postgresql(connection, *, reinicio: bool) -> None:
     identidade = _falha_identidade(postgres=True)
     base = _falha_base()
     conclusao = _falha_conclusao()
+    ramo_delete = _ramo_delete_aplicacao(reinicio=reinicio)
     connection.execute(
         text(
             """
@@ -268,11 +292,9 @@ def _instalar_postgresql(connection) -> None:
             LANGUAGE plpgsql
             AS $apl$
             BEGIN
-              IF TG_OP = 'DELETE' THEN
-                RAISE EXCEPTION '"""
-            + MENSAGEM_APLICACAO
-            + """' USING ERRCODE = 'check_violation';
-              END IF;
+              """
+            + ramo_delete
+            + """
               IF TG_OP = 'UPDATE' AND ("""
             + identidade
             + """) THEN
@@ -310,7 +332,22 @@ def _instalar_postgresql(connection) -> None:
     )
 
 
-def _instalar_sqlite(connection) -> None:
+def _sql_preservar_aplicacao(*, reinicio: bool) -> str:
+    if reinicio:
+        corpo = (
+            "SELECT RAISE(ABORT, '" + MENSAGEM_APLICACAO + "')"
+            " WHERE NOT " + sql_reinicio_do_escopo() + ";"
+        )
+    else:
+        corpo = "SELECT RAISE(ABORT, '" + MENSAGEM_APLICACAO + "');"
+    return (
+        "CREATE TRIGGER " + TRIGGER_PRESERVAR
+        + " BEFORE DELETE ON agente_bi_aplicacao"
+        + " FOR EACH ROW BEGIN " + corpo + " END"
+    )
+
+
+def _instalar_sqlite(connection, *, reinicio: bool) -> None:
     for nome in nomes_gatilhos_aplicacao("sqlite"):
         connection.execute(text("DROP TRIGGER IF EXISTS " + nome))
     identidade = _falha_identidade(postgres=False)
@@ -345,13 +382,7 @@ def _instalar_sqlite(connection) -> None:
             + MENSAGEM_APLICACAO
             + "'); END"
         ),
-        (
-            "CREATE TRIGGER " + TRIGGER_PRESERVAR
-            + " BEFORE DELETE ON agente_bi_aplicacao"
-            + " FOR EACH ROW BEGIN SELECT RAISE(ABORT, '"
-            + MENSAGEM_APLICACAO
-            + "'); END"
-        ),
+        _sql_preservar_aplicacao(reinicio=reinicio),
     )
     for comando in comandos:
         connection.execute(text(comando))

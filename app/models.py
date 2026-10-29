@@ -5144,6 +5144,29 @@ class AgenteBiExecucaoEvento(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow_naive)
 
 
+class AgenteBiReinicioAutorizacao(db.Model):
+    """Autorização de reinício válida só dentro da transação que a criou.
+
+    O serviço apaga a linha antes do commit. O rollback desfaz a inserção.
+    Fora dessa transação a tabela fica vazia e o DELETE direto continua proibido.
+    """
+
+    __tablename__ = "agente_bi_reinicio_autorizacao"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "usuario_id",
+            "conta_id",
+            "franquia_id",
+            name="uq_agente_bi_reinicio_autorizacao_escopo",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, nullable=False)
+    conta_id = db.Column(db.Integer, nullable=False)
+    franquia_id = db.Column(db.Integer, nullable=False)
+
+
 def _agente_bi_recusar_atualizacao(mapper, connection, target):
     """Falha cedo no ORM. Query.update() e SQL direto dependem do gatilho."""
     raise ValueError("registro preparado do AgenteBI e imutavel")

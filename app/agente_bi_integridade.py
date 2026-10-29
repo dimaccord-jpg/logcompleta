@@ -8,6 +8,10 @@ mesmo quando a chave estrangeira do SQLite está desligada.
 Estado operacional da análise (estado, etapa, tentativa, recuperação e
 marcas de tempo) pode mudar. O resultado histórico, depois de gravado,
 não pode ser substituído.
+
+DELETE direto continua proibido. A única exceção é a transação de
+reinício que grava, e depois apaga, uma autorização do escopo. Essa
+linha não permanece depois do commit nem do rollback.
 """
 from __future__ import annotations
 
@@ -47,6 +51,7 @@ MENSAGEM_HISTORICO = "historico do AgenteBI e imutavel"
 MENSAGEM_ESCOPO = "escopo do AgenteBI incompativel"
 MENSAGEM_REFERENCIA = "dataset referenciado pelo AgenteBI"
 MENSAGEM_VINCULO = "referencia de dashboard do AgenteBI e imutavel"
+TABELA_REINICIO = "agente_bi_reinicio_autorizacao"
 
 TRIGGER_BLOCO = "trg_agente_bi_dataset_bloco_imutavel"
 TRIGGER_NOMES = (
@@ -81,18 +86,48 @@ def faixa_inteira(coluna: str) -> str:
     return f"{coluna} BETWEEN 1 AND {INTEIRO_COLUNA_MAX}"
 
 
-def instalar_protecao_agente_bi(connection) -> None:
+def sql_reinicio_do_escopo() -> str:
+    """A linha autorizada tem de ser a do mesmo usuário, conta e franquia."""
+    return (
+        "EXISTS (SELECT 1 FROM "
+        + TABELA_REINICIO
+        + " AS auth WHERE auth.usuario_id = OLD.usuario_id"
+        " AND auth.conta_id = OLD.conta_id"
+        " AND auth.franquia_id = OLD.franquia_id)"
+    )
+
+
+def sql_reinicio_do_evento() -> str:
+    """O diário não tem escopo próprio. A autorização segue a execução."""
+    return (
+        "EXISTS (SELECT 1 FROM agente_bi_execucao AS execucao"
+        " INNER JOIN "
+        + TABELA_REINICIO
+        + " AS auth ON auth.usuario_id = execucao.usuario_id"
+        " AND auth.conta_id = execucao.conta_id"
+        " AND auth.franquia_id = execucao.franquia_id"
+        " WHERE execucao.id = OLD.execucao_id)"
+    )
+
+
+def _tabela_reinicio_presente(connection) -> bool:
+    return TABELA_REINICIO in set(inspect(connection).get_table_names())
+
+
+def instalar_protecao_agente_bi(connection, *, reinicio=None) -> None:
+    if reinicio is None:
+        reinicio = _tabela_reinicio_presente(connection)
     dialeto = connection.dialect.name
     if dialeto == "postgresql":
-        _instalar_postgresql(connection)
+        _instalar_postgresql(connection, reinicio=reinicio)
     elif dialeto == "sqlite":
-        _instalar_sqlite(connection)
+        _instalar_sqlite(connection, reinicio=reinicio)
     else:
         raise RuntimeError(f"dialeto sem protecao do AgenteBI: {dialeto}")
     # Import tardio: a proteção da fila não altera o gatilho do histórico.
     from app.agente_bi_execucao_integridade import instalar_protecao_execucao
 
-    instalar_protecao_execucao(connection)
+    instalar_protecao_execucao(connection, reinicio=reinicio)
 
 
 def remover_funcoes_agente_bi(connection) -> None:
@@ -120,8 +155,26 @@ def _condicao_historico(*, postgres: bool) -> str:
     return " OR ".join(partes)
 
 
-def _instalar_postgresql(connection) -> None:
+def _ramo_delete_vinculo(*, reinicio: bool) -> str:
+    if not reinicio:
+        return (
+            "ELSIF TG_TABLE_NAME = 'agente_bi_dashboard_dataset' AND TG_OP = 'DELETE' THEN\n"
+            f"            RAISE EXCEPTION '{MENSAGEM_VINCULO}' USING ERRCODE = 'check_violation';"
+        )
+    return (
+        "ELSIF TG_TABLE_NAME = 'agente_bi_dashboard_dataset' AND TG_OP = 'DELETE' THEN\n"
+        "            IF NOT "
+        + sql_reinicio_do_escopo()
+        + " THEN\n"
+        f"              RAISE EXCEPTION '{MENSAGEM_VINCULO}' USING ERRCODE = 'check_violation';\n"
+        "            END IF;\n"
+        "            RETURN OLD;"
+    )
+
+
+def _instalar_postgresql(connection, *, reinicio: bool) -> None:
     historico = _condicao_historico(postgres=True)
+    ramo_vinculo = _ramo_delete_vinculo(reinicio=reinicio)
     _executar(
         connection,
         f"""
@@ -200,8 +253,7 @@ def _instalar_postgresql(connection) -> None:
             END IF;
           ELSIF TG_TABLE_NAME = 'agente_bi_dashboard_dataset' AND TG_OP = 'UPDATE' THEN
             RAISE EXCEPTION '{MENSAGEM_IMUTAVEL}' USING ERRCODE = 'check_violation';
-          ELSIF TG_TABLE_NAME = 'agente_bi_dashboard_dataset' AND TG_OP = 'DELETE' THEN
-            RAISE EXCEPTION '{MENSAGEM_VINCULO}' USING ERRCODE = 'check_violation';
+          {ramo_vinculo}
           ELSIF TG_TABLE_NAME = 'agente_bi_dashboard_dataset' AND TG_OP = 'INSERT' THEN
             IF NOT EXISTS (
               SELECT 1 FROM agente_bi_dashboard AS painel
@@ -254,7 +306,22 @@ _GATILHOS_POSTGRES = (
 )
 
 
-def _instalar_sqlite(connection) -> None:
+def _sql_preservar_vinculo(*, reinicio: bool) -> str:
+    if reinicio:
+        condicao = "\n          WHERE NOT " + sql_reinicio_do_escopo() + ";"
+    else:
+        condicao = ";"
+    return f"""
+        CREATE TRIGGER trg_agente_bi_dashboard_dataset_preservar
+        BEFORE DELETE ON agente_bi_dashboard_dataset
+        FOR EACH ROW
+        BEGIN
+          SELECT RAISE(ABORT, '{MENSAGEM_VINCULO}'){condicao}
+        END
+        """
+
+
+def _instalar_sqlite(connection, *, reinicio: bool) -> None:
     historico = _condicao_historico(postgres=False)
     comandos = (
         f"""
@@ -368,14 +435,6 @@ def _instalar_sqlite(connection) -> None:
         END
         """,
         f"""
-        CREATE TRIGGER IF NOT EXISTS trg_agente_bi_dashboard_dataset_preservar
-        BEFORE DELETE ON agente_bi_dashboard_dataset
-        FOR EACH ROW
-        BEGIN
-          SELECT RAISE(ABORT, '{MENSAGEM_VINCULO}');
-        END
-        """,
-        f"""
         CREATE TRIGGER IF NOT EXISTS trg_agente_bi_dashboard_dataset_escopo
         BEFORE INSERT ON agente_bi_dashboard_dataset
         FOR EACH ROW
@@ -428,6 +487,8 @@ def _instalar_sqlite(connection) -> None:
     if tabelas_necessarias <= existentes:
         for comando in comandos:
             _executar(connection, comando)
+        _executar(connection, "DROP TRIGGER IF EXISTS trg_agente_bi_dashboard_dataset_preservar")
+        _executar(connection, _sql_preservar_vinculo(reinicio=reinicio))
     if "agente_bi_dataset_bloco" in existentes:
         _executar(
             connection,
