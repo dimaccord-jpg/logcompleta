@@ -1140,13 +1140,16 @@ def _resultado_confirmado(
     Documento ausente continua no contrato legado. Documento `analisar.v1`
     só segue depois da revalidação contra a análise e o dataset persistidos.
     `patch.definir.v2` só entra quando a análise persistida é desse contrato
-    e o vínculo foi gravado pelo servidor. Qualquer outro documento continua
-    na revalidação de `analisar.v1`.
+    e o vínculo foi gravado pelo servidor. O envelope técnico da colaboração
+    só entra quando a análise persistida é desse contrato. Qualquer outro
+    documento continua na revalidação de `analisar.v1`.
     """
     if documento is None:
         return _resultado_simulado(codigo, referencias)
     if _analise_de_plano_v2(analise):
         validado = _documento_plano_v2_revalidado(analise, documento)
+    elif _analise_de_colaboracao(analise):
+        validado = _documento_colaboracao_revalidado(analise, referencias, documento)
     else:
         validado = _documento_analisar_revalidado(analise, referencias, documento)
     return json.dumps(
@@ -1162,6 +1165,19 @@ def _analise_de_plano_v2(analise: AgenteBiAnalise) -> bool:
     from app.services.agente_bi_contrato_v2_service import CONTRATO_PATCH_V2
 
     return analise.contrato_versao == CONTRATO_PATCH_V2
+
+
+def _analise_de_colaboracao(analise: AgenteBiAnalise) -> bool:
+    from app.services.agente_bi_colaboracao_service import CONTRATO_TECNICO
+
+    return analise.contrato_versao == CONTRATO_TECNICO
+
+
+def _documento_colaboracao_revalidado(analise: AgenteBiAnalise, referencias: dict, documento) -> dict:
+    """Confirma o envelope técnico. Não trata o documento como analisar.v1."""
+    from app.services.agente_bi_colaboracao_service import revalidar_contrato_tecnico
+
+    return revalidar_contrato_tecnico(analise, referencias, documento)
 
 
 def _documento_plano_v2_revalidado(analise: AgenteBiAnalise, documento) -> dict:

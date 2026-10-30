@@ -29,6 +29,7 @@ from app.services.cleiton_billable_ai_call import (
     BillableAiUncertainError,
     calcular_teto_chamada,
     cleiton_governed_billable_ai_call,
+    contar_tokens_oficiais,
     estimar_tokens_entrada,
     liquidar_tentativa_ia,
     tentativas_retry_sdk,
@@ -57,6 +58,10 @@ class _Models:
 
     def count_tokens(self, *, model, contents, config=None):
         self.count_calls.append({"model": model, "contents": contents, "config": config})
+        # google-genai 1.63.0: a Developer API rejeita o campo antes da rede.
+        if getattr(getattr(self, "_api_client", None), "vertexai", None) is not True:
+            if _config_tem_system_instruction(config):
+                raise ValueError("system_instruction parameter is not supported in Gemini API.")
         if self._count_behavior is not None:
             return self._count_behavior(model, contents, config)
         from app.services.cleiton_billable_ai_call import estimar_tokens_entrada
@@ -88,6 +93,16 @@ def _usage(total: int):
 
 def _ok(model, contents, config):
     return SimpleNamespace(text="ok", usage_metadata=_usage(100))
+
+
+def _config_tem_system_instruction(config) -> bool:
+    if config is None:
+        return False
+    if isinstance(config, dict):
+        if config.get("system_instruction") is not None:
+            return True
+        return config.get("systemInstruction") is not None
+    return getattr(config, "system_instruction", None) is not None
 
 
 def _seed(categoria="free", limite="100", consumo="0", bloqueio=False, email="u@test.com"):
@@ -1372,7 +1387,15 @@ def test_system_instruction_grande_reserva_segue_count_oficial(app, caplog):
             result = _call(usuario, client, contents="oi", config=config, attempt_key="instrucao-oficial")
         assert result.complete is True
         assert result.reserved_credits == teto
-        assert client.models.count_calls[0]["config"]["system_instruction"] == instrucao
+        pedido = client.models.count_calls[0]
+        assert "system_instruction" not in pedido["config"]
+        assert "systemInstruction" not in pedido["config"]
+        bloco = pedido["contents"][0]
+        assert bloco.role == "user"
+        assert bloco.parts[0].text == instrucao
+        assert pedido["contents"][1] == "oi"
+        assert client.models.calls[0]["contents"] == "oi"
+        assert client.models.calls[0]["config"]["system_instruction"] == instrucao
         assert instrucao not in caplog.text
         assert len(client.models.calls) == 1
         assert IaConsumoEvento.query.count() == 1
@@ -1635,7 +1658,7 @@ def test_extra_body_ausente_ou_vazio_permanece_admissivel(app, http_options):
 def test_mutacao_do_chamador_depois_da_contagem_nao_entra_na_geracao(app):
     with app.app_context():
         usuario, _franquia_row = _seed(email="mutacao@test.com")
-        instrucao = {"parts": [{"text": "estavel"}]}
+        instrucao = "estavel"
         config = {
             "max_output_tokens": 10,
             "thinking_config": {"thinking_budget": 0},
@@ -1643,9 +1666,10 @@ def test_mutacao_do_chamador_depois_da_contagem_nao_entra_na_geracao(app):
         }
 
         def contar(model, contents, config_contada):
-            config_contada["system_instruction"]["parts"][0]["text"] = "MUTADO-NA-CONTAGEM"
+            assert "system_instruction" not in config_contada
+            contents[0].parts[0].text = "MUTADO-NA-CONTAGEM"
             config_contada["max_output_tokens"] = 65536
-            instrucao["parts"][0]["text"] = "MUTADO-NO-CHAMADOR"
+            config["system_instruction"] = "MUTADO-NO-CHAMADOR"
             config["http_options"] = {"extra_body": _extra_bloqueador()}
             return SimpleNamespace(total_tokens=8, cached_content_token_count=None)
 
@@ -1653,7 +1677,7 @@ def test_mutacao_do_chamador_depois_da_contagem_nao_entra_na_geracao(app):
         result = _call(usuario, client, contents="frete contado", config=config, attempt_key="mutacao")
         assert result.complete is True
         gerada = client.models.calls[0]["config"]
-        assert gerada["system_instruction"]["parts"][0]["text"] == "estavel"
+        assert gerada["system_instruction"] == "estavel"
         assert gerada["max_output_tokens"] == 10
         assert gerada["thinking_config"]["thinking_budget"] == 0
         assert gerada["candidate_count"] == 1
@@ -2323,3 +2347,331 @@ def test_origem_sistema_sem_hard_cap_preserva_fluxo_com_regua_invalida(app):
         assert _franquia(franquia.id).reserva_pendente == 0
         assert _franquia(franquia.id).consumo_acumulado == 0
         assert IaChamadaTentativa.query.filter_by(status="calling").count() == 0
+
+
+def test_sem_instrucao_a_contagem_repassa_o_conteudo_recebido():
+    conteudos = ["linha"]
+    config = {"max_output_tokens": 10}
+    client = _Client(count_behavior=_count_fixo(4))
+    total, erro = contar_tokens_oficiais(
+        client,
+        model="gemini-test",
+        contents=conteudos,
+        config=config,
+        attempt_key="sem-instrucao",
+    )
+    assert erro is None
+    assert total == 4
+    assert client.models.count_calls[0]["contents"] is conteudos
+    assert "system_instruction" not in client.models.count_calls[0]["config"]
+    assert conteudos == ["linha"]
+    assert config == {"max_output_tokens": 10}
+
+
+def test_contagem_developer_copia_a_instrucao_sem_alterar_os_originais():
+    conteudos = ["pedido"]
+    config = {"system_instruction": "REGRA", "max_output_tokens": 10}
+    client = _Client(count_behavior=_count_fixo(9))
+    total, erro = contar_tokens_oficiais(
+        client,
+        model="gemini-test",
+        contents=conteudos,
+        config=config,
+        attempt_key="copia-instrucao",
+    )
+    assert erro is None
+    assert total == 9
+    pedido = client.models.count_calls[0]
+    assert pedido["contents"] is not conteudos
+    assert pedido["contents"][0].role == "user"
+    assert pedido["contents"][0].parts[0].text == "REGRA"
+    assert pedido["contents"][1] is conteudos[0]
+    assert "system_instruction" not in pedido["config"]
+    assert conteudos == ["pedido"]
+    assert config == {"system_instruction": "REGRA", "max_output_tokens": 10}
+
+
+def test_sdk_developer_rejeita_system_instruction_antes_da_rede():
+    capturados = []
+    client = _cliente_sdk(capturados)
+    from google.genai import types
+
+    with pytest.raises(ValueError, match="system_instruction parameter is not supported in Gemini API"):
+        client.models.count_tokens(
+            model="gemini-teste",
+            contents="pedido",
+            config=types.CountTokensConfig(system_instruction="INSTRUCAO-INTEGRAL"),
+        )
+    assert capturados == []
+
+
+def _cliente_sdk_total_no_corpo(capturados, marca):
+    import httpx
+    from google import genai
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode("utf-8") if request.content else ""
+        capturados.append({"url": str(request.url), "body": body})
+        url = str(request.url)
+        if "countTokens" in url:
+            return httpx.Response(200, json={"totalTokens": 17 + body.count(marca)})
+        if "generateContent" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": [{"text": "ok"}]},
+                            "finishReason": "STOP",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 8,
+                        "candidatesTokenCount": 1,
+                        "totalTokenCount": 9,
+                    },
+                },
+            )
+        return httpx.Response(500, json={"error": {"code": 500, "message": "inesperado", "status": "INTERNAL"}})
+
+    client = genai.Client(api_key="teste")
+    client._api_client._httpx_client = httpx.Client(transport=httpx.MockTransport(handler))
+    return client
+
+
+def test_sdk_developer_conta_a_instrucao_no_conteudo_e_preserva_a_geracao(app):
+    import json
+
+    from google.genai import types
+
+    marca = "MARCA-CONTAGEM-OFICIAL"
+    instrucao = marca + ("x" * 4000)
+    esquema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
+    config = types.GenerateContentConfig(
+        system_instruction=instrucao,
+        response_mime_type="application/json",
+        response_json_schema=esquema,
+        max_output_tokens=10,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+    config_antes = config.model_dump(exclude_none=True)
+    conteudo = "pedido-original"
+    capturados = []
+    client = _cliente_sdk_total_no_corpo(capturados, marca)
+
+    sem, erro_sem = contar_tokens_oficiais(
+        client,
+        model="gemini-teste",
+        contents=conteudo,
+        config=types.GenerateContentConfig(max_output_tokens=10),
+        attempt_key="sdk-sem",
+    )
+    com, erro_com = contar_tokens_oficiais(
+        client,
+        model="gemini-teste",
+        contents=conteudo,
+        config=config,
+        attempt_key="sdk-com",
+    )
+    assert erro_sem is None and erro_com is None
+    assert sem == 17
+    assert com == 18
+    assert com > sem
+    counts = [item for item in capturados if "countTokens" in item["url"]]
+    assert len(counts) == 2
+    corpo_sem = json.loads(counts[0]["body"])
+    corpo_com = json.loads(counts[1]["body"])
+    assert _nos(corpo_sem, "systemInstruction") == []
+    assert _nos(corpo_com, "systemInstruction") == []
+    assert _nos(corpo_sem, "text") == [conteudo]
+    assert _nos(corpo_com, "text") == [instrucao, conteudo]
+    assert instrucao in counts[1]["body"]
+    assert com == 17 + counts[1]["body"].count(marca)
+    local, erro_local = estimar_tokens_entrada(conteudo, config)
+    assert erro_local is None
+    assert local > com
+
+    with app.app_context():
+        usuario, _franquia_row = _seed(email="sdk-instrucao@test.com", limite="100")
+        capturados.clear()
+        resultado = _call(
+            usuario,
+            client,
+            contents=conteudo,
+            config=config,
+            attempt_key="sdk-instrucao",
+        )
+        assert resultado.complete is True
+        counts = [item for item in capturados if "countTokens" in item["url"]]
+        generates = [item for item in capturados if "generateContent" in item["url"]]
+        assert len(counts) == 1
+        assert len(generates) == 1
+        corpo_count = json.loads(counts[0]["body"])
+        corpo_generate = json.loads(generates[0]["body"])
+        assert _nos(corpo_count, "systemInstruction") == []
+        assert _nos(corpo_count, "text") == [instrucao, conteudo]
+        assert corpo_generate["systemInstruction"]["parts"][0]["text"] == instrucao
+        assert corpo_generate["contents"][0]["parts"][0]["text"] == conteudo
+        assert corpo_generate["generationConfig"]["responseMimeType"] == "application/json"
+        assert corpo_generate["generationConfig"]["responseJsonSchema"] == esquema
+        oficial = 17 + counts[0]["body"].count(marca)
+        assert resultado.reserved_credits == _creditos_oficiais(oficial, config)
+        assert conteudo == "pedido-original"
+        assert config.model_dump(exclude_none=True) == config_antes
+        assert IaConsumoEvento.query.count() == 1
+
+
+def test_sdk_vertex_mantem_system_instruction_na_contagem(app):
+    import json
+
+    import httpx
+    from google import genai
+    from google.genai import types
+
+    capturados = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        capturados.append(
+            {
+                "url": str(request.url),
+                "body": request.content.decode("utf-8") if request.content else "",
+            }
+        )
+        url = str(request.url)
+        if "countTokens" in url:
+            return httpx.Response(200, json={"totalTokens": 8})
+        if "generateContent" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": [{"text": "ok"}]},
+                            "finishReason": "STOP",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 8,
+                        "candidatesTokenCount": 1,
+                        "totalTokenCount": 9,
+                    },
+                },
+            )
+        return httpx.Response(500, json={"error": {"code": 500, "message": "inesperado", "status": "INTERNAL"}})
+
+    with app.app_context():
+        _seed(email="vertex-regua@test.com")
+        config = types.GenerateContentConfig(
+            system_instruction="REGRA-VERTEX",
+            response_mime_type="application/json",
+            response_json_schema={"type": "object"},
+            max_output_tokens=10,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        )
+        teto = _creditos_oficiais(8, config)
+        usuario, _franquia_row = _outra_conta("vertex@test.com", limite=str(teto))
+        client = genai.Client(
+            vertexai=True,
+            api_key="teste",
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+        )
+        assert client._api_client.vertexai is True
+        client._api_client._httpx_client = httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0)
+        conteudo = "pedido-vertex"
+        resultado = _call(usuario, client, contents=conteudo, config=config, attempt_key="vertex-instrucao")
+        assert resultado.complete is True
+        counts = [item for item in capturados if "countTokens" in item["url"]]
+        generates = [item for item in capturados if "generateContent" in item["url"]]
+        assert len(counts) == 1
+        assert len(generates) == 1
+        corpo_count = json.loads(counts[0]["body"])
+        corpo_generate = json.loads(generates[0]["body"])
+        assert corpo_count["systemInstruction"]["parts"][0]["text"] == "REGRA-VERTEX"
+        assert [item["parts"][0]["text"] for item in corpo_count["contents"]] == [conteudo]
+        assert corpo_generate["systemInstruction"]["parts"][0]["text"] == "REGRA-VERTEX"
+        assert [item["parts"][0]["text"] for item in corpo_generate["contents"]] == [conteudo]
+        assert corpo_generate["generationConfig"]["responseJsonSchema"] == {"type": "object"}
+
+
+def test_content_com_varias_partes_entra_integralmente_na_contagem(app):
+    from google.genai import types
+
+    with app.app_context():
+        usuario, _franquia_row = _seed(email="content-partes@test.com")
+        instrucao = types.Content(
+            role="model",
+            parts=[types.Part(text="primeira"), types.Part(text="segunda")],
+        )
+        config = _cfg_saida(
+            system_instruction=instrucao,
+            response_mime_type="application/json",
+            response_json_schema={"type": "object"},
+        )
+        client = _Client(_ok_dentro_do_teto, count_behavior=_count_fixo(8))
+        resultado = _call(usuario, client, contents="pedido", config=config, attempt_key="content-partes")
+        assert resultado.complete is True
+        pedido = client.models.count_calls[0]
+        assert "system_instruction" not in pedido["config"]
+        bloco = pedido["contents"][0]
+        assert bloco.role == "user"
+        assert [parte.text for parte in bloco.parts] == ["primeira", "segunda"]
+        assert pedido["contents"][1] == "pedido"
+        gerada = client.models.calls[0]["config"]
+        assert [parte.text for parte in gerada["system_instruction"].parts] == ["primeira", "segunda"]
+        assert gerada["system_instruction"].role == "model"
+        assert gerada["response_json_schema"] == {"type": "object"}
+        assert client.models.calls[0]["contents"] == "pedido"
+
+
+@pytest.mark.parametrize("rotulo, instrucao", [("dict", {"parts": [{"text": "dict"}]}), ("lista", ["somente texto"]), ("inteiro", 12)])
+def test_formato_de_instrucao_nao_suportado_falha_antes_da_reserva(app, rotulo, instrucao):
+    with app.app_context():
+        usuario, franquia = _seed(email=f"fmt-{rotulo}@test.com")
+        client = _Client(count_behavior=_count_fixo(8))
+        with pytest.raises(BillableAiAdmissionBlocked) as exc:
+            _call(
+                usuario,
+                client,
+                contents="pedido",
+                config=_cfg_saida(system_instruction=instrucao),
+                attempt_key=f"fmt-{rotulo}",
+            )
+        assert exc.value.motivo == "teto_entrada_nao_verificavel"
+        assert client.models.count_calls == []
+        assert client.models.calls == []
+        assert _franquia(franquia.id).reserva_pendente == 0
+        assert IaConsumoEvento.query.count() == 0
+        assert ProcessingEvent.query.count() == 0
+
+
+def test_content_incompleto_falha_antes_da_reserva(app):
+    from google.genai import types
+
+    with app.app_context():
+        usuario, franquia = _seed(email="content-extra@test.com")
+        casos = [
+            types.Part(text="nao-e-content"),
+            types.Content(role="user", parts=[]),
+            types.Content(role="user", parts=[types.Part(text="parcial", thought=True)]),
+            types.Content(
+                role="user",
+                parts=[types.Part(function_call=types.FunctionCall(name="frete", args={"a": 1}))],
+            ),
+        ]
+        for indice, instrucao in enumerate(casos):
+            client = _Client(count_behavior=_count_fixo(8))
+            with pytest.raises(BillableAiAdmissionBlocked) as exc:
+                _call(
+                    usuario,
+                    client,
+                    contents="pedido",
+                    config=_cfg_saida(system_instruction=instrucao),
+                    attempt_key=f"content-extra-{indice}",
+                )
+            assert exc.value.motivo == "teto_entrada_nao_verificavel"
+            assert client.models.count_calls == []
+            assert client.models.calls == []
+        assert _franquia(franquia.id).reserva_pendente == 0
+        assert IaConsumoEvento.query.count() == 0

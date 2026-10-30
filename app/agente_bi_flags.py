@@ -10,6 +10,7 @@ import os
 
 FLAG_AGENTE_BI_API = "AGENTE_BI_API_ENABLED"
 FLAG_AGENTE_BI_INGESTAO = "AGENTE_BI_INGESTAO_ENABLED"
+FLAG_AGENTE_BI_COLABORACAO = "AGENTE_BI_COLABORACAO_ENABLED"
 
 
 def _parse_bool_strict(raw: str | None) -> bool | None:
@@ -30,4 +31,10 @@ def agente_bi_api_habilitada() -> bool:
 
 def agente_bi_ingestao_habilitada() -> bool:
     bruto = os.getenv(FLAG_AGENTE_BI_INGESTAO)
+    return _parse_bool_strict(bruto) is True
+
+
+def agente_bi_colaboracao_habilitada() -> bool:
+    """Desligada por padrão. O fluxo de uma rodada permanece o da flag ausente."""
+    bruto = os.getenv(FLAG_AGENTE_BI_COLABORACAO)
     return _parse_bool_strict(bruto) is True

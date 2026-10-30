@@ -176,6 +176,7 @@ def get_dataset(escopo: EscopoAgenteBi, dataset_id: int):
 def _contratos_reservados() -> frozenset[str]:
     """Identidades que só os fluxos do servidor podem gravar."""
     from app.services.agente_bi_analisar_service import CONTRATO_ANALISAR, CONTRATO_CONTEXTO_ANALISAR
+    from app.services.agente_bi_colaboracao_service import CONTRATO_CONTEXTO_TECNICO, CONTRATO_TECNICO
     from app.services.agente_bi_descoberta_service import CONTRATO_CONTEXTO_SELECAO, CONTRATO_SELECAO
     from app.services.agente_bi_calculo_service import CONTRATO_CALCULO, CONTRATO_CALCULO_V2, CONTRATO_CONTEXTO_CALCULO
     from app.services.agente_bi_definir_service import CONTRATO_CONTEXTO_DEFINIR, CONTRATO_DEFINIR
@@ -186,6 +187,8 @@ def _contratos_reservados() -> frozenset[str]:
     return frozenset({
         CONTRATO_ANALISAR,
         CONTRATO_CONTEXTO_ANALISAR,
+        CONTRATO_TECNICO,
+        CONTRATO_CONTEXTO_TECNICO,
         CONTRATO_SELECAO,
         CONTRATO_CONTEXTO_SELECAO,
         CONTRATO_DEFINIR,
@@ -227,13 +230,30 @@ def post_analise(escopo: EscopoAgenteBi):
 @agente_bi_api_bp.get("/analises")
 @_endpoint
 def get_analises(escopo: EscopoAgenteBi):
-    return jsonify({"ok": True, "analises": listar_analises(escopo, chave=_chave_consulta())})
+    from app.services.agente_bi_colaboracao_service import CONTRATO_TECNICO
+
+    analises = [
+        item
+        for item in listar_analises(escopo, chave=_chave_consulta())
+        if item.get("contrato_versao") != CONTRATO_TECNICO
+    ]
+    return jsonify({"ok": True, "analises": analises})
 
 
 @agente_bi_api_bp.get("/analises/<int:analise_id>")
 @_endpoint
 def get_analise(escopo: EscopoAgenteBi, analise_id: int):
-    return jsonify({"ok": True, "analise": obter_analise(escopo, analise_id)})
+    from app.services.agente_bi_colaboracao_service import CONTRATO_TECNICO
+
+    analise = obter_analise(escopo, analise_id)
+    if analise.get("contrato_versao") == CONTRATO_TECNICO:
+        logger.info(
+            "evento=agente_bi_contrato_tecnico_oculto usuario_id=%s analise_id=%s",
+            escopo.usuario_id,
+            analise_id,
+        )
+        return _erro("nao_encontrado", 404)
+    return jsonify({"ok": True, "analise": analise})
 
 
 @agente_bi_api_bp.post("/dashboards")

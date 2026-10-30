@@ -636,6 +636,118 @@
     });
   }
 
+  var FASES_COLABORACAO = {
+    claude_analisando: "Claude está analisando os dados.",
+    gemini_revisando: "Gemini está revisando as evidências.",
+    claude_consolidando: "Claude está consolidando as sugestões.",
+    pronto: "Descobertas prontas para seleção."
+  };
+
+  function textoColaboracao(fase) {
+    return FASES_COLABORACAO[fase] || "";
+  }
+
+  function guardarPedido(pedido, fase) {
+    try {
+      localStorage.setItem("agente-bi-colaboracao", JSON.stringify({
+        datasetId: estado.datasetId,
+        pedido: pedido,
+        fase: fase || "claude_analisando"
+      }));
+    } catch (erro) {
+      return;
+    }
+  }
+
+  function lerPedidoGuardado() {
+    try {
+      var bruto = localStorage.getItem("agente-bi-colaboracao");
+      if (!bruto) return null;
+      var valor = JSON.parse(bruto);
+      if (!valor || valor.datasetId == null || !valor.pedido) return null;
+      return valor;
+    } catch (erro) {
+      return null;
+    }
+  }
+
+  function esquecerPedido() {
+    try {
+      localStorage.removeItem("agente-bi-colaboracao");
+    } catch (erro) {
+      return;
+    }
+  }
+
+  function mostrarAndamento(fase) {
+    var texto = textoColaboracao(fase) || "A descoberta continua em andamento.";
+    if (resultadoPainel) resultadoPainel.hidden = false;
+    limpar(descobertas);
+    if (descobertas) descobertas.appendChild(el("p", null, texto));
+    anunciar(texto);
+    avisarJornada("descobertas");
+  }
+
+  function textoParada(colaboracao) {
+    if (colaboracao.estado === "incerta") {
+      return "A análise desta etapa não foi confirmada. A mesma chamada não será reenviada.";
+    }
+    if (colaboracao.estado === "recusada") return "A proposta não pôde ser aceita.";
+    return "A colaboração foi encerrada sem uma nova descoberta aprovada.";
+  }
+
+  function pedirColaboracao(pedido, fase, colaborando) {
+    guardarPedido(pedido, fase);
+    ocupar(colaborando ? (textoColaboracao(fase) || "Claude está analisando os dados.") : "Examinando descobertas…");
+    if (colaborando && fase && fase !== "claude_analisando") mostrarAndamento(fase);
+    pedir(raiz.getAttribute("data-descoberta-url"), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset_id: estado.datasetId, pedido: pedido })
+    }).then(function (resposta) {
+      var corpo = resposta.corpo || {};
+      var colaboracao = corpo.colaboracao;
+      if (corpo.ok === true && corpo.resultado) {
+        limparErro();
+        mostrarResultado(corpo);
+        if (colaboracao) {
+          anunciar(textoColaboracao("pronto"));
+          guardarPedido(pedido, "pronto");
+        } else {
+          esquecerPedido();
+        }
+        liberar();
+        return;
+      }
+      if (corpo.ok === true && colaboracao && colaboracao.continuar === true) {
+        mostrarAndamento(colaboracao.fase);
+        pedirColaboracao(pedido, colaboracao.fase, true);
+        return;
+      }
+      if (corpo.ok === true && colaboracao) {
+        guardarPedido(pedido, colaboracao.fase || fase);
+        var parado = textoColaboracao(colaboracao.fase) || textoParada(colaboracao);
+        if (resultadoPainel) resultadoPainel.hidden = false;
+        limpar(descobertas);
+        if (descobertas) descobertas.appendChild(el("p", null, parado));
+        anunciar(parado);
+        avisarJornada("descobertas");
+        liberar();
+        return;
+      }
+      liberar();
+      mostrarErro(mensagemErro(corpo, "A descoberta não foi concluída."));
+      anunciar("A descoberta não foi concluída.");
+      avisarJornada("analise");
+    }).catch(function () {
+      liberar();
+      mostrarErro("Não foi possível concluir esta etapa. Tente novamente.");
+      anunciar("A descoberta não foi concluída.");
+      avisarJornada("analise");
+    });
+  }
+
   function examinarDescobertas() {
     if (estado.ocupado || (modalidades && modalidades.disabled)) return;
     var montado = montarPedido();
@@ -645,30 +757,16 @@
       return;
     }
     limparErro();
-    ocupar("Examinando descobertas…");
-    avisarJornada("analise");
-    pedir(raiz.getAttribute("data-descoberta-url"), {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset_id: estado.datasetId, pedido: montado.pedido })
-    }).then(function (resposta) {
-      if (!resposta.corpo || resposta.corpo.ok !== true || !resposta.corpo.resultado) {
-        liberar();
-        mostrarErro(mensagemErro(resposta.corpo, "A descoberta não foi concluída."));
-        anunciar("A descoberta não foi concluída.");
-        avisarJornada("analise");
-        return;
-      }
-      limparErro();
-      mostrarResultado(resposta.corpo);
-      liberar();
-    }).catch(function () {
-      liberar();
-      mostrarErro("Não foi possível concluir esta etapa. Tente novamente.");
-      anunciar("A descoberta não foi concluída.");
-      avisarJornada("analise");
-    });
+    pedirColaboracao(montado.pedido, "claude_analisando", false);
+  }
+
+  function recuperarColaboracao() {
+    if (estado.ocupado || estado.aprovado || estado.datasetId) return;
+    var guardado = lerPedidoGuardado();
+    if (!guardado) return;
+    estado.datasetId = guardado.datasetId;
+    revelarDescoberta();
+    pedirColaboracao(guardado.pedido, guardado.fase || "claude_analisando", true);
   }
 
   function aprovarSelecao() {
@@ -716,6 +814,7 @@
           " gráficos viáveis foi gravada na sua conta, na versão " + selecao.versao +
           " do dataset. Sugestões condicionais e leituras que dependem de novos dados não entraram como análises executáveis.";
       }
+      esquecerPedido();
       liberar();
       anunciar("Seleção aprovada e vinculada à versão " + selecao.versao + ".");
       if (aprovadaTitulo) aprovadaTitulo.focus();
@@ -839,10 +938,12 @@
       }
       for (var i = 0; i < analises.length; i += 1) {
         if (selecaoConfiavel(analises[i])) {
+          esquecerPedido();
           mostrarRestaurada(analises[i]);
           return;
         }
       }
+      recuperarColaboracao();
     }).catch(function () {
       mostrarFalhaRecuperacao(null);
     });

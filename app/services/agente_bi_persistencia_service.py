@@ -402,6 +402,10 @@ def criar_dashboard(escopo: EscopoAgenteBi, payload: dict, *, confirmar: bool = 
         analise = _obter_no_escopo(AgenteBiAnalise, escopo, analise_id)
         if analise is None:
             raise AgenteBiErro("nao_encontrado", 404)
+        from app.services.agente_bi_colaboracao_service import CONTRATO_TECNICO
+
+        if analise.contrato_versao == CONTRATO_TECNICO:
+            raise AgenteBiErro("identidade_invalida", 409)
         if not any(ref["dataset_id"] == analise.dataset_id for ref in refs):
             raise AgenteBiErro("identidade_invalida", 409)
 

@@ -31,6 +31,7 @@ from app.services.agente_bi_analisar_service import (
     montar_contexto,
     provedor_simulado,
 )
+from app.agente_bi_flags import agente_bi_colaboracao_habilitada
 from app.services.agente_bi_execucao_service import LEASE_MAX_SEGUNDOS, ExecucaoErro
 from app.services.agente_bi_integracao_service import (
     IntegracaoErro,
@@ -142,11 +143,13 @@ def resumir_preparacao(escopo, bruto: dict) -> dict:
     }
 
 
-def descobrir(escopo, corpo: dict, *, transporte=None) -> dict:
+def descobrir(escopo, corpo: dict, *, transporte=None, cliente_gemini=None, controle=None) -> dict:
     """Uma rodada A, B, C ou combinada.
 
     A flag desligada preserva o simulador. A flag ligada usa a operação
     durável e o adaptador governado, com transporte injetável nos testes.
+    A colaboração, quando habilitada, também usa uma chamada externa por
+    requisição e não altera o simulador.
     """
     if not isinstance(corpo, dict) or set(corpo) != _CHAVES_PEDIDO:
         raise DescobertaErro("pedido_invalido")
@@ -156,6 +159,20 @@ def descobrir(escopo, corpo: dict, *, transporte=None) -> dict:
         raise DescobertaErro("pedido_invalido")
     if not execucao_real_habilitada():
         return _descobrir_simulado(escopo, dataset_id, pedido)
+    if agente_bi_colaboracao_habilitada():
+        from app.services.agente_bi_colaboracao_service import ColaboracaoErro, executar_descoberta
+
+        try:
+            return executar_descoberta(
+                escopo,
+                dataset_id,
+                pedido,
+                transporte=transporte,
+                cliente_gemini=cliente_gemini,
+                controle=controle,
+            )
+        except ColaboracaoErro as exc:
+            raise DescobertaErro(exc.codigo, exc.status, evidencias=exc.evidencias) from exc
     return _descobrir_real(escopo, dataset_id, pedido, transporte=transporte)
 
 

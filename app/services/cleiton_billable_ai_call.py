@@ -496,6 +496,65 @@ def _pedido_count_tokens(config: Any) -> dict[str, Any]:
     return pedido
 
 
+def _cliente_vertexai(client: Any) -> bool:
+    """Verdadeiro só no cliente Vertex. A Developer API não é esse caso."""
+    api = getattr(client, "_api_client", None)
+    return getattr(api, "vertexai", None) is True
+
+
+def _textos_integrais_de_content(instrucao: Any) -> list[str] | None:
+    """Content só com partes de texto. Qualquer outro campo impede a contagem."""
+    from google.genai import types as genai_types
+
+    if not isinstance(instrucao, genai_types.Content):
+        return None
+    partes = getattr(instrucao, "parts", None)
+    if not isinstance(partes, (list, tuple)) or not partes:
+        return None
+    textos: list[str] = []
+    for parte in partes:
+        if not isinstance(parte, genai_types.Part):
+            return None
+        try:
+            bruto = parte.model_dump(exclude_none=True)
+        except Exception:
+            return None
+        if not isinstance(bruto, dict) or set(bruto) != {"text"}:
+            return None
+        texto = bruto.get("text")
+        if not isinstance(texto, str):
+            return None
+        textos.append(texto)
+    return textos
+
+
+def _bloco_instrucao_developer(instrucao: Any) -> Any | None:
+    """Instrução str ou Content, copiada como conteúdo de usuário só para contar."""
+    from google.genai import types as genai_types
+
+    if isinstance(instrucao, str):
+        textos = [instrucao]
+    else:
+        textos = _textos_integrais_de_content(instrucao)
+        if textos is None:
+            return None
+    return genai_types.Content(
+        role="user",
+        parts=[genai_types.Part(text=texto) for texto in textos],
+    )
+
+
+def _contents_com_instrucao(contents: Any, bloco: Any) -> list[Any]:
+    """Lista nova. O conteúdo recebido permanece o da geração."""
+    if isinstance(contents, list):
+        return [bloco, *contents]
+    if isinstance(contents, tuple):
+        return [bloco, *contents]
+    if contents is None:
+        return [bloco]
+    return [bloco, contents]
+
+
 def _metrica(resposta: Any, *nomes: str) -> Any:
     if resposta is None:
         return None
@@ -531,10 +590,31 @@ def contar_tokens_oficiais(
     """
     count_tokens do mesmo model da geração futura.
 
+    Na Gemini Developer API, system_instruction não entra na config de
+    count_tokens: o SDK 1.63.0 rejeita esse campo antes da rede. A instrução
+    já governada vai no início de uma cópia de contents. Vertex mantém o
+    campo na config. A geração continua com a config original.
+
     Falha, configuração não suportada ou métrica inválida: teto não verificável.
     Não usa a estimativa local como fallback e não chama generate_content.
     """
     pedido = _pedido_count_tokens(config)
+    contents_contagem = contents
+    if not _cliente_vertexai(client):
+        instrucao = pedido.pop("system_instruction", None)
+        if instrucao is not None:
+            bloco = _bloco_instrucao_developer(instrucao)
+            if bloco is None:
+                logger.warning(
+                    "Metering count_tokens instrucao nao representavel model=%s agent=%s flow_type=%s attempt_key=%s tipo=%s",
+                    model,
+                    agent,
+                    flow_type,
+                    attempt_key,
+                    type(instrucao).__name__,
+                )
+                return 0, MOTIVO_TETO_ENTRADA
+            contents_contagem = _contents_com_instrucao(contents, bloco)
     tem_cache = "cached_content" in pedido
     modelos = getattr(client, "models", None)
     contar = getattr(modelos, "count_tokens", None) if modelos is not None else None
@@ -555,7 +635,7 @@ def contar_tokens_oficiais(
         attempt_key,
     )
     try:
-        resposta = contar(model=model, contents=contents, config=pedido)
+        resposta = contar(model=model, contents=contents_contagem, config=pedido)
     except Exception as exc:
         logger.warning(
             "Metering count_tokens failed model=%s agent=%s flow_type=%s attempt_key=%s type=%s",
