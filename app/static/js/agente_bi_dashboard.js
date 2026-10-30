@@ -86,6 +86,7 @@
     revelarPainel();
     erro.hidden = false;
     erro.textContent = ERROS[codigo] || "Não foi possível consultar o dashboard.";
+    avisarJornada(null);
   }
 
   function limparErro() {
@@ -447,6 +448,7 @@
     desenharGraficos(consultaAtual);
     anunciar("Dashboard aberto com " + (consultaAtual.graficos || []).length + " gráficos.");
     if (tituloAberto) tituloAberto.focus();
+    avisarJornada("dashboard");
     if (
       continuidadeAtual &&
       continuidadeAtual.situacao === "esclarecimento" &&
@@ -759,6 +761,12 @@
 
   function revelarPainel() {
     if (raiz) raiz.hidden = false;
+  }
+
+  function avisarJornada(fase) {
+    document.dispatchEvent(new CustomEvent("agente-bi-jornada", {
+      detail: fase ? { fase: fase } : { sincronizar: true }
+    }));
   }
 
   function recolherFormulariosAnteriores() {

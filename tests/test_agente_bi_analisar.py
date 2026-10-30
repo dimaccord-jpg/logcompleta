@@ -592,3 +592,253 @@ def test_perguntas_obrigatorias_acima_do_teto_permanecem_validas(ctx):
     assert por_regiao[1] == list(_CODIGOS_PERGUNTA[:4])
     assert all(mapa[item]["regiao"] == primeira for item in sugestoes[0]["perguntas"])
     assert all(mapa[item]["regiao"] == segunda for item in sugestoes[1]["perguntas"])
+
+
+def _regiao_de(ref) -> dict:
+    return {"arquivo": ref["arquivo"], "aba": ref["aba"], "regiao": ref["regiao"]}
+
+
+def _chave_regiao(ref) -> tuple:
+    return (ref["arquivo"], ref["aba"], ref["regiao"])
+
+
+def _relacao_toca(relacoes, indice, regiao) -> bool:
+    relacao = relacoes[indice]
+    alvo = _chave_regiao(regiao)
+    return any(_chave_regiao(relacao[nome]) == alvo for nome in ("lado_unico", "lado_associado"))
+
+
+def _perguntas_de_relacao(saida) -> list[dict]:
+    return [item for item in saida["perguntas"] if item["codigo"] == "confirmar_relacao_candidata"]
+
+
+def _assert_indices_concretos(saida) -> None:
+    perguntas = _perguntas_de_relacao(saida)
+    assert perguntas
+    assert all(type(item["relacao"]) is int for item in perguntas)
+
+
+def _planilha_com_regiao_isolada():
+    return _xlsx(
+        {
+            "movimento": [
+                ["alfa", "beta", "quando", "qtd", "valor"],
+                ["NF-1", "norte", date(2024, 3, 1), 10, 10.5],
+                ["NF-2", "sul", date(2024, 3, 2), 4, 4.25],
+                ["NF-1", "norte", date(2024, 3, 3), 10, 10.5],
+            ],
+            "faixas": [
+                ["alfa", "beta"],
+                ["NF-1", 1],
+                ["NF-2", 2],
+                ["NF-3", 3],
+            ],
+            "isolada": [
+                ["categoria", "medida"],
+                ["leste", 7],
+                ["oeste", 8],
+                ["centro", 9],
+            ],
+        }
+    )
+
+
+def _csv_sem_relacao() -> bytes:
+    return "categoria,medida\nleste,7\noeste,8\ncentro,9\n".encode("utf-8")
+
+
+def test_duvida_de_relacao_compativel_ancora_indice_concreto(ctx):
+    _conta, _franquia, usuario = _par("analisar-relacao", "analisar.relacao@test.com")
+    _resultado, perfil = _perfil(usuario, _movimento(), "relacao.xlsx", "analisar-relacao")
+    pedido = _pedido_a()
+    contexto = montar_contexto(perfil, pedido)
+    relacao = contexto["relacoes"][0]
+    unico = _regiao_de(relacao["lado_unico"])
+    associado = _regiao_de(relacao["lado_associado"])
+    assert unico != associado
+
+    def propor(_contexto):
+        return {
+            "descobertas": [],
+            "sugestoes": [
+                _esclarecimento_forcado(unico, ("confirmar_relacao_candidata",)),
+                _esclarecimento_forcado(associado, ("confirmar_relacao_candidata",)),
+            ],
+        }
+
+    saida = analisar(perfil, pedido, provedor=propor)
+    assert validar_saida(contexto, saida)["contrato"] == "analisar.v1"
+    _assert_indices_concretos(saida)
+    assert all(item["juncao"] == "nao_executada" for item in saida["sugestoes"])
+    mapa = {item["id"]: item for item in saida["perguntas"]}
+    por_regiao = {_chave_regiao(item["regiao"]): item for item in saida["sugestoes"]}
+    assert set(por_regiao) == {_chave_regiao(unico), _chave_regiao(associado)}
+    for regiao in (unico, associado):
+        vinculadas = [mapa[item] for item in por_regiao[_chave_regiao(regiao)]["perguntas"]]
+        assert vinculadas
+        assert all(item["codigo"] == "confirmar_relacao_candidata" for item in vinculadas)
+        assert all(_relacao_toca(contexto["relacoes"], item["relacao"], regiao) for item in vinculadas)
+        assert any(item["relacao"] == relacao["indice"] for item in vinculadas)
+
+
+def test_duvida_sem_relacao_candidata_nao_fabrica_pergunta(ctx):
+    _conta, _franquia, usuario = _par("analisar-sem-relacao", "analisar.sem.relacao@test.com")
+    _resultado, perfil = _perfil(usuario, _csv_sem_relacao(), "sem-relacao.csv", "analisar-sem-relacao")
+    pedido = _pedido_a()
+    contexto = montar_contexto(perfil, pedido)
+    assert contexto["relacoes"] == []
+    regiao = _regiao_de(contexto["regioes"][0])
+
+    def propor(_contexto):
+        return {
+            "descobertas": [],
+            "sugestoes": [
+                _esclarecimento_forcado(regiao, ("confirmar_relacao_candidata", "informar_dados_ausentes")),
+            ],
+        }
+
+    saida = analisar(perfil, pedido, provedor=propor)
+    assert validar_saida(contexto, saida)["contrato"] == "analisar.v1"
+    assert _perguntas_de_relacao(saida) == []
+    assert len(saida["sugestoes"]) == 1
+    mapa = {item["id"]: item for item in saida["perguntas"]}
+    assert [mapa[item]["codigo"] for item in saida["sugestoes"][0]["perguntas"]] == ["informar_dados_ausentes"]
+
+
+def test_relacao_de_outra_regiao_nao_recebe_ancora(ctx):
+    _conta, _franquia, usuario = _par("analisar-isolada", "analisar.isolada@test.com")
+    _resultado, perfil = _perfil(usuario, _planilha_com_regiao_isolada(), "isolada.xlsx", "analisar-isolada")
+    pedido = _pedido_a()
+    contexto = montar_contexto(perfil, pedido)
+    tocadas = set()
+    for relacao in contexto["relacoes"]:
+        tocadas.add(_chave_regiao(relacao["lado_unico"]))
+        tocadas.add(_chave_regiao(relacao["lado_associado"]))
+    isoladas = [item for item in contexto["regioes"] if _chave_regiao(item) not in tocadas]
+    assert contexto["relacoes"]
+    assert len(isoladas) == 1
+    isolada = _regiao_de(isoladas[0])
+
+    def propor(_contexto):
+        return {
+            "descobertas": [],
+            "sugestoes": [
+                _esclarecimento_forcado(isolada, ("confirmar_relacao_candidata", "informar_dados_ausentes")),
+            ],
+        }
+
+    saida = analisar(perfil, pedido, provedor=propor)
+    assert validar_saida(contexto, saida)["contrato"] == "analisar.v1"
+    _assert_indices_concretos(saida)
+    assert all(not _relacao_toca(contexto["relacoes"], item["relacao"], isolada) for item in _perguntas_de_relacao(saida))
+    ids_relacao = {item["id"] for item in _perguntas_de_relacao(saida)}
+    assert len(saida["sugestoes"]) == 1
+    assert ids_relacao.isdisjoint(saida["sugestoes"][0]["perguntas"])
+    mapa = {item["id"]: item for item in saida["perguntas"]}
+    assert [mapa[item]["codigo"] for item in saida["sugestoes"][0]["perguntas"]] == ["informar_dados_ausentes"]
+
+
+def test_pergunta_manual_sem_relacao_continua_rejeitada(ctx):
+    _conta, _franquia, usuario = _par("analisar-nula", "analisar.nula@test.com")
+    _resultado, perfil = _perfil(usuario, _movimento(), "nula.xlsx", "analisar-nula")
+    pedido = _pedido_a()
+    contexto = montar_contexto(perfil, pedido)
+    saida = analisar(perfil, pedido)
+    pergunta = next(item for item in saida["perguntas"] if item["codigo"] == "confirmar_relacao_candidata")
+    assert type(pergunta["relacao"]) is int
+    manual = copy.deepcopy(saida)
+    alvo = next(item for item in manual["perguntas"] if item["id"] == pergunta["id"])
+    alvo["relacao"] = None
+    with pytest.raises(AnalisarErro) as erro:
+        validar_saida(contexto, manual)
+    assert erro.value.codigo == "juncao_nao_confirmada"
+
+    executada = copy.deepcopy(saida)
+    executada["sugestoes"][0]["juncao"] = "executada"
+    with pytest.raises(AnalisarErro) as erro_juncao:
+        validar_saida(contexto, executada)
+    assert erro_juncao.value.codigo == "juncao_nao_confirmada"
+
+
+def test_medida_e_agrupamento_de_regioes_diferentes_continuam_rejeitados(ctx):
+    _conta, _franquia, usuario = _par("analisar-cruzada", "analisar.cruzada@test.com")
+    _resultado, perfil = _perfil(usuario, _movimento(), "cruzada.xlsx", "analisar-cruzada")
+    pedido = _pedido_a()
+    contexto = montar_contexto(perfil, pedido)
+    saida = analisar(perfil, pedido)
+    outra = next(coluna for coluna in perfil["colunas"] if coluna["aba"] == 1)
+    cruzada = copy.deepcopy(saida)
+    alvo = next(item for item in cruzada["sugestoes"] if item["agrupamento"] is not None)
+    alvo["agrupamento"] = _coord(outra)
+    with pytest.raises(AnalisarErro) as erro:
+        validar_saida(contexto, cruzada)
+    assert erro.value.codigo == "juncao_nao_confirmada"
+
+
+def test_caminho_simulado_preserva_relacao_concreta(ctx):
+    _conta, _franquia, usuario = _par("analisar-simulado", "analisar.simulado@test.com")
+    _resultado, perfil = _perfil(usuario, _movimento(), "simulado.xlsx", "analisar-simulado")
+    pedido = _pedido_a()
+    contexto = montar_contexto(perfil, pedido)
+    saida = analisar(perfil, pedido)
+    assert saida["provedor"] == "simulado"
+    assert saida["chamada_anthropic"] is False
+    assert validar_saida(contexto, saida)["contrato"] == "analisar.v1"
+    _assert_indices_concretos(saida)
+    assert all(item["juncao"] == "nao_executada" for item in saida["sugestoes"])
+    assert descrever_catalogo()["juncoes_executaveis"] == []
+    assert len(saida["perguntas"]) <= 12
+
+
+def test_teto_de_doze_perguntas_permanece_com_duvida_de_relacao(ctx):
+    _conta, _franquia, usuario = _par("analisar-teto-relacao", "analisar.teto.relacao@test.com")
+    _resultado, perfil = _perfil(usuario, _movimento(), "teto-relacao.xlsx", "analisar-teto-relacao")
+    primeira = _regiao_da_aba(perfil, 0)
+    segunda = _regiao_da_aba(perfil, 1)
+    duvidas = _CODIGOS_PERGUNTA + ("confirmar_relacao_candidata",)
+
+    def propor(_contexto):
+        return {
+            "descobertas": [],
+            "sugestoes": [
+                _esclarecimento_forcado(primeira, duvidas),
+                _esclarecimento_forcado(segunda, duvidas),
+            ],
+        }
+
+    pedido = _pedido_a()
+    contexto = montar_contexto(perfil, pedido)
+    saida = analisar(perfil, pedido, provedor=propor)
+    assert validar_saida(contexto, saida)["contrato"] == "analisar.v1"
+    assert len(saida["perguntas"]) == 12
+    assert _perguntas_de_relacao(saida) == []
+    mapa = {item["id"]: item for item in saida["perguntas"]}
+    sugestoes = {item["regiao"]["aba"]: item for item in saida["sugestoes"]}
+    assert [mapa[item]["codigo"] for item in sugestoes[0]["perguntas"]] == list(_CODIGOS_PERGUNTA)
+    assert [mapa[item]["codigo"] for item in sugestoes[1]["perguntas"]] == list(_CODIGOS_PERGUNTA[:4])
+
+
+def test_sugestao_sem_ancora_de_relacao_e_descartada(ctx):
+    _conta, _franquia, usuario = _par("analisar-descarte", "analisar.descarte@test.com")
+    _resultado, perfil = _perfil(usuario, _csv_sem_relacao(), "descarte.csv", "analisar-descarte")
+    pedido = _pedido_a()
+    contexto = montar_contexto(perfil, pedido)
+    assert contexto["relacoes"] == []
+    regiao = _regiao_de(contexto["regioes"][0])
+
+    def propor(_contexto):
+        return {
+            "descobertas": [],
+            "sugestoes": [
+                _esclarecimento_forcado(regiao, ("confirmar_relacao_candidata",)),
+                _esclarecimento_forcado(regiao, ("informar_dados_ausentes",)),
+            ],
+        }
+
+    saida = analisar(perfil, pedido, provedor=propor)
+    assert validar_saida(contexto, saida)["contrato"] == "analisar.v1"
+    assert _perguntas_de_relacao(saida) == []
+    assert len(saida["sugestoes"]) == 1
+    mapa = {item["id"]: item for item in saida["perguntas"]}
+    assert [mapa[item]["codigo"] for item in saida["sugestoes"][0]["perguntas"]] == ["informar_dados_ausentes"]
+    assert len(saida["perguntas"]) <= 12

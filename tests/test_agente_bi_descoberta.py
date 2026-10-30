@@ -923,12 +923,14 @@ def test_jornada_visual_seleciona_seis_e_mantem_o_chat_bloqueado(monkeypatch):
         assert "Versão 2" in page.locator("#agente-bi-descoberta-status").inner_text()
         assert page.locator("#agente-bi-input").evaluate("el => el.readOnly") is True
 
-        page.locator("#agente-bi-modalidade-b").check()
+        assert page.locator("#agente-bi-modalidade-b").is_visible()
+        assert page.locator("#agente-bi-modalidade-b-breve").inner_text() == "Em breve"
+        assert page.locator("#agente-bi-bloco-b-tecnico").is_hidden()
+        page.locator("#agente-bi-modalidade-b").focus()
+        assert page.evaluate("() => document.activeElement.id") == "agente-bi-modalidade-b"
+        page.locator("#agente-bi-modalidade-b").press(" ")
+        assert page.locator("#agente-bi-modalidade-b").is_checked() is False
         page.locator("#agente-bi-modalidade-c").check()
-        page.locator('[data-campo="operacao"]').select_option("soma")
-        page.locator('[data-campo="grafico"]').select_option("indicador")
-        page.locator('[data-campo="medida"]').select_option("0")
-        page.locator("#agente-bi-formulas").fill(FORMULA_SOMA)
         page.locator("#agente-bi-texto").fill("INSTRUCAO-SIGILOSA")
         page.locator("#agente-bi-examinar").click()
         page.wait_for_selector("[data-status='viavel']")
@@ -972,9 +974,9 @@ def test_jornada_visual_seleciona_seis_e_mantem_o_chat_bloqueado(monkeypatch):
 
         chamadas = page.evaluate("() => window.__bi")
         pedido = json.loads(next(item["body"] for item in chamadas if item["url"].rstrip("/").endswith("/descoberta")))
-        assert pedido["pedido"]["modalidades"] == ["A", "B", "C"]
+        assert pedido["pedido"]["modalidades"] == ["A", "C"]
         assert pedido["pedido"]["texto"] == "INSTRUCAO-SIGILOSA"
-        assert pedido["pedido"]["referencia"]["formulas"] == [FORMULA_SOMA]
+        assert "referencia" not in pedido["pedido"]
         aprovacao = json.loads(next(item["body"] for item in chamadas if "/descoberta/selecao" in item["url"]))
         assert aprovacao["sugestoes"] == [f"s{indice}" for indice in range(1, 7)]
         assert aprovacao["perguntas"] == [{"id": "p1", "confirmada": True}]

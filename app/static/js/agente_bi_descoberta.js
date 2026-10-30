@@ -192,6 +192,16 @@
     raiz.hidden = false;
   }
 
+  function avisarJornada(fase) {
+    document.dispatchEvent(new CustomEvent("agente-bi-jornada", {
+      detail: fase ? { fase: fase } : { sincronizar: true }
+    }));
+  }
+
+  function modalidadeBDisponivel() {
+    return !!(modalidadeB && modalidadeB.getAttribute("aria-disabled") !== "true");
+  }
+
   function marcarProcessamento() {
     raiz.setAttribute("data-processamento", "persistido");
     document.dispatchEvent(new CustomEvent("agente-bi-processamento"));
@@ -267,6 +277,7 @@
       if (prosseguir) prosseguir.hidden = true;
       mostrarErro(mensagemErro({ codigo: corpo.motivo }, "Os dados não ficaram preparados."));
       anunciar("A preparação não foi concluída.");
+      avisarJornada("upload");
       return;
     }
     estado.colunas = Array.isArray(corpo.colunas) ? corpo.colunas : [];
@@ -287,6 +298,7 @@
       (corpo.reutilizado ? "Esta versão já estava preparada. " : "Dados preparados. ") +
         "Versão " + dataset.versao + ". Escolha as modalidades da rodada. O chat continua bloqueado."
     );
+    avisarJornada("preparados");
   }
 
   function esconderResultado() {
@@ -418,7 +430,7 @@
   function montarPedido() {
     var escolhidas = [];
     if (modalidadeA && modalidadeA.checked) escolhidas.push("A");
-    if (modalidadeB && modalidadeB.checked) escolhidas.push("B");
+    if (modalidadeBDisponivel() && modalidadeB.checked) escolhidas.push("B");
     if (modalidadeC && modalidadeC.checked) escolhidas.push("C");
     if (!escolhidas.length) return { erro: "Escolha ao menos uma modalidade." };
     var pedido = { modalidades: escolhidas };
@@ -556,6 +568,7 @@
     if (aprovada) aprovada.hidden = true;
     anunciar("Descobertas prontas para revisão. A seleção inicial aceita até " + limite + " gráficos viáveis.");
     sincronizarAprovacao();
+    avisarJornada("descobertas");
     if (titulo) titulo.focus();
   }
 
@@ -576,7 +589,7 @@
     var ids = idsSelecionados();
     var caixas = raiz.querySelectorAll(".agente-bi-grafico");
     for (var i = 0; i < caixas.length; i += 1) {
-      caixas[i].disabled = estado.ocupado || (ids.length >= limite && !caixas[i].checked);
+      caixas[i].disabled = estado.ocupado || estado.aprovado || (ids.length >= limite && !caixas[i].checked);
     }
     contagem.textContent = ids.length + " de " + limite + " gráficos viáveis.";
     if (limite && ids.length >= limite) contagem.textContent += " O limite inicial foi atingido.";
@@ -596,6 +609,7 @@
     if (formulario) formulario.hidden = true;
     if (prosseguir) prosseguir.hidden = true;
     ocupar("Preparando os dados…");
+    avisarJornada("upload");
     pedir(raiz.getAttribute("data-preparacao-url"), {
       method: "POST",
       body: dados,
@@ -608,6 +622,7 @@
         if (prosseguir) prosseguir.hidden = true;
         mostrarErro(mensagemErro(resposta.corpo, "A preparação não foi concluída."));
         anunciar("A preparação não foi concluída.");
+        avisarJornada("upload");
         return;
       }
       limparErro();
@@ -617,6 +632,7 @@
       liberar();
       mostrarErro("Não foi possível concluir esta etapa. Tente novamente.");
       anunciar("A preparação não foi concluída.");
+      avisarJornada("upload");
     });
   }
 
@@ -625,10 +641,12 @@
     var montado = montarPedido();
     if (montado.erro) {
       mostrarErro(montado.erro);
+      avisarJornada("analise");
       return;
     }
     limparErro();
     ocupar("Examinando descobertas…");
+    avisarJornada("analise");
     pedir(raiz.getAttribute("data-descoberta-url"), {
       method: "POST",
       credentials: "same-origin",
@@ -639,6 +657,7 @@
         liberar();
         mostrarErro(mensagemErro(resposta.corpo, "A descoberta não foi concluída."));
         anunciar("A descoberta não foi concluída.");
+        avisarJornada("analise");
         return;
       }
       limparErro();
@@ -648,6 +667,7 @@
       liberar();
       mostrarErro("Não foi possível concluir esta etapa. Tente novamente.");
       anunciar("A descoberta não foi concluída.");
+      avisarJornada("analise");
     });
   }
 
@@ -677,6 +697,7 @@
         liberar();
         mostrarErro(mensagemErro(resposta.corpo, "A seleção não foi gravada."));
         anunciar("A seleção não foi gravada.");
+        avisarJornada("selecao");
         return;
       }
       if (aprovada) {
@@ -698,10 +719,12 @@
       liberar();
       anunciar("Seleção aprovada e vinculada à versão " + selecao.versao + ".");
       if (aprovadaTitulo) aprovadaTitulo.focus();
+      avisarJornada("construcao");
     }).catch(function () {
       liberar();
       mostrarErro("Não foi possível concluir esta etapa. Tente novamente.");
       anunciar("A seleção não foi gravada.");
+      avisarJornada("selecao");
     });
   }
 
@@ -789,6 +812,7 @@
     raiz.setAttribute("data-restaurada", "1");
     anunciar("Seleção aprovada recuperada na versão " + item.versao + ". O chat continua bloqueado.");
     if (aprovadaTitulo) aprovadaTitulo.focus();
+    avisarJornada(null);
   }
 
   function mostrarFalhaRecuperacao(corpo) {
@@ -796,6 +820,7 @@
     revelarDescoberta();
     mostrarErro(mensagemErro(corpo, "Não foi possível ler a seleção já gravada."));
     anunciar("Não foi possível ler a seleção já gravada. O chat continua bloqueado.");
+    avisarJornada("upload");
   }
 
   function recuperarSelecao() {
@@ -840,8 +865,24 @@
   if (prosseguir) prosseguir.addEventListener("click", function () {
     if (estado.ocupado || !estado.datasetId || estado.aprovado) return;
     mostrarFormulario(true);
+    avisarJornada("analise");
     if (modalidadeA) modalidadeA.focus();
   });
+  if (modalidadeB && !modalidadeBDisponivel()) {
+    modalidadeB.addEventListener("click", function (event) {
+      event.preventDefault();
+      modalidadeB.checked = false;
+    });
+    modalidadeB.addEventListener("keydown", function (event) {
+      if (event.key === " " || event.key === "Enter") {
+        event.preventDefault();
+        modalidadeB.checked = false;
+      }
+    });
+    modalidadeB.addEventListener("change", function () {
+      modalidadeB.checked = false;
+    });
+  }
   if (adicionar) adicionar.addEventListener("click", adicionarAfirmacao);
   if (examinar) examinar.addEventListener("click", examinarDescobertas);
   if (aprovar) aprovar.addEventListener("click", aprovarSelecao);

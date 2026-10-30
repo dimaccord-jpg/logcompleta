@@ -11,6 +11,7 @@ from tests.test_agente_bi_page import GUIDANCE, _browser_document, _client, _lau
 ROOT = Path(__file__).resolve().parents[1]
 DESCOBERTA = (ROOT / "app" / "static" / "js" / "agente_bi_descoberta.js").read_text(encoding="utf-8")
 DASHBOARD = (ROOT / "app" / "static" / "js" / "agente_bi_dashboard.js").read_text(encoding="utf-8")
+JORNADA = (ROOT / "app" / "static" / "js" / "agente_bi_jornada.js").read_text(encoding="utf-8")
 REINICIO = (ROOT / "app" / "static" / "js" / "agente_bi_reinicio.js").read_text(encoding="utf-8").replace(
     "window.location.reload();",
     "window.__recargas = (window.__recargas || 0) + 1;",
@@ -151,8 +152,11 @@ def _instalar(page, *, segurar=False):
 
 
 def _scripts(page, *nomes):
-    fontes = {"descoberta": DESCOBERTA, "dashboard": DASHBOARD, "reinicio": REINICIO}
-    for nome in nomes:
+    fontes = {"descoberta": DESCOBERTA, "dashboard": DASHBOARD, "reinicio": REINICIO, "jornada": JORNADA}
+    ordem = list(nomes)
+    if "jornada" not in ordem and ("descoberta" in ordem or "dashboard" in ordem):
+        ordem.append("jornada")
+    for nome in ordem:
         page.add_script_tag(content=fontes[nome])
 
 
@@ -216,7 +220,10 @@ def test_marcacao_inicial_so_mostra_identidade_compositor_e_menu(monkeypatch):
     assert 'id="agente-bi-descoberta"' in html
     assert 'id="agente-bi-prosseguir"' in html
     assert "A — Receber sugestões da IA" in html
-    assert "B — Utilizar referências analíticas da planilha" in html
+    assert "B — Copiar um BI existente" in html
+    assert "Em breve" in html
+    assert 'id="agente-bi-bloco-b-tecnico"' in html
+    assert 'id="agente-bi-jornada"' in html
     assert "C — Descrever livremente o que deseja analisar" in html
     assert "O chat continua bloqueado." in html
     assert GUIDANCE in html
@@ -347,29 +354,41 @@ def test_combinacoes_revisao_e_selecao_de_zero_um_e_limite(monkeypatch):
         assert "referencia" not in pedido_a["pedido"]
         assert "texto" not in pedido_a["pedido"]
         assert page.locator("#agente-bi-revisao").is_visible()
-        assert page.locator("#agente-bi-selecao-painel").is_visible()
+        assert page.locator("#agente-bi-selecao-painel").is_hidden()
         assert page.locator("#agente-bi-revisao .agente-bi-grafico").count() == 0
         assert page.locator("[data-status='condicional'] .agente-bi-grafico").count() == 0
+        assert "não é uma análise executável" in page.locator("[data-status='condicional']").inner_text()
+        page.get_by_role("button", name="Avançar").click()
+        assert page.locator("#agente-bi-selecao-painel").is_visible()
+        assert page.locator("#agente-bi-revisao-titulo").is_hidden()
         assert "Não há gráfico viável" in page.locator("#agente-bi-selecao-contagem").inner_text()
         assert page.locator("#agente-bi-aprovar").is_disabled()
-        assert "não é uma análise executável" in page.locator("[data-status='condicional']").inner_text()
+        page.get_by_role("button", name="Como deseja analisar").click()
 
+        assert page.locator("#agente-bi-modalidade-b").is_visible()
+        assert page.locator("#agente-bi-modalidade-b-breve").inner_text() == "Em breve"
+        assert page.locator("#agente-bi-bloco-b-tecnico").is_hidden()
+        page.locator("#agente-bi-modalidade-b").focus()
+        page.locator("#agente-bi-modalidade-b").press(" ")
+        assert page.locator("#agente-bi-modalidade-b").is_checked() is False
+        assert page.locator("#agente-bi-formulas").is_hidden()
+        assert page.locator('[data-campo="operacao"]').is_hidden()
+        assert page.locator("label[for='agente-bi-formulas']").is_hidden()
+
+        page.locator("#agente-bi-modalidade-c").check()
+        page.locator("#agente-bi-texto").fill("total e sugestoes")
         page.evaluate("(corpo) => { window.__descoberta = corpo; }", _descoberta([_sugestao(1)]))
-        page.locator("#agente-bi-modalidade-a").uncheck()
-        page.locator("#agente-bi-modalidade-b").check()
-        page.locator('[data-campo="operacao"]').select_option("soma")
-        page.locator('[data-campo="medida"]').select_option("0")
         page.locator("#agente-bi-examinar").click()
         page.wait_for_function("() => document.querySelectorAll('.agente-bi-grafico').length === 1")
-        pedido_b = json.loads(page.evaluate(
+        pedido_ac = json.loads(page.evaluate(
             """() => window.__bi.filter((item) => item.method === "POST" && item.url.replace(/\\/$/, "").endsWith("/descoberta")).pop().body"""
         ))
-        assert pedido_b["pedido"]["modalidades"] == ["B"]
-        assert pedido_b["pedido"]["referencia"]["afirmacoes"][0]["operacao"] == "soma"
-        assert pedido_b["pedido"]["referencia"]["afirmacoes"][0]["juncao"] is False
+        assert pedido_ac["pedido"]["modalidades"] == ["A", "C"]
+        assert pedido_ac["pedido"]["texto"] == "total e sugestoes"
+        assert "referencia" not in pedido_ac["pedido"]
+        page.get_by_role("button", name="Como deseja analisar").click()
 
-        page.locator("#agente-bi-modalidade-b").uncheck()
-        page.locator("#agente-bi-modalidade-c").check()
+        page.locator("#agente-bi-modalidade-a").uncheck()
         page.locator("#agente-bi-texto").fill("quero o total")
         page.evaluate(
             "(corpo) => { window.__descoberta = corpo; }",
@@ -377,6 +396,9 @@ def test_combinacoes_revisao_e_selecao_de_zero_um_e_limite(monkeypatch):
         )
         page.locator("#agente-bi-examinar").click()
         page.wait_for_function("() => document.querySelectorAll('.agente-bi-grafico').length === 7")
+        page.get_by_role("button", name="Avançar").click()
+        assert page.locator("#agente-bi-selecao-painel").is_visible()
+        assert page.locator("#agente-bi-descobertas").is_hidden()
         identificacao = page.locator(".agente-bi-grafico").evaluate_all(
             """(caixas) => caixas.map((caixa) => {
               const card = caixa.closest("article");
@@ -554,11 +576,13 @@ def test_recuperacao_nao_escolhe_id_maior_sem_vinculo_e_reabre_dashboard(monkeyp
         page.locator("#agente-bi-aprovada").evaluate(
             """(el) => { el.setAttribute("data-selecao", "16"); el.setAttribute("data-versao", "2"); }"""
         )
+        page.get_by_role("button", name="Construção do dashboard").click()
         page.get_by_role("button", name="Salvar dashboard do cálculo 30").wait_for()
         assert page.get_by_role("button", name="Salvar dashboard do cálculo 40").count() == 0
         assert _posts(page, "/definicao") == 0
         assert _posts(page, "/calculo") == 0
         assert _posts(page, "/montar") == 0
+        page.get_by_role("button", name="Dashboard e continuidade").click()
         page.get_by_role("button", name="Abrir revisão 1 de painel-fretes").click()
         page.wait_for_selector("[data-resultado='8']")
         assert page.locator("#agente-bi-dashboard-aberto").is_visible()
@@ -588,7 +612,7 @@ def test_gerar_novo_bi_depende_da_leitura_e_do_reinicio(monkeypatch):
         page.evaluate("() => { window.__falhar = '/datasets'; window.__analises = [{ id: 4, etapa: 'dados', estado: 'concluida' }]; }")
         _scripts(page, "dashboard")
         page.wait_for_function("() => document.getElementById('agente-bi-reinicio').hidden === false")
-        assert "Nenhum dashboard salvo" in page.locator("#agente-bi-dashboard-status").inner_text()
+        assert "Nenhum dashboard salvo" in page.locator("#agente-bi-dashboard-status").text_content()
         page.close()
 
         page2 = browser.new_page(viewport={"width": 390, "height": 844})
@@ -602,7 +626,8 @@ def test_gerar_novo_bi_depende_da_leitura_e_do_reinicio(monkeypatch):
               return status && status.textContent.indexOf('Não foi possível ler os dashboards salvos') !== -1;
             }"""
         )
-        assert page2.locator("#agente-bi-dashboard").is_visible()
+        assert page2.locator("#agente-bi-messages").is_visible()
+        assert page2.locator("#agente-bi-fase-dashboard").is_hidden()
         assert page2.locator("#agente-bi-dashboard-erro").is_visible()
         assert "Não foi possível consultar o dashboard." in page2.locator("#agente-bi-dashboard-erro").inner_text()
         assert page2.locator("#agente-bi-dashboard-aberto").is_hidden()
@@ -658,8 +683,9 @@ def test_falha_de_recuperacao_fica_visivel_sem_montar(monkeypatch):
         _scripts(page, "descoberta", "dashboard")
         page.wait_for_selector("#agente-bi-dashboard-erro:not([hidden])")
         page.wait_for_selector("#agente-bi-descoberta-erro:not([hidden])")
-        assert page.locator("#agente-bi-dashboard").is_visible()
-        assert page.locator("#agente-bi-descoberta").is_visible()
+        assert page.locator("#agente-bi-messages").is_visible()
+        assert page.locator("#agente-bi-descoberta-form").is_hidden()
+        assert page.locator("#agente-bi-fase-dashboard").is_hidden()
         assert page.locator("#agente-bi-dashboard-erro").is_visible()
         assert page.locator("#agente-bi-descoberta-erro").is_visible()
         assert "não está disponível nesta conta" in page.locator("#agente-bi-dashboard-erro").inner_text()
@@ -682,8 +708,8 @@ def test_falha_de_recuperacao_fica_visivel_sem_montar(monkeypatch):
         _scripts(rede, "descoberta", "dashboard")
         rede.wait_for_selector("#agente-bi-dashboard-erro:not([hidden])")
         rede.wait_for_selector("#agente-bi-descoberta-erro:not([hidden])")
-        assert rede.locator("#agente-bi-dashboard").is_visible()
-        assert rede.locator("#agente-bi-descoberta").is_visible()
+        assert rede.locator("#agente-bi-messages").is_visible()
+        assert rede.locator("#agente-bi-fase-dashboard").is_hidden()
         assert "Não foi possível consultar o dashboard." in rede.locator("#agente-bi-dashboard-erro").inner_text()
         assert "Não foi possível ler a seleção já gravada." in rede.locator("#agente-bi-descoberta-erro").inner_text()
         assert "Nenhum dashboard salvo" not in rede.locator("#agente-bi-dashboard").inner_text()
@@ -795,6 +821,7 @@ def test_nova_preparacao_limpa_data_selecao(monkeypatch):
         page.locator("#agente-bi-prosseguir").click()
         page.locator("#agente-bi-examinar").click()
         page.wait_for_function("() => document.querySelectorAll('.agente-bi-grafico').length === 1")
+        page.get_by_role("button", name="Avançar").click()
         page.locator(".agente-bi-grafico").check()
         page.locator("#agente-bi-confirmacao").check()
         page.locator("#agente-bi-aprovar").click()
@@ -818,6 +845,7 @@ def test_nova_preparacao_limpa_data_selecao(monkeypatch):
         page.locator("#agente-bi-prosseguir").click()
         page.locator("#agente-bi-examinar").click()
         page.wait_for_function("() => document.querySelectorAll('.agente-bi-grafico').length === 1")
+        page.get_by_role("button", name="Avançar").click()
         page.locator(".agente-bi-grafico").check()
         page.locator("#agente-bi-confirmacao").check()
         page.locator("#agente-bi-aprovar").click()
@@ -843,4 +871,217 @@ def test_nova_preparacao_limpa_data_selecao(monkeypatch):
         page.locator("#agente-bi-reinicio-cancelar").click()
         assert page.locator("#agente-bi-reinicio-dialogo").is_hidden()
         assert page.evaluate("() => window.__bi.filter((item) => item.url.indexOf('/reinicio') !== -1).length") == 0
+        browser.close()
+
+
+def test_jornada_mostra_uma_fase_navega_sem_repetir_operacao_e_cabe_na_tela(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _browser_document(_html(monkeypatch))
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.set_content(documento, wait_until="domcontentloaded")
+        _instalar(page)
+        page.evaluate("(corpo) => { window.__preparacao = corpo; }", _preparacao())
+        _scripts(page, "descoberta", "dashboard")
+
+        assert page.locator("#agente-bi-shell").get_attribute("data-jornada-fase") == "upload"
+        assert page.locator("#agente-bi-messages").is_visible()
+        assert page.locator("#agente-bi-fase-preparados").is_hidden()
+        assert page.locator("#agente-bi-descoberta-form").is_hidden()
+        assert page.locator("#agente-bi-fase-construcao").is_hidden()
+        assert page.locator("#agente-bi-fase-dashboard").is_hidden()
+        assert page.locator("#agente-bi-jornada-atual").inner_text() == "Etapa 1 de 7. Upload dos dados."
+        assert page.get_by_role("button", name="Dados preparados").is_disabled()
+        assert page.get_by_role("button", name="Descobertas e esclarecimentos").is_disabled()
+        assert page.locator("#agente-bi-jornada-avancar").is_disabled()
+        assert page.locator("#agente-bi-jornada-voltar").is_disabled()
+        assert page.locator("#agente-bi-input").evaluate("el => el.readOnly") is True
+        assert page.locator("#agente-bi-send").is_disabled()
+
+        page.locator("#agente-bi-arquivo").set_input_files(
+            files=[{"name": "fretes.csv", "mimeType": "text/csv", "buffer": b"alfa,valor\nA,10\n"}]
+        )
+        page.wait_for_function("() => document.getElementById('agente-bi-shell').getAttribute('data-jornada-fase') === 'preparados'")
+        assert page.locator("#agente-bi-messages").is_hidden()
+        assert page.locator("#agente-bi-fase-preparados").is_visible()
+        assert "preparado" in page.locator("#agente-bi-preparacao-lista").inner_text()
+        assert page.locator("#agente-bi-descoberta-form").is_hidden()
+        preparacoes = _posts(page, "/descoberta/preparacao")
+        assert preparacoes == 1
+        assert _posts(page, "/definicao") == 0
+        assert _posts(page, "/calculo") == 0
+        assert _posts(page, "/montar") == 0
+
+        page.locator("#agente-bi-jornada-avancar").click()
+        assert page.locator("#agente-bi-shell").get_attribute("data-jornada-fase") == "analise"
+        assert page.locator("#agente-bi-descoberta-form").is_visible()
+        assert page.locator("#agente-bi-fase-preparados").is_hidden()
+        assert _posts(page, "/descoberta/preparacao") == preparacoes
+        assert _posts(page, "/definicao") == 0
+        assert page.get_by_role("button", name="Descobertas e esclarecimentos").is_disabled()
+
+        page.locator("#agente-bi-jornada-voltar").click()
+        assert page.locator("#agente-bi-shell").get_attribute("data-jornada-fase") == "preparados"
+        assert "preparado" in page.locator("#agente-bi-preparacao-lista").inner_text()
+        assert _posts(page, "/descoberta/preparacao") == preparacoes
+        assert page.locator("#agente-bi-input").evaluate("el => el.readOnly") is True
+
+        for largura in (1280, 768, 390):
+            page.set_viewport_size({"width": largura, "height": 900})
+            page.wait_for_function(
+                """(largura) => {
+                  const shell = document.getElementById('agente-bi-shell');
+                  const jornada = document.getElementById('agente-bi-jornada');
+                  const fase = document.getElementById('agente-bi-fase-preparados');
+                  const shellBox = shell.getBoundingClientRect();
+                  const marca = window.__afLarguraShell || { largura: 0, valor: -1, estavel: 0 };
+                  if (marca.largura !== largura || Math.abs(marca.valor - shellBox.width) > 0.5) {
+                    window.__afLarguraShell = { largura: largura, valor: shellBox.width, estavel: 0 };
+                    return false;
+                  }
+                  marca.estavel += 1;
+                  const cabe = (el) => {
+                    const box = el.getBoundingClientRect();
+                    return box.width <= shellBox.width + 1 && el.scrollWidth <= el.clientWidth + 1;
+                  };
+                  return marca.estavel >= 3 && shellBox.width <= largura && cabe(jornada) && cabe(fase);
+                }""",
+                arg=largura,
+                timeout=3000,
+            )
+            caixa = page.locator("#agente-bi-shell").bounding_box()
+            assert caixa is not None
+            assert caixa["width"] <= largura
+            assert page.locator("#agente-bi-jornada-avancar").bounding_box()["height"] >= 44
+            assert page.locator("#agente-bi-jornada").bounding_box()["width"] <= caixa["width"] + 1
+            assert page.locator("#agente-bi-fase-preparados").bounding_box()["width"] <= caixa["width"] + 1
+            assert page.evaluate(
+                """() => {
+                  const fase = document.getElementById('agente-bi-fase-preparados');
+                  const jornada = document.getElementById('agente-bi-jornada');
+                  return fase.scrollWidth <= fase.clientWidth + 1 && jornada.scrollWidth <= jornada.clientWidth + 1;
+                }"""
+            ) is True
+        browser.close()
+
+
+def _consultas(page):
+    return page.evaluate(
+        """() => window.__bi.filter((item) => item.url.indexOf("/consulta") !== -1).length"""
+    )
+
+
+def test_novo_upload_recolhe_dashboard_aberto_sem_nova_operacao(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _browser_document(_html(monkeypatch))
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.set_content(documento, wait_until="domcontentloaded")
+        _instalar(page)
+        page.evaluate("(corpo) => { window.__preparacao = corpo; }", _preparacao())
+        page.evaluate(
+            """() => {
+              window.__analises = [
+                { id: 30, etapa: "execucao", estado: "concluida", contrato_versao: "calculo.v1", dataset_id: 9,
+                  resultado: { origem_definicao_id: 21, dataset_id: 9 } },
+                { id: 21, etapa: "definicao", estado: "concluida", contrato_versao: "definir.v1", dataset_id: 9,
+                  resultado: { origem_selecao_id: 16, dataset_id: 9 } },
+                { id: 16, etapa: "selecao", estado: "concluida", contrato_versao: "selecao.descoberta.v1", dataset_id: 9, versao: 2 }
+              ];
+              window.__dashboards = [{ id: 7, chave: "painel-fretes", revisao: 1, analise_id: 30 }];
+              window.__consulta = {
+                ok: true,
+                dashboard: { id: 7, analise_id: 30, chave: "painel-fretes", revisao: 1 },
+                consulta: {
+                  contrato: "dashboard.v1", dashboard_id: 7, revisao: 1, chave: "painel-fretes",
+                  calculo_id: 30, definicao_id: 21, dataset_id: 9, versao: 2, filtros: [],
+                  graficos: [{
+                    ref: "g1", titulo: "indicador", tipo: "indicador", status: "calculado",
+                    operacao: "soma", unidade: "valor", resultado: "8", total: "8",
+                    serie: [], avisos: [], elegiveis: 1, grupos: 0
+                  }]
+                }
+              };
+            }"""
+        )
+        _scripts(page, "descoberta", "dashboard")
+        page.locator("#agente-bi-aprovada").evaluate(
+            """(el) => { el.setAttribute("data-selecao", "16"); el.setAttribute("data-versao", "2"); }"""
+        )
+        page.get_by_role("button", name="Dashboard e continuidade").click()
+        page.get_by_role("button", name="Abrir revisão 1 de painel-fretes").click()
+        page.wait_for_selector("[data-resultado='8']")
+        assert page.locator("#agente-bi-dashboard-aberto").is_visible()
+        consultas = _consultas(page)
+
+        page.locator("#agente-bi-arquivo").set_input_files(
+            files=[{"name": "fretes.csv", "mimeType": "text/csv", "buffer": b"alfa,valor\nA,10\n"}]
+        )
+        page.wait_for_function(
+            "() => document.getElementById('agente-bi-shell').getAttribute('data-jornada-fase') === 'preparados'"
+        )
+        assert page.locator("#agente-bi-fase-preparados").is_visible()
+        assert page.locator("#agente-bi-dashboard-aberto").is_hidden()
+        assert page.locator("#agente-bi-fase-dashboard").is_hidden()
+        assert _posts(page, "/descoberta/preparacao") == 1
+        assert _posts(page, "/definicao") == 0
+        assert _posts(page, "/calculo") == 0
+        assert _posts(page, "/montar") == 0
+
+        page.evaluate(
+            """() => new Promise((resolve) => {
+              document.getElementById('agente-bi-shell').setAttribute('data-restaurada', 'nova');
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            })"""
+        )
+        assert page.locator("#agente-bi-shell").get_attribute("data-jornada-fase") == "preparados"
+        assert page.locator("#agente-bi-dashboard-aberto").is_hidden()
+        assert page.locator("#agente-bi-fase-preparados").is_visible()
+        assert _posts(page, "/descoberta/preparacao") == 1
+        assert _consultas(page) == consultas
+
+        page.get_by_role("button", name="Dashboard e continuidade").click()
+        assert page.locator("#agente-bi-shell").get_attribute("data-jornada-fase") == "dashboard"
+        assert page.locator("#agente-bi-dashboard-aberto").is_visible()
+        assert page.locator("[data-resultado='8']").is_visible()
+        assert _posts(page, "/descoberta/preparacao") == 1
+        assert _posts(page, "/definicao") == 0
+        assert _posts(page, "/calculo") == 0
+        assert _posts(page, "/montar") == 0
+        assert _consultas(page) == consultas
+        browser.close()
+
+
+def test_descoberta_foca_o_titulo_visivel(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _browser_document(_html(monkeypatch))
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.set_content(documento, wait_until="domcontentloaded")
+        _instalar(page)
+        page.evaluate("(corpo) => { window.__preparacao = corpo; }", _preparacao())
+        page.evaluate("(corpo) => { window.__descoberta = corpo; }", _descoberta([_sugestao(1)]))
+        _scripts(page, "descoberta", "dashboard")
+        page.locator("#agente-bi-arquivo").set_input_files(
+            files=[{"name": "fretes.csv", "mimeType": "text/csv", "buffer": b"alfa,valor\nA,10\n"}]
+        )
+        page.wait_for_selector("#agente-bi-prosseguir:not([hidden])")
+        page.locator("#agente-bi-prosseguir").click()
+        page.locator("#agente-bi-examinar").click()
+        page.wait_for_function(
+            """() => document.getElementById('agente-bi-shell').getAttribute('data-jornada-fase') === 'descobertas'
+              && document.activeElement && document.activeElement.id === 'agente-bi-resultado-titulo'"""
+        )
+        assert page.locator("#agente-bi-resultado-titulo").is_visible()
+        assert page.evaluate("() => document.activeElement.id") == "agente-bi-resultado-titulo"
+        assert page.evaluate("() => document.activeElement.id") != "agente-bi-examinar"
         browser.close()

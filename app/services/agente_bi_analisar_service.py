@@ -1684,6 +1684,8 @@ def _perguntas(contexto: dict, rascunhos: list[dict], *, lexical: bool = True) -
         for codigo in rascunho["duvidas"]:
             if codigo not in _PERGUNTAS:
                 raise AnalisarErro("contrato_saida_invalido")
+            if codigo == "confirmar_relacao_candidata":
+                continue
             chave = (codigo, _coord(rascunho["regiao"]), None, None)
             if chave in origem:
                 continue
@@ -1704,6 +1706,27 @@ def _perguntas(contexto: dict, rascunhos: list[dict], *, lexical: bool = True) -
     def consumir(chave) -> None:
         if chave in pendentes:
             pendentes.remove(chave)
+
+    def ancoras_de_relacao(regiao) -> list[str]:
+        alvo = _coord(regiao)
+        encontradas = []
+        for item in saida:
+            if item["codigo"] != "confirmar_relacao_candidata":
+                continue
+            indice = item["relacao"]
+            if isinstance(indice, bool) or not isinstance(indice, int):
+                continue
+            if indice < 0 or indice >= len(contexto["relacoes"]):
+                continue
+            relacao = contexto["relacoes"][indice]
+            lados = (
+                _coord(_sem_indice(relacao["lado_unico"])),
+                _coord(_sem_indice(relacao["lado_associado"])),
+            )
+            if alvo not in lados or item["ancora"] in encontradas:
+                continue
+            encontradas.append(item["ancora"])
+        return encontradas
 
     def garantir(codigo: str, regiao, coluna, relacao) -> str:
         chave = chave_de(codigo, regiao, coluna, relacao)
@@ -1761,6 +1784,11 @@ def _perguntas(contexto: dict, rascunhos: list[dict], *, lexical: bool = True) -
     for rascunho in rascunhos:
         ancoras = []
         for codigo in rascunho["duvidas"]:
+            if codigo == "confirmar_relacao_candidata":
+                for ancora in ancoras_de_relacao(rascunho["regiao"]):
+                    if ancora not in ancoras:
+                        ancoras.append(ancora)
+                continue
             ancora = localizar((codigo, _coord(rascunho["regiao"]), None, None))
             if ancora:
                 ancoras.append(ancora)
