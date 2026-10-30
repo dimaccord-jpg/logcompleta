@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+from decimal import Decimal
 from uuid import uuid4
 
 from app.extensions import db
@@ -18,6 +19,7 @@ from app.models import (
     AgenteBiAnalise,
     AgenteBiDataset,
     AgenteBiExecucao,
+    AgenteBiExecucaoEvento,
     IaChamadaTentativa,
     utcnow_naive,
 )
@@ -51,9 +53,13 @@ from app.services.agente_bi_anthropic_service import (
 )
 from app.services.agente_bi_execucao_service import (
     LEASE_MAX_SEGUNDOS,
+    MAX_TENTATIVAS,
     EntregaProcessador,
     ExecucaoErro,
+    _atualizar_condicional,
+    _publicar_transicao,
     enfileirar,
+    execucao_para_dict,
     executar_um_ciclo,
     falhar,
     promover_esgotadas,
@@ -69,6 +75,7 @@ from app.services.agente_bi_integracao_service import (
 from app.services.agente_bi_perfil_semantico_service import PerfilErro, perfilar_dataset
 from app.services.agente_bi_persistencia_service import (
     AgenteBiErro,
+    EscopoAgenteBi,
     analise_para_dict,
     criar_analise,
     obter_analise,
@@ -135,6 +142,8 @@ _CHAVES_CONTEXTO = frozenset(
 )
 _ABERTOS = frozenset({"preparada", "aguardando_execucao", "em_execucao"})
 _FILA_LIVRE = frozenset({"aguardando", "falha_recuperavel"})
+_ERROS_PRE_CHAMADA = frozenset({"modelo_ausente", "credencial_ausente"})
+_CODIGO_RECUPERACAO_PRE_CHAMADA = "recuperacao_pre_chamada"
 
 
 class ColaboracaoErro(Exception):
@@ -693,8 +702,10 @@ def _rodar(escopo, dataset, pedido, perfil, contexto, payload, colaboracao_id, a
         if resultado.get("incerto"):
             raise ExecucaoErro("efeito_incerto")
         if not resultado.get("ok"):
-            _recusar(linha, _codigo(str(resultado.get("codigo") or "")))
-            raise ExecucaoErro(_codigo(str(resultado.get("codigo") or "")))
+            codigo = _codigo(str(resultado.get("codigo") or ""))
+            if not _pre_chamada_sem_recusa(linha, resultado, codigo):
+                _recusar(linha, codigo)
+            raise ExecucaoErro(codigo)
         if controle.get("depois_da_resposta"):
             controle["depois_da_resposta"]()
         tecnico = _envelope(analise, contexto_analise, resultado, perfil, pedido, contexto)
@@ -1043,6 +1054,254 @@ def _recusar(linha: AgenteBiExecucao, codigo: str) -> None:
         codigo=codigo,
         recuperavel=False,
     )
+
+
+def _pre_chamada_sem_recusa(linha: AgenteBiExecucao, resultado: dict, codigo: str) -> bool:
+    """Deixa o executor classificar a falha que ocorreu antes de qualquer chamada.
+
+    As demais recusas continuam definitivas por ``_recusar``.
+    """
+    return (
+        resultado.get("provedor_chamado") is False
+        and resultado.get("tentativa_id") is None
+        and codigo in _ERROS_PRE_CHAMADA
+        and linha.ia_chamada_tentativa_id is None
+        and linha.efeito_externo == "nenhum"
+    )
+
+
+def recuperar_falha_pre_chamada(escopo, execucao_id: int) -> dict:
+    """Reabre só ``falha_definitiva`` de pré-chamada para ``falha_recuperavel``.
+
+    Não entra na continuação da colaboração, não chama provedor e não altera
+    contador, fencing, identidade ou consumo. A segunda chamada devolve o
+    mesmo registro.
+    """
+    if not isinstance(escopo, EscopoAgenteBi):
+        raise ExecucaoErro("identidade_inconsistente")
+    if isinstance(execucao_id, bool) or not isinstance(execucao_id, int) or execucao_id < 1:
+        raise ExecucaoErro("nao_encontrado")
+    try:
+        linha = _bloquear_execucao(int(execucao_id))
+        if not _execucao_no_escopo(linha, escopo):
+            db.session.rollback()
+            raise ExecucaoErro("nao_encontrado")
+        analise = _bloquear_analise(linha)
+        if _recuperacao_ja_aplicada(linha, analise, escopo):
+            foto = execucao_para_dict(linha)
+            db.session.rollback()
+            return foto
+        motivo = _motivo_recusa_pre_chamada(linha, analise, escopo)
+        if motivo is not None:
+            db.session.rollback()
+            raise ExecucaoErro(motivo)
+        return _aplicar_recuperacao_pre_chamada(linha, analise)
+    except ExecucaoErro:
+        db.session.rollback()
+        raise
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def _aplicar_recuperacao_pre_chamada(linha: AgenteBiExecucao, analise: AgenteBiAnalise) -> dict:
+    momento = utcnow_naive()
+    execucao_id = int(linha.id)
+    erro = linha.ultimo_erro
+    if not _atualizar_condicional(
+        [
+            AgenteBiExecucao.id == execucao_id,
+            AgenteBiExecucao.estado == "falha_definitiva",
+            AgenteBiExecucao.ultimo_erro == erro,
+            AgenteBiExecucao.efeito_externo == "nenhum",
+            AgenteBiExecucao.ia_chamada_tentativa_id.is_(None),
+            AgenteBiExecucao.tentativas == int(linha.tentativas),
+            AgenteBiExecucao.recuperacoes == int(linha.recuperacoes),
+            AgenteBiExecucao.fencing == int(linha.fencing),
+            AgenteBiExecucao.lease_worker.is_(None),
+            AgenteBiExecucao.lease_ate.is_(None),
+            AgenteBiExecucao.usuario_id == int(linha.usuario_id),
+            AgenteBiExecucao.conta_id == int(linha.conta_id),
+            AgenteBiExecucao.franquia_id == int(linha.franquia_id),
+            AgenteBiExecucao.analise_id == int(analise.id),
+            AgenteBiExecucao.chave_idempotencia == linha.chave_idempotencia,
+            AgenteBiExecucao.tentativas < MAX_TENTATIVAS,
+        ],
+        {
+            "estado": "falha_recuperavel",
+            "lease_worker": None,
+            "lease_ate": None,
+            "updated_at": momento,
+        },
+    ):
+        db.session.rollback()
+        raise ExecucaoErro("estado_invalido")
+    _publicar_transicao(
+        execucao_id,
+        origem="falha_definitiva",
+        destino="falha_recuperavel",
+        codigo=_CODIGO_RECUPERACAO_PRE_CHAMADA,
+        agora=momento,
+    )
+    logger.info(
+        "evento=agente_bi_recuperacao_pre_chamada execucao_id=%s analise_id=%s codigo=%s",
+        execucao_id,
+        analise.id,
+        erro,
+    )
+    return execucao_para_dict(db.session.get(AgenteBiExecucao, execucao_id))
+
+
+def _bloquear_execucao(execucao_id: int) -> AgenteBiExecucao | None:
+    consulta = AgenteBiExecucao.query.filter(AgenteBiExecucao.id == int(execucao_id))
+    if db.session.get_bind().dialect.name == "postgresql":
+        consulta = consulta.with_for_update()
+    return consulta.execution_options(populate_existing=True).one_or_none()
+
+
+def _bloquear_analise(linha: AgenteBiExecucao) -> AgenteBiAnalise | None:
+    consulta = AgenteBiAnalise.query.filter_by(
+        id=linha.analise_id,
+        usuario_id=linha.usuario_id,
+        conta_id=linha.conta_id,
+        franquia_id=linha.franquia_id,
+    )
+    if db.session.get_bind().dialect.name == "postgresql":
+        consulta = consulta.with_for_update()
+    return consulta.execution_options(populate_existing=True).one_or_none()
+
+
+def _execucao_no_escopo(linha: AgenteBiExecucao | None, escopo: EscopoAgenteBi) -> bool:
+    return (
+        linha is not None
+        and linha.usuario_id == escopo.usuario_id
+        and linha.conta_id == escopo.conta_id
+        and linha.franquia_id == escopo.franquia_id
+    )
+
+
+def _recuperacao_ja_aplicada(linha: AgenteBiExecucao, analise: AgenteBiAnalise | None, escopo: EscopoAgenteBi) -> bool:
+    if linha.estado != "falha_recuperavel" or linha.ultimo_erro not in _ERROS_PRE_CHAMADA:
+        return False
+    if not _invariantes_pre_chamada(linha, analise, escopo):
+        return False
+    if analise is None or analise.estado != "em_execucao":
+        return False
+    return (
+        AgenteBiExecucaoEvento.query.filter_by(
+            execucao_id=linha.id,
+            estado_anterior="falha_definitiva",
+            estado_novo="falha_recuperavel",
+            codigo=_CODIGO_RECUPERACAO_PRE_CHAMADA,
+            fencing=int(linha.fencing),
+        ).count()
+        >= 1
+    )
+
+
+def _motivo_recusa_pre_chamada(linha: AgenteBiExecucao, analise: AgenteBiAnalise | None, escopo: EscopoAgenteBi) -> str | None:
+    if linha.estado != "falha_definitiva":
+        return "estado_invalido"
+    if linha.ultimo_erro not in _ERROS_PRE_CHAMADA:
+        return "erro_nao_recuperavel"
+    if linha.efeito_externo != "nenhum":
+        return "efeito_nao_recuperavel"
+    if linha.lease_worker is not None or linha.lease_ate is not None:
+        return "lease_existente"
+    if int(linha.tentativas) >= MAX_TENTATIVAS:
+        return "tentativas_esgotadas"
+    if not _invariantes_pre_chamada(linha, analise, escopo):
+        if analise is not None and analise.resultado_json is not None:
+            return "historico_preservado"
+        tentativa = _tentativa_da_chave(linha.chave_idempotencia)
+        if _reserva_correspondente(linha, tentativa):
+            return "reserva_existente"
+        if linha.ia_chamada_tentativa_id is not None or tentativa is not None:
+            return "tentativa_existente"
+        return "identidade_inconsistente"
+    if analise.estado != "falha_validacao":
+        return "estado_invalido"
+    if not _configuracao_operacional_valida(_json(analise.contexto_json).get("papel"), linha.ultimo_erro):
+        return "configuracao_invalida"
+    return None
+
+
+def _invariantes_pre_chamada(linha: AgenteBiExecucao, analise: AgenteBiAnalise | None, escopo: EscopoAgenteBi) -> bool:
+    if linha.efeito_externo != "nenhum" or linha.ia_chamada_tentativa_id is not None:
+        return False
+    if linha.lease_worker is not None or linha.lease_ate is not None:
+        return False
+    if int(linha.tentativas) >= MAX_TENTATIVAS:
+        return False
+    if not _execucao_no_escopo(linha, escopo):
+        return False
+    tentativa = _tentativa_da_chave(linha.chave_idempotencia)
+    if tentativa is not None or _reserva_correspondente(linha, tentativa):
+        return False
+    if not _vinculos_da_analise(linha, analise):
+        return False
+    return analise.resultado_json is None and analise.estado in {"falha_validacao", "em_execucao"}
+
+
+def _vinculos_da_analise(linha: AgenteBiExecucao, analise: AgenteBiAnalise | None) -> bool:
+    if analise is None or int(analise.id) != int(linha.analise_id):
+        return False
+    if (
+        analise.usuario_id != linha.usuario_id
+        or analise.conta_id != linha.conta_id
+        or analise.franquia_id != linha.franquia_id
+        or analise.chave_recuperacao != linha.chave_idempotencia
+    ):
+        return False
+    dataset = AgenteBiDataset.query.filter_by(
+        id=analise.dataset_id,
+        usuario_id=analise.usuario_id,
+        conta_id=analise.conta_id,
+        franquia_id=analise.franquia_id,
+        versao=analise.dataset_versao,
+        impressao=analise.dataset_impressao,
+    ).one_or_none()
+    if dataset is None:
+        return False
+    contexto = _json(analise.contexto_json)
+    if not isinstance(contexto, dict) or contexto.get("papel") not in {_PAPEL_GEMINI, _PAPEL_CLAUDE}:
+        return False
+    return (
+        contexto.get("dataset_id") == int(dataset.id)
+        and contexto.get("dataset_versao") == int(dataset.versao)
+        and contexto.get("dataset_impressao") == dataset.impressao
+    )
+
+
+def _tentativa_da_chave(chave: str) -> IaChamadaTentativa | None:
+    return db.session.query(IaChamadaTentativa).filter_by(attempt_key=chave).one_or_none()
+
+
+def _reserva_correspondente(linha: AgenteBiExecucao, tentativa: IaChamadaTentativa | None) -> bool:
+    if linha.reserva_em_andamento or linha.desfecho_financeiro == "reservado":
+        return True
+    if tentativa is None:
+        return False
+    if tentativa.reserva_ativa or tentativa.status == IaChamadaTentativa.STATUS_RESERVED:
+        return True
+    creditos = tentativa.reserved_credits
+    return creditos is not None and Decimal(creditos) > 0
+
+
+def _configuracao_operacional_valida(papel, codigo: str) -> bool:
+    """A configuração que faltava na pré-chamada, sem montar cliente nem gerar."""
+    if papel == _PAPEL_GEMINI and codigo == "modelo_ausente":
+        modelo = (os.getenv("AGENTE_BI_GEMINI_MODEL") or "").strip()
+        return bool(modelo) and len(modelo) <= 255
+    if papel == _PAPEL_GEMINI and codigo == "credencial_ausente":
+        chave = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY_1") or "").strip()
+        return bool(chave)
+    if papel == _PAPEL_CLAUDE and codigo == "modelo_ausente":
+        modelo = (os.getenv("AGENTE_BI_ANTHROPIC_MODEL") or "").strip()
+        return bool(modelo) and len(modelo) <= 255
+    if papel == _PAPEL_CLAUDE and codigo == "credencial_ausente":
+        return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+    return False
 
 
 def _observar(analise: AgenteBiAnalise, execucao: AgenteBiExecucao) -> None:
