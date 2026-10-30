@@ -914,12 +914,20 @@ def _intencoes(pedido: dict) -> list[str]:
     return achadas
 
 
+_ESPACOS_DE_CONTROLE = frozenset("\t\n\r")
+
+
 def _intencao_original(pedido: dict):
-    """Texto livre da modalidade C, ainda sem redução. Ausente fica ausente."""
+    """Texto livre da modalidade C, ainda sem redução. Ausente fica ausente.
+
+    Tabulação, quebra de linha e retorno de carro internos permanecem
+    no texto. O strip das extremidades continua. Os demais caracteres
+    de controle deixam a intenção ausente.
+    """
     if "C" not in pedido["modalidades"] or not isinstance(pedido.get("texto"), str):
         return None
     texto = pedido["texto"].strip()
-    if not texto or any(ord(caractere) < 32 for caractere in texto):
+    if not texto or any(ord(caractere) < 32 and caractere not in _ESPACOS_DE_CONTROLE for caractere in texto):
         return None
     return texto
 
@@ -928,13 +936,15 @@ def _anotacao_autorizada(valor) -> bool:
     """Limite estrutural da fronteira. Não interpreta a frase.
 
     Símbolos e dígitos legítimos permanecem. A governança decide o que
-    pode atravessar. Caracteres de controle continuam inválidos.
+    pode atravessar. Tabulação, quebra de linha e retorno de carro são
+    espaços de controle permitidos. Os demais caracteres de controle
+    continuam inválidos.
     """
     if valor is None:
         return True
     if not isinstance(valor, str) or not valor or len(valor) > 2_000:
         return False
-    if any(ord(caractere) < 32 for caractere in valor):
+    if any(ord(caractere) < 32 and caractere not in _ESPACOS_DE_CONTROLE for caractere in valor):
         return False
     return True
 
