@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -39,13 +40,15 @@ from app.services.agente_bi_colaboracao_service import (
     _CHECKPOINT,
     _CHAVES_CRITICA,
     _pai_vinculado,
+    _representar_proposta,
     esquema_critica,
     identidade_rodada,
     instrucao_de_critica,
     instrucao_de_revisao,
     minimizar_critica,
+    revalidar_contrato_tecnico,
 )
-from app.services.agente_bi_execucao_service import ExecucaoErro
+from app.services.agente_bi_execucao_service import ExecucaoErro, _referencias
 from app.services.cleiton_ai_data_governance import PURPOSE_BI_LOGISTICO, govern_provider_config
 from tests.test_agente_bi_analisar import SENTINELA
 from app.services.agente_bi_descoberta_service import DescobertaErro, aprovar_selecao, descobrir
@@ -398,9 +401,17 @@ def test_referencia_juncao_e_evidencia_inventada_continuam_rejeitadas(app):
         assert claude.chamadas == 1
         outro = _Claude([juncao])
         recusa = _descobrir(escopo, dataset_id, _pedido(perfil, ["C"], texto="outra leitura"), outro, gemini)
-        assert recusa["colaboracao"]["estado"] == "recusada"
+        assert recusa["colaboracao"]["continuar"] is True
+        assert recusa["colaboracao"]["fase"] == "gemini_revisando"
         assert outro.chamadas == 1
         assert _finais(dataset_id) == []
+        documento_juncao = json.loads(_tecnicas(dataset_id)[-1].resultado_json)
+        assert documento_juncao["verificacao"]["aprovado"] is False
+        assert documento_juncao["proposta"] == {"descobertas": [], "sugestoes": []}
+        assert documento_juncao["descartes"] == [
+            {"lista": "sugestoes", "posicao": 0, "campo": "juncao", "motivo": "juncao_nao_confirmada"}
+        ]
+        assert "executada" not in _tecnicas(dataset_id)[-1].resultado_json
         with pytest.raises(AnalisarErro) as evidencia:
             analisar(perfil, pedido, provedor=lambda _contexto: _ausente(perfil))
         assert evidencia.value.codigo == "evidencia_ausente"
@@ -743,6 +754,7 @@ def test_interface_retoma_sem_criar_identidade(app):
     assert "Gemini está revisando as evidências." in fonte
     assert "Claude está consolidando as sugestões." in fonte
     assert "Descobertas prontas para seleção." in fonte
+    assert "Conteúdo sensível protegido." in fonte
     assert "localStorage" in fonte
     assert "chave_idempotencia" not in fonte
     assert "execucao_id" not in fonte
@@ -924,6 +936,8 @@ def test_revisao_recupera_a_proposta_claude(app, monkeypatch):
         enviado = _conteudo_claude(claude.pedidos[1])
         assert enviado["proposta_anterior"] == doc_claude["proposta"] == proposta
         assert enviado["critica_autorizada"] == doc_gemini["critica"]
+        assert enviado["verificacao_anterior"] == doc_claude["verificacao"]
+        assert "descartes" not in doc_claude
         assert claude.pedidos[0]["system"] == instrucao_de_rascunho()
         assert instrucao_de_rascunho() in claude.pedidos[1]["system"]
         assert instrucao_de_revisao() in claude.pedidos[1]["system"]
@@ -1170,6 +1184,411 @@ def test_pedido_legado_e_limpo_e_a_recarga_nao_reenvia(monkeypatch):
         finally:
             browser.close()
             servidor.shutdown()
+
+
+def test_proposta_parcial_segue_ao_gemini_sem_o_trecho_invalido(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-parcial@test.com")
+        pedido = _pedido(perfil, ["A"])
+        boa = _condicional(perfil)["sugestoes"][0]
+        ruim = dict(boa)
+        ruim["grafico"] = "grafico_inventado"
+        ruim["medida"] = {**_coord(_medida(perfil)), "indice": 97}
+        proposta = {"descobertas": [], "sugestoes": [boa, ruim]}
+        claude = _Claude([proposta, _condicional(perfil)])
+        gemini = _Gemini(json.dumps(_critica(perfil)))
+        primeira = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert primeira["colaboracao"]["fase"] == "gemini_revisando"
+        assert len(gemini.geracoes) == 0
+        documento = json.loads(_tecnicas(dataset_id)[0].resultado_json)
+        assert documento["verificacao"] == {"aprovado": False, "codigo": "grafico_incompativel"}
+        assert documento["descartes"] == [
+            {"lista": "sugestoes", "posicao": 1, "campo": "grafico", "motivo": "grafico_incompativel"}
+        ]
+        assert len(documento["proposta"]["sugestoes"]) == 1
+        assert documento["referencias"] == [boa["regiao"]]
+        assert "grafico_inventado" not in _tecnicas(dataset_id)[0].resultado_json
+        assert '"indice": 97' not in _tecnicas(dataset_id)[0].resultado_json
+        assert '"indice":97' not in _tecnicas(dataset_id)[0].resultado_json
+        segunda = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert segunda["colaboracao"]["fase"] == "claude_consolidando"
+        assert len(gemini.geracoes) == 1
+        enviado = gemini.geracoes[0]["contents"]
+        assert "grafico_inventado" not in enviado
+        assert '"indice":97' not in enviado.replace(" ", "")
+        assert json.loads(enviado)["descartes"] == documento["descartes"]
+        assert json.loads(enviado)["proposta"]["sugestoes"] == documento["proposta"]["sugestoes"]
+        corpo = _ate(escopo, dataset_id, pedido, claude, gemini)
+        assert corpo["resultado"]["contrato"] == "analisar.v1"
+        assert validar_saida(montar_contexto(perfil, pedido), corpo["resultado"])["contrato_saida_validado"] is True
+
+
+def test_formato_recuperavel_abre_a_revisao_sem_gravar_a_cerca(app, caplog):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-formato@test.com")
+        pedido = _pedido(perfil, ["A"])
+        proposta = _condicional(perfil)
+        cerca = "```json\n" + json.dumps(proposta) + "\n```"
+        claude = _Claude([proposta, proposta])
+
+        def enviar(pedido_chamada):
+            claude.pedidos.append(pedido_chamada)
+            claude.chamadas += 1
+            texto = cerca if claude.chamadas == 1 else json.dumps(proposta)
+            return _resposta(texto, entrada=20, saida=20)
+
+        claude.enviar = enviar
+        gemini = _Gemini(json.dumps(_critica(perfil)))
+        caplog.set_level(logging.INFO)
+        primeira = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert primeira["colaboracao"]["fase"] == "gemini_revisando"
+        assert "agente_bi_colaboracao_formato_recuperado" in caplog.text
+        tecnica = _tecnicas(dataset_id)[0]
+        assert "```" not in (tecnica.resultado_json or "")
+        assert len(gemini.geracoes) == 0
+        segunda = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert segunda["colaboracao"]["fase"] == "claude_consolidando"
+        assert len(gemini.geracoes) == 1
+        corpo = _ate(escopo, dataset_id, pedido, claude, gemini)
+        assert corpo["resultado"]["contrato"] == "analisar.v1"
+
+
+def test_autorizacao_indevida_nao_vira_falha_analitica(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-auth@test.com")
+        pedido = _pedido(perfil, ["A"])
+
+        def recusa(_perfil, _pedido, **_kwargs):
+            raise AnalisarErro("autorizacao_indevida")
+
+        from app.services import agente_bi_colaboracao_service as colaboracao
+
+        original = colaboracao.analisar
+        colaboracao.analisar = recusa
+        try:
+            claude = _Claude([_condicional(perfil)])
+            gemini = _Gemini(json.dumps(_critica(perfil)))
+            corpo = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        finally:
+            colaboracao.analisar = original
+        assert corpo["colaboracao"]["estado"] == "recusada"
+        assert len(gemini.geracoes) == 0
+        execucao = AgenteBiExecucao.query.filter_by(analise_id=_tecnicas(dataset_id)[0].id).one()
+        assert execucao.ultimo_erro == "autorizacao_indevida"
+        assert execucao.estado == "falha_definitiva"
+
+
+def test_planilha_logistica_com_cpf_prepara_descobre_seleciona_e_reabre(app):
+    from app.services.agente_bi_ingestao_service import ArquivoBruto, ingerir
+    from app.services.agente_bi_perfil_semantico_service import perfilar_dataset
+
+    with app.app_context():
+        usuario, _franquia, escopo, _dataset_id, _perfil = _preparar("colab-logistica@test.com")
+        documento = "529.982.247-25"
+        outro = "111.444.777-35"
+        opkips = (
+            "codigo,documento,peso,destino\n"
+            f"C1,{documento},10,sul\n"
+            f"C2,{outro},10,norte\n"
+            f"C3,{documento},12,sul\n"
+        ).encode()
+        opergel = (
+            "codigo,documento,prazo\n"
+            f"C1,{documento},2024-01-02\n"
+            f"C2,{outro},2024-01-03\n"
+            f"C3,{documento},2024-01-04\n"
+        ).encode()
+        ingerido = ingerir(
+            escopo,
+            [
+                ArquivoBruto(nome="opkips.csv", mime=None, conteudo=opkips),
+                ArquivoBruto(nome="opergel.csv", mime=None, conteudo=opergel),
+            ],
+            chave="lote-logistico",
+        )
+        assert ingerido["persistido"] is True, ingerido["motivo"]
+        bruto = json.dumps(ingerido["preparacao"], default=str)
+        assert documento not in bruto
+        assert outro not in bruto
+        assert '"valor": 10' in json.dumps(ingerido["preparacao"]["dados_tipados"]) or '"valor":10' in bruto
+        dataset_id = ingerido["dataset"]["id"]
+        perfil = perfilar_dataset(escopo, dataset_id)
+        mascaradas = {
+            (item["arquivo"], item["aba"], item["regiao"], item["indice"])
+            for item in ingerido["preparacao"]["metadados_preparacao"]["protecao"]["colunas"]
+        }
+        assert mascaradas
+        for relacao in perfil["relacoes"]:
+            for lado in (relacao["lado_unico"], relacao["lado_associado"]):
+                assert (lado["arquivo"], lado["aba"], lado["regiao"], lado["coluna"]) not in mascaradas
+        for coluna in perfil["colunas"]:
+            coordenada = (coluna["arquivo"], coluna["aba"], coluna["regiao"], coluna["indice"])
+            if coordenada in mascaradas:
+                assert coluna["dimensao_principal"] not in {"valor", "quantidade"}
+                assert coluna["chave_candidata"] is False
+        pedido = _pedido(perfil, ["A"])
+        proposta = _proposta_viavel(perfil, pedido)
+        medida = next(
+            coluna for coluna in perfil["colunas"] if coluna["dimensao_principal"] in {"valor", "quantidade"}
+        )
+        critica = {
+            "referencias": [_regiao(perfil)],
+            "medidas": [_coord(medida)],
+            "operacoes": ["soma"],
+            "evidencias": [],
+            "objecoes": [{"codigo": "evidencia_ausente", "referencia": _coord(medida)}],
+        }
+        claude = _Claude([proposta, proposta])
+        gemini = _Gemini(json.dumps(critica))
+        antes = len(_eventos(usuario.id))
+        corpo = _ate(escopo, dataset_id, pedido, claude, gemini)
+        assert corpo["resultado"]["contrato"] == "analisar.v1"
+        assert claude.chamadas == 2
+        assert len(gemini.geracoes) == 1
+        assert validar_saida(montar_contexto(perfil, pedido), corpo["resultado"])["contrato"] == "analisar.v1"
+        viaveis = [
+            item["id"]
+            for item in corpo["resultado"]["sugestoes"]
+            if item["status"] == "viavel" and item["grafico"] and item["juncao"] == "nao_executada"
+        ]
+        assert viaveis
+        assert len(viaveis) <= 6
+        publicada = aprovar_selecao(
+            escopo,
+            {
+                "analise_id": corpo["analise_id"],
+                "sugestoes": viaveis[:6],
+                "perguntas": [{"id": item["id"], "confirmada": True} for item in corpo["resultado"]["perguntas"]],
+                "confirmacao": True,
+            },
+        )
+        assert publicada["selecao"]["etapa"] == "selecao"
+        definicao = definir_selecao(escopo, {"analise_id": publicada["selecao"]["id"]})
+        assert definicao["definicao"]["etapa"] == "definicao"
+        reaberta = obter_analise(escopo, corpo["analise_id"])
+        assert documento not in json.dumps(reaberta, default=str)
+        repetida = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert repetida["analise_id"] == corpo["analise_id"]
+        assert claude.chamadas == 2
+        assert len(gemini.geracoes) == 1
+        assert len(_eventos(usuario.id)) == antes + 3
+
+
+def test_representacao_recusa_forma_irrecuperavel_sem_copiar_valor():
+    assert _representar_proposta("texto livre") == (None, None)
+    assert _representar_proposta({"descobertas": [], "sugestoes": [], "extra": "nao-enviar"}) == (None, None)
+    assert _representar_proposta({"descobertas": [], "sugestoes": ["item-opaco"]}) == (None, None)
+    assert _representar_proposta({"descobertas": {}, "sugestoes": []}) == (None, None)
+    item = {"status": "viavel", "segredo": "529.982.247-25"}
+    assert _representar_proposta({"descobertas": [], "sugestoes": [item]}) == (None, None)
+
+
+def test_status_invalido_registra_descarte_e_nao_aprova(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-status@test.com")
+        pedido = _pedido(perfil, ["A"])
+        boa = _condicional(perfil)["sugestoes"][0]
+        ruim = dict(boa)
+        ruim["status"] = "publicado_silencioso"
+        ruim["medida"] = {**_coord(_medida(perfil)), "indice": 97}
+        proposta = {"descobertas": [], "sugestoes": [boa, ruim]}
+        claude = _Claude([proposta, _condicional(perfil)])
+        gemini = _Gemini(json.dumps(_critica(perfil)))
+        primeira = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert primeira["colaboracao"]["fase"] == "gemini_revisando"
+        documento = json.loads(_tecnicas(dataset_id)[0].resultado_json)
+        assert documento["verificacao"]["aprovado"] is False
+        assert documento["descartes"] == [
+            {
+                "lista": "sugestoes",
+                "posicao": 1,
+                "campo": "status",
+                "motivo": "valor_fora_do_catalogo",
+            }
+        ]
+        assert "publicado_silencioso" not in _tecnicas(dataset_id)[0].resultado_json
+        assert '"indice":97' not in _tecnicas(dataset_id)[0].resultado_json
+        assert documento["referencias"] == [boa["regiao"]]
+        assert esquema_critica()["properties"]["objecoes"]["items"]["properties"]["codigo"]["enum"] == sorted(
+            _CHECKPOINT
+        )
+        assert "valor_fora_do_catalogo" not in esquema_critica()["properties"]["objecoes"]["items"]["properties"]["codigo"]["enum"]
+        segunda = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert segunda["colaboracao"]["fase"] == "claude_consolidando"
+        enviado = json.loads(gemini.geracoes[0]["contents"])
+        assert enviado["descartes"] == documento["descartes"]
+        assert "publicado_silencioso" not in gemini.geracoes[0]["contents"]
+        corpo = _ate(escopo, dataset_id, pedido, claude, gemini)
+        assert validar_saida(montar_contexto(perfil, pedido), corpo["resultado"])["contrato_saida_validado"] is True
+        chamadas = claude.chamadas
+        geracoes = len(gemini.geracoes)
+        repetido = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert repetido["analise_id"] == corpo["analise_id"]
+        assert claude.chamadas == chamadas
+        assert len(gemini.geracoes) == geracoes
+
+
+def test_sugestao_unica_invalida_chega_vazia_ao_gemini(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-vazia@test.com")
+        pedido = _pedido(perfil, ["A"])
+        ruim = dict(_condicional(perfil)["sugestoes"][0])
+        ruim["grafico"] = "grafico_inventado"
+        claude = _Claude([{"descobertas": [], "sugestoes": [ruim]}, _condicional(perfil)])
+        gemini = _Gemini(json.dumps(_critica(perfil)))
+        primeira = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert primeira["colaboracao"]["fase"] == "gemini_revisando"
+        documento = json.loads(_tecnicas(dataset_id)[0].resultado_json)
+        assert documento["proposta"] == {"descobertas": [], "sugestoes": []}
+        assert documento["verificacao"]["aprovado"] is False
+        assert documento["descartes"] == [
+            {"lista": "sugestoes", "posicao": 0, "campo": "grafico", "motivo": "grafico_incompativel"}
+        ]
+        assert "grafico_inventado" not in _tecnicas(dataset_id)[0].resultado_json
+        segunda = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert len(gemini.geracoes) == 1
+        enviado = json.loads(gemini.geracoes[0]["contents"])
+        assert enviado["proposta"] == {"descobertas": [], "sugestoes": []}
+        assert enviado["descartes"] == documento["descartes"]
+        assert "grafico_inventado" not in gemini.geracoes[0]["contents"]
+        assert segunda["colaboracao"]["fase"] == "claude_consolidando"
+
+
+def test_chave_extra_item_opaco_e_json_ilegivel_recusam(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-extra@test.com")
+        pedido = _pedido(perfil, ["A"])
+        boa = _condicional(perfil)
+        extra = dict(boa)
+        extra["extra"] = "nao-enviar"
+        claude = _Claude([extra])
+        gemini = _Gemini(json.dumps(_critica(perfil)))
+        corpo = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert corpo["colaboracao"]["estado"] == "recusada"
+        assert _tecnicas(dataset_id)[0].resultado_json is None
+        assert len(gemini.geracoes) == 0
+        assert _finais(dataset_id) == []
+
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-opaco@test.com")
+        pedido = _pedido(perfil, ["A"])
+        opaco = {"descobertas": [], "sugestoes": ["nao-e-objeto", _condicional(perfil)["sugestoes"][0]]}
+        claude = _Claude([opaco])
+        gemini = _Gemini("{}")
+        corpo = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert corpo["colaboracao"]["estado"] == "recusada"
+        assert _tecnicas(dataset_id)[0].resultado_json is None
+        assert "nao-e-objeto" not in json.dumps(
+            {
+                "contexto": _tecnicas(dataset_id)[0].contexto_json,
+                "resultado": _tecnicas(dataset_id)[0].resultado_json,
+            },
+            default=str,
+        )
+
+
+def test_consolidacao_parcial_nao_materializa_e_revisa_com_diagnostico(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-consolida@test.com")
+        pedido = _pedido(perfil, ["A"])
+        valida = _condicional(perfil)
+        ruim = dict(valida["sugestoes"][0])
+        ruim["status"] = "publicado_silencioso"
+        parcial = {"descobertas": [], "sugestoes": [valida["sugestoes"][0], ruim]}
+        claude = _Claude([valida, parcial, valida])
+        gemini = _Gemini(json.dumps(_critica(perfil)))
+        _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        consolidada = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert consolidada.get("resultado") is None
+        assert consolidada["colaboracao"]["continuar"] is True
+        assert consolidada["colaboracao"]["fase"] == "gemini_revisando"
+        assert _finais(dataset_id) == []
+        documento = json.loads(_tecnicas(dataset_id)[-1].resultado_json)
+        assert documento["acao"] == "revisar"
+        assert documento["verificacao"]["aprovado"] is False
+        assert documento["descartes"][0]["motivo"] == "valor_fora_do_catalogo"
+        assert "publicado_silencioso" not in _tecnicas(dataset_id)[-1].resultado_json
+        pedido_revisao = _conteudo_claude(claude.pedidos[1])
+        assert pedido_revisao["verificacao_anterior"]["aprovado"] is True
+        assert "descartes" not in pedido_revisao["verificacao_anterior"]
+        _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert json.loads(gemini.geracoes[-1]["contents"])["descartes"] == documento["descartes"]
+        assert "publicado_silencioso" not in gemini.geracoes[-1]["contents"]
+        corpo = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert corpo["resultado"]["contrato"] == "analisar.v1"
+        revisao = _conteudo_claude(claude.pedidos[-1])
+        assert revisao["contexto"]
+        assert revisao["proposta_anterior"] == documento["proposta"]
+        assert revisao["critica_autorizada"]["objecoes"]
+        assert revisao["verificacao_anterior"]["descartes"] == documento["descartes"]
+        assert "publicado_silencioso" not in claude.pedidos[-1]["messages"][0]["content"]
+        assert validar_saida(montar_contexto(perfil, pedido), corpo["resultado"])["contrato_saida_validado"] is True
+
+
+def test_envelope_anterior_segue_valido_e_hash_cubre_descartes(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-hash@test.com")
+        pedido = _pedido(perfil, ["A"])
+        claude = _Claude([_condicional(perfil), _condicional(perfil)])
+        gemini = _Gemini(json.dumps(_critica(perfil)))
+        _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        tecnica = _tecnicas(dataset_id)[0]
+        execucao = AgenteBiExecucao.query.filter_by(analise_id=tecnica.id).one()
+        documento = json.loads(tecnica.resultado_json)
+        assert "descartes" not in documento
+        assert revalidar_contrato_tecnico(tecnica, _referencias(execucao, tecnica), documento) == documento
+        adulterado = dict(documento)
+        adulterado["descartes"] = [
+            {"lista": "sugestoes", "posicao": 0, "campo": "status", "motivo": "valor_fora_do_catalogo"}
+        ]
+        with pytest.raises(ExecucaoErro) as erro:
+            revalidar_contrato_tecnico(tecnica, _referencias(execucao, tecnica), adulterado)
+        assert erro.value.codigo == "contrato_saida_invalido"
+
+        ruim = dict(_condicional(perfil)["sugestoes"][0])
+        ruim["grafico"] = "grafico_inventado"
+        outro = _Claude([{"descobertas": [], "sugestoes": [ruim]}])
+        _descobrir(escopo, dataset_id, _pedido(perfil, ["C"], texto="leitura nova"), outro, gemini)
+        parcial = _tecnicas(dataset_id)[-1]
+        execucao_parcial = AgenteBiExecucao.query.filter_by(analise_id=parcial.id).one()
+        corpo = json.loads(parcial.resultado_json)
+        assert revalidar_contrato_tecnico(parcial, _referencias(execucao_parcial, parcial), corpo) == corpo
+        sem_diagnostico = {chave: valor for chave, valor in corpo.items() if chave != "descartes"}
+        with pytest.raises(ExecucaoErro):
+            revalidar_contrato_tecnico(parcial, _referencias(execucao_parcial, parcial), sem_diagnostico)
+        aprovado = dict(corpo)
+        aprovado["verificacao"] = {"aprovado": True, "codigo": None}
+        with pytest.raises(ExecucaoErro):
+            revalidar_contrato_tecnico(parcial, _referencias(execucao_parcial, parcial), aprovado)
+
+
+def test_descarte_nao_contorna_bloqueio_de_governanca(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-bloco@test.com")
+        pedido = _pedido(perfil, ["A"])
+        ruim = dict(_condicional(perfil)["sugestoes"][0])
+        ruim["status"] = "publicado_silencioso"
+        proposta = {"descobertas": [], "sugestoes": [_condicional(perfil)["sugestoes"][0], ruim]}
+
+        def recusa(_perfil, _pedido, **_kwargs):
+            raise AnalisarErro("autorizacao_indevida")
+
+        from app.services import agente_bi_colaboracao_service as colaboracao
+
+        original = colaboracao.analisar
+        colaboracao.analisar = recusa
+        try:
+            claude = _Claude([proposta])
+            gemini = _Gemini(json.dumps(_critica(perfil)))
+            corpo = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        finally:
+            colaboracao.analisar = original
+        assert corpo["colaboracao"]["estado"] == "recusada"
+        assert len(gemini.geracoes) == 0
+        execucao = AgenteBiExecucao.query.filter_by(analise_id=_tecnicas(dataset_id)[0].id).one()
+        assert execucao.ultimo_erro == "autorizacao_indevida"
+        assert execucao.estado == "falha_definitiva"
+        assert _finais(dataset_id) == []
 
 
 def test_postgres_duas_requisicoes_uma_chamada():

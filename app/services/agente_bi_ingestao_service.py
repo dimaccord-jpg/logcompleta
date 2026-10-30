@@ -10,9 +10,10 @@ No ambiente atual o Excel continua limitado a 5 MB e o CSV a 2 MB,
 porque esses são os tetos de `CleitonDocConfig`. O menor valor vence.
 
 A gravação passa só por `criar_dataset`. Dataset que excede um único JSON,
-mas cabe na ingestão, é fatiado em blocos da mesma versão. Se a governança
-não autoriza o conteúdo intacto, nada é gravado. A decisão de envio à IA
-não é tratada como autorização de persistência.
+mas cabe na ingestão, é fatiado em blocos da mesma versão. Conteúdo sensível
+só é gravado depois da minimização comprovada pela governança existente; se
+essa prova falha, nada é gravado. A decisão de envio à IA não autoriza a
+persistência.
 """
 from __future__ import annotations
 
@@ -53,6 +54,8 @@ from app.services.agente_bi_persistencia_service import (
     EscopoAgenteBi,
     calcular_impressao_dataset,
     criar_dataset,
+    redigir_dados_nao_autorizados,
+    representar_dataset_autorizado,
 )
 from app.services.cleiton_doc_config_service import CleitonDocConfig, get_cleiton_doc_config
 
@@ -255,7 +258,7 @@ def ingerir(
             },
             "dataset": None,
         }
-    persistido, reutilizado, motivo, dependencia, dataset = _persistir_se_permitido(
+    persistido, reutilizado, motivo, dependencia, dataset, preparacao_autorizada = _persistir_se_permitido(
         escopo,
         chave_final,
         estrutura,
@@ -264,6 +267,11 @@ def ingerir(
         metadados,
         cota,
     )
+    if preparacao_autorizada is not None:
+        estrutura = preparacao_autorizada["estrutura"]
+        perfil = preparacao_autorizada["perfil"]
+        dados_tipados = preparacao_autorizada["dados_tipados"]
+        metadados = preparacao_autorizada["metadados_preparacao"]
     logger.info(
         "evento=agente_bi_ingestao usuario_id=%s arquivos=%s celulas=%s persistido=%s motivo=%s",
         escopo.usuario_id,
@@ -290,10 +298,36 @@ def ingerir(
 
 def _persistir_se_permitido(escopo, chave, estrutura, perfil, dados, metadados, cota: _Cota):
     cota.verificar()
+    autorizado, motivo_protecao = representar_dataset_autorizado(estrutura, perfil, dados, metadados)
+    quadruple = None
+    if autorizado is None:
+        return (
+            False,
+            False,
+            motivo_protecao or "conteudo_nao_permitido",
+            DEPENDENCIA_ARMAZENAMENTO,
+            None,
+            {
+                "estrutura": estrutura,
+                "perfil": perfil,
+                "dados_tipados": redigir_dados_nao_autorizados(dados),
+                "metadados_preparacao": metadados,
+            },
+        )
+    estrutura = autorizado["estrutura"]
+    perfil = autorizado["perfil"]
+    dados = autorizado["dados_tipados"]
+    metadados = autorizado["metadados_preparacao"]
+    quadruple = {
+        "estrutura": estrutura,
+        "perfil": perfil,
+        "dados_tipados": dados,
+        "metadados_preparacao": metadados,
+    }
     origem_ref = "prep-" + _sha256_bytes(_material_bytes(estrutura, perfil, dados, metadados))[:32]
     existente = _versao_da_origem(escopo, chave, origem_ref)
     if existente is not None:
-        return True, True, None, None, _identidade(existente)
+        return True, True, None, None, _identidade(existente), quadruple
     ultima = _ultima_versao(escopo, chave)
     versao = 1 if ultima is None else int(ultima.versao) + 1
     anterior_id = None if ultima is None else int(ultima.id)
@@ -310,7 +344,7 @@ def _persistir_se_permitido(escopo, chave, estrutura, perfil, dados, metadados, 
             metadados_preparacao=metadados,
         )
     except (TypeError, ValueError):
-        return False, False, "limite_contrato_persistencia", None, None
+        return False, False, "limite_contrato_persistencia", None, None, quadruple
 
     cota.verificar()
     if (
@@ -319,7 +353,7 @@ def _persistir_se_permitido(escopo, chave, estrutura, perfil, dados, metadados, 
         or _fora_do_contrato(metadados)
         or not _dados_cabem_na_segmentacao(dados)
     ):
-        return False, False, "limite_contrato_persistencia", None, None
+        return False, False, "limite_contrato_persistencia", None, None, quadruple
 
     payload = {
         "chave": chave,
@@ -338,9 +372,9 @@ def _persistir_se_permitido(escopo, chave, estrutura, perfil, dados, metadados, 
         criado = criar_dataset(escopo, payload, ponto_de_controle=cota.verificar)
     except AgenteBiErro as exc:
         if exc.codigo == "conteudo_nao_permitido":
-            return False, False, exc.codigo, DEPENDENCIA_ARMAZENAMENTO, None
+            return False, False, exc.codigo, DEPENDENCIA_ARMAZENAMENTO, None, quadruple
         if exc.codigo == "payload_invalido":
-            return False, False, "limite_contrato_persistencia", None, None
+            return False, False, "limite_contrato_persistencia", None, None, quadruple
         raise
     return True, False, None, None, {
         "id": criado["id"],
@@ -350,7 +384,7 @@ def _persistir_se_permitido(escopo, chave, estrutura, perfil, dados, metadados, 
         "versao_anterior_id": criado["versao_anterior_id"],
         "origem": criado["origem"],
         "origem_ref": criado["origem_ref"],
-    }
+    }, quadruple
 
 
 def persistir_preparacao(escopo: EscopoAgenteBi, chave: str, preparacao: dict, *, relogio=time.monotonic) -> dict:
@@ -359,7 +393,7 @@ def persistir_preparacao(escopo: EscopoAgenteBi, chave: str, preparacao: dict, *
         raise IngestaoErro("payload_invalido")
     limites = resolver_limites()
     cota = _Cota(limites.max_celulas, limites.max_segundos, relogio)
-    persistido, reutilizado, motivo, dependencia, dataset = _persistir_se_permitido(
+    persistido, reutilizado, motivo, dependencia, dataset, _preparacao_autorizada = _persistir_se_permitido(
         escopo,
         chave,
         preparacao.get("estrutura"),

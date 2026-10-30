@@ -94,6 +94,7 @@
     limite_processamento: "A preparação excedeu o limite de processamento.",
     limite_contrato_persistencia: "Os dados preparados não couberam na persistência.",
     conteudo_nao_permitido: "O conteúdo não pode ser armazenado.",
+    minimizacao_nao_comprovada: "A proteção do conteúdo sensível não pôde ser comprovada. Nada foi armazenado.",
     pedido_invalido: "O pedido não foi aceito. Na modalidade C, escreva a intenção.",
     limite_graficos: "A seleção passa de seis gráficos.",
     sugestao_nao_executavel: "Só gráficos viáveis entram na seleção aprovada.",
@@ -294,8 +295,13 @@
     mostrarFormulario(false);
     if (prosseguir) prosseguir.hidden = false;
     marcarProcessamento();
+    var protecao = "";
+    if (corpo.protecao === "minimizada" || corpo.protecao === "isolada") {
+      protecao = "Conteúdo sensível protegido. ";
+    }
     anunciar(
       (corpo.reutilizado ? "Esta versão já estava preparada. " : "Dados preparados. ") +
+        protecao +
         "Versão " + dataset.versao + ". Escolha as modalidades da rodada. O chat continua bloqueado."
     );
     avisarJornada("preparados");

@@ -38,10 +38,13 @@ from app.models import (
 from app.services.cleiton_ai_data_governance import (
     CONTENT_TYPE_DOCUMENT,
     DECISION_ALLOW,
+    DECISION_BLOCK,
+    DECISION_MINIMIZE,
     PURPOSE_AUDITORIA_FRETE,
     govern_outbound_content,
     governance_result_is_coherent,
 )
+from app.services.external_ai_masking import MASKABLE_FIELD_KEYS
 from app.services.conta_multiuser_autorizacao_service import mesmo_owner_operacional
 
 logger = logging.getLogger(__name__)
@@ -918,14 +921,554 @@ def _recompor_segmentado(bruto: dict, blocos: list, linha: AgenteBiDataset):
     return dados
 
 
-def _autorizar_conteudo_persistivel(valor) -> None:
-    """Reusa a governança existente. Não grava original nem cópia minimizada.
+def redigir_dados_nao_autorizados(dados):
+    """Tira da resposta o que a governança não autoriza intacto. Não grava."""
+    if not isinstance(dados, list):
+        return dados
+    saida = []
+    for registro in dados:
+        ajustado = _suprimir_celulas(registro)
+        saida.append(ajustado if isinstance(ajustado, dict) else registro)
+    return saida
 
-    A minimização de dataset preparado é das etapas seguintes. Enquanto ela
-    não existe, conteúdo que a governança não autoriza intacto fica bloqueado.
-    Nomes de chave não bastam: a decisão olha o valor. Nada do valor vai ao log.
+
+def representar_dataset_autorizado(estrutura, perfil, dados, metadados):
+    """Prepara a representação que pode ser selada.
+
+    A governança oficial decide a minimização. Esta função só aceita o
+    resultado quando a estrutura, as coordenadas e uma segunda passagem
+    reproduzem o mesmo conteúdo. Número mascarado deixa de ser medida.
+    Se a prova falha, isola a célula ou a linha; se nem isso fecha, recusa
+    sem gravar. Não devolve o valor original sensível.
+    """
+    embrulho = {
+        "estrutura": estrutura,
+        "perfil": perfil,
+        "dados_tipados": dados,
+        "metadados_preparacao": metadados,
+    }
+    promovido, originais = _promover_numeros_longos(embrulho)
+    autorizado = _minimizar_documento(promovido)
+    if autorizado is None:
+        isolado = _isolar_dados(promovido)
+        if isolado is None:
+            return None, "conteudo_nao_permitido"
+        autorizado = _minimizar_documento(isolado)
+        if autorizado is None:
+            return None, "minimizacao_nao_comprovada"
+    restaurado = _restaurar_numeros_inalterados(autorizado, originais)
+    if restaurado is None:
+        return None, "minimizacao_nao_comprovada"
+    selado = _selar_protecao(embrulho, restaurado)
+    if selado is None:
+        return None, "minimizacao_nao_comprovada"
+    return selado, None
+
+
+def _governar_documento(valor):
+    try:
+        return govern_outbound_content(
+            valor,
+            purpose=PURPOSE_AUDITORIA_FRETE,
+            content_type=CONTENT_TYPE_DOCUMENT,
+            agent="agente_bi",
+            provider="persistencia_local",
+        )
+    except Exception:
+        return None
+
+
+def _resultado_confiavel(resultado, original) -> bool:
+    return (
+        resultado is not None
+        and resultado.issued_by_cleiton
+        and resultado.decision in {DECISION_ALLOW, DECISION_MINIMIZE, DECISION_BLOCK}
+        and governance_result_is_coherent(resultado, original=original)
+    )
+
+
+_ISOLAR = object()
+
+
+def _minimizar_documento(embrulho):
+    """Prova o documento pelos textos distintos, na governança oficial.
+
+    O walker oficial classifica cada string e, nas chaves mascaráveis, o
+    valor daquela chave. Repetir a mesma prova em cada célula estoura o
+    tempo das planilhas grandes sem mudar a decisão. O documento inteiro
+    só é reescrito com o que essa prova autorizou.
+    """
+    compacto = _compactar(embrulho)
+    primeiro = _governar_documento(compacto)
+    if not _resultado_confiavel(primeiro, compacto) or primeiro.decision == DECISION_BLOCK:
+        return None
+    if primeiro.decision == DECISION_ALLOW:
+        if primeiro.safe_content != compacto:
+            return None
+        return embrulho
+    seguro = primeiro.safe_content
+    if not _compativel(compacto, seguro) or not _coordenadas_preservadas(compacto, seguro):
+        return None
+    segundo = _governar_documento(compacto)
+    if (
+        not _resultado_confiavel(segundo, compacto)
+        or segundo.decision != DECISION_MINIMIZE
+        or segundo.safe_content != seguro
+    ):
+        return None
+    mapa = _mapa_autorizado(compacto, seguro)
+    if mapa is None:
+        return None
+    conferido = _governar_documento(seguro)
+    if (
+        _resultado_confiavel(conferido, seguro)
+        and conferido.decision == DECISION_ALLOW
+        and conferido.safe_content == seguro
+    ):
+        return _reescrever(embrulho, mapa)
+    if (
+        _resultado_confiavel(conferido, seguro)
+        and conferido.decision == DECISION_MINIMIZE
+        and _compativel(seguro, conferido.safe_content)
+        and _coordenadas_preservadas(seguro, conferido.safe_content)
+    ):
+        instaveis = _textos_alterados(seguro, conferido.safe_content)
+        ajustado = {
+            origem: _ISOLAR if destino in instaveis else destino
+            for origem, destino in mapa.items()
+        }
+        estabilizado = _reescrever(embrulho, ajustado)
+        prova = _compactar(estabilizado)
+        final = _governar_documento(prova)
+        if (
+            _resultado_confiavel(final, prova)
+            and final.decision == DECISION_ALLOW
+            and final.safe_content == prova
+        ):
+            return estabilizado
+    return None
+
+
+def _compactar(valor):
+    campos = {}
+    textos = set()
+    _coletar_textos(valor, campos, textos)
+    lista_campos = []
+    for chave in sorted(campos):
+        for item in sorted(campos[chave]):
+            lista_campos.append({chave: item})
+    return {"campos": lista_campos, "textos": sorted(textos)}
+
+
+def _coletar_textos(valor, campos, textos):
+    if isinstance(valor, dict):
+        for chave, item in valor.items():
+            if (
+                isinstance(chave, str)
+                and chave in MASKABLE_FIELD_KEYS
+                and isinstance(item, str)
+                and item.strip()
+            ):
+                campos.setdefault(chave, set()).add(item)
+            else:
+                _coletar_textos(item, campos, textos)
+    elif isinstance(valor, list):
+        for item in valor:
+            _coletar_textos(item, campos, textos)
+    elif isinstance(valor, str):
+        textos.add(valor)
+
+
+def _mapa_autorizado(compacto, seguro):
+    mapa = {}
+    campos = compacto.get("campos")
+    campos_seguros = seguro.get("campos")
+    textos = compacto.get("textos")
+    textos_seguros = seguro.get("textos")
+    if not isinstance(campos, list) or not isinstance(campos_seguros, list) or len(campos) != len(campos_seguros):
+        return None
+    if not isinstance(textos, list) or not isinstance(textos_seguros, list) or len(textos) != len(textos_seguros):
+        return None
+    for original, autorizado in zip(campos, campos_seguros):
+        if not isinstance(original, dict) or not isinstance(autorizado, dict) or len(original) != 1:
+            return None
+        chave, valor = next(iter(original.items()))
+        if chave not in autorizado or not isinstance(valor, str) or not isinstance(autorizado[chave], str):
+            return None
+        if autorizado[chave] != valor:
+            mapa[valor] = autorizado[chave]
+    for original, autorizado in zip(textos, textos_seguros):
+        if not isinstance(original, str) or not isinstance(autorizado, str):
+            return None
+        if autorizado != original:
+            mapa[original] = autorizado
+    return mapa
+
+
+def _textos_alterados(base, alterado):
+    saida = set()
+    if isinstance(base, dict) and isinstance(alterado, dict):
+        for chave, valor in base.items():
+            saida.update(_textos_alterados(valor, alterado.get(chave)))
+        return saida
+    if isinstance(base, list) and isinstance(alterado, list) and len(base) == len(alterado):
+        for item, outro in zip(base, alterado):
+            saida.update(_textos_alterados(item, outro))
+        return saida
+    if isinstance(base, str) and isinstance(alterado, str) and base != alterado:
+        saida.add(base)
+    return saida
+
+
+def _reescrever(valor, mapa):
+    if isinstance(valor, dict):
+        if "tipo" in valor and "valor" in valor and isinstance(valor.get("valor"), str) and valor["valor"] in mapa:
+            destino = mapa[valor["valor"]]
+            if destino is _ISOLAR:
+                return {"tipo": "ausente"}
+            copia = {chave: _reescrever(item, mapa) for chave, item in valor.items()}
+            copia["valor"] = destino
+            if copia.get("tipo") == "numero":
+                copia["tipo"] = "texto"
+            if copia.get("tipo_cache") == "numero":
+                copia["tipo_cache"] = "texto"
+            return copia
+        return {chave: _reescrever(item, mapa) for chave, item in valor.items()}
+    if isinstance(valor, list):
+        return [_reescrever(item, mapa) for item in valor]
+    if isinstance(valor, str) and valor in mapa:
+        destino = mapa[valor]
+        return "protegido" if destino is _ISOLAR else destino
+    return valor
+
+
+def _compativel(original, seguro) -> bool:
+    if isinstance(original, bool) or isinstance(seguro, bool):
+        return isinstance(original, bool) and isinstance(seguro, bool) and original is seguro
+    if isinstance(original, dict):
+        if not isinstance(seguro, dict) or set(original) != set(seguro):
+            return False
+        return all(_compativel(original[chave], seguro[chave]) for chave in original)
+    if isinstance(original, list):
+        if not isinstance(seguro, list) or len(original) != len(seguro):
+            return False
+        return all(_compativel(item, outro) for item, outro in zip(original, seguro))
+    if isinstance(original, str):
+        return isinstance(seguro, str)
+    if isinstance(original, int):
+        return isinstance(seguro, int) and not isinstance(seguro, bool) and original == seguro
+    if isinstance(original, float):
+        return isinstance(seguro, float) and original == seguro
+    return original == seguro
+
+
+def _coordenadas_preservadas(original, seguro) -> bool:
+    chaves = {"arquivo", "aba", "regiao", "linha", "indice", "coluna", "coluna_inicio", "coluna_fim"}
+    if isinstance(original, dict) and isinstance(seguro, dict):
+        for chave, valor in original.items():
+            if chave in chaves and seguro.get(chave) != valor:
+                return False
+            if not _coordenadas_preservadas(valor, seguro.get(chave)):
+                return False
+        return True
+    if isinstance(original, list) and isinstance(seguro, list) and len(original) == len(seguro):
+        return all(_coordenadas_preservadas(item, outro) for item, outro in zip(original, seguro))
+    return True
+
+
+def _intacto(valor) -> bool:
+    resultado = _governar_documento(valor)
+    return (
+        _resultado_confiavel(resultado, valor)
+        and resultado.decision == DECISION_ALLOW
+        and resultado.safe_content == valor
+    )
+
+
+def _isolar_dados(embrulho):
+    dados = embrulho.get("dados_tipados")
+    if not isinstance(dados, list):
+        return None
+    if not _intacto(embrulho.get("estrutura")) or not _intacto(embrulho.get("perfil")):
+        return None
+    if not _intacto(embrulho.get("metadados_preparacao")):
+        return None
+    novos = []
+    for registro in dados:
+        if _intacto(registro):
+            novos.append(registro)
+            continue
+        ajustado = _suprimir_celulas(registro)
+        if ajustado is None or not _intacto(ajustado):
+            continue
+        novos.append(ajustado)
+    if dados and not novos:
+        return None
+    candidato = dict(embrulho)
+    candidato["dados_tipados"] = novos
+    return candidato
+
+
+def _suprimir_celulas(registro):
+    if not isinstance(registro, dict) or not isinstance(registro.get("valores"), list):
+        return None
+    copia = dict(registro)
+    valores = []
+    for celula in registro["valores"]:
+        if _intacto(celula):
+            valores.append(celula)
+        else:
+            valores.append({"tipo": "ausente"})
+    copia["valores"] = valores
+    return copia
+
+
+def _texto_de_numero_longo(valor):
+    if isinstance(valor, bool) or valor is None:
+        return None
+    if isinstance(valor, int):
+        texto = str(abs(valor))
+        if len(texto) >= 10:
+            return texto
+        return None
+    if isinstance(valor, float) and math.isfinite(valor):
+        texto = format(valor, "f")
+        if sum(1 for caractere in texto if caractere.isdigit()) >= 10:
+            return texto
+    return None
+
+
+def _promover_celula(celula):
+    if not isinstance(celula, dict):
+        return celula, None
+    if celula.get("tipo") == "numero":
+        texto = _texto_de_numero_longo(celula.get("valor"))
+        if texto is None:
+            return celula, None
+        nova = dict(celula)
+        nova["tipo"] = "texto"
+        nova["valor"] = texto
+        return nova, texto
+    if (
+        celula.get("tipo") == "formula"
+        and celula.get("cache_estado") == "presente"
+        and celula.get("tipo_cache") == "numero"
+    ):
+        texto = _texto_de_numero_longo(celula.get("valor"))
+        if texto is None:
+            return celula, None
+        nova = dict(celula)
+        nova["tipo_cache"] = "texto"
+        nova["valor"] = texto
+        return nova, texto
+    return celula, None
+
+
+def _promover_numeros_longos(embrulho):
+    dados = embrulho.get("dados_tipados")
+    originais = {}
+    if not isinstance(dados, list):
+        return embrulho, originais
+    copia = []
+    mudou = False
+    for registro in dados:
+        if not isinstance(registro, dict) or not isinstance(registro.get("valores"), list):
+            copia.append(registro)
+            continue
+        valores = []
+        registro_mudou = False
+        for indice, celula in enumerate(registro["valores"]):
+            nova, texto = _promover_celula(celula)
+            valores.append(nova)
+            if texto is not None:
+                originais[
+                    (
+                        registro.get("arquivo"),
+                        registro.get("aba"),
+                        registro.get("regiao"),
+                        registro.get("linha"),
+                        indice,
+                    )
+                ] = (celula, texto)
+                registro_mudou = True
+        if registro_mudou:
+            novo = dict(registro)
+            novo["valores"] = valores
+            copia.append(novo)
+            mudou = True
+        else:
+            copia.append(registro)
+    if not mudou:
+        return embrulho, originais
+    saida = dict(embrulho)
+    saida["dados_tipados"] = copia
+    return saida, originais
+
+
+def _restaurar_numeros_inalterados(autorizado, originais):
+    if not originais:
+        return autorizado
+    dados = autorizado.get("dados_tipados")
+    if not isinstance(dados, list):
+        return None
+    copia = []
+    for registro in dados:
+        if not isinstance(registro, dict) or not isinstance(registro.get("valores"), list):
+            copia.append(registro)
+            continue
+        valores = list(registro["valores"])
+        mudou = False
+        for indice, celula in enumerate(valores):
+            chave = (
+                registro.get("arquivo"),
+                registro.get("aba"),
+                registro.get("regiao"),
+                registro.get("linha"),
+                indice,
+            )
+            par = originais.get(chave)
+            if par is None or not isinstance(celula, dict):
+                continue
+            celula_original, texto = par
+            if celula.get("valor") == texto:
+                valores[indice] = celula_original
+                mudou = True
+        if mudou:
+            novo = dict(registro)
+            novo["valores"] = valores
+            copia.append(novo)
+        else:
+            copia.append(registro)
+    saida = dict(autorizado)
+    saida["dados_tipados"] = copia
+    return saida
+
+
+def _selar_protecao(original, autorizado):
+    if autorizado == original:
+        return original
+    dados_originais = original.get("dados_tipados")
+    dados = autorizado.get("dados_tipados")
+    minimizadas, suprimidas, colunas = _diferenças(dados_originais, dados)
+    estrutura = autorizado.get("estrutura")
+    perfil = dict(autorizado.get("perfil") or {})
+    if isinstance(dados_originais, list) and isinstance(dados, list) and len(dados) != len(dados_originais):
+        estrutura = _alinhar_linhas(estrutura, dados)
+        if isinstance(perfil.get("linhas_elegiveis"), int):
+            perfil["linhas_elegiveis"] = len(dados)
+    metadados = dict(autorizado.get("metadados_preparacao") or {})
+    metadados["protecao"] = {
+        "decisao": "isolada" if suprimidas else "minimizada",
+        "celulas_minimizadas": minimizadas,
+        "celulas_suprimidas": suprimidas,
+        "colunas": colunas,
+    }
+    selado = {
+        "estrutura": estrutura,
+        "perfil": perfil,
+        "dados_tipados": dados,
+        "metadados_preparacao": metadados,
+    }
+    if not _intacto(selado):
+        return None
+    logger.info(
+        "evento=agente_bi_preparacao_protegida decisao=%s celulas_minimizadas=%s celulas_suprimidas=%s",
+        selado["metadados_preparacao"]["protecao"]["decisao"],
+        minimizadas,
+        suprimidas,
+    )
+    return selado
+
+
+def _diferenças(antes, depois):
+    minimizadas = 0
+    suprimidas = 0
+    vistos = []
+    chaves = set()
+    if not isinstance(antes, list) or not isinstance(depois, list):
+        return 0, 0, []
+    if len(depois) < len(antes):
+        suprimidas += len(antes) - len(depois)
+    for registro_antes, registro_depois in zip(antes, depois):
+        if not isinstance(registro_antes, dict) or not isinstance(registro_depois, dict):
+            continue
+        valores_antes = registro_antes.get("valores")
+        valores_depois = registro_depois.get("valores")
+        if not isinstance(valores_antes, list) or not isinstance(valores_depois, list):
+            continue
+        for indice, (celula_antes, celula_depois) in enumerate(zip(valores_antes, valores_depois)):
+            if celula_antes == celula_depois:
+                continue
+            if isinstance(celula_depois, dict) and celula_depois.get("tipo") == "ausente":
+                suprimidas += 1
+            else:
+                minimizadas += 1
+            coordenada = (
+                registro_depois.get("arquivo"),
+                registro_depois.get("aba"),
+                registro_depois.get("regiao"),
+                indice,
+            )
+            if coordenada in chaves:
+                continue
+            if not all(isinstance(parte, int) and not isinstance(parte, bool) and parte >= 0 for parte in coordenada):
+                continue
+            chaves.add(coordenada)
+            vistos.append(
+                {
+                    "arquivo": coordenada[0],
+                    "aba": coordenada[1],
+                    "regiao": coordenada[2],
+                    "indice": coordenada[3],
+                }
+            )
+    vistos.sort(key=lambda item: (item["arquivo"], item["aba"], item["regiao"], item["indice"]))
+    return minimizadas, suprimidas, vistos
+
+
+def _alinhar_linhas(estrutura, dados):
+    if not isinstance(estrutura, dict) or not isinstance(estrutura.get("regioes"), list):
+        return estrutura
+    contagem = {}
+    for registro in dados:
+        if not isinstance(registro, dict):
+            continue
+        chave = (registro.get("arquivo"), registro.get("aba"), registro.get("regiao"))
+        contagem[chave] = contagem.get(chave, 0) + 1
+    novas = []
+    mudou = False
+    for regiao in estrutura["regioes"]:
+        if not isinstance(regiao, dict):
+            novas.append(regiao)
+            continue
+        chave = (regiao.get("arquivo"), regiao.get("aba"), regiao.get("indice"))
+        atual = contagem.get(chave, 0)
+        if isinstance(regiao.get("linhas_elegiveis"), int) and regiao["linhas_elegiveis"] != atual:
+            copia = dict(regiao)
+            copia["linhas_elegiveis"] = atual
+            novas.append(copia)
+            mudou = True
+        else:
+            novas.append(regiao)
+    if not mudou:
+        return estrutura
+    saida = dict(estrutura)
+    saida["regioes"] = novas
+    return saida
+
+
+def _autorizar_conteudo_persistivel(valor) -> None:
+    """Reusa a governança existente. Não grava original nem cópia não comprovada.
+
+    O dataset preparado chega aqui já minimizado, quando a governança autorizou
+    essa forma. Este ponto continua exigindo decisão intacta: não aceita
+    `safe_content` diferente do valor, não grava o original sensível e não
+    registra o valor no log. A prova compacta só dispensa a varredura integral
+    quando cada texto distinto já foi autorizado sem alteração.
     """
     embrulho = {"conteudo": valor}
+    if _prova_compacta_intacta(embrulho):
+        return
     resultado = govern_outbound_content(
         embrulho,
         purpose=PURPOSE_AUDITORIA_FRETE,
@@ -940,6 +1483,16 @@ def _autorizar_conteudo_persistivel(valor) -> None:
         or resultado.safe_content != embrulho
     ):
         raise AgenteBiErro("conteudo_nao_permitido", 422)
+
+
+def _prova_compacta_intacta(valor) -> bool:
+    compacto = _compactar(valor)
+    resultado = _governar_documento(compacto)
+    return (
+        _resultado_confiavel(resultado, compacto)
+        and resultado.decision == DECISION_ALLOW
+        and resultado.safe_content == compacto
+    )
 
 
 def _recusar_volume(valor) -> None:

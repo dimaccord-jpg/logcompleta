@@ -551,7 +551,7 @@ def test_api_recusa_flag_auth_e_nao_abre_o_upload_publico(app, monkeypatch):
     assert "uploadItem.disabled = true" in script or "if (!uploadItem.disabled) uploadItem.disabled = true;" in script
 
 
-def test_persistencia_recusada_quando_a_governanca_nao_autoriza_intacto(ctx, caplog):
+def test_cpf_e_minimizado_e_o_dado_logistico_permanece(ctx, caplog):
     _conta, _franquia, usuario = _par("ing-gov", "ing.gov@test.com")
     documento = "123.456.789-09"
     caplog.set_level(logging.INFO)
@@ -560,14 +560,58 @@ def test_persistencia_recusada_quando_a_governanca_nao_autoriza_intacto(ctx, cap
         f"codigo,faixa,qtd\n{documento},ate10,1\n".encode("utf-8"),
         "restrito.csv",
     )
-    assert resultado["persistido"] is False
-    assert resultado["motivo"] == "conteudo_nao_permitido"
-    assert resultado["dependencia"] == "SCRUM-252"
-    assert resultado["dataset"] is None
-    assert AgenteBiDataset.query.count() == 0
-    assert resultado["preparacao"]["dados_tipados"][0]["valores"][1]["valor"] == "ate10"
+    assert resultado["persistido"] is True, resultado["motivo"]
+    assert resultado["dataset"]["impressao"]
+    celulas = resultado["preparacao"]["dados_tipados"][0]["valores"]
+    assert celulas[1]["valor"] == "ate10"
+    assert celulas[2]["valor"] == 1
+    assert celulas[2]["tipo"] == "numero"
+    assert documento not in json.dumps(resultado["preparacao"], default=str)
     assert documento not in caplog.text
-    assert "norte" not in caplog.text
+    gravado = db.session.get(AgenteBiDataset, resultado["dataset"]["id"])
+    assert documento not in gravado.dados_tipados_json
+    assert documento not in gravado.estrutura_json
+    assert documento not in gravado.perfil_json
+    assert documento not in gravado.metadados_preparacao_json
+    assert resultado["preparacao"]["metadados_preparacao"]["protecao"]["decisao"] == "minimizada"
+    from app.services.agente_bi_persistencia_service import obter_dataset
+
+    recarga = obter_dataset(escopo_do_usuario(usuario), resultado["dataset"]["id"])
+    assert documento not in json.dumps(recarga, default=str)
+    assert recarga["impressao"] == resultado["dataset"]["impressao"]
+
+
+def test_celula_bloqueada_nao_deixa_armazenamento_parcial(ctx):
+    import copy
+
+    from app.services.agente_bi_persistencia_service import representar_dataset_autorizado
+
+    _conta, _franquia, usuario = _par("ing-bloqueio", "ing.bloqueio@test.com")
+    base = _ingerir(usuario, b"origem,nota\nnorte,leste\nsul,ok\n", "bloqueio.csv", chave="lote-bloqueio")
+    assert base["persistido"] is True
+    preparacao = copy.deepcopy(base["preparacao"])
+    preparacao["dados_tipados"][0]["valores"][1] = {"tipo": "texto", "valor": "a\x00b"}
+    autorizado, motivo = representar_dataset_autorizado(
+        preparacao["estrutura"],
+        preparacao["perfil"],
+        preparacao["dados_tipados"],
+        preparacao["metadados_preparacao"],
+    )
+    texto = json.dumps(autorizado, default=str)
+    assert "\x00" not in texto
+    assert "a\\u0000b" not in texto
+    assert AgenteBiDataset.query.count() == 1
+    assert AgenteBiDatasetBloco.query.count() == 0
+    if autorizado is None:
+        assert motivo in {"conteudo_nao_permitido", "minimizacao_nao_comprovada"}
+    else:
+        assert "norte" in texto
+        assert "sul" in texto
+        assert any(
+            isinstance(celula, dict) and celula.get("tipo") == "ausente"
+            for registro in autorizado["dados_tipados"]
+            for celula in registro["valores"]
+        )
 
 
 def test_log_nao_grava_valor_de_celula(ctx, caplog):

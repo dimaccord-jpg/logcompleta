@@ -374,15 +374,18 @@ def test_minimizacao_exclui_identificadores_textuais_e_numericos(ctx, caplog):
     )
     caplog.set_level(logging.INFO)
     resultado = _ingerir(usuario, texto.encode("utf-8"), f"{CPF_NUMERO}.csv", chave="perfil-pii")
-    assert resultado["persistido"] is False
+    assert resultado["persistido"] is True, resultado["motivo"]
+    bruto = json.dumps(resultado["preparacao"], default=str)
+    for segredo in (CPF_TEXTO, str(CPF_NUMERO), EMAIL, NOME):
+        assert segredo not in bruto
+        assert segredo not in caplog.text
     perfil = perfilar_preparacao(resultado["preparacao"], escopo=escopo_do_usuario(usuario))
     _sem_segredos(perfil, [CPF_TEXTO, str(CPF_NUMERO), CPF_NUMERO, TELEFONE, PLACA, EMAIL, NOME, INJECAO])
     assert "historia" not in _textos(perfil)
-    categorias = perfil["governanca"]["categorias_detectadas"]
-    assert categorias.get("cpf", 0) >= 1
-    assert categorias.get("email", 0) >= 1
-    assert categorias.get("phone", 0) >= 1
-    assert categorias.get("person_name", 0) >= 1
+    documento = next(coluna for coluna in perfil["colunas"] if coluna["indice"] == 3)
+    assert "quantidade" not in documento["dimensoes"]
+    assert "valor" not in documento["dimensoes"]
+    assert documento["chave_candidata"] is False
     assert perfil["governanca"]["amostras_de_linhas"] is False
     assert perfil["governanca"]["valores_de_celula"] is False
     assert perfil["governanca"]["identificadores_fora_do_classificador"] == ["placa"]

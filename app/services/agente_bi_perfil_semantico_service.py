@@ -393,7 +393,7 @@ def perfilar_preparacao(preparacao: dict, *, escopo: EscopoAgenteBi | None = Non
         raise PerfilErro("dados_invalidos")
 
     ambiguidades, opacas = _copiar_ambiguidades(estrutura.get("ambiguidades"))
-    analise = _analisar(estrutura, dados, ambiguidades)
+    analise = _analisar(estrutura, dados, ambiguidades, _colunas_protegidas(metadados))
     transformacoes = []
     if opacas:
         transformacoes.append(
@@ -496,7 +496,24 @@ def _copiar_ambiguidades(bruto) -> tuple[list, int]:
     return saida, opacas
 
 
-def _analisar(estrutura: dict, dados: list, ambiguidades: list) -> dict:
+def _colunas_protegidas(metadados) -> set:
+    """Coordenadas mascaradas ou suprimidas. Não lê valor de célula."""
+    if not isinstance(metadados, dict):
+        return set()
+    protecao = metadados.get("protecao")
+    if not isinstance(protecao, dict) or not isinstance(protecao.get("colunas"), list):
+        return set()
+    saida = set()
+    for item in protecao["colunas"]:
+        if not isinstance(item, dict):
+            continue
+        chave = tuple(item.get(nome) for nome in ("arquivo", "aba", "regiao", "indice"))
+        if all(isinstance(parte, int) and not isinstance(parte, bool) and parte >= 0 for parte in chave):
+            saida.add(chave)
+    return saida
+
+
+def _analisar(estrutura: dict, dados: list, ambiguidades: list, protegidas: set | None = None) -> dict:
     abas = {}
     for aba in estrutura.get("abas") or []:
         if isinstance(aba, dict):
@@ -517,12 +534,12 @@ def _analisar(estrutura: dict, dados: list, ambiguidades: list) -> dict:
         chave = (regiao.get("arquivo"), regiao.get("aba"), regiao.get("indice"))
         linhas = list(grupos.get(chave, []))
         aba = abas.get((regiao.get("arquivo"), regiao.get("aba")), {})
-        montada, cols, qualidade = _regiao(regiao, aba, linhas, ambiguidades)
+        montada, cols, qualidade = _regiao(regiao, aba, linhas, ambiguidades, protegidas or set())
         regioes.append(montada)
         colunas.extend(cols)
         qualidade_regioes.append(qualidade)
 
-    relacoes, orcamento = _relacoes(colunas, regioes)
+    relacoes, orcamento = _relacoes(colunas, regioes, protegidas or set())
     for coluna in colunas:
         coluna.pop("_identidades", None)
         coluna.pop("_tipo_chave", None)
@@ -553,7 +570,7 @@ def _criterios() -> dict:
     }
 
 
-def _regiao(regiao: dict, aba: dict, linhas: list, ambiguidades: list) -> tuple[dict, list, dict]:
+def _regiao(regiao: dict, aba: dict, linhas: list, ambiguidades: list, protegidas: set | None = None) -> tuple[dict, list, dict]:
     arquivo = regiao.get("arquivo")
     aba_indice = regiao.get("aba")
     indice = regiao.get("indice")
@@ -563,7 +580,15 @@ def _regiao(regiao: dict, aba: dict, linhas: list, ambiguidades: list) -> tuple[
     colunas = []
     for posicao, item in enumerate(stats):
         codigos = _codigos_da_coluna(ambiguidades, arquivo, aba_indice, indice, posicao)
-        montada = _hipotese_coluna(arquivo, aba_indice, indice, posicao, item, codigos)
+        montada = _hipotese_coluna(
+            arquivo,
+            aba_indice,
+            indice,
+            posicao,
+            item,
+            codigos,
+            protegida=(arquivo, aba_indice, indice, posicao) in (protegidas or set()),
+        )
         colunas.append(montada)
 
     deteccao = regiao.get("cabecalho_deteccao")
@@ -674,7 +699,7 @@ def _coluna(linhas: list, posicao: int, coluna_planilha: int) -> dict:
     }
 
 
-def _hipotese_coluna(arquivo, aba, regiao, posicao, item: dict, codigos: list) -> dict:
+def _hipotese_coluna(arquivo, aba, regiao, posicao, item: dict, codigos: list, *, protegida: bool = False) -> dict:
     tipos = [tipo for tipo in item["tipos"] if tipo != "ausente"]
     dimensoes = []
     evidencias = []
@@ -713,6 +738,11 @@ def _hipotese_coluna(arquivo, aba, regiao, posicao, item: dict, codigos: list) -
         evidencias.append("valores_repetidos")
     if ("data_ambigua" in codigos or "numero_ambiguo" in codigos) and _INDEFINIDA not in dimensoes:
         dimensoes.append(_INDEFINIDA)
+    if protegida:
+        chave = False
+        dimensoes = [item_dimensao for item_dimensao in dimensoes if item_dimensao not in {_DIM_VALOR, _DIM_QUANTIDADE}]
+        if _INDEFINIDA not in dimensoes:
+            dimensoes.append(_INDEFINIDA)
     principal = _DIM_IDENTIFICADOR if chave else (dimensoes[0] if dimensoes else _INDEFINIDA)
     if not dimensoes:
         dimensoes = [_INDEFINIDA]
@@ -885,7 +915,7 @@ def _rotulo_tipo(tipos: list, presentes: int) -> str:
     return "opaco"
 
 
-def _relacoes(colunas: list, regioes: list) -> tuple[list, dict]:
+def _relacoes(colunas: list, regioes: list, protegidas: set | None = None) -> tuple[list, dict]:
     """Examina pares sob orçamento, sem montar o produto cartesiano.
 
     Primeiro as duas colunas são chave candidata; depois exatamente uma.
@@ -904,7 +934,7 @@ def _relacoes(colunas: list, regioes: list) -> tuple[list, dict]:
     for fontes in (fontes_chave, fontes_mistas):
         if examinados >= teto_pares:
             break
-        achadas, usados = _examinar_fontes(fontes, teto_pares - examinados, por_regiao)
+        achadas, usados = _examinar_fontes(fontes, teto_pares - examinados, por_regiao, protegidas or set())
         encontradas.extend(achadas)
         examinados += usados
     publicadas = _publicar_relacoes(encontradas, teto_publicadas, totais)
@@ -991,7 +1021,7 @@ def _tamanho_fontes(fontes: list) -> int:
     return sum(len(esquerda) * len(direita) for esquerda, direita in fontes)
 
 
-def _examinar_fontes(fontes: list, limite: int, regioes: dict) -> tuple[list, int]:
+def _examinar_fontes(fontes: list, limite: int, regioes: dict, protegidas: set | None = None) -> tuple[list, int]:
     if limite <= 0 or not fontes:
         return [], 0
     cursores = [0] * len(fontes)
@@ -1007,7 +1037,7 @@ def _examinar_fontes(fontes: list, limite: int, regioes: dict) -> tuple[list, in
             cursores[indice] += 1
             avancou = True
             examinados += 1
-            relacao = _relacionar(primeira, segunda, regioes)
+            relacao = _relacionar(primeira, segunda, regioes, protegidas or set())
             if relacao is not None:
                 encontradas.append(relacao)
             if examinados >= limite:
@@ -1146,7 +1176,12 @@ def _ordem_relacao(item: dict) -> tuple:
     )
 
 
-def _relacionar(primeira: dict, segunda: dict, regioes: dict):
+def _relacionar(primeira: dict, segunda: dict, regioes: dict, protegidas: set | None = None):
+    bloqueadas = protegidas or set()
+    for coluna in (primeira, segunda):
+        coordenada = (coluna.get("arquivo"), coluna.get("aba"), coluna.get("regiao"), coluna.get("indice"))
+        if coordenada in bloqueadas:
+            return None
     if (primeira["arquivo"], primeira["aba"], primeira["regiao"]) == (
         segunda["arquivo"],
         segunda["aba"],

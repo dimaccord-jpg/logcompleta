@@ -125,7 +125,7 @@ def resumir_preparacao(escopo, bruto: dict) -> dict:
         int(persistido),
         None if publico is None else publico["versao"],
     )
-    return {
+    resposta = {
         "ok": True,
         "estado": "preparado" if persistido else "nao_persistido",
         "persistido": persistido,
@@ -141,6 +141,10 @@ def resumir_preparacao(escopo, bruto: dict) -> dict:
         "regioes": regioes,
         "qualidade": qualidade,
     }
+    protecao = _protecao_publica(preparacao.get("metadados_preparacao"))
+    if protecao is not None:
+        resposta["protecao"] = protecao
+    return resposta
 
 
 def descobrir(escopo, corpo: dict, *, transporte=None, cliente_gemini=None, controle=None) -> dict:
@@ -691,6 +695,18 @@ def _dataset_publico(escopo, dataset: dict) -> dict:
         "versao": dataset.get("versao"),
         "impressao": dataset.get("impressao"),
     }
+
+
+def _protecao_publica(metadados):
+    if not isinstance(metadados, dict):
+        return None
+    protecao = metadados.get("protecao")
+    if not isinstance(protecao, dict):
+        return None
+    decisao = protecao.get("decisao")
+    if decisao not in {"minimizada", "isolada"}:
+        return None
+    return decisao
 
 
 def _resumo(perfil: dict) -> dict:

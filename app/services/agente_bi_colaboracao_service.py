@@ -124,6 +124,36 @@ _CHAVES_TECNICAS = frozenset(
     }
 )
 _CHAVES_VERIFICACAO = frozenset({"aprovado", "codigo"})
+_CHAVES_DESCARTE = frozenset({"lista", "posicao", "campo", "motivo"})
+_LISTAS_DESCARTE = frozenset({"sugestoes", "descobertas"})
+_MOTIVO_CATALOGO = "valor_fora_do_catalogo"
+_MOTIVOS_DESCARTE = _CHECKPOINT | {_MOTIVO_CATALOGO}
+_CHAVES_SUGESTAO_RASCUNHO = frozenset(
+    {
+        "status",
+        "leitura",
+        "grafico",
+        "operacao",
+        "origem",
+        "regiao",
+        "medida",
+        "agrupamento",
+        "segunda_medida",
+        "evidencias",
+        "juncao",
+        "lacuna",
+        "duvidas",
+    }
+)
+_CHAVES_DESCOBERTA_RASCUNHO = frozenset({"codigo", "regiao", "relacao"})
+_CAMPOS_DESCARTE = {
+    "sugestoes": _CHAVES_SUGESTAO_RASCUNHO | {"item", "limite"},
+    "descobertas": _CHAVES_DESCOBERTA_RASCUNHO | {"item", "limite"},
+}
+_TETO_LISTA = {"descobertas": 12, "sugestoes": 8}
+_TETO_BRUTO = {"descobertas": 24, "sugestoes": 16}
+_TETO_DESCARTES = 40
+_POSICAO_MAXIMA = 31
 _CHAVES_CRITICA = frozenset({"referencias", "medidas", "operacoes", "evidencias", "objecoes"})
 _CHAVES_OBJECAO = frozenset({"codigo", "referencia"})
 _CHAVES_CONTEXTO = frozenset(
@@ -227,8 +257,11 @@ def identidade_rodada(colaboracao_id: str, pai_id: int | None, acao: str, papel:
 
 
 def revalidar_contrato_tecnico(analise: AgenteBiAnalise, referencias: dict, documento) -> dict:
-    """Reconfere o envelope gravável. Não chama `validar_saida`."""
-    if not isinstance(documento, dict) or set(documento) != _CHAVES_TECNICAS:
+    """Reconfere o envelope gravável. Não chama `validar_saida`.
+
+    O diagnóstico é opcional. Envelope antigo, sem descartes, continua válido.
+    """
+    if not isinstance(documento, dict) or set(documento) != _chaves_envelope(documento):
         raise ExecucaoErro("contrato_saida_invalido")
     contexto = _json(analise.contexto_json)
     if not isinstance(contexto, dict) or set(contexto) != _CHAVES_CONTEXTO:
@@ -254,13 +287,25 @@ def revalidar_contrato_tecnico(analise: AgenteBiAnalise, referencias: dict, docu
             raise ExecucaoErro("contrato_saida_invalido")
     else:
         raise ExecucaoErro("contrato_saida_invalido")
+    descartes = None
+    if "descartes" in documento:
+        if contexto["papel"] != _PAPEL_CLAUDE:
+            raise ExecucaoErro("contrato_saida_invalido")
+        descartes = _minimizar_descartes(documento.get("descartes"))
+        if descartes != documento.get("descartes"):
+            raise ExecucaoErro("contrato_saida_invalido")
     verificacao = documento.get("verificacao")
     if not isinstance(verificacao, dict) or set(verificacao) != _CHAVES_VERIFICACAO:
         raise ExecucaoErro("contrato_saida_invalido")
     if verificacao.get("aprovado") is True:
-        if verificacao.get("codigo") is not None or contexto["papel"] != _PAPEL_CLAUDE:
+        if descartes is not None or verificacao.get("codigo") is not None or contexto["papel"] != _PAPEL_CLAUDE:
             raise ExecucaoErro("contrato_saida_invalido")
-    elif verificacao.get("aprovado") is not False or verificacao.get("codigo") not in _CHECKPOINT:
+    elif verificacao.get("aprovado") is not False:
+        raise ExecucaoErro("contrato_saida_invalido")
+    elif descartes is None:
+        if verificacao.get("codigo") not in _CHECKPOINT:
+            raise ExecucaoErro("contrato_saida_invalido")
+    elif verificacao.get("codigo") is not None and verificacao.get("codigo") not in _CHECKPOINT:
         raise ExecucaoErro("contrato_saida_invalido")
     if not _referencias_validas(documento.get("referencias")):
         raise ExecucaoErro("contrato_saida_invalido")
@@ -279,8 +324,7 @@ def revalidar_contrato_tecnico(analise: AgenteBiAnalise, referencias: dict, docu
         or tentativa.status != IaChamadaTentativa.STATUS_SETTLED
     ):
         raise ExecucaoErro("identidade_inconsistente")
-    corpo = {chave: documento[chave] for chave in _CHAVES_TECNICAS if chave != "hash"}
-    if documento.get("hash") != _hash(corpo):
+    if documento.get("hash") != _hash(_corpo_assinado(documento)):
         raise ExecucaoErro("contrato_saida_invalido")
     if not chamada_liquidada(int(execucao.id)):
         raise ExecucaoErro("efeito_incerto")
@@ -345,7 +389,8 @@ def instrucao_de_critica() -> str:
         [
             "Voce e o revisor critico da proposta recebida.",
             "Voce nao e o autor da proposta final.",
-            "Use somente o contexto autorizado, a proposta e a verificacao.",
+            "Use somente o contexto autorizado, a proposta, a verificacao e os descartes.",
+            "Descartes, quando existirem, trazem somente lista, posicao, campo e motivo.",
             "Referencias, medidas e evidencias precisam existir nesse contexto.",
             "Nao invente coordenada, metrica, valor, rotulo, formula ou cliente.",
             "Nao copie celula nem conteudo bruto.",
@@ -371,6 +416,8 @@ def instrucao_de_revisao() -> str:
         [
             "Revise a proposta anterior usando somente a critica autorizada.",
             "Corrija o que as objecoes indicam e conserve o restante.",
+            "A verificacao anterior pode trazer descartes com lista, posicao, campo e motivo.",
+            "Reconstrua a sugestao com o contexto autorizado, sem o valor removido.",
             "Referencias e evidencias precisam existir no contexto autorizado.",
             "A critica nao substitui a proposta nem o contrato de saida.",
         ]
@@ -644,7 +691,9 @@ def _rodar(escopo, dataset, pedido, perfil, contexto, payload, colaboracao_id, a
             controle["antes_da_chamada"]()
         if contexto_analise["papel"] == _PAPEL_CLAUDE and contexto_analise.get("acao") == _ACAO_REVISAR:
             try:
-                proposta_anterior, critica = _proposta_revisavel(analise, contexto_analise, referencias, contexto)
+                proposta_anterior, critica, verificacao_anterior = _proposta_revisavel(
+                    analise, contexto_analise, referencias, contexto
+                )
             except ExecucaoErro as exc:
                 _recusar(linha, exc.codigo)
                 raise
@@ -653,6 +702,7 @@ def _rodar(escopo, dataset, pedido, perfil, contexto, payload, colaboracao_id, a
                     "contexto": payload,
                     "proposta_anterior": proposta_anterior,
                     "critica_autorizada": critica,
+                    "verificacao_anterior": verificacao_anterior,
                 }
             )
         else:
@@ -708,7 +758,20 @@ def _rodar(escopo, dataset, pedido, perfil, contexto, payload, colaboracao_id, a
             raise ExecucaoErro(codigo)
         if controle.get("depois_da_resposta"):
             controle["depois_da_resposta"]()
-        tecnico = _envelope(analise, contexto_analise, resultado, perfil, pedido, contexto)
+        try:
+            tecnico = _envelope(analise, contexto_analise, resultado, perfil, pedido, contexto)
+        except ExecucaoErro as exc:
+            if exc.codigo in {"efeito_incerto", "identidade_inconsistente"}:
+                raise
+            ident = {
+                "usuario_id": int(linha.usuario_id),
+                "conta_id": int(linha.conta_id),
+                "franquia_id": int(linha.franquia_id),
+            }
+            _liberar_efeito(int(linha.id), ident, linha.lease_worker, int(linha.fencing))
+            db.session.refresh(linha)
+            _recusar(linha, exc.codigo)
+            raise
         if tecnico is None:
             ident = {
                 "usuario_id": int(linha.usuario_id),
@@ -830,31 +893,59 @@ def _preservar(escopo, dataset, pedido, perfil, colaboracao_id, tecnicas, contro
     return _materializar(escopo, dataset, pedido, perfil, colaboracao_id, aprovada[0], aprovada[1], controle)
 
 
+_BLOQUEIO_DURO = frozenset(
+    {
+        "autorizacao_indevida",
+        "contexto_nao_autorizado",
+        "provedor_nao_autorizado",
+        "provedor_indisponivel",
+    }
+)
+
+
 def _envelope(analise, contexto_analise, resultado, perfil, pedido, contexto):
     texto = resultado.get("texto")
-    try:
-        bruto = json.loads(texto) if isinstance(texto, str) else None
-    except (TypeError, json.JSONDecodeError):
-        bruto = None
     papel = contexto_analise["papel"]
     proposta = None
     critica = None
     verificacao = {"aprovado": False, "codigo": "contrato_saida_invalido"}
+    descartes = []
     if papel == _PAPEL_CLAUDE:
-        proposta = minimizar_proposta(bruto)
-        if proposta is None:
+        bruto, formato = _objeto_da_resposta(texto)
+        if bruto is None:
+            _diagnosticar(analise, "json_nao_interpretavel")
+            return None
+        proposta, descartes = _representar_proposta(bruto)
+        if proposta is None or descartes is None:
+            _diagnosticar(analise, "estrutura_nao_representavel")
             return None
         try:
             analisar(perfil, pedido, provedor=lambda _contexto: proposta, proveniencia=PROVEDOR_ANTHROPIC)
         except AnalisarErro as exc:
-            if exc.codigo not in _CHECKPOINT:
+            if exc.codigo in _BLOQUEIO_DURO:
+                raise ExecucaoErro(exc.codigo)
+            if exc.codigo not in _CHECKPOINT and not _vazia_recuperavel(proposta, descartes):
+                _diagnosticar(analise, "verificacao_nao_recuperavel")
                 return None
-            verificacao = {"aprovado": False, "codigo": exc.codigo}
+            codigo = exc.codigo if exc.codigo in _CHECKPOINT else _codigo_de_descartes(descartes)
+            verificacao = {"aprovado": False, "codigo": codigo}
         else:
             verificacao = {"aprovado": True, "codigo": None}
+        if descartes:
+            verificacao = {"aprovado": False, "codigo": verificacao["codigo"] or _codigo_de_descartes(descartes)}
+        if formato:
+            logger.info(
+                "evento=agente_bi_colaboracao_formato_recuperado analise_id=%s",
+                getattr(analise, "id", None),
+            )
     else:
+        try:
+            bruto = json.loads(texto) if isinstance(texto, str) else None
+        except (TypeError, json.JSONDecodeError):
+            bruto = None
         critica = minimizar_critica(bruto, contexto)
         if critica is None:
+            _diagnosticar(analise, "critica_nao_representavel")
             return None
         codigo_critica = critica["objecoes"][0]["codigo"] if critica["objecoes"] else "evidencia_ausente"
         verificacao = {"aprovado": False, "codigo": codigo_critica}
@@ -863,9 +954,9 @@ def _envelope(analise, contexto_analise, resultado, perfil, pedido, contexto):
     db.session.refresh(execucao)
     tentativa_id = execucao.ia_chamada_tentativa_id or resultado.get("tentativa_id")
     if isinstance(tentativa_id, bool) or not isinstance(tentativa_id, int):
-        return None
+        raise ExecucaoErro("identidade_inconsistente")
     if not chamada_liquidada(int(execucao.id)):
-        return None
+        raise ExecucaoErro("efeito_incerto")
     documento = {
         "contrato": CONTRATO_TECNICO,
         "colaboracao_id": contexto_analise["colaboracao_id"],
@@ -879,8 +970,220 @@ def _envelope(analise, contexto_analise, resultado, perfil, pedido, contexto):
         "verificacao": verificacao,
         "tentativa_id": int(tentativa_id),
     }
+    if descartes:
+        documento["descartes"] = descartes
     documento["hash"] = _hash(documento)
     return documento
+
+
+def _diagnosticar(analise, motivo: str) -> None:
+    logger.info(
+        "evento=agente_bi_colaboracao_irrecuperavel motivo=%s analise_id=%s",
+        motivo,
+        getattr(analise, "id", None),
+    )
+
+
+def _objeto_da_resposta(texto):
+    """Lê o JSON da resposta. Cerca de markdown não cria campo analítico."""
+    if not isinstance(texto, str) or not texto.strip():
+        return None, False
+    candidato = texto.strip()
+    recuperado = False
+    if candidato.startswith("```"):
+        linhas = candidato.splitlines()
+        if linhas and linhas[0].startswith("```"):
+            linhas = linhas[1:]
+        if linhas and linhas[-1].strip().startswith("```"):
+            linhas = linhas[:-1]
+        candidato = "\n".join(linhas).strip()
+        recuperado = True
+    bruto = _carregar_json(candidato)
+    if not isinstance(bruto, dict):
+        inicio = candidato.find("{")
+        fim = candidato.rfind("}")
+        if inicio < 0 or fim <= inicio:
+            return None, False
+        bruto = _carregar_json(candidato[inicio : fim + 1])
+        recuperado = True
+    if not isinstance(bruto, dict):
+        return None, False
+    return bruto, recuperado or candidato != texto.strip()
+
+
+def _carregar_json(texto):
+    try:
+        return json.loads(texto)
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
+def _representar_proposta(valor):
+    """Devolve a proposta segura e os descartes classificáveis.
+
+    Forma superior irrecuperável, item que não é objeto ou campo
+    desconhecido não produz aprovação. Lista vazia com diagnóstico
+    continua representável.
+    """
+    if not isinstance(valor, dict) or set(valor) != {"descobertas", "sugestoes"}:
+        return None, None
+    descobertas_brutas = valor.get("descobertas")
+    sugestoes_brutas = valor.get("sugestoes")
+    if not isinstance(descobertas_brutas, list) or not isinstance(sugestoes_brutas, list):
+        return None, None
+    if len(descobertas_brutas) > _TETO_BRUTO["descobertas"] or len(sugestoes_brutas) > _TETO_BRUTO["sugestoes"]:
+        return None, None
+    estrita = minimizar_proposta(valor)
+    if estrita is not None:
+        return estrita, []
+    descobertas = []
+    sugestoes = []
+    descartes = []
+    if not _separar("descobertas", descobertas_brutas, _descoberta, _falha_descoberta, descobertas, descartes):
+        return None, None
+    if not _separar("sugestoes", sugestoes_brutas, _sugestao, _falha_sugestao, sugestoes, descartes):
+        return None, None
+    if not descartes:
+        return None, None
+    proposta = {"descobertas": descobertas, "sugestoes": sugestoes}
+    if minimizar_proposta(proposta) != proposta or _minimizar_descartes(descartes) != descartes:
+        return None, None
+    return proposta, descartes
+
+
+def _separar(lista, brutos, conversor, classificar, destino, descartes) -> bool:
+    teto = _TETO_LISTA[lista]
+    for posicao, item in enumerate(brutos):
+        if not isinstance(item, dict):
+            return False
+        if posicao < teto:
+            convertido = conversor(item)
+            if convertido is not None:
+                destino.append(convertido)
+                continue
+            falha = classificar(item)
+        else:
+            falha = classificar(item)
+            if falha is None and conversor(item) is not None:
+                falha = ("limite", _MOTIVO_CATALOGO)
+        if falha is None:
+            return False
+        diagnostico = _diagnostico(lista, posicao, falha[0], falha[1])
+        if diagnostico is None:
+            return False
+        descartes.append(diagnostico)
+    return True
+
+
+def _falha_sugestao(item):
+    if not isinstance(item, dict) or set(item) - _CHAVES_SUGESTAO_RASCUNHO:
+        return None
+    if "juncao" in item and item.get("juncao") != _JUNCAO:
+        return ("juncao", "juncao_nao_confirmada")
+    if "grafico" in item and item.get("grafico") is not None and item.get("grafico") not in GRAFICOS:
+        return ("grafico", "grafico_incompativel")
+    if "operacao" in item and item.get("operacao") is not None and item.get("operacao") not in OPERACOES:
+        return ("operacao", "metrica_inventada")
+    if "evidencias" in item:
+        evidencias = item.get("evidencias")
+        if not isinstance(evidencias, list) or len(evidencias) > 8:
+            return ("evidencias", _MOTIVO_CATALOGO)
+        if any(codigo not in _EVIDENCIAS for codigo in evidencias):
+            return ("evidencias", "evidencia_ausente")
+    for chave in ("medida", "agrupamento", "segunda_medida"):
+        if chave not in item or item.get(chave) is None:
+            continue
+        if _coluna(item.get(chave)) is None:
+            return (chave, "referencia_inexistente")
+    if "regiao" in item and item.get("regiao") is not None and _regiao(item.get("regiao")) is None:
+        return ("regiao", "referencia_inexistente")
+    if "status" in item and item.get("status") not in _STATUS:
+        return ("status", _MOTIVO_CATALOGO)
+    if "leitura" in item and item.get("leitura") not in _LEITURAS:
+        return ("leitura", _MOTIVO_CATALOGO)
+    if "origem" in item and item.get("origem") not in _ORIGENS:
+        return ("origem", _MOTIVO_CATALOGO)
+    if "lacuna" in item and item.get("lacuna") is not None and item.get("lacuna") not in _LACUNAS:
+        return ("lacuna", _MOTIVO_CATALOGO)
+    if "duvidas" in item:
+        duvidas = item.get("duvidas")
+        if not isinstance(duvidas, list) or len(duvidas) > 8:
+            return ("duvidas", _MOTIVO_CATALOGO)
+        if any(codigo not in _PERGUNTAS for codigo in duvidas):
+            return ("duvidas", _MOTIVO_CATALOGO)
+    if set(item) != _CHAVES_SUGESTAO_RASCUNHO:
+        return ("item", _MOTIVO_CATALOGO)
+    return None
+
+
+def _falha_descoberta(item):
+    if not isinstance(item, dict) or set(item) - _CHAVES_DESCOBERTA_RASCUNHO:
+        return None
+    if "codigo" in item and item.get("codigo") not in _DESCOBERTAS:
+        return ("codigo", _MOTIVO_CATALOGO)
+    if "regiao" in item and item.get("regiao") is not None and _regiao(item.get("regiao")) is None:
+        return ("regiao", "referencia_inexistente")
+    if "relacao" in item and item.get("relacao") is not None:
+        relacao = item.get("relacao")
+        if isinstance(relacao, bool) or not isinstance(relacao, int) or relacao < 0:
+            return ("relacao", "referencia_inexistente")
+    if set(item) != _CHAVES_DESCOBERTA_RASCUNHO:
+        return ("item", _MOTIVO_CATALOGO)
+    return None
+
+
+def _diagnostico(lista, posicao, campo, motivo):
+    if lista not in _LISTAS_DESCARTE or campo not in _CAMPOS_DESCARTE[lista] or motivo not in _MOTIVOS_DESCARTE:
+        return None
+    if isinstance(posicao, bool) or not isinstance(posicao, int) or not 0 <= posicao <= _POSICAO_MAXIMA:
+        return None
+    if campo == "limite" and (motivo != _MOTIVO_CATALOGO or posicao < _TETO_LISTA[lista]):
+        return None
+    return {"lista": lista, "posicao": int(posicao), "campo": campo, "motivo": motivo}
+
+
+def _minimizar_descartes(valor):
+    if not isinstance(valor, list) or not valor or len(valor) > _TETO_DESCARTES:
+        return None
+    saida = []
+    for item in valor:
+        if not isinstance(item, dict) or set(item) != _CHAVES_DESCARTE:
+            return None
+        diagnostico = _diagnostico(item.get("lista"), item.get("posicao"), item.get("campo"), item.get("motivo"))
+        if diagnostico is None:
+            return None
+        saida.append(diagnostico)
+    return saida
+
+
+def _codigo_de_descartes(descartes) -> str | None:
+    for item in descartes:
+        if item.get("motivo") in _CHECKPOINT:
+            return item["motivo"]
+    return None
+
+
+def _vazia_recuperavel(proposta, descartes) -> bool:
+    return (
+        isinstance(proposta, dict)
+        and proposta.get("descobertas") == []
+        and proposta.get("sugestoes") == []
+        and bool(descartes)
+    )
+
+
+def _chaves_envelope(documento: dict) -> frozenset:
+    if isinstance(documento, dict) and "descartes" in documento:
+        return _CHAVES_TECNICAS | {"descartes"}
+    return _CHAVES_TECNICAS
+
+
+def _corpo_assinado(documento: dict) -> dict:
+    return {
+        chave: documento[chave]
+        for chave in _chaves_envelope(documento)
+        if chave != "hash" and chave in documento
+    }
 
 
 def _mensagem(payload, contexto_analise, documento_pai) -> str:
@@ -893,6 +1196,11 @@ def _mensagem(payload, contexto_analise, documento_pai) -> str:
             "proposta": documento_pai["proposta"],
             "verificacao": documento_pai.get("verificacao"),
         }
+        if "descartes" in documento_pai:
+            seguro = _minimizar_descartes(documento_pai.get("descartes"))
+            if seguro != documento_pai.get("descartes"):
+                raise ExecucaoErro("contexto_nao_autorizado")
+            corpo["descartes"] = seguro
     elif contexto_analise["papel"] == _PAPEL_CLAUDE and isinstance(documento_pai.get("critica"), dict):
         corpo = {
             "contexto": payload,
@@ -917,6 +1225,9 @@ def _progresso(contexto, tecnicas) -> bool:
     if _aprovado(atual):
         return True
     anteriores = propostas[:-1]
+    descartes = atual.get("descartes") or []
+    if descartes and all((item.get("descartes") or []) != descartes for item in anteriores):
+        return True
     assinatura = _assinatura(atual["proposta"])
     if any(_assinatura(item["proposta"]) == assinatura for item in anteriores):
         return False
@@ -1402,7 +1713,32 @@ def _proposta_revisavel(analise: AgenteBiAnalise, contexto_analise: dict, refere
     critica = documento_gemini.get("critica")
     if minimizar_critica(critica, contexto_analitico) != critica:
         raise ExecucaoErro("contexto_nao_autorizado")
-    return proposta, critica
+    execucao = AgenteBiExecucao.query.filter_by(analise_id=int(claude.id)).one_or_none()
+    if execucao is None:
+        raise ExecucaoErro("identidade_inconsistente")
+    revalidar_contrato_tecnico(
+        claude,
+        {
+            "execucao_id": int(execucao.id),
+            "analise_id": int(claude.id),
+            "dataset_id": int(claude.dataset_id),
+            "usuario_id": int(claude.usuario_id),
+            "conta_id": int(claude.conta_id),
+            "franquia_id": int(claude.franquia_id),
+        },
+        documento_claude,
+    )
+    return proposta, critica, _verificacao_anterior(documento_claude)
+
+
+def _verificacao_anterior(documento: dict) -> dict:
+    verificacao = documento.get("verificacao")
+    if not isinstance(verificacao, dict):
+        raise ExecucaoErro("identidade_inconsistente")
+    saida = {"aprovado": verificacao.get("aprovado"), "codigo": verificacao.get("codigo")}
+    if "descartes" in documento:
+        saida["descartes"] = documento["descartes"]
+    return saida
 
 
 def _vinculo(analise: AgenteBiAnalise) -> str:
@@ -1460,7 +1796,9 @@ def _citar(proposta, critica) -> list:
 
 
 def _aprovado(documento: dict) -> bool:
-    verificacao = documento.get("verificacao") if isinstance(documento, dict) else None
+    if not isinstance(documento, dict) or documento.get("descartes"):
+        return False
+    verificacao = documento.get("verificacao")
     return isinstance(verificacao, dict) and verificacao.get("aprovado") is True and verificacao.get("codigo") is None
 
 
