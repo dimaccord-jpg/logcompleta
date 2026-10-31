@@ -793,7 +793,14 @@
     return FASES_COLABORACAO[fase] || "";
   }
 
+  var RECUPERACAO_OBSOLETA = "A análise anterior não pode mais ser recuperada. Envie os dados para começar uma nova análise.";
+
+  function reiniciado() {
+    return document.documentElement.getAttribute("data-agente-bi-reiniciado") === "1";
+  }
+
   function guardarPedido(pedido, fase) {
+    if (reiniciado()) return;
     try {
       localStorage.setItem("agente-bi-colaboracao", JSON.stringify({
         datasetId: estado.datasetId,
@@ -842,7 +849,18 @@
     return "A colaboração foi encerrada sem uma nova descoberta aprovada.";
   }
 
-  function pedirColaboracao(pedido, fase, colaborando) {
+  function abandonarRecuperacao() {
+    esquecerPedido();
+    estado.datasetId = null;
+    esconderResultado();
+    mostrarFormulario(false);
+    liberar();
+    mostrarErro(RECUPERACAO_OBSOLETA);
+    anunciar(RECUPERACAO_OBSOLETA);
+    avisarJornada("upload");
+  }
+
+  function pedirColaboracao(pedido, fase, colaborando, recuperando) {
     guardarPedido(pedido, fase);
     ocupar(colaborando ? (textoColaboracao(fase) || "Claude está analisando os dados.") : "Examinando descobertas…");
     if (colaborando && fase && fase !== "claude_analisando") mostrarAndamento(fase);
@@ -852,6 +870,7 @@
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ dataset_id: estado.datasetId, pedido: pedido })
     }).then(function (resposta) {
+      if (reiniciado()) return;
       var corpo = resposta.corpo || {};
       var colaboracao = corpo.colaboracao;
       if (corpo.ok === true && corpo.resultado) {
@@ -868,11 +887,12 @@
       }
       if (corpo.ok === true && colaboracao && colaboracao.continuar === true) {
         mostrarAndamento(colaboracao.fase);
-        pedirColaboracao(pedido, colaboracao.fase, true);
+        pedirColaboracao(pedido, colaboracao.fase, true, recuperando);
         return;
       }
       if (corpo.ok === true && colaboracao) {
-        guardarPedido(pedido, colaboracao.fase || fase);
+        if (colaboracao.estado === "encerrada" || colaboracao.estado === "recusada") esquecerPedido();
+        else guardarPedido(pedido, colaboracao.fase || fase);
         var parado = textoColaboracao(colaboracao.fase) || textoParada(colaboracao);
         if (resultadoPainel) resultadoPainel.hidden = false;
         limpar(descobertas);
@@ -885,11 +905,16 @@
         liberar();
         return;
       }
+      if (recuperando && resposta.status === 404 && corpo.codigo === "nao_encontrado") {
+        abandonarRecuperacao();
+        return;
+      }
       liberar();
       mostrarErro(mensagemErro(corpo, "A descoberta não foi concluída."));
       anunciar("A descoberta não foi concluída.");
       avisarJornada("analise");
     }).catch(function () {
+      if (reiniciado()) return;
       liberar();
       mostrarErro("Não foi possível concluir esta etapa. Tente novamente.");
       anunciar("A descoberta não foi concluída.");
@@ -915,7 +940,7 @@
     if (!guardado) return;
     estado.datasetId = guardado.datasetId;
     revelarDescoberta();
-    pedirColaboracao(guardado.pedido, guardado.fase || "claude_analisando", true);
+    pedirColaboracao(guardado.pedido, guardado.fase || "claude_analisando", true, true);
   }
 
   function aprovarSelecao() {

@@ -93,6 +93,11 @@
         if (resultado.status >= 200 && resultado.status < 300 && resultado.corpo && resultado.corpo.ok === true) {
           document.documentElement.setAttribute("data-agente-bi-reiniciado", "1");
           botao.hidden = true;
+          try {
+            localStorage.removeItem("agente-bi-colaboracao");
+          } catch (falha) {
+            // Sem armazenamento local não há colaboração a invalidar.
+          }
           window.location.reload();
           return;
         }
