@@ -613,6 +613,29 @@
   color: var(--af-text-secondary);
 }
 
+.agente-bi-diagnosticos {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.75rem 0 0;
+}
+
+.agente-bi-diagnostico {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--af-border-strong);
+  border-radius: var(--af-radius-md);
+  overflow-wrap: anywhere;
+}
+
+.agente-bi-diagnostico h4,
+.agente-bi-diagnostico p {
+  margin: 0 0 0.35rem;
+}
+
+.agente-bi-diagnostico button {
+  margin-top: 0.35rem;
+}
+
 .agente-bi-sugestoes {
   display: grid;
   grid-template-columns: 1fr;
@@ -707,7 +730,8 @@
 
 @media (max-width: 767.98px) {
   .agente-bi-preparacao-lista,
-  .agente-bi-sugestoes {
+  .agente-bi-sugestoes,
+  .agente-bi-diagnosticos {
     grid-template-columns: 1fr;
   }
 
@@ -716,7 +740,8 @@
   .agente-bi-examinar,
   .agente-bi-aprovar,
   .agente-bi-secundario,
-  .agente-bi-login {
+  .agente-bi-login,
+  .agente-bi-diagnostico button {
     width: 100%;
     margin-right: 0;
   }

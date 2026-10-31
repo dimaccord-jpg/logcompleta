@@ -657,6 +657,7 @@ def _coluna(linhas: list, posicao: int, coluna_planilha: int) -> dict:
     fracionados = False
     com_hora = False
     identidades = {}
+    linhas_ausentes = []
     for registro in linhas:
         valores = registro["valores"]
         celula = valores[posicao] if posicao < len(valores) else {"tipo": "ausente"}
@@ -665,11 +666,13 @@ def _coluna(linhas: list, posicao: int, coluna_planilha: int) -> dict:
         efetivo = _tipo_efetivo(celula)
         if efetivo == "ausente":
             ausentes += 1
+            _anotar_linha_ausente(registro, linhas_ausentes)
             continue
         if efetivo not in tipos:
             tipos.append(efetivo)
         if not _tem_valor(celula):
             ausentes += 1
+            _anotar_linha_ausente(registro, linhas_ausentes)
             continue
         presentes += 1
         com_valor += 1
@@ -691,6 +694,7 @@ def _coluna(linhas: list, posicao: int, coluna_planilha: int) -> dict:
         "ausentes": ausentes,
         "com_valor": com_valor,
         "distintos": len(identidades),
+        "linhas_ausentes": linhas_ausentes,
         "inteiros": inteiros and presentes > 0 and tipos == ["numero"],
         "fracionados": fracionados,
         "com_hora": com_hora,
@@ -763,6 +767,7 @@ def _hipotese_coluna(arquivo, aba, regiao, posicao, item: dict, codigos: list, *
         "presentes": item["presentes"],
         "ausentes": item["ausentes"],
         "distintos": item["distintos"],
+        "linhas_ausentes": list(item["linhas_ausentes"]),
         "dominio_inconsistente": len(tipos) > 1 or "data_ambigua" in codigos or "numero_ambiguo" in codigos,
         "completude": {"com_valor": item["com_valor"], "linhas": item["linhas"], "ausentes": item["ausentes"]},
         "_identidades": item["identidades"],
@@ -1562,6 +1567,14 @@ def _tipo_efetivo(celula: dict) -> str:
     if tipo in _TIPOS:
         return tipo
     return "desconhecido"
+
+
+def _anotar_linha_ausente(registro: dict, destino: list) -> None:
+    """Guarda a linha já publicada no registro. Sem linha inteira, não inventa coordenada."""
+    linha = registro.get("linha")
+    if isinstance(linha, bool) or not isinstance(linha, int) or linha < 0 or linha > 1_000_000:
+        return
+    destino.append(linha)
 
 
 def _tem_valor(celula: dict) -> bool:

@@ -1085,3 +1085,103 @@ def test_descoberta_foca_o_titulo_visivel(monkeypatch):
         assert page.evaluate("() => document.activeElement.id") == "agente-bi-resultado-titulo"
         assert page.evaluate("() => document.activeElement.id") != "agente-bi-examinar"
         browser.close()
+
+
+def test_diagnostico_aparece_na_etapa_certa_e_a_navegacao_nao_repete_chamada(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    preparacao = _preparacao()
+    preparacao["diagnosticos"] = [
+        {
+            "codigo": "cabecalho_ambiguo",
+            "mensagem": "Fato: o cabeçalho está ambíguo em região 0, aba 0, arquivo 0. Revise os títulos das colunas nessa aba e região.",
+            "local": {"arquivo": 0, "aba": 0, "regiao": 0},
+            "acao": "revisar_titulos",
+            "continuidade_independente": True,
+        }
+    ]
+    descoberta = _descoberta([_sugestao(1), _sugestao(2, status="condicional")])
+    descoberta["diagnosticos"] = [
+        {
+            "codigo": "dados_incompletos",
+            "mensagem": "Fato: a análise registrou dados incompletos. Não há coluna, linha ou região comprovada para este achado.",
+            "acao": "completar_valores",
+            "continuidade_independente": True,
+        }
+    ]
+    documento = _browser_document(_html(monkeypatch))
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        for largura in (1280, 390):
+            page = browser.new_page(viewport={"width": largura, "height": 900})
+            page.set_content(documento, wait_until="domcontentloaded")
+            _instalar(page)
+            page.evaluate("(corpo) => { window.__preparacao = corpo; }", preparacao)
+            page.evaluate("(corpo) => { window.__descoberta = corpo; }", descoberta)
+            _scripts(page, "descoberta", "dashboard")
+            page.locator("#agente-bi-arquivo").set_input_files(
+                files=[{"name": "fretes.csv", "mimeType": "text/csv", "buffer": b"alfa,valor\nA,10\n"}]
+            )
+            page.wait_for_function("() => document.getElementById('agente-bi-shell').getAttribute('data-jornada-fase') === 'preparados'")
+            preparados = page.locator("#agente-bi-diagnosticos-preparados")
+            assert "Revise os títulos das colunas" in preparados.inner_text()
+            assert page.locator("#agente-bi-diagnosticos-descobertas").is_hidden()
+            posts = _posts(page, "/descoberta")
+            page.locator("#agente-bi-jornada-avancar").click()
+            assert page.locator("#agente-bi-shell").get_attribute("data-jornada-fase") == "analise"
+            assert preparados.is_hidden()
+            assert _posts(page, "/descoberta") == posts
+            page.locator("#agente-bi-jornada-voltar").click()
+            assert "Revise os títulos das colunas" in preparados.inner_text()
+            assert _posts(page, "/descoberta") == posts
+            page.locator("#agente-bi-prosseguir").click()
+            page.evaluate(
+                """() => {
+                  window.__descoberta = {
+                    ok: false,
+                    codigo: "limite_estrutural_excedido",
+                    diagnostico: {
+                      codigo: "limite_estrutural_excedido",
+                      mensagem: "Fato: foram identificadas 20001 colunas. O limite aplicável é 20000. Impacto: a análise guiada não pode transferir essa lista. Isso não é uma falha genérica de autorização."
+                    }
+                  };
+                }"""
+            )
+            page.locator("#agente-bi-examinar").click()
+            varLimite = page.locator("#agente-bi-descoberta-erro").inner_text()
+            assert "20001" in varLimite
+            assert "20000" in varLimite
+            assert "não é uma falha genérica de autorização" in varLimite
+            assert "não autoriza" not in varLimite
+            page.evaluate(
+                """() => {
+                  window.__descoberta = {
+                    ok: false,
+                    codigo: "falha_sem_causa_conhecida",
+                    diagnostico: { mensagem: "causa inventada que nao deve aparecer" }
+                  };
+                }"""
+            )
+            page.locator("#agente-bi-examinar").click()
+            erro = page.locator("#agente-bi-descoberta-erro").inner_text()
+            assert "Identificador técnico: falha_sem_causa_conhecida" in erro
+            assert "causa inventada" not in erro
+            assert "não autoriza" not in erro
+            page.evaluate("(corpo) => { window.__descoberta = corpo; }", descoberta)
+            page.locator("#agente-bi-examinar").click()
+            page.wait_for_function("() => document.getElementById('agente-bi-shell').getAttribute('data-jornada-fase') === 'descobertas'")
+            descobertas = page.locator("#agente-bi-diagnosticos-descobertas")
+            assert descobertas.is_visible()
+            assert "Não há coluna, linha ou região comprovada" in descobertas.inner_text()
+            assert preparados.is_hidden()
+            depois = _posts(page, "/descoberta")
+            page.locator("#agente-bi-jornada-voltar").click()
+            page.locator("#agente-bi-jornada-voltar").click()
+            assert page.locator("#agente-bi-shell").get_attribute("data-jornada-fase") == "preparados"
+            assert "Revise os títulos das colunas" in preparados.inner_text()
+            assert _posts(page, "/descoberta") == depois
+            caixa = page.locator("#agente-bi-shell").bounding_box()
+            assert caixa["width"] <= largura
+            page.close()
+        browser.close()

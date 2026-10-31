@@ -67,6 +67,7 @@ from app.services.agente_bi_perfil_semantico_service import (
     perfilar_dataset,
 )
 from app.services.agente_bi_persistencia_service import (
+    MAX_LISTA,
     AgenteBiErro,
     EscopoAgenteBi,
     criar_analise,
@@ -118,8 +119,9 @@ _CHAVES_CONTEUDO = frozenset(
     }
 )
 class IntegracaoErro(Exception):
-    def __init__(self, codigo: str):
+    def __init__(self, codigo: str, detalhes: dict | None = None):
         self.codigo = codigo
+        self.detalhes = detalhes
         super().__init__(codigo)
 
 
@@ -558,7 +560,16 @@ def _estrutura_fechada(payload: dict) -> None:
     _recusar_sujo(payload)
 
 
-def _recusar_sujo(valor, profundidade: int = 0) -> None:
+_LIMITE_LISTA = 64
+
+
+def _recusar_sujo(valor, profundidade: int = 0, *, chave: str | None = None) -> None:
+    """Recusa conteúdo fora do contrato. A lista de colunas usa o teto já persistido.
+
+    As demais listas permanecem em 64 itens. Elementos, referências e chaves
+    sensíveis continuam verificados. Acima de `MAX_LISTA`, a coluna não é
+    truncada: o impedimento registra a quantidade e o limite aplicável.
+    """
     if profundidade > 8:
         raise IntegracaoErro("contexto_nao_autorizado")
     if valor is None or isinstance(valor, bool):
@@ -576,7 +587,18 @@ def _recusar_sujo(valor, profundidade: int = 0) -> None:
             raise IntegracaoErro("contexto_nao_autorizado")
         return
     if isinstance(valor, list):
-        if len(valor) > 64:
+        estrutural = chave == "colunas" and profundidade == 1
+        teto = MAX_LISTA if estrutural else _LIMITE_LISTA
+        if len(valor) > teto:
+            if estrutural:
+                raise IntegracaoErro(
+                    "limite_estrutural_excedido",
+                    detalhes={
+                        "quantidade": len(valor),
+                        "limite": teto,
+                        "impacto": "transferencia_bloqueada",
+                    },
+                )
             raise IntegracaoErro("contexto_nao_autorizado")
         for item in valor:
             _recusar_sujo(item, profundidade + 1)
@@ -584,10 +606,10 @@ def _recusar_sujo(valor, profundidade: int = 0) -> None:
     if isinstance(valor, dict):
         if len(valor) > 32:
             raise IntegracaoErro("contexto_nao_autorizado")
-        for chave, item in valor.items():
-            if not isinstance(chave, str) or chave in _CHAVES_CONTEUDO:
+        for nome, item in valor.items():
+            if not isinstance(nome, str) or nome in _CHAVES_CONTEUDO:
                 raise IntegracaoErro("contexto_nao_autorizado")
-            _recusar_sujo(item, profundidade + 1)
+            _recusar_sujo(item, profundidade + 1, chave=nome if profundidade == 0 else None)
         return
     raise IntegracaoErro("contexto_nao_autorizado")
 

@@ -75,6 +75,11 @@ def _erro_descoberta(exc):
         and all(isinstance(item, str) and _CODIGO_PUBLICO_ERRO.fullmatch(item) for item in evidencias)
     ):
         corpo["verificacoes"] = list(evidencias)
+    from app.services.agente_bi_descoberta_service import diagnostico_publico
+
+    diagnostico = diagnostico_publico(getattr(exc, "diagnostico", None))
+    if diagnostico is not None:
+        corpo["diagnostico"] = diagnostico
     return jsonify(corpo), exc.status
 
 

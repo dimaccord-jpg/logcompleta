@@ -25,6 +25,8 @@
   var criticas = document.getElementById("agente-bi-criticas");
   var instrucao = document.getElementById("agente-bi-instrucao");
   var perguntas = document.getElementById("agente-bi-perguntas");
+  var diagnosticosPreparados = document.getElementById("agente-bi-diagnosticos-preparados");
+  var diagnosticosDescobertas = document.getElementById("agente-bi-diagnosticos-descobertas");
   var selecaoGraficos = document.getElementById("agente-bi-selecao-graficos");
   var contagem = document.getElementById("agente-bi-selecao-contagem");
   var confirmacao = document.getElementById("agente-bi-confirmacao");
@@ -105,6 +107,7 @@
     selecao_invalida: "A seleção não foi aceita.",
     provedor_indisponivel: "A descoberta não pôde ser concluída.",
     contexto_nao_autorizado: "O contexto desta versão não autoriza a descoberta.",
+    limite_estrutural_excedido: "A quantidade de colunas passou do limite estrutural aplicável.",
     intencao_nao_transportada: "A intenção não pôde ser enviada. Reformule o pedido.",
     operacao_em_andamento: "A descoberta ainda está em processamento. Envie de novo para recuperar a mesma operação.",
     efeito_incerto: "A descoberta não foi confirmada. Envie de novo para recuperar a mesma operação."
@@ -170,9 +173,40 @@
     erro.textContent = "";
   }
 
+  function codigoControlado(codigo) {
+    if (typeof codigo !== "string" || !codigo || codigo.length > 40) return false;
+    var i;
+    for (i = 0; i < codigo.length; i += 1) {
+      var caractere = codigo.charAt(i);
+      var letra = caractere >= "a" && caractere <= "z";
+      var digito = caractere >= "0" && caractere <= "9";
+      if (!letra && !digito && caractere !== "_") return false;
+    }
+    return true;
+  }
+
+  function mensagemConfiavel(texto) {
+    if (typeof texto !== "string" || !texto || texto.length > 400) return false;
+    var i;
+    for (i = 0; i < texto.length; i += 1) {
+      if (texto.charCodeAt(i) < 32) return false;
+    }
+    return true;
+  }
+
   function mensagemErro(corpo, reserva) {
     var codigo = corpo && corpo.codigo;
+    var diagnostico = corpo && corpo.diagnostico;
+    if (
+      codigo === "limite_estrutural_excedido"
+      && diagnostico
+      && diagnostico.codigo === codigo
+      && mensagemConfiavel(diagnostico.mensagem)
+    ) {
+      return diagnostico.mensagem;
+    }
     if (codigo && ERROS[codigo]) return ERROS[codigo];
+    if (codigoControlado(codigo)) return "Não foi possível concluir. Identificador técnico: " + codigo + ".";
     return reserva;
   }
 
@@ -249,6 +283,64 @@
     return codigos.map(legivel).join(", ");
   }
 
+  function textoOnde(item) {
+    var partes = [];
+    var local = item && item.local;
+    if (local) {
+      if (local.coluna != null) partes.push("coluna " + local.coluna);
+      if (local.regiao != null) partes.push("região " + local.regiao);
+      if (local.aba != null) partes.push("aba " + local.aba);
+      if (local.arquivo != null) partes.push("arquivo " + local.arquivo);
+      if (local.linha != null) partes.push("linha " + local.linha);
+    }
+    if (item && item.intervalo) partes.push("linhas " + item.intervalo.inicio + " a " + item.intervalo.fim);
+    if (item && Array.isArray(item.linhas) && item.linhas.length) {
+      var mostradas = item.linhas.slice(0, 8).join(", ");
+      partes.push(item.linhas.length > 8 ? item.linhas.length + " linhas comprovadas" : "linhas " + mostradas);
+    }
+    if (item && Array.isArray(item.regioes)) {
+      item.regioes.forEach(function (regiao) {
+        partes.push("região " + regiao.regiao + ", aba " + regiao.aba + ", arquivo " + regiao.arquivo);
+      });
+    }
+    return partes.join("; ");
+  }
+
+  function renderDiagnosticos(destino, itens, etapa) {
+    limpar(destino);
+    if (!destino) return;
+    var titulo = etapa === "preparados" ? "Qualidade e problemas detectados" : "Problemas identificados na análise";
+    destino.appendChild(el("h4", null, titulo));
+    if (!itens || !itens.length) {
+      destino.appendChild(el("p", null, etapa === "preparados"
+        ? "Nenhum problema estrutural foi comprovado nesta preparação."
+        : "Nenhum problema adicional foi comprovado nesta análise."));
+      return;
+    }
+    itens.forEach(function (item) {
+      var card = el("article", { class: "agente-bi-diagnostico" });
+      if (item && item.codigo) card.setAttribute("data-codigo", item.codigo);
+      card.setAttribute("data-etapa", etapa);
+      var texto = item && mensagemConfiavel(item.mensagem) ? item.mensagem : (item && ERROS[item.codigo]) || (item && codigoControlado(item.codigo) ? "Identificador técnico: " + item.codigo + "." : "Não foi possível descrever este achado.");
+      card.appendChild(el("h4", null, texto));
+      var onde = textoOnde(item);
+      if (onde) card.appendChild(el("p", null, "Onde: " + onde + "."));
+      if (item && item.acao === "nenhuma") {
+        card.appendChild(el("p", null, "Nenhuma ação é necessária."));
+      } else if (item && (item.acao === "completar_valores" || item.acao === "revisar_titulos" || item.acao === "revisar_regiao" || item.acao === "reduzir_estrutura" || item.acao === "informar_dado")) {
+        card.appendChild(el("p", null, "Corrija na planilha de origem e envie uma nova versão."));
+      }
+      if (item && item.continuidade_independente === true && item.acao !== "nenhuma") {
+        var seguir = el("button", { type: "button", class: "agente-bi-secundario" }, "Continuar com as análises independentes");
+        seguir.addEventListener("click", function () {
+          avisarJornada(etapa === "preparados" ? "analise" : "selecao");
+        });
+        card.appendChild(seguir);
+      }
+      destino.appendChild(card);
+    });
+  }
+
   function mostrarPreparacao(corpo) {
     estado.datasetId = corpo.dataset && corpo.dataset.id;
     var resumo = corpo.resumo || {};
@@ -271,6 +363,7 @@
       if (qualidade[chave]) pares.push([legivel(chave), String(qualidade[chave])]);
     });
     definirLista(pares);
+    renderDiagnosticos(diagnosticosPreparados, corpo.diagnosticos || [], "preparados");
     revelarDescoberta();
     if (corpo.estado !== "preparado") {
       if (modalidades) modalidades.disabled = true;
@@ -323,6 +416,7 @@
     limpar(selecaoGraficos);
     limpar(criticas);
     limpar(perguntas);
+    limpar(diagnosticosDescobertas);
     if (instrucao) {
       instrucao.hidden = true;
       instrucao.textContent = "";
@@ -561,6 +655,7 @@
     estado.analiseId = corpo.analise_id;
     estado.aprovado = false;
     if (confirmacao) confirmacao.checked = false;
+    renderDiagnosticos(diagnosticosDescobertas, corpo.diagnosticos || [], "descobertas");
     renderDescobertas(resultado.descobertas || []);
     renderSugestoes(resultado.sugestoes || []);
     renderCriticas(resultado.critica_referencia || []);

@@ -177,10 +177,11 @@ _CODIGO_RECUPERACAO_PRE_CHAMADA = "recuperacao_pre_chamada"
 
 
 class ColaboracaoErro(Exception):
-    def __init__(self, codigo: str, status: int = 422, evidencias: list | None = None):
+    def __init__(self, codigo: str, status: int = 422, evidencias: list | None = None, diagnostico: dict | None = None):
         self.codigo = codigo
         self.status = status
         self.evidencias = list(evidencias) if evidencias else None
+        self.diagnostico = diagnostico
         super().__init__(codigo)
 
 
@@ -210,7 +211,15 @@ def executar_descoberta(
 
         estrutura = obter_dataset(escopo, dataset_id).get("estrutura")
         liberacao = autorizar_transferencia(perfil, contexto, estrutura=estrutura)
-    except (IntegracaoErro, AnalisarErro, PerfilErro, AgenteBiErro) as exc:
+    except IntegracaoErro as exc:
+        from app.services.agente_bi_descoberta_service import diagnostico_de_integracao
+
+        raise ColaboracaoErro(
+            _codigo(exc.codigo),
+            _status(exc.codigo),
+            diagnostico=diagnostico_de_integracao(exc),
+        ) from exc
+    except (AnalisarErro, PerfilErro, AgenteBiErro) as exc:
         raise ColaboracaoErro(_codigo(getattr(exc, "codigo", "")), _status(getattr(exc, "codigo", ""))) from exc
     if intencao_c_removida(pedido_ok, liberacao):
         raise ColaboracaoErro("intencao_nao_transportada", 422, evidencias=["intencao_nao_transportada"])
