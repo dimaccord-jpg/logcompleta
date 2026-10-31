@@ -144,7 +144,10 @@ def resumir_preparacao(escopo, bruto: dict) -> dict:
         "colunas": colunas,
         "regioes": regioes,
         "qualidade": qualidade,
-        "diagnosticos": diagnosticar_perfil(perfil if persistido else {}, preparacao.get("metadados_preparacao")),
+        "diagnosticos": diagnosticar_preparacao(perfil if persistido else {}, preparacao.get("metadados_preparacao")),
+        "achados": achados_estruturais(
+            perfil if persistido else {}, preparacao.get("metadados_preparacao"), estrutura
+        ),
     }
     protecao = _protecao_publica(preparacao.get("metadados_preparacao"))
     if protecao is not None:
@@ -910,6 +913,7 @@ _FATOS = frozenset(
         "dado_necessario",
         "quantidade_acima_do_limite",
         "sugestao_nao_executavel",
+        "sugestao_descartada",
     }
 )
 _HIPOTESES = frozenset(
@@ -928,8 +932,45 @@ _IMPACTOS = frozenset(
         "transferencia_bloqueada",
         "dado_necessario",
         "sugestao_condicional",
+        "cobertura_parcial",
+        "avaliacao_pendente",
+        "sem_impacto_comprovado",
     }
 )
+# Achado registrado sem pedido de intervenção: antes da intenção ou sem
+# indicador desta análise que dependa dele.
+_IMPACTOS_INFORMATIVOS = frozenset({"avaliacao_pendente", "sem_impacto_comprovado"})
+_ACHADOS_ESTRUTURAIS = frozenset(
+    {
+        "cabecalho_ambiguo",
+        "divisao_lateral_ambigua",
+        "coluna_parcialmente_vazia",
+        "dominio_inconsistente",
+        "formula_sem_cache",
+        "dados_incompletos",
+        "relacao_candidata_nao_confirmada",
+    }
+)
+# Motivo de descarte da colaboração, como o usuário lê. Lista fechada: o
+# aviso não carrega posição de célula nem valor da proposta.
+_TEXTO_MOTIVO = {
+    "evidencia_ausente": "evidência ausente",
+    "referencia_inexistente": "referência inexistente",
+    "juncao_nao_confirmada": "junção não confirmada",
+    "metrica_inventada": "métrica fora do catálogo",
+    "grafico_incompativel": "gráfico incompatível",
+    "operacao_incompativel": "operação incompatível",
+    "valor_fora_do_catalogo": "valor fora do catálogo",
+    "viabilidade_nao_comprovada": "a região não cumpre as condições de uma sugestão viável",
+}
+# Pergunta do analisar.v1 que liga uma sugestão ao achado da mesma região.
+_PERGUNTAS_DO_ACHADO = {
+    "cabecalho_ambiguo": frozenset({"confirmar_rotulos"}),
+    "divisao_lateral_ambigua": frozenset({"resolver_divisao_lateral"}),
+    "formula_sem_cache": frozenset({"resolver_formula_sem_cache"}),
+    "dominio_inconsistente": frozenset({"resolver_tipo_misto"}),
+    "dados_incompletos": frozenset({"informar_dados_ausentes"}),
+}
 _ACOES = frozenset(
     {
         "revisar_titulos",
@@ -1076,7 +1117,7 @@ def _texto_linhas(linhas, intervalo) -> str:
 
 
 def _montar(base: dict) -> dict | None:
-    codigo = _codigo_em(base.get("codigo"), _FATOS | _LACUNAS | frozenset({"limite_estrutural_excedido", "dados_pessoais_protegidos", "coluna_parcialmente_vazia", "relacao_candidata_nao_confirmada"}))
+    codigo = _codigo_em(base.get("codigo"), _FATOS | _LACUNAS | frozenset({"limite_estrutural_excedido", "dados_pessoais_protegidos", "coluna_parcialmente_vazia", "relacao_candidata_nao_confirmada", "cobertura_parcial", "proposta_descartada"}))
     categoria = _codigo_em(base.get("categoria"), _CATEGORIAS_DIAGNOSTICO)
     impacto = _codigo_em(base.get("impacto"), _IMPACTOS)
     acao = _codigo_em(base.get("acao"), _ACOES)
@@ -1114,7 +1155,12 @@ def _montar(base: dict) -> dict | None:
         if not limpo:
             return None
         saida["local"] = limpo
-    for chave in ("quantidade", "limite"):
+    motivos = base.get("motivos")
+    if motivos is not None:
+        if not isinstance(motivos, list) or not motivos or any(motivo not in _TEXTO_MOTIVO for motivo in motivos):
+            return None
+        saida["motivos"] = list(motivos)
+    for chave in ("quantidade", "limite", "consolidados", "consolidados_ausentes", "consolidados_dominio"):
         if chave not in base:
             continue
         numero = _inteiro_diagnostico(base[chave])
@@ -1178,12 +1224,60 @@ def _montar(base: dict) -> dict | None:
     if mensagem is None:
         return None
     saida["mensagem"] = mensagem
+    saida["nivel"] = _nivel(saida)
     return saida
+
+
+def _nivel(item: dict) -> str:
+    """Informação, esclarecimento, correção necessária ou bloqueio."""
+    if item["impacto"] in _IMPACTOS_INFORMATIVOS:
+        return "informacao"
+    if item["categoria"] == "confirmacao":
+        return "esclarecimento"
+    if item["acao"] == "nenhuma":
+        return "informacao"
+    if item["continuidade_independente"]:
+        return "correcao"
+    return "bloqueio"
+
+
+def _mensagem_informativa(item: dict) -> str | None:
+    codigo = item["codigo"]
+    local = _texto_local(item.get("local"))
+    if codigo == "relacao_candidata_nao_confirmada":
+        regioes = item.get("regioes") or []
+        if len(regioes) >= 2:
+            fato = f"há uma relação candidata entre {_texto_local(regioes[0])} e {_texto_local(regioes[1])}. A junção não foi executada"
+        else:
+            fato = "há uma relação candidata. A junção não foi executada"
+    else:
+        quantidade = item.get("quantidade")
+        fato = {
+            "cabecalho_ambiguo": "o cabeçalho está ambíguo",
+            "divisao_lateral_ambigua": "a divisão da planilha está ambígua",
+            "coluna_parcialmente_vazia": "há 1 valor ausente" if quantidade == 1 else f"há {quantidade} valores ausentes",
+            "dominio_inconsistente": "a coluna mistura tipos de valor",
+            "formula_sem_cache": "há fórmula sem valor em cache",
+            "dados_incompletos": "a análise registrou dados incompletos",
+        }[codigo]
+        if local:
+            fato = f"{fato} em {local}"
+        elif codigo == "dados_incompletos":
+            fato = f"{fato}. Não há coluna, linha ou região comprovada para este achado"
+    if item["impacto"] == "avaliacao_pendente":
+        efeito = "O impacto será avaliado quando houver um pedido de análise. Nenhuma ação é necessária agora."
+    else:
+        efeito = "Nenhum indicador desta análise depende desse achado. Nenhuma ação é necessária agora."
+    return f"Fato: {fato}. {efeito}"
 
 
 def _mensagem(item: dict) -> str | None:
     codigo = item["codigo"]
     local = _texto_local(item.get("local"))
+    if item["impacto"] in _IMPACTOS_INFORMATIVOS:
+        if codigo not in _ACHADOS_ESTRUTURAIS:
+            return None
+        return _limitar(_mensagem_informativa(item))
     continuidade = (
         "As análises que não dependem desta informação podem continuar."
         if item["continuidade_independente"]
@@ -1253,10 +1347,38 @@ def _mensagem(item: dict) -> str | None:
         )
     elif codigo == "formula_sem_cache":
         onde = f" em {local}" if local else ""
+        consolidados = item.get("consolidados")
+        derivados = ""
+        if consolidados:
+            # Só cita o tipo contado. Sem a contagem por tipo, não nomeia nenhum.
+            tipos = []
+            if item.get("consolidados_ausentes"):
+                tipos.append(f"valores ausentes em {item['consolidados_ausentes']}")
+            if item.get("consolidados_dominio"):
+                tipos.append(f"mistura de tipos em {item['consolidados_dominio']}")
+            detalhe = f" ({' e '.join(tipos)})" if tipos else ""
+            derivados = f"{consolidados} achado(s) de coluna vêm dessas fórmulas{detalhe}. "
         texto = (
-            f"Fato: há fórmula sem valor em cache{onde}. "
+            f"Fato: há fórmula sem valor em cache nos registros{onde}. "
             "Hipótese analítica: o indicador que depende dessa fórmula não pode usar um resultado ausente. "
-            f"{continuidade}"
+            f"{derivados}{continuidade}"
+        )
+    elif codigo == "cobertura_parcial":
+        quantidade = item.get("quantidade")
+        itens = "1 item da proposta foi descartado" if quantidade == 1 else f"{quantidade} itens da proposta foram descartados"
+        texto = (
+            f"Fato: esta análise cobre só parte da proposta. {itens} por não passar na validação oficial. "
+            "As sugestões apresentadas foram validadas uma a uma e em conjunto. "
+            "Nenhum item descartado virou indicador."
+        )
+    elif codigo == "proposta_descartada":
+        quantidade = item.get("quantidade")
+        itens = "1 item da proposta foi descartado" if quantidade == 1 else f"{quantidade} itens da proposta foram descartados"
+        motivos = "; ".join(_TEXTO_MOTIVO[motivo] for motivo in item.get("motivos") or [])
+        texto = (
+            f"Fato: nenhuma sugestão da proposta passou na validação oficial. {itens}. "
+            f"Motivos: {motivos}. "
+            "Nenhum indicador foi publicado."
         )
     elif codigo == "dados_incompletos":
         onde = f" em {local}" if local else " Não há coluna, linha ou região comprovada para este achado."
@@ -1294,6 +1416,10 @@ def _mensagem(item: dict) -> str | None:
         )
     else:
         return None
+    return _limitar(texto)
+
+
+def _limitar(texto) -> str | None:
     if not isinstance(texto, str) or not texto or len(texto) > _TEXTO_DIAGNOSTICO:
         return None
     if any(ord(caractere) < 32 for caractere in texto):
@@ -1301,11 +1427,175 @@ def _mensagem(item: dict) -> str | None:
     return texto
 
 
-def diagnosticar_perfil(perfil, metadados=None) -> list[dict]:
-    """Projeta evidências já perfiladas. Não classifica célula nem inventa coordenada."""
+def diagnosticar_preparacao(perfil, metadados=None) -> list[dict]:
+    """O que a etapa "Dados preparados" mostra antes da intenção.
+
+    Só proteção de dados e impedimento global comprovado: nenhuma região com
+    registro. Os demais achados seguem no perfil, na qualidade e em
+    `achados_estruturais`, sem pedido de correção.
+    """
     if not isinstance(perfil, dict):
         perfil = {}
     saida = []
+    regioes = [item for item in perfil.get("regioes") or [] if isinstance(item, dict)]
+    if regioes and all(_inteiro_diagnostico(item.get("linhas_observadas")) == 0 for item in regioes):
+        fechado = _montar(
+            {
+                "codigo": "sem_registros",
+                "categoria": "dados_adicionais",
+                "impacto": "dado_necessario",
+                "acao": "informar_dado",
+                "continuidade_independente": False,
+                "fato": "dado_necessario",
+            }
+        )
+        if fechado is not None:
+            saida.append(fechado)
+    for item in _protecoes(perfil, metadados):
+        if len(saida) >= _TETO_DIAGNOSTICOS:
+            break
+        fechado = _montar(item)
+        if fechado is not None:
+            saida.append(fechado)
+    return saida
+
+
+def achados_estruturais(perfil, metadados=None, estrutura=None) -> list[dict]:
+    """Achados do perfil como informação, com a avaliação adiada para depois do pedido."""
+    saida = []
+    for item in diagnosticar_perfil(perfil, metadados, estrutura):
+        if item["codigo"] not in _ACHADOS_ESTRUTURAIS:
+            continue
+        base = {chave: valor for chave, valor in item.items() if chave not in {"mensagem", "nivel"}}
+        base["acao"] = "nenhuma"
+        base["impacto"] = "avaliacao_pendente"
+        fechado = _montar(base)
+        if fechado is not None:
+            saida.append(fechado)
+    return saida
+
+
+def diagnostico_de_cobertura(descartes, restantes: bool = True) -> dict | None:
+    """Aviso de cobertura. Descartes já minimizados: lista, posição, campo, motivo.
+
+    Sem sugestão restante, o aviso diz que nada foi publicado e cita só os
+    códigos de motivo dos descartes.
+    """
+    if not isinstance(descartes, list) or not descartes:
+        return None
+    if restantes:
+        return _montar(
+            {
+                "codigo": "cobertura_parcial",
+                "categoria": "correcao",
+                "impacto": "cobertura_parcial",
+                "acao": "nenhuma",
+                "continuidade_independente": True,
+                "fato": "sugestao_descartada",
+                "quantidade": len(descartes),
+            }
+        )
+    motivos = []
+    for item in descartes:
+        motivo = item.get("motivo") if isinstance(item, dict) else None
+        if motivo not in _TEXTO_MOTIVO:
+            return None
+        if motivo not in motivos:
+            motivos.append(motivo)
+    return _montar(
+        {
+            "codigo": "proposta_descartada",
+            "categoria": "correcao",
+            "impacto": "cobertura_parcial",
+            "acao": "nenhuma",
+            "continuidade_independente": False,
+            "fato": "sugestao_descartada",
+            "quantidade": len(descartes),
+            "motivos": motivos,
+        }
+    )
+
+
+def _formulas_em_registros(estrutura) -> dict:
+    """Linhas de fórmula sem cache em registro elegível, por coluna da planilha."""
+    saida: dict[tuple, set] = {}
+    if not isinstance(estrutura, dict):
+        return saida
+    for regiao in estrutura.get("regioes") or []:
+        if not isinstance(regiao, dict):
+            continue
+        base = tuple(_inteiro_diagnostico(regiao.get(chave)) for chave in ("arquivo", "aba", "indice"))
+        if None in base:
+            continue
+        for formula in regiao.get("formulas_observadas") or []:
+            if not isinstance(formula, dict) or formula.get("cache_estado") == "presente":
+                continue
+            if formula.get("registro") is not True:
+                continue
+            linha = _inteiro_diagnostico(formula.get("linha"))
+            coluna = _inteiro_diagnostico(formula.get("coluna"), positivo=True)
+            if linha is None or coluna is None:
+                continue
+            saida.setdefault(base + (coluna,), set()).add(linha)
+    return saida
+
+
+def _ambiguidade_de_tipo(estrutura, coluna) -> bool:
+    """Data ou número ambíguo na coluna também mistura o domínio, sem fórmula."""
+    if not isinstance(estrutura, dict):
+        return True
+    indice = _inteiro_diagnostico(coluna.get("indice"))
+    if indice is None:
+        return True
+    for item in estrutura.get("ambiguidades") or []:
+        if not isinstance(item, dict) or item.get("codigo") not in {"data_ambigua", "numero_ambiguo"}:
+            continue
+        if (
+            item.get("arquivo") == coluna.get("arquivo")
+            and item.get("aba") == coluna.get("aba")
+            and item.get("regiao") == coluna.get("regiao")
+            and item.get("coluna") == indice + 1
+        ):
+            return True
+    return False
+
+
+def _derivado_de_formula(coluna, formulas, estrutura, codigo) -> bool:
+    """Prova que o achado da coluna vem só de fórmula sem cache em registro.
+
+    Ausência: toda linha ausente comprovada tem fórmula sem cache nessa
+    coluna. Domínio: o único tipo além do valor é `formula`, e não há data
+    ou número ambíguo na coluna. Sem prova, o achado fica separado.
+    """
+    local = _coluna_de(coluna)
+    if local is None or "coluna" not in local:
+        return False
+    linhas_formula = formulas.get((local["arquivo"], local["aba"], local["regiao"], local["coluna"]))
+    if not linhas_formula:
+        return False
+    if codigo == "coluna_parcialmente_vazia":
+        ausentes = _inteiro_diagnostico(coluna.get("ausentes"))
+        linhas = coluna.get("linhas_ausentes")
+        if ausentes is None or not isinstance(linhas, list) or len(linhas) != ausentes:
+            return False
+        return all(_inteiro_diagnostico(linha) in linhas_formula for linha in linhas)
+    tipos = coluna.get("tipos")
+    if not isinstance(tipos, list) or "formula" not in tipos:
+        return False
+    return len(set(tipos) - {"formula"}) <= 1 and not _ambiguidade_de_tipo(estrutura, coluna)
+
+
+def diagnosticar_perfil(perfil, metadados=None, estrutura=None) -> list[dict]:
+    """Projeta evidências já perfiladas. Não classifica célula nem inventa coordenada.
+
+    Com a estrutura, ausência e mistura de tipo causadas só por fórmula sem
+    cache entram no achado da fórmula, contadas em `consolidados`.
+    """
+    if not isinstance(perfil, dict):
+        perfil = {}
+    saida = []
+    formulas = _formulas_em_registros(estrutura)
+    consolidados: dict[tuple, dict[str, int]] = {}
 
     def acrescentar(item) -> None:
         if len(saida) >= _TETO_DIAGNOSTICOS:
@@ -1355,6 +1645,12 @@ def diagnosticar_perfil(perfil, metadados=None) -> list[dict]:
             continue
         presentes = _inteiro_diagnostico(coluna.get("presentes"))
         ausentes = _inteiro_diagnostico(coluna.get("ausentes"))
+        regiao_coluna = (local["arquivo"], local["aba"], local["regiao"])
+        if presentes is not None and ausentes is not None and presentes > 0 and ausentes > 0:
+            if _derivado_de_formula(coluna, formulas, estrutura, "coluna_parcialmente_vazia"):
+                contagem = consolidados.setdefault(regiao_coluna, {"ausentes": 0, "dominio": 0})
+                contagem["ausentes"] += 1
+                ausentes = None
         if presentes is not None and ausentes is not None and presentes > 0 and ausentes > 0:
             linhas, intervalo = _linhas_comprovadas(coluna)
             item = {
@@ -1375,7 +1671,10 @@ def diagnosticar_perfil(perfil, metadados=None) -> list[dict]:
             elif linhas is not None:
                 item["linhas"] = linhas
             acrescentar(item)
-        if coluna.get("dominio_inconsistente") is True:
+        if coluna.get("dominio_inconsistente") is True and _derivado_de_formula(coluna, formulas, estrutura, "dominio_inconsistente"):
+            contagem = consolidados.setdefault(regiao_coluna, {"ausentes": 0, "dominio": 0})
+            contagem["dominio"] += 1
+        elif coluna.get("dominio_inconsistente") is True:
             acrescentar(
                 {
                     "codigo": "dominio_inconsistente",
@@ -1392,9 +1691,10 @@ def diagnosticar_perfil(perfil, metadados=None) -> list[dict]:
     for regiao in qualidade.get("por_regiao") or []:
         if not isinstance(regiao, dict):
             continue
-        formulas = regiao.get("formulas_sem_cache") if isinstance(regiao.get("formulas_sem_cache"), dict) else {}
-        observadas = _inteiro_diagnostico(formulas.get("observadas"))
-        if observadas is None or observadas < 1:
+        bloco = regiao.get("formulas_sem_cache") if isinstance(regiao.get("formulas_sem_cache"), dict) else {}
+        # Fórmula de linha pré-preenchida não alimenta registro e não bloqueia.
+        bloqueantes = _inteiro_diagnostico(bloco["bloqueantes"] if "bloqueantes" in bloco else bloco.get("observadas"))
+        if bloqueantes is None or bloqueantes < 1:
             continue
         local = _regiao_de(regiao)
         item = {
@@ -1407,6 +1707,13 @@ def diagnosticar_perfil(perfil, metadados=None) -> list[dict]:
         }
         if local is not None:
             item["local"] = local
+            derivados = consolidados.get((local["arquivo"], local["aba"], local["regiao"]))
+            if derivados:
+                item["consolidados"] = derivados["ausentes"] + derivados["dominio"]
+                if derivados["ausentes"]:
+                    item["consolidados_ausentes"] = derivados["ausentes"]
+                if derivados["dominio"]:
+                    item["consolidados_dominio"] = derivados["dominio"]
         acrescentar(item)
     for relacao in perfil.get("relacoes") or []:
         if not isinstance(relacao, dict) or relacao.get("juncao") != _JUNCAO:
@@ -1507,68 +1814,71 @@ def _tupla_coluna(item):
 
 
 def diagnosticar_resultado(resultado) -> list[dict]:
-    """Traduz o documento analisar.v1 já validado. Não promove sugestão inválida."""
+    """Traduz o documento analisar.v1 já validado. Não promove sugestão inválida.
+
+    O achado estrutural só pede intervenção quando uma sugestão não viável
+    da mesma região cita a pergunta ligada a ele. Sem essa ligação, fica
+    como informação. Sugestão já explicada por um achado não gera um
+    segundo aviso, e achado repetido no mesmo lugar aparece uma vez.
+    """
     if not isinstance(resultado, dict):
         return []
     sugestoes = resultado.get("sugestoes") if isinstance(resultado.get("sugestoes"), list) else []
     viaveis = [item for item in sugestoes if isinstance(item, dict) and item.get("status") == "viavel"]
+    codigos_pergunta = {}
+    for pergunta in resultado.get("perguntas") or []:
+        if isinstance(pergunta, dict) and isinstance(pergunta.get("id"), str):
+            codigos_pergunta[pergunta["id"]] = pergunta.get("codigo")
     saida = []
+    vistos = set()
 
     def acrescentar(item) -> None:
         if len(saida) >= _TETO_DIAGNOSTICOS:
             return
+        chave = (item.get("codigo"), json.dumps(item.get("local"), sort_keys=True))
+        if item.get("codigo") != "sugestao_nao_executavel" and chave in vistos:
+            return
         fechado = _montar(item)
         if fechado is not None:
+            vistos.add(chave)
             saida.append(fechado)
 
-    indicadores = []
-    for item in sugestoes:
-        if not isinstance(item, dict):
-            continue
+    def indicador(item):
         identificador = item.get("id")
         status = item.get("status")
         operacao = item.get("operacao")
         if not isinstance(identificador, str) or _ID_SUGESTAO.fullmatch(identificador) is None:
-            continue
+            return None
         if status not in _STATUS_SUGESTAO:
-            continue
+            return None
         if operacao is not None and operacao not in OPERACOES:
             operacao = None
-        indicadores.append({"id": identificador, "status": status, "operacao": operacao})
+        return {"id": identificador, "status": status, "operacao": operacao}
+
+    def dependentes(codigo, local) -> list:
+        """Sugestões não viáveis da região cuja pergunta aponta para o achado."""
+        if local is None:
+            return []
+        perguntas = _PERGUNTAS_DO_ACHADO[codigo]
+        achadas = []
+        for item in sugestoes:
+            if not isinstance(item, dict) or item.get("status") == "viavel":
+                continue
+            regiao = _regiao_de(item.get("regiao")) if isinstance(item.get("regiao"), dict) else None
+            if regiao != local:
+                continue
+            ligadas = {codigos_pergunta.get(valor) for valor in item.get("perguntas") or [] if isinstance(valor, str)}
+            if ligadas & perguntas:
+                achadas.append(item)
+        return achadas
+
+    explicadas = set()
     for item in resultado.get("descobertas") or []:
         if not isinstance(item, dict):
             continue
         codigo = item.get("codigo")
         local = _regiao_de(item.get("regiao")) if isinstance(item.get("regiao"), dict) else None
-        if codigo == "cabecalho_ambiguo":
-            acrescentar(
-                {
-                    "codigo": "cabecalho_ambiguo",
-                    "categoria": "correcao",
-                    "impacto": "indicadores_da_regiao",
-                    "acao": "revisar_titulos",
-                    "continuidade_independente": bool(viaveis),
-                    "fato": "cabecalho_ambiguo",
-                    "hipotese": "indicadores_da_regiao_sem_titulo",
-                    **({} if local is None else {"local": local}),
-                    "indicadores": indicadores,
-                }
-            )
-        elif codigo == "dados_incompletos":
-            acrescentar(
-                {
-                    "codigo": "dados_incompletos",
-                    "categoria": "correcao",
-                    "impacto": "indicadores_da_coluna",
-                    "acao": "completar_valores",
-                    "continuidade_independente": bool(viaveis),
-                    "fato": "dados_incompletos",
-                    "hipotese": "indicadores_dependem_do_dado",
-                    **({} if local is None else {"local": local}),
-                    "indicadores": indicadores,
-                }
-            )
-        elif codigo == "relacao_candidata_nao_confirmada":
+        if codigo == "relacao_candidata_nao_confirmada":
             acrescentar(
                 {
                     "codigo": "relacao_candidata_nao_confirmada",
@@ -1580,31 +1890,74 @@ def diagnosticar_resultado(resultado) -> list[dict]:
                     **({} if local is None else {"local": local}),
                 }
             )
-        elif codigo == "dominio_inconsistente":
-            acrescentar(
+            continue
+        if codigo not in _PERGUNTAS_DO_ACHADO:
+            continue
+        afetadas = dependentes(codigo, local)
+        base = {
+            "codigo": codigo,
+            "categoria": "correcao",
+            "continuidade_independente": bool(viaveis),
+            "fato": codigo,
+            **({} if local is None else {"local": local}),
+        }
+        if not afetadas:
+            base.update({"impacto": "sem_impacto_comprovado", "acao": "nenhuma"})
+            acrescentar(base)
+            continue
+        explicadas.update(id(sugestao) for sugestao in afetadas)
+        lista = [valor for valor in (indicador(sugestao) for sugestao in afetadas) if valor is not None]
+        if codigo == "cabecalho_ambiguo":
+            base.update(
                 {
-                    "codigo": "dominio_inconsistente",
-                    "categoria": "correcao",
+                    "impacto": "indicadores_da_regiao",
+                    "acao": "revisar_titulos",
+                    "hipotese": "indicadores_da_regiao_sem_titulo",
+                }
+            )
+        elif codigo == "dados_incompletos":
+            base.update(
+                {
+                    "impacto": "indicadores_da_coluna",
+                    "acao": "completar_valores",
+                    "hipotese": "indicadores_dependem_do_dado",
+                }
+            )
+        elif codigo == "dominio_inconsistente":
+            base.update(
+                {
                     "impacto": "indicadores_da_coluna",
                     "acao": "revisar_regiao",
-                    "continuidade_independente": bool(viaveis),
-                    "fato": "dominio_inconsistente",
                     "hipotese": "indicadores_dependem_da_coluna",
-                    **({} if local is None else {"local": local}),
                 }
             )
-        elif codigo == "formula_sem_cache":
-            acrescentar(
-                {
-                    "codigo": "formula_sem_cache",
-                    "categoria": "correcao",
-                    "impacto": "indicadores_da_regiao",
-                    "acao": "revisar_regiao",
-                    "continuidade_independente": bool(viaveis),
-                    "fato": "formula_sem_cache",
-                    **({} if local is None else {"local": local}),
-                }
-            )
+        else:
+            base.update({"impacto": "indicadores_da_regiao", "acao": "revisar_regiao"})
+        base["indicadores"] = lista
+        acrescentar(base)
+    # Divisão lateral não é descoberta do analisar.v1. A pergunta
+    # resolver_divisao_lateral, gerada só para a região com essa ambiguidade,
+    # é a prova do achado.
+    for pergunta in resultado.get("perguntas") or []:
+        if not isinstance(pergunta, dict) or pergunta.get("codigo") not in _PERGUNTAS_DO_ACHADO["divisao_lateral_ambigua"]:
+            continue
+        local = _regiao_de(pergunta.get("regiao")) if isinstance(pergunta.get("regiao"), dict) else None
+        afetadas = dependentes("divisao_lateral_ambigua", local)
+        if not afetadas:
+            continue
+        explicadas.update(id(sugestao) for sugestao in afetadas)
+        acrescentar(
+            {
+                "codigo": "divisao_lateral_ambigua",
+                "categoria": "correcao",
+                "impacto": "indicadores_da_regiao",
+                "acao": "revisar_regiao",
+                "continuidade_independente": bool(viaveis),
+                "fato": "divisao_lateral_ambigua",
+                "local": local,
+                "indicadores": [valor for valor in (indicador(sugestao) for sugestao in afetadas) if valor is not None],
+            }
+        )
     for item in sugestoes:
         if not isinstance(item, dict) or item.get("status") == "viavel":
             continue
@@ -1623,7 +1976,10 @@ def diagnosticar_resultado(resultado) -> list[dict]:
                     **({} if local is None else {"local": local}),
                 }
             )
+        elif id(item) in explicadas:
+            continue
         elif item.get("status") in {"condicional", "dependente_de_novos_dados"}:
+            proprio = indicador(item)
             acrescentar(
                 {
                     "codigo": "sugestao_nao_executavel",
@@ -1632,6 +1988,7 @@ def diagnosticar_resultado(resultado) -> list[dict]:
                     "acao": "nenhuma" if item.get("status") == "condicional" else "informar_dado",
                     "continuidade_independente": bool(viaveis),
                     "fato": "sugestao_nao_executavel",
+                    **({} if proprio is None else {"indicadores": [proprio]}),
                 }
             )
     return saida

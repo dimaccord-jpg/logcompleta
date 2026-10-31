@@ -839,9 +839,13 @@ def _qualidade(regiao, linhas, stats, colunas, largura, estruturais, pre_preench
     datas_pendentes = sum(1 for item in stats for tipo in item["tipos"] if tipo == "data_pendente")
     formulas_observadas = regiao.get("formulas_observadas") if isinstance(regiao.get("formulas_observadas"), list) else []
     sem_cache = 0
+    bloqueantes = 0
     for formula in formulas_observadas:
         if isinstance(formula, dict) and formula.get("cache_estado") != "presente":
             sem_cache += 1
+            # Linha pré-preenchida não entra em dados_tipados. Sem a marca, conta.
+            if formula.get("registro") is not False:
+                bloqueantes += 1
     publicadas = regiao.get("formulas_sem_cache")
     if not _inteiro_nao_bool(publicadas):
         publicadas = None
@@ -874,6 +878,7 @@ def _qualidade(regiao, linhas, stats, colunas, largura, estruturais, pre_preench
         },
         "formulas_sem_cache": {
             "observadas": sem_cache,
+            "bloqueantes": bloqueantes,
             "publicadas": publicadas,
             "divergencia": publicadas is not None and publicadas != sem_cache,
         },

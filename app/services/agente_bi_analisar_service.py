@@ -302,9 +302,20 @@ _CHAVES_REF = frozenset({"arquivo", "aba", "regiao", "indice"})
 _CHAVES_REGIAO_REF = frozenset({"arquivo", "aba", "regiao"})
 
 
+MOTIVO_VIABILIDADE = "viabilidade_nao_comprovada"
+
+
 class AnalisarErro(Exception):
-    def __init__(self, codigo: str):
+    """`codigo` é o código público. `motivo` é interno e não muda esse código.
+
+    Hoje só `MOTIVO_VIABILIDADE` usa `motivo`: sugestão `viavel` em região que
+    não cumpre `_regiao_viavel`. A colaboração lê o motivo para separar essa
+    inconsistência analítica de uma violação de contrato.
+    """
+
+    def __init__(self, codigo: str, motivo: str | None = None):
         self.codigo = codigo
+        self.motivo = motivo
         super().__init__(codigo)
 
 
@@ -459,6 +470,13 @@ def instrucao_de_rascunho() -> str:
             "origem: dados. juncao: nao_executada.",
             "leitura conforme o grafico: linha serie_temporal_de_medida; barra e pizza medida_por_categoria; indicador de agregacao indicador_de_medida; indicador de contagem contagem_de_registros; tabela tabela_agregada; dispersao dispersao_de_medidas.",
             "viavel exige duvidas vazias, operacao, grafico, medida e evidencias, com lacuna nula.",
+            "viavel tambem exige, na regiao citada: cabecalho inequivoca, ambiguidades sem cabecalho_ambiguo e sem divisao_lateral_ambigua, "
+            "formulas_sem_cache igual a zero na qualidade, e dominio_inconsistente falso em medida, agrupamento e segunda_medida.",
+            "Valores ausentes nao impedem viavel. soma, minimo, maximo e contagem pedem ao menos um valor presente na medida; media pede dois.",
+            "Se a operacao cabe na medida mas a regiao nao cumpre essas condicoes, use condicional com a mesma operacao, grafico, leitura, medida e evidencias, "
+            "lacuna nula e a duvida da condicao: confirmar_rotulos para cabecalho, resolver_divisao_lateral para divisao lateral, "
+            "resolver_formula_sem_cache para formula sem cache e resolver_tipo_misto para agrupamento com dominio_inconsistente.",
+            "Se a medida ou a segunda_medida tem dominio_inconsistente, a operacao nao cabe: use condicional sem operacao e duvida resolver_tipo_misto.",
             "condicional sem operacao exige leitura esclarecimento_necessario, grafico nulo, medida nula, lacuna nula, evidencias vazias e ao menos uma duvida.",
             "dependente_de_novos_dados exige leitura lacuna_de_dados, lacuna em "
             + ", ".join(sorted(_LACUNAS))
@@ -866,10 +884,21 @@ def _qualidade_contexto(item: dict) -> dict:
         "regiao": _inteiro_contexto(item.get("regiao")),
         "valores_ausentes": _inteiro_contexto((item.get("completude") or {}).get("valores_ausentes")),
         "datas_ambiguas": _inteiro_contexto((item.get("datas") or {}).get("ambiguas")),
-        "formulas_sem_cache": _inteiro_contexto((item.get("formulas_sem_cache") or {}).get("observadas")),
+        "formulas_sem_cache": _formulas_bloqueantes(item.get("formulas_sem_cache")),
         "cabecalho_ambiguo": item.get("cabecalho_ambiguo") is True,
         "dominios_inconsistentes": _inteiro_contexto(item.get("dominios_inconsistentes")),
     }
+
+
+def _formulas_bloqueantes(bloco) -> int:
+    """Fórmulas sem cache nos registros elegíveis.
+
+    Perfil sem `bloqueantes` usa `observadas`, a contagem antiga e mais ampla.
+    """
+    bloco = bloco or {}
+    if "bloqueantes" in bloco:
+        return _inteiro_contexto(bloco.get("bloqueantes"))
+    return _inteiro_contexto(bloco.get("observadas"))
 
 
 def _orcamento(item) -> dict:
@@ -1943,7 +1972,7 @@ def _validar_sugestao(item, contexto, perguntas) -> dict:
         if not _evidencias_existem(evidencias, coluna_medida, coluna_grupo, coluna_segunda, regiao, contexto):
             raise AnalisarErro("evidencia_ausente")
         if item["status"] == "viavel" and not _regiao_viavel(contexto, regiao, [coluna_medida, coluna_grupo, coluna_segunda]):
-            raise AnalisarErro("contrato_saida_invalido")
+            raise AnalisarErro("contrato_saida_invalido", motivo=MOTIVO_VIABILIDADE)
     return {
         "id": item["id"],
         "status": item["status"],

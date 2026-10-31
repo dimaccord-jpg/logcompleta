@@ -27,6 +27,7 @@ from app.services.agente_bi_analisar_service import (
     CATALOGO_CONTRATO,
     CONTRATO_ANALISAR,
     CONTRATO_CONTEXTO_ANALISAR,
+    MOTIVO_VIABILIDADE,
     PROVEDOR_ANTHROPIC,
     AnalisarErro,
     _DESCOBERTAS,
@@ -127,7 +128,9 @@ _CHAVES_VERIFICACAO = frozenset({"aprovado", "codigo"})
 _CHAVES_DESCARTE = frozenset({"lista", "posicao", "campo", "motivo"})
 _LISTAS_DESCARTE = frozenset({"sugestoes", "descobertas"})
 _MOTIVO_CATALOGO = "valor_fora_do_catalogo"
-_MOTIVOS_DESCARTE = _CHECKPOINT | {_MOTIVO_CATALOGO}
+# Viabilidade só existe como motivo de descarte. Não entra no checkpoint nem
+# no enum de objeções do Gemini. Envelope antigo continua válido.
+_MOTIVOS_DESCARTE = _CHECKPOINT | {_MOTIVO_CATALOGO, MOTIVO_VIABILIDADE}
 _CHAVES_SUGESTAO_RASCUNHO = frozenset(
     {
         "status",
@@ -400,6 +403,9 @@ def instrucao_de_critica() -> str:
             "Voce nao e o autor da proposta final.",
             "Use somente o contexto autorizado, a proposta, a verificacao e os descartes.",
             "Descartes, quando existirem, trazem somente lista, posicao, campo e motivo.",
+            "Motivo " + MOTIVO_VIABILIDADE + " e um descarte interno decidido pelo servidor: "
+            "a sugestao estava viavel numa regiao que nao cumpre as condicoes de viavel. "
+            "Nao e codigo de objecao e nao deve aparecer em objecoes.",
             "Referencias, medidas e evidencias precisam existir nesse contexto.",
             "Nao invente coordenada, metrica, valor, rotulo, formula ou cliente.",
             "Nao copie celula nem conteudo bruto.",
@@ -427,6 +433,8 @@ def instrucao_de_revisao() -> str:
             "Corrija o que as objecoes indicam e conserve o restante.",
             "A verificacao anterior pode trazer descartes com lista, posicao, campo e motivo.",
             "Reconstrua a sugestao com o contexto autorizado, sem o valor removido.",
+            "Motivo " + MOTIVO_VIABILIDADE + ": a sugestao estava viavel numa regiao que nao cumpre as condicoes de viavel. "
+            "Proponha de novo como condicional com a duvida da condicao, ou retire a sugestao.",
             "Referencias e evidencias precisam existir no contexto autorizado.",
             "A critica nao substitui a proposta nem o contrato de saida.",
         ]
@@ -897,9 +905,134 @@ def _preservar(escopo, dataset, pedido, perfil, colaboracao_id, tecnicas, contro
         documento = _json(item.resultado_json)
         if item.estado == "concluida" and _aprovado(documento):
             aprovada = (item, documento)
-    if aprovada is None:
-        return _estado("encerrada", None, False)
-    return _materializar(escopo, dataset, pedido, perfil, colaboracao_id, aprovada[0], aprovada[1], controle)
+    if aprovada is not None:
+        return _materializar(escopo, dataset, pedido, perfil, colaboracao_id, aprovada[0], aprovada[1], controle)
+    for item in reversed(tecnicas):
+        if item.estado != "concluida" or not item.resultado_json:
+            continue
+        documento = _json(item.resultado_json)
+        if not _parcial(documento) or not _tecnica_integra(item, documento):
+            continue
+        corpo = _materializar(escopo, dataset, pedido, perfil, colaboracao_id, item, documento, controle)
+        if "resultado" in corpo:
+            return corpo
+    return _sem_resultado(tecnicas)
+
+
+def _sem_resultado(tecnicas) -> dict:
+    """Encerramento com os descartes da última proposta Claude que não deixou sugestão.
+
+    Só lista, posição, campo e motivo saem; nada da proposta é publicado.
+    """
+    from app.services.agente_bi_descoberta_service import diagnostico_de_cobertura
+
+    corpo = _estado("encerrada", None, False)
+    for item in reversed(tecnicas):
+        if item.estado != "concluida" or not item.resultado_json:
+            continue
+        documento = _json(item.resultado_json)
+        if not isinstance(documento, dict) or documento.get("papel") != _PAPEL_CLAUDE:
+            continue
+        proposta = documento.get("proposta")
+        if not isinstance(proposta, dict) or proposta.get("sugestoes") or not documento.get("descartes"):
+            return corpo
+        descartes = _minimizar_descartes(documento.get("descartes"))
+        if descartes is None or not _tecnica_integra(item, documento):
+            return corpo
+        corpo["colaboracao"]["descartes"] = descartes
+        aviso = diagnostico_de_cobertura(descartes, restantes=False)
+        if aviso is not None:
+            corpo["diagnosticos"] = [aviso]
+        return corpo
+    return corpo
+
+
+def _parcial(documento) -> bool:
+    """Proposta Claude verificada, com descarte assinado e sugestão restante.
+
+    A proposta gravada já é só o que restou; `_materializar` ainda passa
+    tudo por `analisar` e `validar_saida`. A cobertura parcial aparece em
+    `_pronto`.
+
+    Só conta a proposta com descarte do isolamento (`_isolar`), que o código
+    anterior não gravava. Colaboração histórica encerrada com descarte de
+    formato continua encerrada e não é materializada depois do deploy.
+    """
+    if not isinstance(documento, dict) or documento.get("papel") != _PAPEL_CLAUDE:
+        return False
+    if documento.get("acao") not in {_ACAO_PROPOR, _ACAO_REVISAR} or not documento.get("descartes"):
+        return False
+    if not any(_descarte_isolado(item) for item in documento["descartes"]):
+        return False
+    proposta = documento.get("proposta")
+    verificacao = documento.get("verificacao")
+    return (
+        isinstance(proposta, dict)
+        and bool(proposta.get("sugestoes"))
+        and isinstance(verificacao, dict)
+        and verificacao.get("aprovado") is False
+    )
+
+
+def _descarte_isolado(item) -> bool:
+    """Descarte que só `_isolar` grava: viabilidade em `status` ou checkpoint em `item`."""
+    if not isinstance(item, dict):
+        return False
+    if item.get("campo") == "status" and item.get("motivo") == MOTIVO_VIABILIDADE:
+        return True
+    return item.get("campo") == "item" and item.get("motivo") in _CHECKPOINT
+
+
+def _tecnica_integra(analise: AgenteBiAnalise, documento: dict) -> bool:
+    execucao = AgenteBiExecucao.query.filter_by(analise_id=int(analise.id)).one_or_none()
+    if execucao is None:
+        return False
+    try:
+        revalidar_contrato_tecnico(
+            analise,
+            {
+                "execucao_id": int(execucao.id),
+                "analise_id": int(analise.id),
+                "dataset_id": int(analise.dataset_id),
+                "usuario_id": int(analise.usuario_id),
+                "conta_id": int(analise.conta_id),
+                "franquia_id": int(analise.franquia_id),
+            },
+            documento,
+        )
+    except ExecucaoErro:
+        return False
+    return True
+
+
+def _descartes_da_origem(escopo, analise: AgenteBiAnalise) -> list:
+    """Descartes da rodada técnica que originou a análise publicada.
+
+    Análise sem pai técnico, ou pai sem descarte, cobre a proposta inteira.
+    Pai com hash diferente não é lido como cobertura integral.
+    """
+    contexto = _json(analise.contexto_json)
+    if not isinstance(contexto, dict) or contexto.get("colaboracao_id") is None or contexto.get("pai_id") is None:
+        return []
+    pai = AgenteBiAnalise.query.filter_by(
+        id=contexto["pai_id"],
+        usuario_id=escopo.usuario_id,
+        conta_id=escopo.conta_id,
+        franquia_id=escopo.franquia_id,
+        dataset_id=analise.dataset_id,
+        contrato_versao=CONTRATO_TECNICO,
+    ).one_or_none()
+    if pai is None or not pai.resultado_json:
+        raise ColaboracaoErro("identidade_inconsistente", 409)
+    documento = _json(pai.resultado_json)
+    if documento.get("hash") != contexto.get("pai_hash"):
+        raise ColaboracaoErro("identidade_inconsistente", 409)
+    if "descartes" not in documento:
+        return []
+    descartes = _minimizar_descartes(documento.get("descartes"))
+    if descartes is None:
+        raise ColaboracaoErro("identidade_inconsistente", 409)
+    return descartes
 
 
 _BLOQUEIO_DURO = frozenset(
@@ -933,7 +1066,10 @@ def _envelope(analise, contexto_analise, resultado, perfil, pedido, contexto):
         except AnalisarErro as exc:
             if exc.codigo in _BLOQUEIO_DURO:
                 raise ExecucaoErro(exc.codigo)
-            if exc.codigo not in _CHECKPOINT and not _vazia_recuperavel(proposta, descartes):
+            isolada = _isolar(bruto, proposta, descartes, perfil, pedido)
+            if isolada is not None:
+                proposta, descartes = isolada
+            elif exc.codigo not in _CHECKPOINT and not _vazia_recuperavel(proposta, descartes):
                 _diagnosticar(analise, "verificacao_nao_recuperavel")
                 return None
             codigo = exc.codigo if exc.codigo in _CHECKPOINT else _codigo_de_descartes(descartes)
@@ -1181,6 +1317,68 @@ def _vazia_recuperavel(proposta, descartes) -> bool:
     )
 
 
+def _isolar(bruto, proposta, descartes, perfil, pedido):
+    """Descarta o item que o validador oficial recusa sozinho.
+
+    Só vira descarte a inconsistência analítica recuperável: código do
+    checkpoint ou viabilidade não comprovada. Outro erro devolve None e o
+    caminho antigo decide. Isolar só vale quando há viabilidade não
+    comprovada ou sobra sugestão válida; o restante passa de novo por
+    `analisar` inteiro. Nenhum item é alterado, só retirado.
+    """
+    novos = []
+    mantida = {"descobertas": [], "sugestoes": []}
+    for lista in ("descobertas", "sugestoes"):
+        posicoes = _posicoes_mantidas(bruto, lista)
+        if len(posicoes) != len(proposta[lista]):
+            return None
+        for posicao, item in zip(posicoes, proposta[lista]):
+            sozinho = {"descobertas": [], "sugestoes": []}
+            sozinho[lista] = [item]
+            motivo = _motivo_recuperavel(sozinho, perfil, pedido)
+            if motivo is None:
+                mantida[lista].append(item)
+                continue
+            if motivo is False:
+                return None
+            campo = "status" if motivo == MOTIVO_VIABILIDADE else "item"
+            novos.append(_diagnostico(lista, posicao, campo, motivo))
+    if not novos or any(item is None for item in novos):
+        return None
+    if not mantida["sugestoes"] and all(item["motivo"] != MOTIVO_VIABILIDADE for item in novos):
+        return None
+    todos = sorted(list(descartes) + novos, key=lambda item: (item["lista"] != "descobertas", item["posicao"]))
+    if _minimizar_descartes(todos) != todos or minimizar_proposta(mantida) != mantida:
+        return None
+    if _motivo_recuperavel(mantida, perfil, pedido) is not None:
+        return None
+    return mantida, todos
+
+
+def _motivo_recuperavel(proposta, perfil, pedido):
+    """None quando `analisar` aceita; o motivo recuperável; ou False."""
+    try:
+        analisar(perfil, pedido, provedor=lambda _contexto: proposta, proveniencia=PROVEDOR_ANTHROPIC)
+    except AnalisarErro as exc:
+        if exc.codigo in _BLOQUEIO_DURO:
+            raise ExecucaoErro(exc.codigo) from exc
+        if exc.codigo in _CHECKPOINT:
+            return exc.codigo
+        if exc.codigo == "contrato_saida_invalido" and exc.motivo == MOTIVO_VIABILIDADE:
+            return MOTIVO_VIABILIDADE
+        return False
+    return None
+
+
+def _posicoes_mantidas(bruto, lista) -> list[int]:
+    """Posição original de cada item que `_representar_proposta` manteve."""
+    conversor = _descoberta if lista == "descobertas" else _sugestao
+    itens = bruto.get(lista) if isinstance(bruto, dict) else None
+    if not isinstance(itens, list):
+        return []
+    return [posicao for posicao, item in enumerate(itens[: _TETO_LISTA[lista]]) if conversor(item) is not None]
+
+
 def _chaves_envelope(documento: dict) -> frozenset:
     if isinstance(documento, dict) and "descartes" in documento:
         return _CHAVES_TECNICAS | {"descartes"}
@@ -1280,10 +1478,17 @@ def _fase_da_analise(analise) -> str:
 
 
 def _pronto(escopo, analise: AgenteBiAnalise) -> dict:
-    from app.services.agente_bi_descoberta_service import _publicar_descoberta
+    from app.services.agente_bi_descoberta_service import _publicar_descoberta, diagnostico_de_cobertura
 
     corpo = _publicar_descoberta(analise_para_dict(analise), _json(analise.resultado_json))
     corpo["colaboracao"] = _colaboracao("concluida", _FASE_PRONTO, False)
+    descartes = _descartes_da_origem(escopo, analise)
+    if descartes:
+        corpo["colaboracao"]["cobertura"] = "parcial"
+        corpo["colaboracao"]["descartes"] = descartes
+        aviso = diagnostico_de_cobertura(descartes)
+        if aviso is not None:
+            corpo["diagnosticos"] = [aviso] + list(corpo.get("diagnosticos") or [])
     return corpo
 
 
@@ -1322,7 +1527,7 @@ def _materializada(escopo, dataset, colaboracao_id, tecnicas):
         if item.estado != "concluida" or not item.resultado_json:
             continue
         documento = _json(item.resultado_json)
-        if not _aprovado(documento) or documento.get("acao") not in {_ACAO_PROPOR, _ACAO_REVISAR}:
+        if not (_aprovado(documento) or _parcial(documento)) or documento.get("acao") not in {_ACAO_PROPOR, _ACAO_REVISAR}:
             continue
         chave = identidade_rodada(colaboracao_id, int(item.id), _ACAO_MATERIALIZAR, _PAPEL_SERVIDOR)
         achada = AgenteBiAnalise.query.filter_by(

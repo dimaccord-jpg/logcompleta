@@ -306,39 +306,84 @@
     return partes.join("; ");
   }
 
-  function renderDiagnosticos(destino, itens, etapa) {
+  var NIVEIS = {
+    bloqueio: "Bloqueio",
+    correcao: "Correção necessária",
+    esclarecimento: "Esclarecimento",
+    informacao: "Informação"
+  };
+  var ORDEM_NIVEIS = ["bloqueio", "correcao", "esclarecimento", "informacao"];
+  var ACOES = {
+    revisar_titulos: "Revise os títulos das colunas nessa região na planilha de origem e envie uma nova versão.",
+    revisar_regiao: "Revise essa região na planilha de origem e envie uma nova versão.",
+    completar_valores: "Complete na planilha de origem só os valores indicados e envie uma nova versão.",
+    informar_dado: "Inclua o dado indicado na planilha de origem e envie uma nova versão.",
+    reduzir_estrutura: "Ajuste a planilha de origem para caber no limite suportado e envie uma nova versão.",
+    confirmar_relacao: "Confirme a relação na seleção, se ela for necessária para a análise."
+  };
+
+  function nivelDe(item) {
+    if (item && NIVEIS[item.nivel]) return item.nivel;
+    if (!item || item.acao === "nenhuma") return "informacao";
+    if (item.acao === "confirmar_relacao") return "esclarecimento";
+    return item.continuidade_independente === true ? "correcao" : "bloqueio";
+  }
+
+  function cartaoDiagnostico(item, etapa) {
+    var nivel = nivelDe(item);
+    var card = el("article", { class: "agente-bi-diagnostico" });
+    if (item && item.codigo) card.setAttribute("data-codigo", item.codigo);
+    card.setAttribute("data-etapa", etapa);
+    card.setAttribute("data-nivel", nivel);
+    card.appendChild(el("p", { class: "agente-bi-diagnostico-nivel" }, NIVEIS[nivel]));
+    var texto = item && mensagemConfiavel(item.mensagem) ? item.mensagem : (item && ERROS[item.codigo]) || (item && codigoControlado(item.codigo) ? "Identificador técnico: " + item.codigo + "." : "Não foi possível descrever este achado.");
+    card.appendChild(el("h4", null, texto));
+    var onde = textoOnde(item);
+    if (onde) card.appendChild(el("p", null, "Onde: " + onde + "."));
+    if (item && Array.isArray(item.indicadores) && item.indicadores.length && nivel !== "informacao") {
+      card.appendChild(el("p", null, "Indicadores afetados: " + item.indicadores.map(function (valor) { return valor.id; }).join(", ") + "."));
+    }
+    if (nivel !== "informacao" && item && ACOES[item.acao]) {
+      card.appendChild(el("p", null, ACOES[item.acao]));
+    }
+    return card;
+  }
+
+  function renderDiagnosticos(destino, itens, etapa, achados) {
     limpar(destino);
     if (!destino) return;
     var titulo = etapa === "preparados" ? "Qualidade e problemas detectados" : "Problemas identificados na análise";
     destino.appendChild(el("h4", null, titulo));
     if (!itens || !itens.length) {
       destino.appendChild(el("p", null, etapa === "preparados"
-        ? "Nenhum problema estrutural foi comprovado nesta preparação."
+        ? "Nenhum impedimento foi comprovado nesta preparação."
         : "Nenhum problema adicional foi comprovado nesta análise."));
-      return;
     }
-    itens.forEach(function (item) {
-      var card = el("article", { class: "agente-bi-diagnostico" });
-      if (item && item.codigo) card.setAttribute("data-codigo", item.codigo);
-      card.setAttribute("data-etapa", etapa);
-      var texto = item && mensagemConfiavel(item.mensagem) ? item.mensagem : (item && ERROS[item.codigo]) || (item && codigoControlado(item.codigo) ? "Identificador técnico: " + item.codigo + "." : "Não foi possível descrever este achado.");
-      card.appendChild(el("h4", null, texto));
-      var onde = textoOnde(item);
-      if (onde) card.appendChild(el("p", null, "Onde: " + onde + "."));
-      if (item && item.acao === "nenhuma") {
-        card.appendChild(el("p", null, "Nenhuma ação é necessária."));
-      } else if (item && (item.acao === "completar_valores" || item.acao === "revisar_titulos" || item.acao === "revisar_regiao" || item.acao === "reduzir_estrutura" || item.acao === "informar_dado")) {
-        card.appendChild(el("p", null, "Corrija na planilha de origem e envie uma nova versão."));
-      }
-      if (item && item.continuidade_independente === true && item.acao !== "nenhuma") {
-        var seguir = el("button", { type: "button", class: "agente-bi-secundario" }, "Continuar com as análises independentes");
-        seguir.addEventListener("click", function () {
-          avisarJornada(etapa === "preparados" ? "analise" : "selecao");
-        });
-        card.appendChild(seguir);
-      }
-      destino.appendChild(card);
+    var ordenados = (itens || []).slice().sort(function (a, b) {
+      return ORDEM_NIVEIS.indexOf(nivelDe(a)) - ORDEM_NIVEIS.indexOf(nivelDe(b));
     });
+    ordenados.forEach(function (item) {
+      destino.appendChild(cartaoDiagnostico(item, etapa));
+    });
+    var independente = ordenados.some(function (item) {
+      var nivel = nivelDe(item);
+      return item && item.continuidade_independente === true && (nivel === "correcao" || nivel === "esclarecimento");
+    });
+    if (independente) {
+      var seguir = el("button", { type: "button", class: "agente-bi-secundario", "data-continuidade": etapa }, "Continuar com as análises independentes");
+      seguir.addEventListener("click", function () {
+        avisarJornada(etapa === "preparados" ? "analise" : "selecao");
+      });
+      destino.appendChild(seguir);
+    }
+    if (achados && achados.length) {
+      var caixa = el("details", { class: "agente-bi-achados" });
+      caixa.appendChild(el("summary", null, "Achados estruturais registrados (" + achados.length + "), avaliados depois do pedido de análise"));
+      achados.forEach(function (item) {
+        caixa.appendChild(cartaoDiagnostico(item, etapa));
+      });
+      destino.appendChild(caixa);
+    }
   }
 
   function mostrarPreparacao(corpo) {
@@ -363,7 +408,7 @@
       if (qualidade[chave]) pares.push([legivel(chave), String(qualidade[chave])]);
     });
     definirLista(pares);
-    renderDiagnosticos(diagnosticosPreparados, corpo.diagnosticos || [], "preparados");
+    renderDiagnosticos(diagnosticosPreparados, corpo.diagnosticos || [], "preparados", corpo.achados || []);
     revelarDescoberta();
     if (corpo.estado !== "preparado") {
       if (modalidades) modalidades.disabled = true;
@@ -832,6 +877,9 @@
         if (resultadoPainel) resultadoPainel.hidden = false;
         limpar(descobertas);
         if (descobertas) descobertas.appendChild(el("p", null, parado));
+        if (corpo.diagnosticos && corpo.diagnosticos.length) {
+          renderDiagnosticos(diagnosticosDescobertas, corpo.diagnosticos, "descobertas");
+        }
         anunciar(parado);
         avisarJornada("descobertas");
         liberar();

@@ -636,6 +636,31 @@
   margin-top: 0.35rem;
 }
 
+.agente-bi-diagnostico-nivel {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--af-text-secondary);
+}
+
+.agente-bi-diagnostico[data-nivel="bloqueio"],
+.agente-bi-diagnostico[data-nivel="correcao"] {
+  border-left-width: 4px;
+}
+
+.agente-bi-achados {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agente-bi-achados summary {
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+}
+
+.agente-bi-achados .agente-bi-diagnostico {
+  margin-bottom: 0.5rem;
+}
+
 .agente-bi-sugestoes {
   display: grid;
   grid-template-columns: 1fr;

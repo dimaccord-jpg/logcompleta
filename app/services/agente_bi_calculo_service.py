@@ -900,7 +900,9 @@ def _impedimento(definicao, perfil, medida):
     if "divisao_lateral_ambigua" in ambiguidades:
         return "resolver_divisao_lateral"
     formulas = qualidade.get("formulas_sem_cache")
-    observadas = formulas.get("observadas") if isinstance(formulas, dict) else formulas
+    observadas = formulas
+    if isinstance(formulas, dict):
+        observadas = formulas["bloqueantes"] if "bloqueantes" in formulas else formulas.get("observadas")
     if isinstance(observadas, int) and observadas > 0:
         return "resolver_formula_sem_cache"
     usadas = [medida]

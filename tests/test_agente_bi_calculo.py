@@ -428,8 +428,11 @@ def test_nulos_vazias_e_linhas_pre_preenchidas_nao_entram_na_conta(ctx):
     documento = definir(perfil_p, pacote_pre)
     salva = _gravar(escopo_p, pacote_p["id"], documento)
     indicador = _calcular(escopo_p, salva["id"])["calculo"]["resultado"]["indicadores"][0]
-    assert indicador["resultado"] is None
-    assert indicador["motivo"] == "resolver_formula_sem_cache"
+    # SCRUM-144 D4: a fórmula da linha pré-preenchida não alimenta registro
+    # e não bloqueia mais. O resultado não é calculado artificialmente.
+    assert regiao["formulas_sem_cache"]["bloqueantes"] == 0
+    assert indicador["motivo"] != "resolver_formula_sem_cache"
+    assert indicador["resultado"] in (None, "30")
     assert indicador["resultado"] != "32"
 
 
