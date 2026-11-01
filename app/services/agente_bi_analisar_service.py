@@ -2053,20 +2053,35 @@ def _operacao_cabe(operacao, medida, segunda=None) -> bool:
 def _grafico_cabe(grafico, operacao, medida, agrupamento, segunda) -> bool:
     if operacao == OPERACAO_PAR:
         return grafico == "dispersao" and agrupamento is None and segunda is not None
+    if segunda is not None:
+        return False
     if grafico == "dispersao" or agrupamento is not None and _coord(agrupamento) == _coord(medida):
         return False
     if grafico == "indicador":
         return agrupamento is None
-    if grafico == "tabela":
+    if grafico == "tabela" and agrupamento is None:
         return True
     if agrupamento is None:
         return False
     if grafico == "linha":
         return _e_temporal(agrupamento)
+    if grafico in {"barra", "pizza", "tabela"}:
+        # Mesmos sinais estruturais que a definição já usa em _forma.
+        dimensoes = set(agrupamento.get("dimensoes") or [])
+        evidencias = set(agrupamento.get("evidencias") or [])
+        tipos = set(agrupamento.get("tipos") or [])
+        temporal = bool(_TEMPORAIS & dimensoes or {"tipo_data", "tipo_hora", "componente_horario"} & evidencias)
+        numerica = agrupamento.get("dimensao_principal") in _NUMERICAS or "numero" in tipos or bool(
+            {"tipo_numero_inteiro", "tipo_numero_fracionado"} & evidencias
+        )
+        if temporal or numerica or "texto" not in tipos:
+            return False
     if grafico == "pizza":
         return 2 <= agrupamento["distintos"] <= 8
     if grafico == "barra":
         return agrupamento["distintos"] >= 2
+    if grafico == "tabela":
+        return True
     return False
 
 

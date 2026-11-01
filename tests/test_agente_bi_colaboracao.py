@@ -1223,6 +1223,69 @@ def test_proposta_parcial_segue_ao_gemini_sem_o_trecho_invalido(app):
         assert validar_saida(montar_contexto(perfil, pedido), corpo["resultado"])["contrato_saida_validado"] is True
 
 
+def test_agrupamento_incompativel_e_isolado_sem_eliminar_sugestao_valida(app):
+    with app.app_context():
+        _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-compat@test.com")
+        pedido = _pedido(perfil, ["A"])
+        valor = _medida(perfil)
+        quando = next(
+            coluna
+            for coluna in perfil["colunas"]
+            if coluna["aba"] == valor["aba"] and coluna["regiao"] == valor["regiao"] and "data" in coluna["dimensoes"]
+        )
+        assert "tipo_numero_fracionado" in valor["evidencias"]
+        regiao = {"arquivo": valor["arquivo"], "aba": valor["aba"], "regiao": valor["regiao"]}
+        boa = {
+            "status": "viavel",
+            "leitura": "indicador_de_medida",
+            "grafico": "indicador",
+            "operacao": "soma",
+            "origem": "dados",
+            "regiao": regiao,
+            "medida": _coord(valor),
+            "agrupamento": None,
+            "segunda_medida": None,
+            "evidencias": ["tipo_numero_fracionado"],
+            "juncao": "nao_executada",
+            "lacuna": None,
+            "duvidas": [],
+        }
+        ruim = {
+            "status": "viavel",
+            "leitura": "medida_por_categoria",
+            "grafico": "barra",
+            "operacao": "soma",
+            "origem": "dados",
+            "regiao": regiao,
+            "medida": _coord(valor),
+            "agrupamento": _coord(quando),
+            "segunda_medida": None,
+            "evidencias": ["tipo_numero_fracionado"],
+            "juncao": "nao_executada",
+            "lacuna": None,
+            "duvidas": [],
+        }
+        proposta = {"descobertas": [], "sugestoes": [boa, ruim]}
+        claude = _Claude([proposta, _condicional(perfil)])
+        gemini = _Gemini(json.dumps(_critica(perfil)))
+        primeira = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert primeira["colaboracao"]["fase"] == "gemini_revisando"
+        documento = json.loads(_tecnicas(dataset_id)[0].resultado_json)
+        assert documento["verificacao"] == {"aprovado": False, "codigo": "grafico_incompativel"}
+        assert documento["descartes"] == [
+            {"lista": "sugestoes", "posicao": 1, "campo": "item", "motivo": "grafico_incompativel"}
+        ]
+        assert documento["proposta"]["sugestoes"] == [boa]
+        assert documento["proposta"]["sugestoes"][0]["agrupamento"] is None
+        assert quando["indice"] != boa["medida"]["indice"]
+        segunda = _descobrir(escopo, dataset_id, pedido, claude, gemini)
+        assert segunda["colaboracao"]["fase"] == "claude_consolidando"
+        enviado = json.loads(gemini.geracoes[0]["contents"])
+        assert enviado["proposta"]["sugestoes"] == [boa]
+        assert enviado["descartes"] == documento["descartes"]
+        assert _coord(quando) not in enviado["proposta"]["sugestoes"][0].values()
+
+
 def test_formato_recuperavel_abre_a_revisao_sem_gravar_a_cerca(app, caplog):
     with app.app_context():
         _usuario, _franquia, escopo, dataset_id, perfil = _preparar("colab-formato@test.com")
