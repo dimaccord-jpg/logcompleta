@@ -441,6 +441,45 @@ def _proveniencia_declarada(proveniencia: str | None) -> tuple[str, bool]:
     raise AnalisarErro("contrato_saida_invalido")
 
 
+def instrucao_de_compatibilidade() -> str:
+    """Regras matemáticas já aplicadas pelos validadores. Texto estático, sem dado de planilha."""
+    numericas = ", ".join(sorted(_NUMERICAS))
+    temporais = ", ".join(sorted(_TEMPORAIS))
+    # Mesmos literais de _grafico_cabe. Não viram constante para não refatorar o validador.
+    sinais_temporais = ", ".join(sorted({"componente_horario", "tipo_data", "tipo_hora"}))
+    sinais_numericos = ", ".join(sorted({"tipo_numero_fracionado", "tipo_numero_inteiro"}))
+    return "\n".join(
+        [
+            "contagem aceita medida categorica, textual ou de outra dimensao "
+            "quando o dominio e consistente e existe ao menos um valor presente.",
+            "contagem_distinta exige ao menos um valor presente e ao menos um valor distinto, "
+            "com dominio consistente, em medida categorica, textual ou de outra dimensao.",
+            f"soma, minimo e maximo exigem dimensao_principal em {numericas} e ao menos um valor presente.",
+            f"media exige dimensao_principal em {numericas} e ao menos dois valores presentes.",
+            f"{OPERACAO_PAR} exige duas medidas com dimensao_principal em {numericas} "
+            "e dominio consistente, sem minimo de presentes.",
+            f"{OPERACAO_PAR} cabe somente em dispersao, sem agrupamento e com segunda_medida.",
+            f"dispersao exige {OPERACAO_PAR}.",
+            f"Fora de {OPERACAO_PAR}, segunda_medida deve ser nula.",
+            "Medida e agrupamento nao podem referenciar a mesma coluna.",
+            "indicador nao admite agrupamento.",
+            f"linha exige agrupamento com dimensao em {temporais}; evidencia temporal sem essa dimensao nao basta.",
+            "barra, pizza e tabela com agrupamento exigem o tipo texto, "
+            f"sem dimensao em {temporais}, sem evidencia em {sinais_temporais}, "
+            f"sem dimensao_principal em {numericas}, sem o tipo numero e sem evidencia em {sinais_numericos}.",
+            "tabela sem agrupamento nao exige essas restricoes textuais.",
+            "barra exige ao menos dois valores distintos no agrupamento e nao tem teto.",
+            "pizza exige de dois a oito valores distintos no agrupamento, inclusive.",
+            "tabela com agrupamento textual valido nao tem limite de valores distintos.",
+            "linha, barra e pizza exigem agrupamento.",
+            "Medida, agrupamento e segunda_medida, quando presentes, "
+            "devem compartilhar arquivo, aba e regiao com a regiao da sugestao.",
+            "dominio_inconsistente na medida impede a operacao.",
+            f"dominio_inconsistente na segunda_medida impede {OPERACAO_PAR}.",
+        ]
+    )
+
+
 def instrucao_de_rascunho() -> str:
     """Instrução estática do rascunho. Não inclui dado de planilha."""
     return "\n".join(
@@ -485,6 +524,7 @@ def instrucao_de_rascunho() -> str:
             "evidencias usam somente codigos presentes na coluna ou na regiao citada: " + ", ".join(sorted(_EVIDENCIAS)) + ".",
             "Nao confirme juncao. Relacao candidata nao vira operacao.",
             "No maximo 12 descobertas e 8 sugestoes.",
+            instrucao_de_compatibilidade(),
         ]
     )
 

@@ -43,6 +43,7 @@ from app.services.agente_bi_analisar_service import (
     _EVIDENCIAS,
     analisar,
     esquema_rascunho_analisar,
+    instrucao_de_compatibilidade,
     instrucao_de_rascunho,
     montar_contexto,
 )
@@ -421,6 +422,7 @@ def instrucao_de_critica() -> str:
             "codigo da objecao: " + ", ".join(sorted(_CHECKPOINT)) + ".",
             "referencia da objecao e nula ou uma coluna autorizada.",
             "Nao inclua outras chaves.",
+            instrucao_de_compatibilidade(),
         ]
     )
 
