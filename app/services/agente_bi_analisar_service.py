@@ -4,13 +4,16 @@ Interpreta um perfil semântico já preparado e devolve descobertas,
 sugestões e perguntas. A entrada do provedor simulado continua estrutural:
 sem perfil bruto, sem valor de célula e sem o texto livre. A representação
 governada, usada na fronteira, pode levar intenção autorizada, a referência
-da modalidade B e o vínculo técnico do dataset. Texto e fórmula dessa
-referência são anotação não confiável: a governança pode reduzi-los e eles
-não são executados. O texto do cabeçalho não entra nessa representação:
-a governança compartilhada não comprova identificadores como placa, e
-ALLOW não prova anonimização. A identidade da coluna continua sendo
-arquivo, aba, região e índice. Planilha de referência, fórmula e texto
-entram como dado não confiável e não são copiados para a saída.
+da modalidade B, o vínculo técnico do dataset e o rótulo de coluna quando
+`texto_de_cabecalho_transferivel` autoriza: cabeçalho inequívoco, texto
+curto sem dígito e ALLOW da governança sem categoria detectada. Placa,
+CPF, identificador com dígito e cabeçalho ambíguo ficam de fora. Nome de
+arquivo, aba, valor de célula, amostra, descrição e unidade continuam
+fora. Texto e fórmula da referência são anotação não confiável: a
+governança pode reduzi-los e eles não são executados. A identidade da
+coluna continua sendo arquivo, aba, região e índice. Planilha de
+referência, fórmula e texto entram como dado não confiável e não são
+copiados para a saída.
 
 O catálogo abaixo é o conjunto fechado que a SCRUM-260 poderá executar.
 Junção não está nesse conjunto: relação candidata gera pergunta e não
@@ -1018,24 +1021,63 @@ def _anotacao_autorizada(valor) -> bool:
     return True
 
 
-def texto_de_cabecalho_transferivel():
-    """Não transfere o texto do cabeçalho.
+def texto_de_cabecalho_transferivel(rotulo=None):
+    """Devolve o rótulo local só quando todas as condições de transporte valem.
 
-    O perfil já registra que o classificador compartilhado não cobre
-    identificadores como placa. ALLOW não comprova anonimização. Sem essa
-    prova, o texto fica de fora. A referência técnica da coluna permanece.
-    Reconhecer placa exigiria ampliar a governança compartilhada, o que
-    este recorte não autoriza.
+    O chamador só passa texto vindo de `anotacoes_comprovadas`, isto é,
+    cabeçalho inequívoco. Fora isso, ou se qualquer condição abaixo falhar,
+    o resultado é None e a referência técnica da coluna permanece:
+
+    - depois do strip, de 1 a 80 caracteres;
+    - nenhum caractere para o qual `str.isdigit` seja verdadeiro, o que
+      exclui placa, CPF, identificador e telefone sem interpretar o texto;
+    - `govern_outbound_content`, com a finalidade e o agente já usados no
+      transporte do AgenteBI, devolve ALLOW sem categoria detectada.
+      MINIMIZE, BLOCK ou exceção também devolvem None.
+
+    Nome de arquivo, nome de aba, valor de célula, amostra, descrição e
+    unidade não passam por esta função.
     """
-    return None
+    if not isinstance(rotulo, str):
+        return None
+    texto = rotulo.strip()
+    if not texto or len(texto) > 80:
+        return None
+    if any(str.isdigit(caractere) for caractere in texto):
+        return None
+    if not _governanca_permite_rotulo(texto):
+        return None
+    return texto
+
+
+def _governanca_permite_rotulo(texto: str) -> bool:
+    """ALLOW sem categoria. Qualquer outra decisão ou falha recusa o rótulo."""
+    try:
+        resultado = govern_outbound_content(
+            texto,
+            purpose=FINALIDADE_TRANSFERENCIA,
+            content_type=CONTENT_TYPE_DOCUMENT,
+            agent="agente_bi",
+            provider="simulado",
+        )
+    except Exception:
+        return False
+    if getattr(resultado, "decision", None) != DECISION_ALLOW:
+        return False
+    categorias = getattr(resultado, "categories_detected", None)
+    if isinstance(categorias, str) or categorias:
+        return False
+    return True
 
 
 def anotacoes_comprovadas(estrutura, colunas) -> dict:
     """Nomes locais de cabeçalho inequívoco. Ambíguo ou ausente fica desconhecido.
 
     O mapa de colunas usa a mesma coordenada do classificador da evolução.
-    Esse mapa não autoriza transporte: o texto do cabeçalho não vai ao
-    provedor externo. Não há conclusão de negócio a partir do tipo físico.
+    Ele prova o rótulo local do cabeçalho inequívoco e não autoriza sozinho
+    o transporte: `texto_de_cabecalho_transferivel` ainda exige tamanho,
+    ausência de dígito e ALLOW da governança. Não há conclusão de negócio
+    a partir do tipo físico.
     """
     colunas_nome: dict[tuple, str] = {}
     arquivos: dict[int, str] = {}
@@ -1107,7 +1149,7 @@ def representacao_semantica(contexto: dict, estrutura=None) -> dict:
         "regioes": [
             _regiao_semantica(item, anotacoes["arquivos"], anotacoes["abas"]) for item in estrutural["regioes"]
         ],
-        "colunas": [_coluna_semantica(item) for item in estrutural["colunas"]],
+        "colunas": [_coluna_semantica(item, anotacoes["colunas"]) for item in estrutural["colunas"]],
     }
     if "B" in estrutural["modalidades"]:
         saida["referencia"] = _referencia_transportavel(contexto.get("referencia_pedida"))
@@ -1165,9 +1207,11 @@ def _referencia_transportavel(referencia) -> dict | None:
     return {"afirmacoes": afirmacoes, "formulas": formulas}
 
 
-def _coluna_semantica(coluna: dict) -> dict:
+def _coluna_semantica(coluna: dict, rotulos=None) -> dict:
     saida = dict(coluna)
-    saida["nome"] = texto_de_cabecalho_transferivel()
+    chave = (coluna.get("arquivo"), coluna.get("aba"), coluna.get("regiao"), coluna.get("indice"))
+    rotulo = rotulos.get(chave) if isinstance(rotulos, dict) else None
+    saida["nome"] = texto_de_cabecalho_transferivel(rotulo)
     saida["descricao"] = None
     saida["unidade"] = None
     return saida

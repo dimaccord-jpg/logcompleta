@@ -843,7 +843,7 @@
 
   function textoParada(colaboracao) {
     if (colaboracao.estado === "incerta") {
-      return "A análise desta etapa não foi confirmada. A mesma chamada não será reenviada.";
+      return "A análise desta etapa não foi confirmada. A mesma chamada não será reenviada. Envie os dados novamente para iniciar uma nova análise.";
     }
     if (colaboracao.estado === "recusada") return "A proposta não pôde ser aceita.";
     return "A colaboração foi encerrada sem uma nova descoberta aprovada.";
@@ -893,7 +893,7 @@
       if (corpo.ok === true && colaboracao) {
         if (colaboracao.estado === "encerrada" || colaboracao.estado === "recusada") esquecerPedido();
         else guardarPedido(pedido, colaboracao.fase || fase);
-        var parado = textoColaboracao(colaboracao.fase) || textoParada(colaboracao);
+        var parado = textoParada(colaboracao);
         if (resultadoPainel) resultadoPainel.hidden = false;
         limpar(descobertas);
         if (descobertas) descobertas.appendChild(el("p", null, parado));

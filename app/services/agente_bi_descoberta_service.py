@@ -1366,11 +1366,40 @@ def _mensagem_lacuna(item: dict) -> str:
     )
 
 
+def _alegacao_sem_prova(item: dict) -> bool:
+    return (
+        item.get("codigo") in _ACHADOS_ESTRUTURAIS
+        and item.get("impacto") == "sem_impacto_comprovado"
+        and item.get("fato") == "sugestao_nao_executavel"
+        and item.get("acao") == "nenhuma"
+    )
+
+
+def _mensagem_alegacao_nao_comprovada(item: dict) -> str:
+    alegacao, prova = {
+        "cabecalho_ambiguo": ("cabeçalho ambíguo", "o cabeçalho é inequívoco"),
+        "divisao_lateral_ambigua": ("divisão ambígua da planilha", "essa divisão não está ambígua"),
+        "coluna_parcialmente_vazia": ("coluna parcialmente vazia", "não há valores ausentes nessa coluna"),
+        "dominio_inconsistente": ("mistura de tipos", "a coluna não mistura tipos"),
+        "formula_sem_cache": ("fórmula sem valor em cache", "não há fórmula sem valor em cache"),
+        "dados_incompletos": ("dados incompletos", "não há valores ausentes"),
+        "relacao_candidata_nao_confirmada": ("relação candidata", "não há relação candidata"),
+    }[item["codigo"]]
+    return (
+        f"A alegação de {alegacao} não foi comprovada. "
+        f"O perfil disponível mostra que {prova}. "
+        "Essa alegação não bloqueia sugestões independentes. "
+        "Nenhuma ação é necessária com base nessa alegação."
+    )
+
+
 def _mensagem(item: dict) -> str | None:
     codigo = item["codigo"]
     local = _texto_local(item.get("local"))
     if codigo in _LACUNAS:
         return _limitar(_mensagem_lacuna(item))
+    if _alegacao_sem_prova(item):
+        return _limitar(_mensagem_alegacao_nao_comprovada(item))
     if item["impacto"] in _IMPACTOS_INFORMATIVOS:
         if codigo not in _ACHADOS_ESTRUTURAIS:
             return None
@@ -1917,6 +1946,88 @@ def _prova_de_lacunas(resultado, contexto):
         return None
 
 
+def _regiao_vinculada(contexto, local):
+    if not isinstance(local, dict):
+        return None
+    for regiao in contexto.get("regioes") or []:
+        if not isinstance(regiao, dict):
+            continue
+        if (
+            regiao.get("arquivo") == local.get("arquivo")
+            and regiao.get("aba") == local.get("aba")
+            and regiao.get("regiao") == local.get("regiao")
+        ):
+            return regiao
+    return None
+
+
+def _itens_vinculados(contexto, chave, local):
+    itens = [item for item in contexto.get(chave) or [] if isinstance(item, dict)]
+    if local is None:
+        return itens
+    return [
+        item
+        for item in itens
+        if item.get("arquivo") == local.get("arquivo")
+        and item.get("aba") == local.get("aba")
+        and item.get("regiao") == local.get("regiao")
+    ]
+
+
+def _campo_uniforme(itens, campo, valor) -> bool:
+    if not itens or any(campo not in item for item in itens):
+        return False
+    return all(item.get(campo) == valor for item in itens)
+
+
+def _alegacao_estrutural_contradita(codigo, local, resultado, contexto) -> bool:
+    """True só quando o contexto vinculado da SCRUM-278 contradiz o achado.
+
+    Sem vínculo ou sem o campo que verifica a condição, devolve False e o
+    diagnóstico segue o caminho anterior.
+    """
+    if _prova_de_lacunas(resultado, contexto) is None:
+        return False
+    if codigo == "cabecalho_ambiguo":
+        regiao = _regiao_vinculada(contexto, local)
+        if not isinstance(regiao, dict):
+            return False
+        cabecalho = regiao.get("cabecalho")
+        ambiguidades = regiao.get("ambiguidades")
+        if not isinstance(cabecalho, str) or not isinstance(ambiguidades, list):
+            return False
+        return cabecalho == "inequivoca" and "cabecalho_ambiguo" not in ambiguidades
+    if codigo == "divisao_lateral_ambigua":
+        regiao = _regiao_vinculada(contexto, local)
+        if not isinstance(regiao, dict) or not isinstance(regiao.get("ambiguidades"), list):
+            return False
+        return "divisao_lateral_ambigua" not in regiao["ambiguidades"]
+    if codigo == "dominio_inconsistente":
+        return _campo_uniforme(_itens_vinculados(contexto, "colunas", local), "dominio_inconsistente", False)
+    if codigo == "dados_incompletos":
+        return _campo_uniforme(_itens_vinculados(contexto, "qualidade", local), "valores_ausentes", 0)
+    if codigo == "formula_sem_cache":
+        return _campo_uniforme(_itens_vinculados(contexto, "qualidade", local), "formulas_sem_cache", 0)
+    if codigo == "relacao_candidata_nao_confirmada":
+        relacoes = contexto.get("relacoes")
+        return isinstance(relacoes, list) and len(relacoes) == 0
+    return False
+
+
+def _diagnostico_contradito(codigo, local, continuidade) -> dict:
+    item = {
+        "codigo": codigo,
+        "categoria": "confirmacao" if codigo == "relacao_candidata_nao_confirmada" else "correcao",
+        "impacto": "sem_impacto_comprovado",
+        "acao": "nenhuma",
+        "continuidade_independente": continuidade,
+        "fato": "sugestao_nao_executavel",
+    }
+    if local is not None:
+        item["local"] = local
+    return item
+
+
 def diagnosticar_resultado(resultado, contexto=None) -> list[dict]:
     """Traduz o documento analisar.v1 já validado. Não promove sugestão inválida.
 
@@ -1925,6 +2036,8 @@ def diagnosticar_resultado(resultado, contexto=None) -> list[dict]:
     como informação. Sugestão já explicada por um achado não gera um
     segundo aviso, e achado repetido no mesmo lugar aparece uma vez.
     Lacuna só vira fato quando o contexto vinculado comprova a ausência.
+    Achado estrutural cuja condição o mesmo contexto contradiz fica como
+    informação, sem fato e sem bloqueio.
     """
     if not isinstance(resultado, dict):
         return []
@@ -1983,6 +2096,9 @@ def diagnosticar_resultado(resultado, contexto=None) -> list[dict]:
             continue
         codigo = item.get("codigo")
         local = _regiao_de(item.get("regiao")) if isinstance(item.get("regiao"), dict) else None
+        if codigo in _ACHADOS_ESTRUTURAIS and _alegacao_estrutural_contradita(codigo, local, resultado, contexto):
+            acrescentar(_diagnostico_contradito(codigo, local, bool(viaveis)))
+            continue
         if codigo == "relacao_candidata_nao_confirmada":
             acrescentar(
                 {
@@ -2047,6 +2163,9 @@ def diagnosticar_resultado(resultado, contexto=None) -> list[dict]:
         if not isinstance(pergunta, dict) or pergunta.get("codigo") not in _PERGUNTAS_DO_ACHADO["divisao_lateral_ambigua"]:
             continue
         local = _regiao_de(pergunta.get("regiao")) if isinstance(pergunta.get("regiao"), dict) else None
+        if _alegacao_estrutural_contradita("divisao_lateral_ambigua", local, resultado, contexto):
+            acrescentar(_diagnostico_contradito("divisao_lateral_ambigua", local, bool(viaveis)))
+            continue
         afetadas = dependentes("divisao_lateral_ambigua", local)
         if not afetadas:
             continue

@@ -27,6 +27,7 @@ from app.services.agente_bi_analisar_service import (
     PROVEDOR_ANTHROPIC,
     PROVEDOR_SIMULADO,
     TransferenciaRecusada,
+    anotacoes_comprovadas,
     governar_representacao,
     texto_de_cabecalho_transferivel,
 )
@@ -605,8 +606,11 @@ def _patch_do_modelo(escopo, carregado, texto, transporte):
 def _contexto_minimizado(carregado, texto) -> dict:
     dataset = carregado.get("dataset") if isinstance(carregado.get("dataset"), dict) else {}
     perfil = carregado.get("perfil") if isinstance(carregado.get("perfil"), dict) else {}
+    estrutura = dataset.get("estrutura") if isinstance(dataset, dict) else None
+    rotulos = anotacoes_comprovadas(estrutura, carregado.get("autorizadas"))["colunas"]
     colunas = []
     for indice, coluna in enumerate(carregado["autorizadas"]):
+        chave = (coluna.get("arquivo"), coluna.get("aba"), coluna.get("regiao"), coluna.get("indice"))
         colunas.append(
             {
                 "indice": indice,
@@ -619,7 +623,7 @@ def _contexto_minimizado(carregado, texto) -> dict:
                 "papel": coluna.get("dimensao_principal"),
                 "tipos": list(coluna.get("tipos") or []),
                 "evidencias": list(coluna.get("evidencias") or []),
-                "nome": texto_de_cabecalho_transferivel(),
+                "nome": texto_de_cabecalho_transferivel(rotulos.get(chave)),
                 "nome_arquivo": None,
                 "nome_aba": None,
                 "descricao": None,

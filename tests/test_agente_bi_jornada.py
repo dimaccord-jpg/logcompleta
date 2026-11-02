@@ -1185,3 +1185,84 @@ def test_diagnostico_aparece_na_etapa_certa_e_a_navegacao_nao_repete_chamada(mon
             assert caixa["width"] <= largura
             page.close()
         browser.close()
+
+
+def test_colaboracao_parada_mostra_o_texto_de_parada_e_andamento_mantem_a_fase(monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    documento = _browser_document(_html(monkeypatch))
+    with sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.set_content(documento, wait_until="domcontentloaded")
+        _instalar(page)
+        page.evaluate("(corpo) => { window.__preparacao = corpo; }", _preparacao())
+        page.evaluate(
+            """() => {
+              window.__descoberta = {
+                ok: true,
+                colaboracao: { estado: "incerta", fase: "gemini_revisando", continuar: false }
+              };
+            }"""
+        )
+        _scripts(page, "descoberta", "dashboard")
+        page.locator("#agente-bi-arquivo").set_input_files(
+            files=[{"name": "fretes.csv", "mimeType": "text/csv", "buffer": b"alfa,valor\nA,10\n"}]
+        )
+        page.wait_for_selector("#agente-bi-prosseguir:not([hidden])")
+        page.locator("#agente-bi-prosseguir").click()
+        page.locator("#agente-bi-examinar").click()
+        page.wait_for_selector("#agente-bi-descobertas")
+        parado = page.locator("#agente-bi-descobertas").inner_text()
+        assert "A análise desta etapa não foi confirmada. A mesma chamada não será reenviada." in parado
+        assert "Envie os dados novamente para iniciar uma nova análise." in parado
+        assert "Gemini está revisando as evidências." not in parado
+        page.close()
+
+        andamento = browser.new_page(viewport={"width": 1280, "height": 900})
+        andamento.set_content(documento, wait_until="domcontentloaded")
+        _instalar(andamento)
+        andamento.evaluate("(corpo) => { window.__preparacao = corpo; }", _preparacao())
+        andamento.evaluate(
+            """() => {
+              let chamadas = 0;
+              const original = window.fetch;
+              window.fetch = (url, opts) => {
+                const alvo = String(url);
+                const metodo = (opts && opts.method) || "GET";
+                if (alvo.indexOf("/descoberta") !== -1 && alvo.indexOf("/preparacao") === -1 && alvo.indexOf("/selecao") === -1 && metodo === "POST") {
+                  chamadas += 1;
+                  if (chamadas === 1) {
+                    return Promise.resolve({
+                      status: 200,
+                      json: () => Promise.resolve({
+                        ok: true,
+                        colaboracao: { estado: "em_andamento", fase: "gemini_revisando", continuar: true }
+                      })
+                    });
+                  }
+                  return new Promise(() => {});
+                }
+                return original(url, opts);
+              };
+            }"""
+        )
+        _scripts(andamento, "descoberta", "dashboard")
+        andamento.locator("#agente-bi-arquivo").set_input_files(
+            files=[{"name": "fretes.csv", "mimeType": "text/csv", "buffer": b"alfa,valor\nA,10\n"}]
+        )
+        andamento.wait_for_selector("#agente-bi-prosseguir:not([hidden])")
+        andamento.locator("#agente-bi-prosseguir").click()
+        andamento.locator("#agente-bi-examinar").click()
+        andamento.wait_for_function(
+            """() => {
+              const painel = document.getElementById("agente-bi-descobertas");
+              return painel && painel.textContent.indexOf("Gemini está revisando as evidências.") !== -1;
+            }"""
+        )
+        texto = andamento.locator("#agente-bi-descobertas").inner_text()
+        assert "Gemini está revisando as evidências." in texto
+        assert "Envie os dados novamente para iniciar uma nova análise." not in texto
+        andamento.close()
+        browser.close()

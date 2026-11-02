@@ -292,11 +292,12 @@ def test_interpretacao_passa_pelo_adaptador_e_patch_invalido_nao_publica(ctx, mo
     assert "4.25" not in enviado
     assert SENTINELA not in enviado
     assert "norte" not in enviado
-    assert "beta" not in enviado
+    assert "beta" in enviado
     conteudo = json.loads(capturado["pedido"]["messages"][0]["content"])
     referencias = [item["referencia"] for item in conteudo["colunas"]]
     assert len({(item["arquivo"], item["aba"], item["regiao"], item["indice"]) for item in referencias}) == len(referencias)
-    assert all(item.get("nome") is None for item in conteudo["colunas"])
+    assert conteudo["colunas"]
+    assert all(item.get("nome") in {"alfa", "beta", "quando", "qtd", "valor"} for item in conteudo["colunas"])
     assert all(item.get("unidade") is None and item.get("descricao") is None for item in conteudo["colunas"])
     assert IaConsumoEvento.query.filter_by(provider="anthropic", franquia_id=franquia.id).count() == 1
     db.session.refresh(franquia)

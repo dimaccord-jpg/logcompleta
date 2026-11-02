@@ -31,6 +31,7 @@ from app.services.agente_bi_analisar_service import (
     AnalisarErro,
     TransferenciaRecusada,
     governar_representacao,
+    anotacoes_comprovadas,
     montar_contexto,
     referencias_da_representacao,
     texto_de_cabecalho_transferivel,
@@ -643,12 +644,15 @@ def _representacao_semantica(contexto: dict, estrutura) -> dict:
     """Acrescenta vínculo e anotação sem mudar a cópia persistida da definição.
 
     Nome de arquivo e de aba permanecem na estrutura local. A representação
-    de transporte conserva as chaves com valor nulo.
+    de transporte conserva essas chaves com valor nulo. O rótulo da coluna
+    só entra quando `texto_de_cabecalho_transferivel` autoriza o texto
+    comprovado por `anotacoes_comprovadas`.
     """
-    del estrutura
     payload = copy.deepcopy(contexto_de_transferencia(contexto))
+    rotulos = anotacoes_comprovadas(estrutura, payload.get("colunas"))["colunas"]
     for coluna in payload["colunas"]:
-        coluna["nome"] = texto_de_cabecalho_transferivel()
+        chave = (coluna.get("arquivo"), coluna.get("aba"), coluna.get("regiao"), coluna.get("indice"))
+        coluna["nome"] = texto_de_cabecalho_transferivel(rotulos.get(chave))
         coluna["descricao"] = None
         coluna["unidade"] = None
     for regiao in payload["regioes"]:

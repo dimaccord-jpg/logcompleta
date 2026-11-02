@@ -39,7 +39,7 @@ from app.services.agente_bi_descoberta_service import (
 )
 from app.services.agente_bi_integracao_service import IntegracaoErro, abrir_operacao, executar_operacao
 from app.services.agente_bi_perfil_semantico_service import perfilar_dataset
-from app.services.agente_bi_persistencia_service import AgenteBiErro, escopo_do_usuario, obter_analise
+from app.services.agente_bi_persistencia_service import AgenteBiErro, escopo_do_usuario, obter_analise, obter_dataset
 from app.services.cleiton_ai_data_governance import DECISION_ALLOW, DECISION_MINIMIZE, GovernanceResult
 from tests.test_agente_bi_analisar import FORMULA_SOMA, SENTINELA, _movimento
 from tests.test_agente_bi_execucao import _seed_financeiro
@@ -217,9 +217,36 @@ def test_modalidades_persistem_analisar_validado(app, modalidades):
         assert "Nao invente" in estado["pedido"]["system"]
         mensagem = _mensagem(estado)
         assert mensagem["intencoes"] == []
-        assert all(coluna.get("nome") is None for coluna in mensagem["colunas"])
-        assert SENTINELA not in estado["pedido"]["messages"][0]["content"]
-        assert "qtd" not in estado["pedido"]["messages"][0]["content"]
+        estrutura = obter_dataset(escopo, dataset_id)["estrutura"]
+        regioes = {
+            (item["arquivo"], item["aba"], item["indice"]): item
+            for item in estrutura["regioes"]
+            if isinstance(item, dict)
+        }
+        esperados = []
+        for coluna in mensagem["colunas"]:
+            regiao = regioes[(coluna["arquivo"], coluna["aba"], coluna["regiao"])]
+            rotulo = None
+            if regiao.get("cabecalho_deteccao") == "inequivoca":
+                for candidato in regiao.get("candidatos") or []:
+                    if not isinstance(candidato, dict) or candidato.get("linha") != regiao.get("cabecalho_linha"):
+                        continue
+                    rotulos = candidato.get("rotulos")
+                    indice = coluna["indice"]
+                    if isinstance(rotulos, list) and isinstance(indice, int) and 0 <= indice < len(rotulos):
+                        bruto = rotulos[indice]
+                        if isinstance(bruto, str):
+                            rotulo = bruto.strip()
+                    break
+            if not rotulo or len(rotulo) > 80 or any(str.isdigit(caractere) for caractere in rotulo):
+                esperados.append(None)
+            else:
+                esperados.append(rotulo)
+        assert [coluna.get("nome") for coluna in mensagem["colunas"]] == esperados
+        conteudo = estado["pedido"]["messages"][0]["content"]
+        assert SENTINELA not in conteudo
+        for trecho in ("norte", "sul", "K200", "movimento", "faixas"):
+            assert trecho not in conteudo
 
 
 def test_referencia_b_entra_no_payload_autorizado_e_nao_e_executada(app):

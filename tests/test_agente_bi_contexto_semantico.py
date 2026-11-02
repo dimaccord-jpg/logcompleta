@@ -107,14 +107,14 @@ def test_contexto_autorizado_leva_nome_referencia_e_intencao(ctx):
     assert payload["dataset"]["versao"] == perfil["dataset"]["versao"]
     assert payload["dataset"]["impressao"] == perfil["dataset"]["impressao"]
     for coluna in payload["colunas"]:
-        assert coluna["nome"] is None
+        assert coluna["nome"] in {"ano_fabricacao", "quantidade_veiculos", "identificador_veiculo", "transportadora"}
         assert {"arquivo", "aba", "regiao", "indice"} <= set(coluna)
         assert coluna["descricao"] is None
         assert coluna["unidade"] is None
     identidades = {(item["arquivo"], item["aba"], item["regiao"], item["indice"]) for item in payload["colunas"]}
     assert len(identidades) == len(payload["colunas"])
-    assert "ano_fabricacao" not in bruto
-    assert "identificador_veiculo" not in bruto
+    assert "ano_fabricacao" in bruto
+    assert "identificador_veiculo" in bruto
     anotado = json.dumps(
         {
             "intencao": payload["intencao"],
@@ -147,7 +147,12 @@ def test_governanca_allow_minimize_block_e_falhas(ctx, monkeypatch):
     assert liberacao["payload"]["dataset"]["impressao"] == perfil["dataset"]["impressao"]
     assert liberacao["payload"]["vinculo_preparacao"] == perfil["vinculo_preparacao"]
     assert pedido["texto"] not in json.dumps(liberacao["payload"], ensure_ascii=False)
-    assert all(item["nome"] is None for item in liberacao["payload"]["colunas"])
+    assert {item["nome"] for item in liberacao["payload"]["colunas"]} == {
+        "ano_fabricacao",
+        "quantidade_veiculos",
+        "identificador_veiculo",
+        "transportadora",
+    }
 
     def minimiza_indice(conteudo, **_kwargs):
         seguro = copy.deepcopy(conteudo)
@@ -241,8 +246,7 @@ def test_colunas_homonimas_conservam_referencia_tecnica(ctx):
     )
     payload = _liberar(perfil, estrutura, {"modalidades": ["A"]})["payload"]
     assert len(payload["colunas"]) == 2
-    assert all(item.get("nome") is None for item in payload["colunas"])
-    assert "transportadora" not in json.dumps(payload, ensure_ascii=False)
+    assert [item.get("nome") for item in payload["colunas"]] == ["transportadora", "transportadora"]
     identidades = {(item["arquivo"], item["aba"], item["regiao"], item["indice"]) for item in payload["colunas"]}
     assert len(identidades) == 2
     assert all(item["descricao"] is None and item["unidade"] is None for item in payload["colunas"])
@@ -326,16 +330,13 @@ def test_linguagem_com_formula_nao_vira_dsl(ctx):
     outra_estrutura, outro_perfil = _base(usuario, _equivalente(), "cadastro.xlsx", "semantico-f2")
     outra = _liberar(outro_perfil, outra_estrutura, {"modalidades": ["A"]})["payload"]
     assert outra["dataset"]["id"] != payload["dataset"]["id"]
-    assert all(item["nome"] is None for item in outra["colunas"])
+    assert {item["nome"] for item in outra["colunas"]} == {"ano", "qtde", "codigo", "empresa"}
     assert all(item["unidade"] is None and item["descricao"] is None for item in outra["colunas"])
     assert all(item["unidade"] is None for item in payload["colunas"])
     numericas = [item for item in payload["colunas"] if "numero" in item["tipos"]]
     assert numericas
     assert all(item["unidade"] is None for item in numericas)
     assert "Leste" not in json.dumps(outra, ensure_ascii=False)
-    bruto_outra = json.dumps(outra, ensure_ascii=False)
-    for cabecalho in ("ano", "qtde", "codigo", "empresa"):
-        assert cabecalho not in bruto_outra
 
 
 def test_evolucao_prepara_contexto_sem_trocar_a_rota(ctx):
@@ -353,7 +354,7 @@ def test_evolucao_prepara_contexto_sem_trocar_a_rota(ctx):
     estrutura = obter_dataset(escopo, perfil["dataset"]["id"])["estrutura"]
     fronteira = preparar_fronteira(perfil, pacote, estrutura=estrutura)
     assert fronteira["chamada_anthropic"] is False
-    assert "beta" not in fronteira["mensagem"]
+    assert "beta" in fronteira["mensagem"]
     assert CELULA not in fronteira["mensagem"]
     valor = _coluna(perfil, dimensao_principal="valor", aba=0)
     pacote_um = _indicador(pacote, "soma", leitura="indicador_de_medida")
@@ -371,7 +372,8 @@ def test_evolucao_prepara_contexto_sem_trocar_a_rota(ctx):
     governado = preparar_contexto_semantico(carregado, "quero ver a tendencia de beta")
     assert governado is not None
     assert governado["intencao"] == "quero ver a tendencia de beta"
-    assert all(item.get("nome") is None for item in governado["colunas"])
+    assert governado["colunas"]
+    assert all(item.get("nome") in {"alfa", "beta", "quando", "qtd", "valor"} for item in governado["colunas"])
     assert all(item["unidade"] is None for item in governado["colunas"])
     identidades = {
         (item["referencia"]["arquivo"], item["referencia"]["aba"], item["referencia"]["regiao"], item["referencia"]["indice"])
@@ -452,7 +454,10 @@ def test_allow_preserva_intencao_na_descoberta_e_na_evolucao(ctx, monkeypatch):
         governado = preparar_contexto_semantico(carregado, frase)
         assert governado is not None
         assert governado["intencao"] == frase
-        assert all(item.get("nome") is None for item in governado["colunas"])
+        assert all(
+            item.get("nome") in {"ano_fabricacao", "quantidade_veiculos", "identificador_veiculo", "transportadora"}
+            for item in governado["colunas"]
+        )
 
 
 def test_bloqueio_tecnico_encerra_sem_segunda_avaliacao(ctx, monkeypatch):
@@ -627,7 +632,8 @@ def test_cabecalho_de_placa_nao_entra_no_transporte(ctx, monkeypatch):
     _anotacoes_de_nome_nulas(integrado)
     assert [_coord(item) for item in integrado["colunas"]] == originais
     assert [(item["arquivo"], item["aba"], item["regiao"]) for item in integrado["regioes"]] == regioes_originais
-    assert all(item["nome"] is None for item in integrado["colunas"])
+    assert [item["nome"] for item in integrado["colunas"]] == [None, None, "quantidade"]
+    assert all(nome is None or ("ABC1D23" not in nome and "ABC-1234" not in nome) for nome in (item["nome"] for item in integrado["colunas"]))
 
     fronteira = preparar_fronteira(perfil, pacote, estrutura=estrutura)
     pedido = argumentos_do_adaptador(fronteira, escopo, chave_idempotencia="semantico.placa.local")
@@ -639,7 +645,8 @@ def test_cabecalho_de_placa_nao_entra_no_transporte(ctx, monkeypatch):
     _anotacoes_de_nome_nulas(definido)
     assert [_coord(item) for item in definido["colunas"]] == originais
     assert [(item["arquivo"], item["aba"], item["regiao"]) for item in definido["regioes"]] == regioes_originais
-    assert all(item["nome"] is None for item in definido["colunas"])
+    assert [item["nome"] for item in definido["colunas"]] == [None, None, "quantidade"]
+    assert all(nome is None or ("ABC1D23" not in nome and "ABC-1234" not in nome) for nome in (item["nome"] for item in definido["colunas"]))
 
     carregado = _carregado(perfil, estrutura)
     governado = preparar_contexto_semantico(carregado, "comparar quantidades")
@@ -650,7 +657,8 @@ def test_cabecalho_de_placa_nao_entra_no_transporte(ctx, monkeypatch):
     _anotacoes_de_nome_nulas(evoluido)
     referencias = [_coord(item["referencia"]) for item in evoluido["colunas"]]
     assert referencias == originais
-    assert all(item.get("nome") is None for item in evoluido["colunas"])
+    assert [item.get("nome") for item in evoluido["colunas"]] == [None, None, "quantidade"]
+    assert all(nome is None or ("ABC1D23" not in nome and "ABC-1234" not in nome) for nome in (item.get("nome") for item in evoluido["colunas"]))
 
     persistida = obter_dataset(escopo, perfil["dataset"]["id"])["estrutura"]
     assert persistida["arquivos"][0]["nome"] == "ABC1D23.xlsx"
