@@ -7,6 +7,7 @@ vira o documento final, sem outra chamada.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -846,7 +847,15 @@ def _materializar(escopo, dataset, pedido, perfil, colaboracao_id, revisao, docu
         if existente.contrato_versao != CONTRATO_ANALISAR or existente.estado != "concluida":
             raise ColaboracaoErro("identidade_inconsistente", 409)
         return _pronto(escopo, existente)
-    proposta = documento.get("proposta")
+    proposta = _preservar_viaveis(
+        escopo,
+        dataset,
+        pedido,
+        perfil,
+        colaboracao_id,
+        revisao,
+        documento.get("proposta"),
+    )
     try:
         saida = analisar(perfil, pedido, provedor=lambda _contexto: proposta, proveniencia=PROVEDOR_ANTHROPIC)
     except AnalisarErro:
@@ -1482,7 +1491,8 @@ def _fase_da_analise(analise) -> str:
 def _pronto(escopo, analise: AgenteBiAnalise) -> dict:
     from app.services.agente_bi_descoberta_service import _publicar_descoberta, diagnostico_de_cobertura
 
-    corpo = _publicar_descoberta(analise_para_dict(analise), _json(analise.resultado_json))
+    resultado = _json(analise.resultado_json)
+    corpo = _publicar_descoberta(analise_para_dict(analise), resultado, _contexto_da_publicacao(analise, resultado))
     corpo["colaboracao"] = _colaboracao("concluida", _FASE_PRONTO, False)
     descartes = _descartes_da_origem(escopo, analise)
     if descartes:
@@ -1492,6 +1502,104 @@ def _pronto(escopo, analise: AgenteBiAnalise) -> dict:
         if aviso is not None:
             corpo["diagnosticos"] = [aviso] + list(corpo.get("diagnosticos") or [])
     return corpo
+
+
+def _contexto_da_publicacao(analise: AgenteBiAnalise, resultado):
+    """Contexto analítico só entra como prova quando o vínculo confere."""
+    if not isinstance(resultado, dict):
+        return None
+    try:
+        contexto = _contexto_analitico(analise)
+    except ExecucaoErro:
+        return None
+    if not isinstance(contexto, dict):
+        return None
+    if contexto.get("vinculo_preparacao") != resultado.get("vinculo_preparacao"):
+        return None
+    dataset = contexto.get("dataset") if isinstance(contexto.get("dataset"), dict) else {}
+    if (
+        dataset.get("id") != int(analise.dataset_id)
+        or dataset.get("versao") != int(analise.dataset_versao)
+        or dataset.get("impressao") != analise.dataset_impressao
+    ):
+        return None
+    return contexto
+
+
+def _preservar_viaveis(escopo, dataset, pedido, perfil, colaboracao_id, revisao, proposta):
+    """Reintroduz sugestões viáveis anteriores que a revisão omitiu.
+
+    A revisão tem prioridade. A união inválida devolve só a revisão.
+    Não fabrica sugestão.
+    """
+    if not isinstance(proposta, dict):
+        return proposta
+    atuais = proposta.get("sugestoes")
+    descobertas = proposta.get("descobertas")
+    if not isinstance(atuais, list) or not isinstance(descobertas, list):
+        return proposta
+    teto = _TETO_LISTA["sugestoes"]
+    if len(atuais) >= teto:
+        return proposta
+    ocupadas = {_combinacao_sugestao(item) for item in atuais if isinstance(item, dict)}
+    preservadas = []
+    for tecnica in reversed(_tecnicas(escopo, dataset, colaboracao_id)):
+        if int(tecnica.id) >= int(revisao.id) or tecnica.estado != "concluida" or not tecnica.resultado_json:
+            continue
+        documento = _json(tecnica.resultado_json)
+        if not isinstance(documento, dict) or documento.get("papel") != _PAPEL_CLAUDE:
+            continue
+        anterior = documento.get("proposta")
+        if not isinstance(anterior, dict) or not _tecnica_integra(tecnica, documento):
+            continue
+        for item in anterior.get("sugestoes") or []:
+            if not isinstance(item, dict) or item.get("status") != "viavel":
+                continue
+            chave = _combinacao_sugestao(item)
+            if chave in ocupadas:
+                continue
+            copia = copy.deepcopy(item)
+            if not _analisar_aceita(perfil, pedido, {"descobertas": [], "sugestoes": [copia]}):
+                continue
+            preservadas.append(copia)
+            ocupadas.add(chave)
+            if len(atuais) + len(preservadas) >= teto:
+                break
+        if len(atuais) + len(preservadas) >= teto:
+            break
+    if not preservadas:
+        return proposta
+    unida = {
+        "descobertas": copy.deepcopy(descobertas),
+        "sugestoes": copy.deepcopy(list(atuais)) + preservadas,
+    }
+    if not _analisar_aceita(perfil, pedido, unida):
+        return proposta
+    return unida
+
+
+def _analisar_aceita(perfil, pedido, proposta) -> bool:
+    corpo = copy.deepcopy(proposta)
+    try:
+        analisar(perfil, pedido, provedor=lambda _contexto, corpo=corpo: corpo, proveniencia=PROVEDOR_ANTHROPIC)
+    except AnalisarErro:
+        return False
+    return True
+
+
+def _combinacao_sugestao(item) -> tuple:
+    def coordenada(valor):
+        if not isinstance(valor, dict):
+            return None
+        return tuple(valor.get(chave) for chave in ("arquivo", "aba", "regiao", "indice"))
+
+    return (
+        item.get("operacao"),
+        item.get("grafico"),
+        coordenada(item.get("medida")),
+        coordenada(item.get("agrupamento")),
+        coordenada(item.get("segunda_medida")),
+    )
 
 
 def _estado(estado: str, fase: str | None, continuar: bool) -> dict:

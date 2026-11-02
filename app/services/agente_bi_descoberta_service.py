@@ -23,6 +23,7 @@ from app.models import AgenteBiAnalise, AgenteBiDataset
 from app.services.agente_bi_analisar_service import (
     CATALOGO_CONTRATO,
     CONTRATO_ANALISAR,
+    CONTRATO_CONTEXTO_ANALISAR,
     PROVEDOR_ANTHROPIC,
     PROVEDOR_SIMULADO,
     AnalisarErro,
@@ -31,6 +32,8 @@ from app.services.agente_bi_analisar_service import (
     _STATUS as _STATUS_SUGESTAO,
     _validar_pedido,
     analisar_dataset,
+    lacunas_comprovadas,
+    lacunas_refutadas,
     montar_contexto,
     provedor_simulado,
 )
@@ -220,7 +223,7 @@ def _descobrir_simulado(escopo, dataset_id: int, pedido: dict) -> dict:
         analise["versao"],
         len(resultado.get("sugestoes") or []),
     )
-    return _publicar_descoberta(analise, resultado)
+    return _publicar_descoberta(analise, resultado, _contexto_da_descoberta(escopo, dataset_id, pedido, resultado))
 
 
 def _descobrir_real(escopo, dataset_id: int, pedido: dict, *, transporte=None) -> dict:
@@ -342,7 +345,7 @@ def _publicar_ciclo(escopo, resultado: dict) -> dict:
         len(saida.get("sugestoes") or []),
         PROVEDOR_ANTHROPIC,
     )
-    return _publicar_descoberta(analise, saida)
+    return _publicar_descoberta(analise, saida, _contexto_da_analise(escopo, analise, saida))
 
 
 def _identidade_operacao(escopo, dataset: AgenteBiDataset, pedido: dict) -> str:
@@ -676,7 +679,7 @@ def _perguntas_obrigatorias(resultado, identificadores, conhecidas: set[str]) ->
     return obrigatorias
 
 
-def _publicar_descoberta(analise: dict, resultado: dict) -> dict:
+def _publicar_descoberta(analise: dict, resultado: dict, contexto=None) -> dict:
     return {
         "ok": True,
         "analise_id": analise["id"],
@@ -688,8 +691,60 @@ def _publicar_descoberta(analise: dict, resultado: dict) -> dict:
         "etapa": analise["etapa"],
         "contrato_versao": analise["contrato_versao"],
         "resultado": resultado,
-        "diagnosticos": diagnosticar_resultado(resultado),
+        "diagnosticos": diagnosticar_resultado(resultado, contexto),
     }
+
+
+def _contexto_da_descoberta(escopo, dataset_id, pedido, resultado):
+    """Contexto da rodada simulada. Vínculo divergente não prova lacuna."""
+    if not isinstance(resultado, dict) or not isinstance(pedido, dict):
+        return None
+    try:
+        perfil = perfilar_dataset(escopo, dataset_id)
+        contexto = montar_contexto(perfil, pedido)
+    except (AnalisarErro, PerfilErro, AgenteBiErro):
+        return None
+    return _contexto_vinculado(resultado, contexto, dataset_id)
+
+
+def _contexto_da_analise(escopo, analise, resultado):
+    """Reconstrói o contexto pelo pedido gravado na operação durável."""
+    if not isinstance(analise, dict) or not isinstance(resultado, dict):
+        return None
+    regras = analise.get("regras_negocio")
+    pedido = regras.get("pedido") if isinstance(regras, dict) else None
+    dataset_id = analise.get("dataset_id")
+    if not isinstance(pedido, dict) or isinstance(dataset_id, bool) or not isinstance(dataset_id, int):
+        return None
+    try:
+        perfil = perfilar_dataset(escopo, dataset_id)
+        contexto = montar_contexto(perfil, pedido)
+    except (AnalisarErro, PerfilErro, AgenteBiErro):
+        return None
+    dataset = contexto.get("dataset") if isinstance(contexto.get("dataset"), dict) else {}
+    if (
+        dataset.get("id") != dataset_id
+        or dataset.get("versao") != analise.get("versao")
+        or dataset.get("impressao") != analise.get("impressao")
+    ):
+        return None
+    return _contexto_vinculado(resultado, contexto, dataset_id)
+
+
+def _contexto_vinculado(resultado, contexto, dataset_id):
+    if not isinstance(contexto, dict) or contexto.get("contrato") != CONTRATO_CONTEXTO_ANALISAR:
+        return None
+    if contexto.get("vinculo_preparacao") != resultado.get("vinculo_preparacao"):
+        return None
+    dataset = contexto.get("dataset") if isinstance(contexto.get("dataset"), dict) else {}
+    if dataset.get("id") != dataset_id:
+        return None
+    trilha = resultado.get("trilha") if isinstance(resultado.get("trilha"), dict) else {}
+    if trilha.get("dataset_id") not in (None, dataset_id):
+        return None
+    if trilha.get("dataset_impressao") not in (None, dataset.get("impressao")):
+        return None
+    return contexto
 
 
 def _publicar_selecao(analise: dict, documento: dict) -> dict:
@@ -1271,9 +1326,51 @@ def _mensagem_informativa(item: dict) -> str | None:
     return f"Fato: {fato}. {efeito}"
 
 
+def _mensagem_lacuna(item: dict) -> str:
+    necessario = {
+        "dimensao_temporal_ausente": "uma data ou período",
+        "medida_numerica_ausente": "uma medida numérica",
+        "relacao_ausente": "a relação entre as regiões",
+        "sem_registros": "pelo menos um registro",
+    }[item["codigo"]]
+    continuidade = (
+        "As análises que não dependem desta informação podem continuar."
+        if item["continuidade_independente"]
+        else "Não há outro indicador independente comprovado."
+    )
+    if item["impacto"] == "sem_impacto_comprovado":
+        return (
+            f"A alegação de ausência de {necessario} não foi comprovada. "
+            "O perfil disponível mostra que esse dado existe. "
+            "Essa alegação não bloqueia sugestões independentes. "
+            "Nenhuma ação é necessária com base nessa alegação."
+        )
+    if item.get("hipotese") == "indicadores_dependem_do_dado" and item["fato"] == "dado_necessario":
+        return (
+            f"Fato: não há {necessario}. "
+            "Hipótese analítica: o indicador pedido pode depender desse dado. "
+            "Inclua esse dado na planilha de origem e envie uma nova versão. "
+            f"{continuidade}"
+        )
+    if item.get("hipotese") == "indicadores_dependem_do_dado":
+        return (
+            f"Fato: o diagnóstico recebeu uma alegação de ausência de {necessario}. "
+            "Essa ausência não está comprovada. O perfil disponível não comprova essa ausência. "
+            "Hipótese analítica: o indicador pedido pode depender desse dado. "
+            f"{continuidade}"
+        )
+    return (
+        f"Fato: falta {necessario} para produzir o indicador pedido. "
+        "Inclua esse dado na planilha de origem e envie uma nova versão. "
+        f"{continuidade}"
+    )
+
+
 def _mensagem(item: dict) -> str | None:
     codigo = item["codigo"]
     local = _texto_local(item.get("local"))
+    if codigo in _LACUNAS:
+        return _limitar(_mensagem_lacuna(item))
     if item["impacto"] in _IMPACTOS_INFORMATIVOS:
         if codigo not in _ACHADOS_ESTRUTURAIS:
             return None
@@ -1395,18 +1492,6 @@ def _mensagem(item: dict) -> str | None:
             "Isso não é uma falha genérica de autorização. "
             "Ajuste a planilha de origem para caber no limite já suportado e envie uma nova versão. "
             "As colunas não foram cortadas nem renumeradas."
-        )
-    elif codigo in _LACUNAS:
-        necessario = {
-            "dimensao_temporal_ausente": "uma data ou período",
-            "medida_numerica_ausente": "uma medida numérica",
-            "relacao_ausente": "a relação entre as regiões",
-            "sem_registros": "pelo menos um registro",
-        }[codigo]
-        texto = (
-            f"Fato: falta {necessario} para produzir o indicador pedido. "
-            "Inclua esse dado na planilha de origem e envie uma nova versão. "
-            f"{continuidade}"
         )
     elif codigo == "sugestao_nao_executavel":
         texto = (
@@ -1813,13 +1898,33 @@ def _tupla_coluna(item):
     return tuple(partes)
 
 
-def diagnosticar_resultado(resultado) -> list[dict]:
+def _prova_de_lacunas(resultado, contexto):
+    """Par (refutadas, comprovadas), ou None sem força probatória."""
+    if not isinstance(resultado, dict) or not isinstance(contexto, dict):
+        return None
+    if contexto.get("contrato") != CONTRATO_CONTEXTO_ANALISAR:
+        return None
+    vinculo = contexto.get("vinculo_preparacao")
+    if not isinstance(vinculo, str) or resultado.get("vinculo_preparacao") != vinculo:
+        return None
+    if not isinstance(contexto.get("regioes"), list) or not contexto["regioes"]:
+        return None
+    if not isinstance(contexto.get("colunas"), list) or not isinstance(contexto.get("relacoes"), list):
+        return None
+    try:
+        return lacunas_refutadas(contexto), lacunas_comprovadas(contexto)
+    except (KeyError, TypeError, AnalisarErro):
+        return None
+
+
+def diagnosticar_resultado(resultado, contexto=None) -> list[dict]:
     """Traduz o documento analisar.v1 já validado. Não promove sugestão inválida.
 
     O achado estrutural só pede intervenção quando uma sugestão não viável
     da mesma região cita a pergunta ligada a ele. Sem essa ligação, fica
     como informação. Sugestão já explicada por um achado não gera um
     segundo aviso, e achado repetido no mesmo lugar aparece uma vez.
+    Lacuna só vira fato quando o contexto vinculado comprova a ausência.
     """
     if not isinstance(resultado, dict):
         return []
@@ -1958,14 +2063,25 @@ def diagnosticar_resultado(resultado) -> list[dict]:
                 "indicadores": [valor for valor in (indicador(sugestao) for sugestao in afetadas) if valor is not None],
             }
         )
+    prova = _prova_de_lacunas(resultado, contexto)
+    refutadas, comprovadas = prova if prova is not None else (None, None)
     for item in sugestoes:
         if not isinstance(item, dict) or item.get("status") == "viavel":
             continue
         lacuna = item.get("lacuna")
         if lacuna in _LACUNAS:
             local = _regiao_de(item.get("regiao")) if isinstance(item.get("regiao"), dict) else None
-            acrescentar(
-                {
+            if refutadas is not None and lacuna in refutadas:
+                base_lacuna = {
+                    "codigo": lacuna,
+                    "categoria": "dados_adicionais",
+                    "impacto": "sem_impacto_comprovado",
+                    "acao": "nenhuma",
+                    "continuidade_independente": bool(viaveis),
+                    "fato": "sugestao_nao_executavel",
+                }
+            elif comprovadas is not None and lacuna in comprovadas:
+                base_lacuna = {
                     "codigo": lacuna,
                     "categoria": "dados_adicionais",
                     "impacto": "dado_necessario",
@@ -1973,9 +2089,20 @@ def diagnosticar_resultado(resultado) -> list[dict]:
                     "continuidade_independente": bool(viaveis),
                     "fato": "dado_necessario",
                     "hipotese": "indicadores_dependem_do_dado",
-                    **({} if local is None else {"local": local}),
                 }
-            )
+            else:
+                base_lacuna = {
+                    "codigo": lacuna,
+                    "categoria": "dados_adicionais",
+                    "impacto": "dado_necessario",
+                    "acao": "informar_dado",
+                    "continuidade_independente": bool(viaveis),
+                    "fato": "sugestao_nao_executavel",
+                    "hipotese": "indicadores_dependem_do_dado",
+                }
+            if local is not None:
+                base_lacuna["local"] = local
+            acrescentar(base_lacuna)
         elif id(item) in explicadas:
             continue
         elif item.get("status") in {"condicional", "dependente_de_novos_dados"}:

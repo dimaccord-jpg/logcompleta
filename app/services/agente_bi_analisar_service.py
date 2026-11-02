@@ -2257,6 +2257,53 @@ def _alguma_medida(contexto) -> bool:
     return any(_medidas(contexto, regiao) for regiao in contexto["regioes"])
 
 
+def lacunas_refutadas(contexto) -> frozenset:
+    """Alegações de ausência que o contexto estrutural contradiz.
+
+    Usa medida, dimensão temporal, relação e quantidade de linhas.
+    Contexto incompleto não refuta nada.
+    """
+    if not isinstance(contexto, dict) or contexto.get("contrato") != CONTRATO_CONTEXTO_ANALISAR:
+        return frozenset()
+    refutadas = set()
+    if _alguma_medida(contexto):
+        refutadas.add("medida_numerica_ausente")
+    if any(_temporal(contexto, regiao) for regiao in contexto["regioes"]):
+        refutadas.add("dimensao_temporal_ausente")
+    if contexto["relacoes"]:
+        refutadas.add("relacao_ausente")
+    if any(regiao["linhas"] for regiao in contexto["regioes"]):
+        refutadas.add("sem_registros")
+    return frozenset(refutadas)
+
+
+def lacunas_comprovadas(contexto) -> frozenset:
+    """Alegações de ausência que o contexto estrutural comprova.
+
+    Não refutar não comprova. Só entram as quatro categorias com prova
+    nos campos já presentes do contexto. Qualquer outra fica de fora.
+    Contexto incompleto não comprova nada.
+    """
+    if not isinstance(contexto, dict) or contexto.get("contrato") != CONTRATO_CONTEXTO_ANALISAR:
+        return frozenset()
+    comprovadas = set()
+    colunas = contexto["colunas"]
+    dominio_inconsistente = any(coluna["dominio_inconsistente"] for coluna in colunas)
+    if contexto["regioes"] and all(regiao["linhas"] == 0 for regiao in contexto["regioes"]):
+        comprovadas.add("sem_registros")
+    if not _alguma_medida(contexto) and not dominio_inconsistente:
+        comprovadas.add("medida_numerica_ausente")
+    if (
+        not any(_e_temporal(coluna) for coluna in colunas)
+        and not _temporal_ambiguo(contexto)
+        and not dominio_inconsistente
+    ):
+        comprovadas.add("dimensao_temporal_ausente")
+    if not contexto["relacoes"] and contexto["orcamento_relacoes"]["analise_relacoes_parcial"] is False:
+        comprovadas.add("relacao_ausente")
+    return frozenset(comprovadas)
+
+
 def _numerica(coluna) -> bool:
     return coluna["dimensao_principal"] in _NUMERICAS
 
