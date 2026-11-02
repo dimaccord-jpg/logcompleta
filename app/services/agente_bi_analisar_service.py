@@ -1850,22 +1850,34 @@ def _perguntas(contexto: dict, rascunhos: list[dict], *, lexical: bool = True) -
         garantir(codigo, regiao, None, None)
 
     mantidos = []
+    relacao_sem_ancora = 0
+    teto_perguntas = 0
     for rascunho in rascunhos:
         ancoras = []
+        so_relacao = True
         for codigo in rascunho["duvidas"]:
             if codigo == "confirmar_relacao_candidata":
                 for ancora in ancoras_de_relacao(rascunho["regiao"]):
                     if ancora not in ancoras:
                         ancoras.append(ancora)
                 continue
+            so_relacao = False
             ancora = localizar((codigo, _coord(rascunho["regiao"]), None, None))
             if ancora:
                 ancoras.append(ancora)
         if rascunho["duvidas"] and not ancoras:
+            if so_relacao:
+                relacao_sem_ancora += 1
+            else:
+                teto_perguntas += 1
             continue
         rascunho["duvidas"] = ancoras
         mantidos.append(rascunho)
     rascunhos[:] = mantidos
+    if relacao_sem_ancora:
+        _registrar_descarte("perguntas", "relacao_sem_ancora", quantidade=relacao_sem_ancora)
+    if teto_perguntas:
+        _registrar_descarte("perguntas", "teto_perguntas", quantidade=teto_perguntas)
     return saida
 
 
@@ -2005,14 +2017,42 @@ def _validar_sugestao(item, contexto, perguntas) -> dict:
         coluna_medida = _coluna_no_contexto(contexto, medida)
         coluna_grupo = _coluna_no_contexto(contexto, agrupamento)
         coluna_segunda = _coluna_no_contexto(contexto, segunda)
-        if not _operacao_cabe(operacao, coluna_medida, coluna_segunda):
+        motivo_operacao = _motivo_operacao(operacao, coluna_medida, coluna_segunda)
+        if motivo_operacao is not None:
+            _registrar_descarte(
+                "validar_sugestao",
+                motivo_operacao,
+                codigo="operacao_incompativel",
+                status=item["status"],
+                operacao=operacao,
+                grafico=grafico,
+            )
             raise AnalisarErro("operacao_incompativel")
-        if not _grafico_cabe(grafico, operacao, coluna_medida, coluna_grupo, coluna_segunda):
+        motivo_grafico = _motivo_grafico(grafico, operacao, coluna_medida, coluna_grupo, coluna_segunda)
+        if motivo_grafico is not None:
+            _registrar_descarte(
+                "validar_sugestao",
+                motivo_grafico,
+                codigo="grafico_incompativel",
+                status=item["status"],
+                operacao=operacao,
+                grafico=grafico,
+            )
             raise AnalisarErro("grafico_incompativel")
         if not _evidencias_existem(evidencias, coluna_medida, coluna_grupo, coluna_segunda, regiao, contexto):
             raise AnalisarErro("evidencia_ausente")
-        if item["status"] == "viavel" and not _regiao_viavel(contexto, regiao, [coluna_medida, coluna_grupo, coluna_segunda]):
-            raise AnalisarErro("contrato_saida_invalido", motivo=MOTIVO_VIABILIDADE)
+        if item["status"] == "viavel":
+            motivo_regiao = _motivo_regiao(contexto, regiao, [coluna_medida, coluna_grupo, coluna_segunda])
+            if motivo_regiao is not None:
+                _registrar_descarte(
+                    "validar_sugestao",
+                    motivo_regiao,
+                    codigo="contrato_saida_invalido",
+                    status=item["status"],
+                    operacao=operacao,
+                    grafico=grafico,
+                )
+                raise AnalisarErro("contrato_saida_invalido", motivo=MOTIVO_VIABILIDADE)
     return {
         "id": item["id"],
         "status": item["status"],
@@ -2062,49 +2102,208 @@ def _mesma_regiao(regiao, medida, agrupamento, segunda) -> None:
         raise AnalisarErro("juncao_nao_confirmada")
 
 
-def _regiao_viavel(contexto, regiao_ref, colunas) -> bool:
+_ETAPAS_DESCARTE = frozenset({"validar_sugestao", "perguntas", "preservar_viaveis", "materializar"})
+_CODIGOS_ANALISAR = frozenset(
+    {
+        "autorizacao_indevida",
+        "contexto_nao_autorizado",
+        "contrato_saida_invalido",
+        "evidencia_ausente",
+        "grafico_incompativel",
+        "juncao_nao_confirmada",
+        "metrica_inventada",
+        "operacao_incompativel",
+        "pedido_invalido",
+        "perfil_ausente",
+        "provedor_indisponivel",
+        "provedor_nao_autorizado",
+        "referencia_inexistente",
+    }
+)
+_MOTIVOS_DIAGNOSTICO = frozenset(
+    {
+        "agrupamento_ausente",
+        "agrupamento_igual_medida",
+        "agrupamento_nao_temporal",
+        "agrupamento_numerico",
+        "agrupamento_sem_texto",
+        "agrupamento_temporal",
+        "cabecalho_ambiguo",
+        "cabecalho_nao_inequivoco",
+        "cardinalidade_barra",
+        "cardinalidade_pizza",
+        "contrato_divergente",
+        "dispersao_sem_par",
+        "distintos_insuficientes",
+        "divisao_lateral_ambigua",
+        "dominio_inconsistente",
+        "formula_sem_cache",
+        "grafico_nao_catalogado",
+        "indicador_com_agrupamento",
+        "medida_ausente",
+        "medida_nao_numerica",
+        "operacao_nao_catalogada",
+        "par_com_agrupamento",
+        "par_sem_dispersao",
+        "par_sem_segunda",
+        "presentes_insuficientes",
+        "regiao_ausente",
+        "relacao_sem_ancora",
+        "segunda_ausente",
+        "segunda_nao_numerica",
+        "segunda_presente",
+        "teto_perguntas",
+        MOTIVO_VIABILIDADE,
+    }
+)
+_FORA_DO_CATALOGO = "fora_do_catalogo"
+
+
+def _token_catalogo(valor, permitidos):
+    if isinstance(valor, str) and valor in permitidos:
+        return valor
+    return _FORA_DO_CATALOGO
+
+
+def _token_inteiro(valor):
+    if isinstance(valor, int) and not isinstance(valor, bool):
+        return valor
+    return _FORA_DO_CATALOGO
+
+
+def _registrar_descarte(
+    etapa,
+    motivo,
+    *,
+    codigo=None,
+    status=None,
+    operacao=None,
+    grafico=None,
+    quantidade=None,
+    analise_id=None,
+    pai_id=None,
+) -> None:
+    """Registra só enumerações e inteiros. Nunca propaga erro do log."""
+    try:
+        campos = ["evento=agente_bi_descarte", "etapa=%s", "motivo=%s"]
+        valores = [
+            _token_catalogo(etapa, _ETAPAS_DESCARTE),
+            _token_catalogo(motivo, _MOTIVOS_DIAGNOSTICO),
+        ]
+
+        def incluir(nome, valor, filtro):
+            if valor is None:
+                return
+            campos.append(nome + "=%s")
+            valores.append(filtro(valor))
+
+        incluir("codigo", codigo, lambda valor: _token_catalogo(valor, _CODIGOS_ANALISAR))
+        incluir("status", status, lambda valor: _token_catalogo(valor, _STATUS))
+        incluir("operacao", operacao, lambda valor: _token_catalogo(valor, OPERACOES))
+        incluir("grafico", grafico, lambda valor: _token_catalogo(valor, GRAFICOS))
+        incluir("quantidade", quantidade, _token_inteiro)
+        incluir("analise_id", analise_id, _token_inteiro)
+        incluir("pai_id", pai_id, _token_inteiro)
+        logger.info(" ".join(campos), *valores)
+    except Exception:
+        return
+
+
+def _motivo_regiao(contexto, regiao_ref, colunas) -> str | None:
     regiao = _achar_regiao(contexto, regiao_ref)
     qualidade = _achar_qualidade(contexto, regiao_ref)
     if regiao is None or qualidade is None:
-        return False
-    if regiao["cabecalho"] != "inequivoca" or qualidade["formulas_sem_cache"] > 0:
-        return False
-    if "cabecalho_ambiguo" in regiao["ambiguidades"] or "divisao_lateral_ambigua" in regiao["ambiguidades"]:
-        return False
-    return all(coluna is None or coluna["dominio_inconsistente"] is False for coluna in colunas)
+        return "regiao_ausente"
+    if regiao["cabecalho"] != "inequivoca":
+        return "cabecalho_nao_inequivoco"
+    if qualidade["formulas_sem_cache"] > 0:
+        return "formula_sem_cache"
+    if "cabecalho_ambiguo" in regiao["ambiguidades"]:
+        return "cabecalho_ambiguo"
+    if "divisao_lateral_ambigua" in regiao["ambiguidades"]:
+        return "divisao_lateral_ambigua"
+    for coluna in colunas:
+        if coluna is None or coluna["dominio_inconsistente"] is False:
+            continue
+        return "dominio_inconsistente"
+    return None
+
+
+def _regiao_viavel(contexto, regiao_ref, colunas) -> bool:
+    return _motivo_regiao(contexto, regiao_ref, colunas) is None
+
+
+def _motivo_operacao(operacao, medida, segunda=None) -> str | None:
+    if medida is None:
+        return "medida_ausente"
+    if medida["dominio_inconsistente"]:
+        return "dominio_inconsistente"
+    if operacao == OPERACAO_PAR:
+        if segunda is None:
+            return "segunda_ausente"
+        if not _numerica(medida):
+            return "medida_nao_numerica"
+        if not _numerica(segunda):
+            return "segunda_nao_numerica"
+        if segunda["dominio_inconsistente"]:
+            return "dominio_inconsistente"
+        return None
+    if operacao in {"soma", "minimo", "maximo"}:
+        if not _numerica(medida):
+            return "medida_nao_numerica"
+        if not medida["presentes"] >= 1:
+            return "presentes_insuficientes"
+        return None
+    if operacao == "media":
+        if not _numerica(medida):
+            return "medida_nao_numerica"
+        if not medida["presentes"] >= 2:
+            return "presentes_insuficientes"
+        return None
+    if operacao == "contagem":
+        if not medida["presentes"] >= 1:
+            return "presentes_insuficientes"
+        return None
+    if operacao == "contagem_distinta":
+        if not medida["presentes"] >= 1:
+            return "presentes_insuficientes"
+        if not medida["distintos"] >= 1:
+            return "distintos_insuficientes"
+        return None
+    return "operacao_nao_catalogada"
 
 
 def _operacao_cabe(operacao, medida, segunda=None) -> bool:
-    if medida is None or medida["dominio_inconsistente"]:
-        return False
-    if operacao == OPERACAO_PAR:
-        return segunda is not None and _numerica(medida) and _numerica(segunda) and not segunda["dominio_inconsistente"]
-    if operacao in {"soma", "minimo", "maximo"}:
-        return _numerica(medida) and medida["presentes"] >= 1
-    if operacao == "media":
-        return _numerica(medida) and medida["presentes"] >= 2
-    if operacao == "contagem":
-        return medida["presentes"] >= 1
-    if operacao == "contagem_distinta":
-        return medida["presentes"] >= 1 and medida["distintos"] >= 1
-    return False
+    return _motivo_operacao(operacao, medida, segunda) is None
 
 
-def _grafico_cabe(grafico, operacao, medida, agrupamento, segunda) -> bool:
+def _motivo_grafico(grafico, operacao, medida, agrupamento, segunda) -> str | None:
     if operacao == OPERACAO_PAR:
-        return grafico == "dispersao" and agrupamento is None and segunda is not None
+        if grafico != "dispersao":
+            return "par_sem_dispersao"
+        if agrupamento is not None:
+            return "par_com_agrupamento"
+        if segunda is None:
+            return "par_sem_segunda"
+        return None
     if segunda is not None:
-        return False
-    if grafico == "dispersao" or agrupamento is not None and _coord(agrupamento) == _coord(medida):
-        return False
+        return "segunda_presente"
+    if grafico == "dispersao":
+        return "dispersao_sem_par"
+    if agrupamento is not None and _coord(agrupamento) == _coord(medida):
+        return "agrupamento_igual_medida"
     if grafico == "indicador":
-        return agrupamento is None
+        if agrupamento is None:
+            return None
+        return "indicador_com_agrupamento"
     if grafico == "tabela" and agrupamento is None:
-        return True
+        return None
     if agrupamento is None:
-        return False
+        return "agrupamento_ausente"
     if grafico == "linha":
-        return _e_temporal(agrupamento)
+        if _e_temporal(agrupamento):
+            return None
+        return "agrupamento_nao_temporal"
     if grafico in {"barra", "pizza", "tabela"}:
         # Mesmos sinais estruturais que a definição já usa em _forma.
         dimensoes = set(agrupamento.get("dimensoes") or [])
@@ -2114,15 +2313,27 @@ def _grafico_cabe(grafico, operacao, medida, agrupamento, segunda) -> bool:
         numerica = agrupamento.get("dimensao_principal") in _NUMERICAS or "numero" in tipos or bool(
             {"tipo_numero_inteiro", "tipo_numero_fracionado"} & evidencias
         )
-        if temporal or numerica or "texto" not in tipos:
-            return False
+        if temporal:
+            return "agrupamento_temporal"
+        if numerica:
+            return "agrupamento_numerico"
+        if "texto" not in tipos:
+            return "agrupamento_sem_texto"
     if grafico == "pizza":
-        return 2 <= agrupamento["distintos"] <= 8
+        if 2 <= agrupamento["distintos"] <= 8:
+            return None
+        return "cardinalidade_pizza"
     if grafico == "barra":
-        return agrupamento["distintos"] >= 2
+        if agrupamento["distintos"] >= 2:
+            return None
+        return "cardinalidade_barra"
     if grafico == "tabela":
-        return True
-    return False
+        return None
+    return "grafico_nao_catalogado"
+
+
+def _grafico_cabe(grafico, operacao, medida, agrupamento, segunda) -> bool:
+    return _motivo_grafico(grafico, operacao, medida, agrupamento, segunda) is None
 
 
 def _evidencias_existem(codigos, medida, agrupamento, segunda, regiao_ref, contexto) -> bool:

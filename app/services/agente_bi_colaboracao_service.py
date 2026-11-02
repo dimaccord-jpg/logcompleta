@@ -47,6 +47,7 @@ from app.services.agente_bi_analisar_service import (
     instrucao_de_compatibilidade,
     instrucao_de_rascunho,
     montar_contexto,
+    _registrar_descarte,
 )
 from app.services.agente_bi_anthropic_service import (
     _liberar_efeito,
@@ -858,9 +859,11 @@ def _materializar(escopo, dataset, pedido, perfil, colaboracao_id, revisao, docu
     )
     try:
         saida = analisar(perfil, pedido, provedor=lambda _contexto: proposta, proveniencia=PROVEDOR_ANTHROPIC)
-    except AnalisarErro:
+    except AnalisarErro as exc:
+        _registrar_descarte("materializar", exc.motivo, codigo=exc.codigo, pai_id=revisao.id)
         return _estado("encerrada", None, False)
     if saida.get("contrato") != CONTRATO_ANALISAR or saida.get("contrato_saida_validado") is not True:
+        _registrar_descarte("materializar", "contrato_divergente", pai_id=revisao.id)
         return _estado("encerrada", None, False)
     try:
         criada = criar_analise(
@@ -1543,6 +1546,7 @@ def _preservar_viaveis(escopo, dataset, pedido, perfil, colaboracao_id, revisao,
         return proposta
     ocupadas = {_combinacao_sugestao(item) for item in atuais if isinstance(item, dict)}
     preservadas = []
+    reprovadas = 0
     for tecnica in reversed(_tecnicas(escopo, dataset, colaboracao_id)):
         if int(tecnica.id) >= int(revisao.id) or tecnica.estado != "concluida" or not tecnica.resultado_json:
             continue
@@ -1559,7 +1563,8 @@ def _preservar_viaveis(escopo, dataset, pedido, perfil, colaboracao_id, revisao,
             if chave in ocupadas:
                 continue
             copia = copy.deepcopy(item)
-            if not _analisar_aceita(perfil, pedido, {"descobertas": [], "sugestoes": [copia]}):
+            if _codigo_analise(perfil, pedido, {"descobertas": [], "sugestoes": [copia]}) is not None:
+                reprovadas += 1
                 continue
             preservadas.append(copia)
             ocupadas.add(chave)
@@ -1573,18 +1578,29 @@ def _preservar_viaveis(escopo, dataset, pedido, perfil, colaboracao_id, revisao,
         "descobertas": copy.deepcopy(descobertas),
         "sugestoes": copy.deepcopy(list(atuais)) + preservadas,
     }
-    if not _analisar_aceita(perfil, pedido, unida):
+    recusa = _codigo_analise(perfil, pedido, unida)
+    if recusa is not None:
+        _registrar_descarte(
+            "preservar_viaveis",
+            recusa[1],
+            codigo=recusa[0],
+            quantidade=reprovadas,
+        )
         return proposta
     return unida
 
 
-def _analisar_aceita(perfil, pedido, proposta) -> bool:
+def _codigo_analise(perfil, pedido, proposta) -> tuple | None:
     corpo = copy.deepcopy(proposta)
     try:
         analisar(perfil, pedido, provedor=lambda _contexto, corpo=corpo: corpo, proveniencia=PROVEDOR_ANTHROPIC)
-    except AnalisarErro:
-        return False
-    return True
+    except AnalisarErro as exc:
+        return (exc.codigo, exc.motivo)
+    return None
+
+
+def _analisar_aceita(perfil, pedido, proposta) -> bool:
+    return _codigo_analise(perfil, pedido, proposta) is None
 
 
 def _combinacao_sugestao(item) -> tuple:
