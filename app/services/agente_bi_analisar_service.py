@@ -307,13 +307,31 @@ _CHAVES_REGIAO_REF = frozenset({"arquivo", "aba", "regiao"})
 
 MOTIVO_VIABILIDADE = "viabilidade_nao_comprovada"
 
+# Incoerência entre campos de um único item. O código público continua
+# `contrato_saida_invalido`. Motivo fora desta lista não é recuperável.
+_INCOERENCIAS_LOCAIS = frozenset(
+    {
+        "viavel_com_pergunta",
+        "pergunta_ausente",
+        "lacuna_incoerente",
+        "esclarecimento_incoerente",
+        "campos_da_operacao",
+        "leitura_incompativel",
+        "origem_sem_referencia",
+        "orcamento_relacoes_incoerente",
+    }
+)
+
 
 class AnalisarErro(Exception):
     """`codigo` é o código público. `motivo` é interno e não muda esse código.
 
-    Hoje só `MOTIVO_VIABILIDADE` usa `motivo`: sugestão `viavel` em região que
-    não cumpre `_regiao_viavel`. A colaboração lê o motivo para separar essa
-    inconsistência analítica de uma violação de contrato.
+    `MOTIVO_VIABILIDADE` marca sugestão `viavel` em região que não cumpre
+    `_regiao_viavel`. Os valores de `_INCOERENCIAS_LOCAIS` marcam incoerência
+    entre campos de um único item ou descoberta. Nos dois casos o código
+    público continua `contrato_saida_invalido`. A colaboração lê `motivo`
+    só para decidir se esse item pode ser isolado. Erro sem `motivo`, ou com
+    motivo fora dessa lista, continua derrubando a proposta inteira.
     """
 
     def __init__(self, codigo: str, motivo: str | None = None):
@@ -1963,6 +1981,19 @@ def _validar_lista(valor, teto, validador, contexto, extra=None) -> list:
     return [validador(item, contexto, extra) for item in valor]
 
 
+def _incoerencia(etapa, motivo, item, *, operacao=None, grafico=None) -> None:
+    """Registra a incoerência local e recusa o item sem mudar o código público."""
+    _registrar_descarte(
+        etapa,
+        motivo,
+        codigo="contrato_saida_invalido",
+        status=item.get("status") if isinstance(item, dict) else None,
+        operacao=operacao,
+        grafico=grafico,
+    )
+    raise AnalisarErro("contrato_saida_invalido", motivo=motivo)
+
+
 def _validar_descoberta(item, contexto) -> dict:
     if not isinstance(item, dict) or set(item) != _CHAVES_DESCOBERTA:
         raise AnalisarErro("contrato_saida_invalido")
@@ -1975,9 +2006,9 @@ def _validar_descoberta(item, contexto) -> dict:
         if relacao >= len(contexto["relacoes"]):
             raise AnalisarErro("referencia_inexistente")
     if item["codigo"] == "analise_relacoes_parcial" and not contexto["orcamento_relacoes"]["analise_relacoes_parcial"]:
-        raise AnalisarErro("contrato_saida_invalido")
+        _incoerencia("validar_descoberta", "orcamento_relacoes_incoerente", item)
     if item["codigo"] == "limite_relacoes_atingido" and not contexto["orcamento_relacoes"]["limite_relacoes_atingido"]:
-        raise AnalisarErro("contrato_saida_invalido")
+        _incoerencia("validar_descoberta", "orcamento_relacoes_incoerente", item)
     if item["codigo"] == "relacao_candidata_nao_confirmada" and relacao is None:
         raise AnalisarErro("referencia_inexistente")
     return {"id": item["id"], "codigo": item["codigo"], "regiao": regiao, "relacao": relacao}
@@ -2017,7 +2048,13 @@ def _validar_sugestao(item, contexto, perguntas) -> dict:
     if item.get("juncao") != _JUNCAO:
         raise AnalisarErro("juncao_nao_confirmada")
     if item["origem"] == "referencia" and "B" not in contexto.get("modalidades", []):
-        raise AnalisarErro("contrato_saida_invalido")
+        _incoerencia(
+            "validar_sugestao",
+            "origem_sem_referencia",
+            item,
+            operacao=item.get("operacao"),
+            grafico=item.get("grafico"),
+        )
     regiao = _validar_regiao_ref(item.get("regiao"), contexto)
     medida = _validar_coluna_ref(item.get("medida"), contexto)
     agrupamento = _validar_coluna_ref(item.get("agrupamento"), contexto)
@@ -2040,24 +2077,24 @@ def _validar_sugestao(item, contexto, perguntas) -> dict:
     if any(valor not in conhecidas for valor in perguntas_ids):
         raise AnalisarErro("contrato_saida_invalido")
     if item["status"] == "viavel" and perguntas_ids:
-        raise AnalisarErro("contrato_saida_invalido")
+        _incoerencia("validar_sugestao", "viavel_com_pergunta", item, operacao=operacao, grafico=grafico)
     if item["status"] != "viavel" and not perguntas_ids:
-        raise AnalisarErro("contrato_saida_invalido")
+        _incoerencia("validar_sugestao", "pergunta_ausente", item, operacao=operacao, grafico=grafico)
     if item["status"] == "dependente_de_novos_dados":
         if lacuna not in _LACUNAS or operacao is not None or grafico is not None or medida is not None:
-            raise AnalisarErro("contrato_saida_invalido")
+            _incoerencia("validar_sugestao", "lacuna_incoerente", item, operacao=operacao, grafico=grafico)
         if item.get("leitura") != "lacuna_de_dados" or evidencias:
-            raise AnalisarErro("contrato_saida_invalido")
+            _incoerencia("validar_sugestao", "lacuna_incoerente", item, operacao=operacao, grafico=grafico)
     elif operacao is None:
         if item["status"] != "condicional" or grafico is not None or medida is not None:
-            raise AnalisarErro("contrato_saida_invalido")
+            _incoerencia("validar_sugestao", "esclarecimento_incoerente", item, operacao=operacao, grafico=grafico)
         if item.get("leitura") != "esclarecimento_necessario" or lacuna is not None or evidencias:
-            raise AnalisarErro("contrato_saida_invalido")
+            _incoerencia("validar_sugestao", "esclarecimento_incoerente", item, operacao=operacao, grafico=grafico)
     else:
         if lacuna is not None or medida is None or grafico is None:
-            raise AnalisarErro("contrato_saida_invalido")
+            _incoerencia("validar_sugestao", "campos_da_operacao", item, operacao=operacao, grafico=grafico)
         if item.get("leitura") != _leitura(grafico, operacao):
-            raise AnalisarErro("contrato_saida_invalido")
+            _incoerencia("validar_sugestao", "leitura_incompativel", item, operacao=operacao, grafico=grafico)
         coluna_medida = _coluna_no_contexto(contexto, medida)
         coluna_grupo = _coluna_no_contexto(contexto, agrupamento)
         coluna_segunda = _coluna_no_contexto(contexto, segunda)
@@ -2146,7 +2183,9 @@ def _mesma_regiao(regiao, medida, agrupamento, segunda) -> None:
         raise AnalisarErro("juncao_nao_confirmada")
 
 
-_ETAPAS_DESCARTE = frozenset({"validar_sugestao", "perguntas", "preservar_viaveis", "materializar"})
+_ETAPAS_DESCARTE = frozenset(
+    {"validar_sugestao", "validar_descoberta", "perguntas", "preservar_viaveis", "materializar"}
+)
 _CODIGOS_ANALISAR = frozenset(
     {
         "autorizacao_indevida",
@@ -2198,6 +2237,7 @@ _MOTIVOS_DIAGNOSTICO = frozenset(
         "segunda_presente",
         "teto_perguntas",
         MOTIVO_VIABILIDADE,
+        *_INCOERENCIAS_LOCAIS,
     }
 )
 _FORA_DO_CATALOGO = "fora_do_catalogo"

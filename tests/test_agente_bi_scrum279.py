@@ -646,8 +646,23 @@ def test_validar_sugestao_registra_operacao_grafico_e_viabilidade(caplog):
     with pytest.raises(AnalisarErro) as contrato:
         contrato_anterior()
     assert contrato.value.codigo == "contrato_saida_invalido"
-    assert contrato.value.motivo is None
-    assert len(_eventos(caplog)) == antes
+    assert contrato.value.motivo == "viavel_com_pergunta"
+    novos = _eventos(caplog)[antes:]
+    assert len(novos) == 1
+    combinacao = _LINHA_DESCARTE.fullmatch(novos[0].getMessage())
+    assert combinacao, novos[0].getMessage()
+    grupos = combinacao.groupdict()
+    assert grupos["motivo"] == "viavel_com_pergunta"
+    assert grupos["etapa"] in _ETAPAS_DESCARTE or grupos["etapa"] == _FORA_DO_CATALOGO
+    assert grupos["motivo"] in _MOTIVOS_DIAGNOSTICO or grupos["motivo"] == _FORA_DO_CATALOGO
+    if grupos["codigo"] is not None:
+        assert grupos["codigo"] in _CODIGOS_ANALISAR or grupos["codigo"] == _FORA_DO_CATALOGO
+    if grupos["status"] is not None:
+        assert grupos["status"] in _STATUS or grupos["status"] == _FORA_DO_CATALOGO
+    if grupos["operacao"] is not None:
+        assert grupos["operacao"] in OPERACOES or grupos["operacao"] == _FORA_DO_CATALOGO
+    if grupos["grafico"] is not None:
+        assert grupos["grafico"] in GRAFICOS or grupos["grafico"] == _FORA_DO_CATALOGO
     mensagens = _conferir_eventos(caplog)
     assert "motivo=medida_nao_numerica" in mensagens[0]
     assert "codigo=operacao_incompativel" in mensagens[0]

@@ -430,7 +430,8 @@ def test_referencia_inexistente_e_juncao_nao_autorizada_viram_descarte(app):
             assert item["regiao"] == valida["regiao"]
 
 
-def test_erro_de_contrato_nao_recuperavel_continua_terminal(app):
+def test_erro_de_contrato_nao_recuperavel_continua_terminal(app, caplog):
+    caplog.set_level("INFO")
     with app.app_context():
         escopo, dataset_id, perfil, _ingerido = _preparar("res-contrato@test.com")
         quebrada = _indicador(perfil, 0, status="condicional", duvidas=["escolher_medida"])
@@ -438,13 +439,17 @@ def test_erro_de_contrato_nao_recuperavel_continua_terminal(app):
         quebrada["medida"] = None
         quebrada["evidencias"] = []
         quebrada["leitura"] = "esclarecimento_necessario"
-        claude = _Claude([_proposta(_indicador(perfil, 0), quebrada)])
+        claude = _Claude([_proposta(quebrada)])
         gemini = _Gemini(json.dumps(_critica_de(_indicador(perfil, 0))))
         corpo = _descobrir(escopo, dataset_id, PEDIDO, claude, gemini)
         assert corpo["colaboracao"]["estado"] == "recusada"
         assert len(gemini.geracoes) == 0
         assert _tecnicas(dataset_id)[0].resultado_json is None
         assert _finais(dataset_id) == []
+        assert any(
+            "evento=agente_bi_descarte" in registro.getMessage() and "motivo=esclarecimento_incoerente" in registro.getMessage()
+            for registro in caplog.records
+        )
 
 
 def test_governanca_bloqueante_durante_o_isolamento_nao_vira_descarte(app, monkeypatch):

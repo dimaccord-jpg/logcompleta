@@ -31,6 +31,7 @@ from app.services.agente_bi_analisar_service import (
     MOTIVO_VIABILIDADE,
     PROVEDOR_ANTHROPIC,
     AnalisarErro,
+    _INCOERENCIAS_LOCAIS,
     _DESCOBERTAS,
     _EVIDENCIAS,
     _JUNCAO,
@@ -1331,14 +1332,26 @@ def _vazia_recuperavel(proposta, descartes) -> bool:
     )
 
 
+# Campo já aceito em `_CAMPOS_DESCARTE` para cada incoerência local.
+# O motivo persistido é sempre `_MOTIVO_CATALOGO`; o nome interno fica só no log.
+_CAMPO_INCOERENCIA_LOCAL = {
+    "viavel_com_pergunta": "status",
+    "pergunta_ausente": "duvidas",
+    "leitura_incompativel": "leitura",
+    "origem_sem_referencia": "origem",
+    "orcamento_relacoes_incoerente": "codigo",
+}
+
+
 def _isolar(bruto, proposta, descartes, perfil, pedido):
     """Descarta o item que o validador oficial recusa sozinho.
 
-    Só vira descarte a inconsistência analítica recuperável: código do
-    checkpoint ou viabilidade não comprovada. Outro erro devolve None e o
-    caminho antigo decide. Isolar só vale quando há viabilidade não
-    comprovada ou sobra sugestão válida; o restante passa de novo por
-    `analisar` inteiro. Nenhum item é alterado, só retirado.
+    Vira descarte a inconsistência recuperável: código do checkpoint,
+    viabilidade não comprovada ou incoerência local de um item. O motivo
+    gravado da incoerência local é o de catálogo já existente. Outro erro
+    devolve None e o caminho antigo decide. Isolar só vale quando há
+    viabilidade não comprovada ou sobra sugestão válida; o restante passa
+    de novo por `analisar` inteiro. Nenhum item é alterado, só retirado.
     """
     novos = []
     mantida = {"descobertas": [], "sugestoes": []}
@@ -1349,13 +1362,13 @@ def _isolar(bruto, proposta, descartes, perfil, pedido):
         for posicao, item in zip(posicoes, proposta[lista]):
             sozinho = {"descobertas": [], "sugestoes": []}
             sozinho[lista] = [item]
-            motivo = _motivo_recuperavel(sozinho, perfil, pedido)
-            if motivo is None:
+            recuperavel = _motivo_recuperavel(sozinho, perfil, pedido)
+            if recuperavel is None:
                 mantida[lista].append(item)
                 continue
-            if motivo is False:
+            if recuperavel is False:
                 return None
-            campo = "status" if motivo == MOTIVO_VIABILIDADE else "item"
+            campo, motivo = recuperavel
             novos.append(_diagnostico(lista, posicao, campo, motivo))
     if not novos or any(item is None for item in novos):
         return None
@@ -1370,16 +1383,18 @@ def _isolar(bruto, proposta, descartes, perfil, pedido):
 
 
 def _motivo_recuperavel(proposta, perfil, pedido):
-    """None quando `analisar` aceita; o motivo recuperável; ou False."""
+    """None quando `analisar` aceita; `(campo, motivo)` recuperável; ou False."""
     try:
         analisar(perfil, pedido, provedor=lambda _contexto: proposta, proveniencia=PROVEDOR_ANTHROPIC)
     except AnalisarErro as exc:
         if exc.codigo in _BLOQUEIO_DURO:
             raise ExecucaoErro(exc.codigo) from exc
         if exc.codigo in _CHECKPOINT:
-            return exc.codigo
+            return ("item", exc.codigo)
         if exc.codigo == "contrato_saida_invalido" and exc.motivo == MOTIVO_VIABILIDADE:
-            return MOTIVO_VIABILIDADE
+            return ("status", MOTIVO_VIABILIDADE)
+        if exc.codigo == "contrato_saida_invalido" and exc.motivo in _INCOERENCIAS_LOCAIS:
+            return (_CAMPO_INCOERENCIA_LOCAL.get(exc.motivo, "item"), _MOTIVO_CATALOGO)
         return False
     return None
 
